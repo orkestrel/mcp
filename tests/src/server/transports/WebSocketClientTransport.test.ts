@@ -1,16 +1,14 @@
-import type { StartedServerInterface } from '../../../../setupServer.js'
+import type { StartedServerInterface } from '../../../setupServer.js'
 import type { Server } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { createServer as createHTTPServer } from 'node:http'
 import { describe, expect, it } from 'vitest'
-import { createMCPClient, isRecord } from '@src/core'
-import {
-	createErrorBoundary,
-	createServer,
-	createWebSocketClientTransport,
-	createWebSocketServer,
-} from '@src/server'
-import { createCalculatorServer, createTeardown, startServer } from '../../../../setupServer.js'
+import { createMCPClient } from '@src/core'
+import { isRecord } from '@orkestrel/contract'
+import { createDispatcher } from '@orkestrel/router'
+import { createServer } from '@orkestrel/server/server'
+import { createWebSocketClientTransport, createWebSocketServer } from '@src/server'
+import { createCalculatorServer, createTeardown, startServer } from '../../../setupServer.js'
 
 // src/server/mcp/WebSocketClientTransport.ts — the WebSocket CLIENT transport (the egress
 // mirror of createWebSocketServer), proven END TO END against the shipped createWebSocketServer
@@ -48,8 +46,8 @@ const rawTeardown = createTeardown<RawServerHandle>(
 // Stand up a server exposing the stub-tool MCPServer over WebSocket (the spine upgrade seam) on
 // an ephemeral port. `path` defaults to /mcp; pass a custom one to exercise the path option.
 async function startWs(path?: string): Promise<StartedServerInterface> {
-	const server = createServer()
-	server.use(createErrorBoundary())
+	const dispatcher = createDispatcher<unknown>()
+	const server = createServer<unknown>({ dispatcher, state: () => undefined })
 	server.upgrade(
 		createWebSocketServer(createCalculatorServer(), path === undefined ? undefined : { path }),
 	)

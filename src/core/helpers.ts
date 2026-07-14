@@ -1,4 +1,4 @@
-import type { ToolManagerInterface, ToolResult } from '../agents/types.js'
+import type { ToolManagerInterface, ToolResult } from '@orkestrel/agent'
 import type { JSONRPCResponse, MCPToolDescriptor, MCPToolResult } from './types.js'
 import { MCP_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
 
@@ -46,7 +46,7 @@ export function jsonRPCError(
  * — renaming `parameters` to the wire's `inputSchema`.
  *
  * @remarks
- * Each {@link import('../agents/types.js').ToolDefinition} carries through its
+ * Each {@link import('@orkestrel/agent').ToolDefinition} carries through its
  * `name` and (when present) `description`; its open JSON-Schema `parameters`
  * becomes `inputSchema`, defaulting to an empty object schema (`{ type: 'object' }`)
  * when a tool declares none (MCP requires an `inputSchema`).

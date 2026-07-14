@@ -1,21 +1,22 @@
-import { describe, expect, it } from 'vitest'
 import type { JSONRPCMessage } from '@src/core'
+import { describe, expect, it } from 'vitest'
 import { JSONRPC_INVALID_REQUEST, jsonRPCError, parseJSONRPCMessage } from '@src/core'
 import {
 	acceptsEventStream,
 	decodeEvent,
 	MCP_SESSION_HEADER,
 	readEventStream,
+	readLastEventId,
 	readSessionHeader,
 	rejectUnknownSession,
 	upgradeRequestPath,
 } from '@src/server'
-import { createJSONRPCRequest } from '../../../setup.js'
-import { createContextStub, createRequestStub } from '../../../setupServer.js'
+import { createJSONRPCRequest } from '../../setup.js'
+import { createRequestStub } from '../../setupServer.js'
 
 // One SSE `data:` event carrying `payload` as its JSON-serialized data, terminated by the
-// blank line that dispatches it — the exact wire framing the server's `openSSEStream` seam
-// writes (`sse.write({ data: JSON.stringify(response) })`), so a body of these round-trips
+// blank line that dispatches it — the exact wire framing the server's `openStream` seam
+// writes (`s.write({ data: JSON.stringify(response) })`), so a body of these round-trips
 // back through `readEventStream`. A non-string `payload` (a raw token) frames an event whose
 // `data` is that literal, for the malformed-drop path.
 function dataEvent(payload: unknown): string {
@@ -38,100 +39,93 @@ function rpcMessage(overrides?: Parameters<typeof createJSONRPCRequest>[0]): JSO
 	return message
 }
 
-// src/server/mcp/helpers.ts — `acceptsEventStream`, the pure `Accept`-header reader the
-// MCP transport uses to pick a Streamable-HTTP SSE response over a plain JSON body. It
-// reads only `context.request.headers.accept` and narrows with `typeof`, so the shared
-// `createContextStub` carrying a `request` with the `Accept` header exercises every
-// branch (the live over-the-wire SSE path is proven through a real server in
-// factories.test.ts, AGENTS §16). The stub crosses into the parameter via a structural
-// guard, never an assertion (§14).
-
-// A context whose request carries (or omits) the `Accept` header `acceptsEventStream`
-// reads — built from the shared stubs so the one full default shape serves every branch.
-function contextStub(accept?: string): ReturnType<typeof createContextStub> {
-	return createContextStub({
-		request: createRequestStub({ headers: accept === undefined ? {} : { accept } }),
-	})
+// A fetch-standard Request carrying (or omitting) the given headers — the shape every
+// pure fetch-standard reader below (`acceptsEventStream` / `readSessionHeader` /
+// `readLastEventId`) takes directly, no stub crossing needed (§14 — `Request` IS the
+// boundary type now).
+function requestWithHeaders(headers?: Record<string, string>): Request {
+	return new Request('http://localhost/mcp', { headers })
 }
+
+// src/server/helpers.ts — `acceptsEventStream`, the pure `Accept`-header reader the MCP
+// transport uses to pick a Streamable-HTTP SSE response over a plain JSON body. It reads
+// only `request.headers.get('accept')` and narrows with a `null` check (the live
+// over-the-wire SSE path is proven through a real server in factories.test.ts, AGENTS §16).
 
 describe('acceptsEventStream — does the client opt into SSE?', () => {
 	it('is true when Accept contains text/event-stream', () => {
-		expect(acceptsEventStream(contextStub('text/event-stream'))).toBe(true)
+		expect(acceptsEventStream(requestWithHeaders({ accept: 'text/event-stream' }))).toBe(true)
 	})
 
 	it('is true when text/event-stream is one of several accepted types', () => {
-		expect(acceptsEventStream(contextStub('application/json, text/event-stream;q=0.9'))).toBe(true)
+		expect(
+			acceptsEventStream(
+				requestWithHeaders({ accept: 'application/json, text/event-stream;q=0.9' }),
+			),
+		).toBe(true)
 	})
 
 	it('matches case-insensitively', () => {
-		expect(acceptsEventStream(contextStub('Text/Event-Stream'))).toBe(true)
+		expect(acceptsEventStream(requestWithHeaders({ accept: 'Text/Event-Stream' }))).toBe(true)
 	})
 
 	it('is false for a plain JSON Accept', () => {
-		expect(acceptsEventStream(contextStub('application/json'))).toBe(false)
+		expect(acceptsEventStream(requestWithHeaders({ accept: 'application/json' }))).toBe(false)
 	})
 
 	it('is false for a wildcard Accept (no explicit event-stream)', () => {
 		// A `*/*` does NOT opt in — the transport only streams when the client names the type.
-		expect(acceptsEventStream(contextStub('*/*'))).toBe(false)
+		expect(acceptsEventStream(requestWithHeaders({ accept: '*/*' }))).toBe(false)
 	})
 
 	it('is false for an absent Accept header', () => {
-		expect(acceptsEventStream(contextStub())).toBe(false)
+		expect(acceptsEventStream(requestWithHeaders())).toBe(false)
 	})
 })
 
-// src/server/mcp/helpers.ts — `readSessionHeader`, the pure reader the STATEFUL transport
-// uses to look up a request's `mcp-session-id`. It reads only that header and narrows with
-// `isString`, so the shared `createContextStub` carrying a `request` with the header exercises
-// every branch (the over-the-wire mint/validate path is proven through a real server in
-// factories.test.ts, §16). Total — a missing / repeated header reads as `undefined`.
+// src/server/helpers.ts — `readSessionHeader`, the pure reader the STATEFUL transport
+// uses to look up a request's `mcp-session-id`. Total — a missing header reads as
+// `undefined` (the over-the-wire mint/validate path is proven through a real server in
+// middlewares.test.ts, §16).
 
 describe('readSessionHeader — the request mcp-session-id, or undefined', () => {
-	it('returns the single-valued session id when present', () => {
-		const context = createContextStub({
-			request: createRequestStub({ headers: { [MCP_SESSION_HEADER]: 'sess-123' } }),
-		})
-		expect(readSessionHeader(context)).toBe('sess-123')
+	it('returns the session id when present', () => {
+		const request = requestWithHeaders({ [MCP_SESSION_HEADER]: 'sess-123' })
+		expect(readSessionHeader(request)).toBe('sess-123')
 	})
 
 	it('is undefined when the header is absent', () => {
-		const context = createContextStub({ request: createRequestStub({ headers: {} }) })
-		expect(readSessionHeader(context)).toBeUndefined()
-	})
-
-	it('is undefined for the (illegal) repeated-header array form — narrowed, never asserted', () => {
-		// A repeated header arrives as a `string[]`; `isString` rejects it → `undefined` (no session),
-		// so a malformed duplicate id is treated exactly like an absent one (§14).
-		const context = createContextStub({
-			request: createRequestStub({ headers: { [MCP_SESSION_HEADER]: ['a', 'b'] } }),
-		})
-		expect(readSessionHeader(context)).toBeUndefined()
+		expect(readSessionHeader(requestWithHeaders())).toBeUndefined()
 	})
 })
 
-// src/server/mcp/helpers.ts — `rejectUnknownSession`, the stateful transport's shared
-// "unknown session" reply (the POST validation AND the DELETE route both call it). It only
-// writes a response, so a context stub whose inert `json` is OVERRIDDEN with a capture
-// records the exact (body, status) pair it sent — the over-the-wire 404 is proven through a
-// real server in factories.test.ts (§16); this pins the envelope it builds.
+// src/server/helpers.ts — `readLastEventId`, the pure reader the resumable GET-SSE stream
+// uses to find a reconnecting client's resume cursor. Total — a missing header reads as
+// `undefined` (no resume).
+
+describe('readLastEventId — the resume cursor, or undefined', () => {
+	it('returns the last-event-id when present', () => {
+		const request = requestWithHeaders({ 'last-event-id': '7' })
+		expect(readLastEventId(request)).toBe('7')
+	})
+
+	it('is undefined when the header is absent', () => {
+		expect(readLastEventId(requestWithHeaders())).toBeUndefined()
+	})
+})
+
+// src/server/helpers.ts — `rejectUnknownSession`, the stateful transport's shared "unknown
+// session" reply (the POST validation AND the GET / DELETE routes all call it). Total —
+// never throws; the exact envelope is pinned here, the over-the-wire 404 is proven through
+// a real server in middlewares.test.ts (§16).
 
 describe('rejectUnknownSession — the 404 + JSON-RPC "Session not found" body', () => {
-	it('sends a 404 carrying the JSON-RPC invalid-request error body', () => {
-		// Capture what the helper writes via `context.json(body, status)` (the default stub's
-		// `json` is an inert no-op — override it with a recorder, no `as`, §14).
-		const sent: { body?: unknown; status?: number } = {}
-		const context = createContextStub({
-			json: (body, status) => {
-				sent.body = body
-				sent.status = status
-			},
-		})
-		rejectUnknownSession(context)
-		// The exact envelope: a `-32600` "Session not found" error with a `null` id, at HTTP 404
-		// (mirroring the transport-failure 400 shape but at the session-not-found status).
-		expect(sent.status).toBe(404)
-		expect(sent.body).toEqual(jsonRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not found'))
+	it('sends a 404 carrying the JSON-RPC invalid-request error body', async () => {
+		const response = rejectUnknownSession()
+		expect(response.status).toBe(404)
+		expect(await response.json()).toEqual(
+			jsonRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not found'),
+		)
 	})
 })
 
@@ -199,7 +193,7 @@ describe('readEventStream — decode a Response SSE body into JSON-RPC messages'
 	})
 })
 
-// src/server/mcp/helpers.ts — `upgradeRequestPath`, the pure reader the WebSocket transport's
+// src/server/helpers.ts — `upgradeRequestPath`, the pure reader the WebSocket transport's
 // `createWebSocketServer` uses to match a raw `node:http` upgrade request's path against its
 // configured mount path. It reads only `request.url` and narrows with `isString`, so the
 // shared `createRequestStub` carrying a `url` exercises every branch (the live over-the-wire

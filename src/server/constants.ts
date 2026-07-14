@@ -1,6 +1,6 @@
 // The MCP HTTP-transport constants (AGENTS §5 constants file) — the wire-level header
-// names, the default mount path, the session `context.state` key, and the folded
-// event-log bounds. The HEADER names are the Streamable-HTTP transport's session /
+// names, the default mount path, and the folded event-log bounds. The HEADER names are
+// the Streamable-HTTP transport's session /
 // protocol-version headers: they go LIVE when a `createMCPSession` middleware is mounted
 // (it mints the session id into `MCP_SESSION_HEADER` on `initialize` and reads it back on
 // subsequent requests); the stateless `createMCPRoutes` default neither sets nor reads
@@ -14,17 +14,6 @@
  * (validating the session); the stateless `createMCPRoutes` default neither sets nor reads it.
  */
 export const MCP_SESSION_HEADER = 'mcp-session-id'
-
-/**
- * The `context.state` key under which a {@link import('./middlewares.js').createMCPSession}
- * middleware stashes the resolved {@link import('./types.js').MCPSessionInterface} for the
- * current request — so an in-request handler can read it (`context.state.get(MCP_SESSION_STATE)`)
- * and `push` a server-initiated message to the session's resumable `GET {path}` stream. Mirrors
- * the http spine's {@link import('../http/constants.js').TOKEN_STATE} pattern. Set on an
- * `initialize` POST (the minted session) and on every validated non-`initialize` POST (the
- * resolved one); absent on the stateless path.
- */
-export const MCP_SESSION_STATE = 'mcp:session'
 
 /**
  * The Streamable-HTTP transport header that carries the negotiated MCP protocol version

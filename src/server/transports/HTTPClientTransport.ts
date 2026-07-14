@@ -1,11 +1,8 @@
-import type {
-	ClientTransportEventMap,
-	ClientTransportInterface,
-	EmitterInterface,
-	JSONRPCMessage,
-} from '@src/core'
+import type { ClientTransportEventMap, ClientTransportInterface, JSONRPCMessage } from '@src/core'
+import type { EmitterInterface } from '@orkestrel/emitter'
 import type { HTTPClientTransportOptions } from '../types.js'
-import { Emitter, parseJSONRPCMessage } from '@src/core'
+import { parseJSONRPCMessage } from '@src/core'
+import { Emitter } from '@orkestrel/emitter'
 import { MCP_SESSION_HEADER } from '../constants.js'
 import { readEventStream } from '../helpers.js'
 
@@ -24,8 +21,9 @@ import { readEventStream } from '../helpers.js'
  *   to.
  * - **Both reply framings.** A `200` with an `application/json` body is parsed with
  *   `parseJSONRPCMessage`; a `200` with a `text/event-stream` body is decoded via the
- *   core {@link import('@src/core').SSEParserInterface} ({@link readEventStream}) — the
- *   inverse of the server's `openSSEStream` seam, so the wire round-trips. A `202`
+ *   `@orkestrel/sse` {@link import('@orkestrel/sse').SSEParserInterface} ({@link
+ *   readEventStream}) — the inverse of the server's `openStream` seam, so the wire
+ *   round-trips. A `202`
  *   Accepted (a notification) carries no body and emits nothing.
  * - **Session echo.** `start()` / `close()` are no-ops (a request/response transport
  *   holds no long-lived connection). The `mcp-session-id` response header, when a
@@ -51,12 +49,16 @@ export class HTTPClientTransport implements ClientTransportInterface {
 	readonly #emitter: Emitter<ClientTransportEventMap>
 	readonly #url: string
 	readonly #headers: Readonly<Record<string, string>>
+	readonly #fetch: typeof fetch
+	readonly #timeout: number | undefined
 	#session: string | undefined = undefined
 
 	constructor(options: HTTPClientTransportOptions) {
 		this.#emitter = new Emitter<ClientTransportEventMap>()
 		this.#url = options.url
 		this.#headers = options.headers ?? {}
+		this.#fetch = options.fetch ?? globalThis.fetch
+		this.#timeout = options.timeout
 	}
 
 	get emitter(): EmitterInterface<ClientTransportEventMap> {
@@ -75,7 +77,7 @@ export class HTTPClientTransport implements ClientTransportInterface {
 	async send(message: JSONRPCMessage | readonly JSONRPCMessage[]): Promise<void> {
 		let response: Response
 		try {
-			response = await fetch(this.#url, {
+			response = await this.#fetch(this.#url, {
 				method: 'POST',
 				headers: {
 					'content-type': 'application/json',
@@ -87,6 +89,7 @@ export class HTTPClientTransport implements ClientTransportInterface {
 					...this.#headers,
 				},
 				body: JSON.stringify(message),
+				...(this.#timeout === undefined ? {} : { signal: AbortSignal.timeout(this.#timeout) }),
 			})
 		} catch (error) {
 			// A network-level failure (connection refused, DNS) — surface it for observation;

@@ -1,61 +1,57 @@
-import type { JSONRPCMessage, SSEEvent } from '@src/core'
-import type { Middleware } from '@src/server'
-import type { StartedServerInterface } from '../../../setupServer.js'
+import type { JSONRPCMessage } from '@src/core'
+import type { SSEEvent } from '@orkestrel/sse'
+import type { MiddlewareHandler } from '@orkestrel/server'
+import type { MCPSessionState } from '@src/server'
+import type { StartedServerInterface } from '../../setupServer.js'
 import { describe, expect, it } from 'vitest'
 import { createMCPClient } from '@src/core'
+import { createDispatcher } from '@orkestrel/router'
+import { createServer } from '@orkestrel/server/server'
 import {
-	createErrorBoundary,
 	createHTTPClientTransport,
 	createMCPRoutes,
 	createMCPSession,
-	createServer,
 	MCP_SESSION_HEADER,
-	MCP_SESSION_STATE,
-	MCPSession,
 } from '@src/server'
-import { createJSONRPCRequest, createManualClock, readSSEStream } from '../../../setup.js'
-import {
-	createCalculatorServer,
-	createTeardown,
-	postJSON,
-	startServer,
-} from '../../../setupServer.js'
+import { createJSONRPCRequest, createManualClock, readSSEStream } from '../../setup.js'
+import { createCalculatorServer, createTeardown, postJSON, startServer } from '../../setupServer.js'
 
 // ── createMCPSession — the plug-and-play stateful session middleware ──────────
 //
-// src/server/mcp/middlewares.ts — `createMCPSession` BUILDS ON the generic `createSession` HTTP
-// primitive (proven over the spine in tests/src/server/http/middlewares.test.ts): the generic
-// resolve / mint / validate-or-404 / DELETE-end / idle-TTL machinery comes from `createSession`
-// configured for the MCP wire (the `mcp-session-id` header, an `MCPSession` per id, mint-only-on-
-// `initialize`, require-or-404), and `createMCPSession` adds ONLY the resumable `GET` SSE stream.
-// Composed via `server.use(createMCPSession())` IN FRONT of a session-AGNOSTIC `createMCPRoutes(mcp)`
-// and proven over a REAL `node:http` server + a REAL `MCPServer` via `fetch` (no live model): an
-// `initialize` POST MINTS a session id returned in the `mcp-session-id` header; a NON-initialize POST
-// must echo a VALID id (missing / unknown → a 404 + a JSON-RPC error body); a `DELETE {path}` → 204
-// then the session is gone (a later echo → 404); and the resumable `GET {path}` SSE channel (a
-// server-side push ARRIVES decoded via the core `SSEParser`, a reconnect echoing `Last-Event-ID`
-// REPLAYS). The push is driven the REAL way — an in-request app middleware reads
-// `context.state.get(MCP_SESSION_STATE)` and `.push`es, so the test exercises push AND demonstrates
-// the in-request push pattern. The `MCPClient` round-trip proves the client ECHOES the captured
-// session end to end. (The folded replay-log mechanics — append / replay / capacity / TTL — are
-// unit-tested on the `MCPSession` entity in MCPSession.test.ts; the generic session mint / reuse /
-// TTL / DELETE / require machinery is unit-tested on `createSession` in the http middlewares test.)
+// src/server/middlewares.ts — `createMCPSession` is the NATIVE MCP session layer (NO
+// dependency on `@orkestrel/middleware`): a closure `Map` mints a session on `initialize`,
+// validates the `mcp-session-id` header on every other `POST`, serves the resumable `GET
+// {path}` SSE channel and the `DELETE {path}` session-end, with a lazy idle-TTL sweep.
+// Composed via `server.use(createMCPSession())` IN FRONT of a session-AGNOSTIC
+// `createMCPRoutes(mcp)` and proven over a REAL `@orkestrel/server` + a REAL `MCPServer` via
+// `fetch` (no live model): an `initialize` POST MINTS a session id returned in the
+// `mcp-session-id` header; a NON-initialize POST must echo a VALID id (missing / unknown → a
+// 404 + a JSON-RPC error body); a `DELETE {path}` → 204 then the session is gone (a later echo
+// → 404); and the resumable `GET {path}` SSE channel (a server-side push ARRIVES decoded via
+// the core `SSEParser`, a reconnect echoing `Last-Event-ID` REPLAYS). The push is driven the
+// REAL way — an in-request app middleware reads `context.state.session` (set by
+// `createMCPSession` for a validated request) and `.push`es, so the test exercises push AND
+// demonstrates the in-request push pattern. The `MCPClient` round-trip proves the client
+// ECHOES the captured session end to end. (The folded replay-log mechanics — append / replay /
+// capacity / TTL — are unit-tested on the `MCPSession` entity in MCPSession.test.ts.)
 
-const { track } = createTeardown((handle: StartedServerInterface) => handle.stop())
+// The consumer TState this suite threads through the spine — extends MCPSessionState so
+// createMCPSession can set `context.state.session`.
+interface AppState extends MCPSessionState {}
+
+const { track } = createTeardown<StartedServerInterface<AppState>>((handle) => handle.stop())
 
 // The in-request PUSH pattern as a tiny app middleware: on a POST carrying `x-push-now`, read the
 // session off `context.state` (set by `createMCPSession` for a validated request) and push the
 // supplied message to its resumable GET stream — then short-circuit 202. The real shape of a
-// request handler pushing a server-initiated message (no test-only seam). `instanceof MCPSession`
-// narrows the `unknown` state value with no assertion (§14).
-function pushTrigger(payload: JSONRPCMessage): Middleware {
-	return (context, next) => {
-		if (context.method === 'POST' && context.request.headers['x-push-now'] === '1') {
-			const session = context.state.get(MCP_SESSION_STATE)
-			if (session instanceof MCPSession) {
+// request handler pushing a server-initiated message (no test-only seam).
+function pushTrigger(payload: JSONRPCMessage): MiddlewareHandler<AppState> {
+	return (request, context, next) => {
+		if (context.method === 'POST' && request.headers.get('x-push-now') === '1') {
+			const session = context.state.session
+			if (session !== undefined) {
 				session.push(payload)
-				context.empty(202)
-				return
+				return new Response(null, { status: 202 })
 			}
 		}
 		return next()
@@ -71,14 +67,18 @@ async function startSession(options?: {
 	readonly capacity?: number
 	readonly push?: JSONRPCMessage
 	readonly clock?: () => number
-}): Promise<StartedServerInterface> {
-	const server = createServer()
-	server.use(createErrorBoundary())
+}): Promise<StartedServerInterface<AppState>> {
+	const dispatcher = createDispatcher<AppState>()
+	dispatcher.add(createMCPRoutes<AppState>(createCalculatorServer()))
+	const server = createServer<AppState>({ dispatcher, state: () => ({}) })
 	server.use(
-		createMCPSession({ ttl: options?.ttl, capacity: options?.capacity, clock: options?.clock }),
+		createMCPSession<AppState>({
+			ttl: options?.ttl,
+			capacity: options?.capacity,
+			clock: options?.clock,
+		}),
 	)
 	if (options?.push !== undefined) server.use(pushTrigger(options.push))
-	server.route(createMCPRoutes(createCalculatorServer()))
 	return track(await startServer(server))
 }
 
@@ -229,8 +229,9 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 			body: JSON.stringify(createJSONRPCRequest({ method: 'tools/list', id: 6 })),
 		})
 		expect(response.status).toBe(404)
-		// And it is the spine's route-miss 404, not the session "Session not found" body.
-		expect((await response.json()).error).not.toBe('Session not found')
+		// And it is the spine's plain-text route-miss 404, not the session's JSON-RPC
+		// "Session not found" error body — proving the middleware did not intercept it.
+		expect(await response.text()).toBe('Not Found')
 	})
 })
 
@@ -239,9 +240,9 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 // `createMCPSession` registers the resumable `GET {path}` SSE channel: a server-side push ARRIVES
 // on the open stream decoded via the core `SSEParser` (`readSSEStream`) carrying a monotone id, and
 // a reconnect echoing `Last-Event-ID` REPLAYS the missed events in order. The push is driven the
-// REAL way — the in-request `pushTrigger` app middleware reads `context.state.get(MCP_SESSION_STATE)`
-// and `.push`es. The long-lived stream is read with a BOUNDED reader (take N then abort, so the test
-// never hangs — the same disconnect path `bindStreamingAbort` binds).
+// REAL way — the in-request `pushTrigger` app middleware reads `context.state.session` and
+// `.push`es. The long-lived stream is read with a BOUNDED reader (take N then abort, so the test
+// never hangs).
 
 // Open the resumable GET-SSE stream for `id` and return the live `Response` + abort `controller`.
 // Sends the session header + optional resume cursor.
@@ -356,10 +357,10 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 
 describe('createMCPSession — lazy session TTL eviction', () => {
 	it('a session idle past the ttl reads as absent (a later echo → 404)', async () => {
-		// A 50ms TTL driven by the INJECTED manual clock (`MCPSessionOptions.clock` → the generic
-		// `createSession` seam): mint at t=0, advance PAST the ttl without touching the session, and
-		// a subsequent echo finds it evicted (dropped lazily on the next access — no background
-		// timer). Manual time — no real wait, no wall-clock race under suite load (#24).
+		// A 50ms TTL driven by the INJECTED manual clock (`MCPSessionOptions.clock`): mint at t=0,
+		// advance PAST the ttl without touching the session, and a subsequent echo finds it evicted
+		// (dropped lazily on the next access — no background timer). Manual time — no real wait, no
+		// wall-clock race under suite load.
 		const clock = createManualClock()
 		const handle = await startSession({ ttl: 50, clock: clock.now })
 		const init = await postJSON(handle.base, createJSONRPCRequest())

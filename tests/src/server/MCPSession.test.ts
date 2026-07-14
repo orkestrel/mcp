@@ -1,10 +1,10 @@
 import type { JSONRPCMessage } from '@src/core'
-import type { SSEMessage, SSEStreamInterface } from '@src/server'
+import type { SSEMessage, StreamInterface } from '@orkestrel/server'
 import { describe, expect, it } from 'vitest'
 import { MCPSession } from '@src/server'
-import { createJSONRPCRequest, createRecorder } from '../../../setup.js'
+import { createJSONRPCRequest, createRecorder } from '../../setup.js'
 
-// src/server/mcp/MCPSession.ts — one MCP transport session, the per-session entity a
+// src/server/MCPSession.ts — one MCP transport session, the per-session entity a
 // `createMCPSession` middleware owns, with its bounded resumable replay log FOLDED IN (the old
 // SessionState + EventStore merged into one class). Pure mechanics (NO server, NO live model):
 // `push` appends to the folded log under a MONOTONE base36 id (returned) AND fans the message out
@@ -13,24 +13,25 @@ import { createJSONRPCRequest, createRecorder } from '../../../setup.js'
 // resume); capacity evicts the OLDEST past the bound; and the OPTIONAL per-event TTL evicts a
 // stale entry lazily. The time-reading methods accept an explicit `now` (default `Date.now()`),
 // so the TTL path is driven with an elapsed clock deterministically (AGENTS §16). The over-the-
-// wire mint / validate / push / replay flow is proven through a real server in factories.test.ts.
+// wire mint / validate / push / replay flow is proven through a real server in middlewares.test.ts.
 
 // A distinct JSON-RPC message per ordinal, so a replayed sequence is identifiable by content.
 function message(n: number): JSONRPCMessage {
 	return createJSONRPCRequest({ method: 'notifications/message', id: n })
 }
 
-// A REAL recording SSEStreamInterface (single-use to this file, so local — AGENTS §16.1): its
+// A REAL recording StreamInterface (single-use to this file, so local — AGENTS §16.1): its
 // `write` records each SSEMessage into a recorder; the other methods are inert. NOT a mock of
 // behaviour — a genuine sink standing in for an open GET-SSE stream so `push`'s fan-out is
 // observable without a socket. `writes()` is a function (not a getter), so a caller reads the LIVE
 // recorded list after each push rather than a stale snapshot.
 function recordingStream(): {
-	readonly stream: SSEStreamInterface
+	readonly stream: StreamInterface
 	readonly writes: () => readonly SSEMessage[]
 } {
 	const recorder = createRecorder<readonly [SSEMessage]>()
-	const stream: SSEStreamInterface = {
+	const stream: StreamInterface = {
+		response: new Response(null),
 		closed: false,
 		write: (event) => recorder.handler(event),
 		comment: () => {},

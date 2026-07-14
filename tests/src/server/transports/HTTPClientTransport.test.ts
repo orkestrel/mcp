@@ -1,16 +1,13 @@
 import type { MCPClientInterface, MCPServerInterface } from '@src/core'
-import type { StartedServerInterface } from '../../../../setupServer.js'
+import type { MiddlewareHandler } from '@orkestrel/server'
+import type { StartedServerInterface } from '../../../setupServer.js'
 import { describe, expect, it } from 'vitest'
-import { createMCPClient, createMCPServer, createTool, createToolManager } from '@src/core'
-import {
-	createErrorBoundary,
-	createHTTPClientTransport,
-	createMCPRoutes,
-	createServer,
-	createTokenGuard,
-	signToken,
-} from '@src/server'
-import { createTeardown, startServer } from '../../../../setupServer.js'
+import { createMCPClient, createMCPServer } from '@src/core'
+import { createTool, createToolManager } from '@orkestrel/agent'
+import { createDispatcher } from '@orkestrel/router'
+import { createServer } from '@orkestrel/server/server'
+import { createHTTPClientTransport, createMCPRoutes } from '@src/server'
+import { createTeardown, startServer } from '../../../setupServer.js'
 
 // src/server/mcp/HTTPClientTransport.ts — the HTTP CLIENT transport, proven END-TO-END
 // against the SHIPPED server transport (`createMCPRoutes`) over a REAL `node:http` server
@@ -57,20 +54,30 @@ function mcpServer(): MCPServerInterface {
 // pointed at it via the HTTP client transport. `streaming` picks the server's reply
 // framing (SSE vs JSON); `guardSecret` mounts a token guard in front (the client sends
 // the bearer through the transport's `headers`).
+// A minimal bearer-token check middleware, hand-rolled locally (no @orkestrel/middleware
+// dependency) — just enough to prove the transport composes auth IN FRONT rather than
+// baking it in.
+function createBearerGuard(secret: string): MiddlewareHandler<unknown> {
+	return (request, _context, next) => {
+		if (request.headers.get('authorization') !== `Bearer ${secret}`) {
+			return Response.json({ error: 'unauthorized' }, { status: 401 })
+		}
+		return next()
+	}
+}
+
 async function connectClient(options?: {
 	readonly streaming?: boolean
 	readonly guardSecret?: string
 }): Promise<{ readonly client: MCPClientInterface; readonly handle: StartedServerInterface }> {
-	const server = createServer()
-	server.use(createErrorBoundary())
-	if (options?.guardSecret !== undefined) {
-		server.use(createTokenGuard({ secret: options.guardSecret }))
-	}
-	server.route(createMCPRoutes(mcpServer(), { streaming: options?.streaming }))
+	const dispatcher = createDispatcher<unknown>()
+	dispatcher.add(createMCPRoutes(mcpServer(), { streaming: options?.streaming }))
+	const server = createServer<unknown>({ dispatcher, state: () => undefined })
+	if (options?.guardSecret !== undefined) server.use(createBearerGuard(options.guardSecret))
 	const handle = track(await startServer(server))
 	const headers =
 		options?.guardSecret !== undefined
-			? { authorization: `Bearer ${signToken('client', { secret: options.guardSecret })}` }
+			? { authorization: `Bearer ${options.guardSecret}` }
 			: undefined
 	const client = createMCPClient({
 		transport: createHTTPClientTransport({ url: `${handle.base}/mcp`, headers }),
@@ -134,10 +141,10 @@ describe('HTTPClientTransport — policy composes in front', () => {
 	})
 
 	it('rejects (no connect) when the bearer is missing against a guarded server', async () => {
-		const server = createServer()
-		server.use(createErrorBoundary())
-		server.use(createTokenGuard({ secret: 'topsecret' }))
-		server.route(createMCPRoutes(mcpServer()))
+		const dispatcher = createDispatcher<unknown>()
+		dispatcher.add(createMCPRoutes(mcpServer()))
+		const server = createServer<unknown>({ dispatcher, state: () => undefined })
+		server.use(createBearerGuard('topsecret'))
 		const handle = track(await startServer(server))
 		// No `headers` → the guard 401s the POST; the transport surfaces no `message`, so the
 		// client's `initialize` never resolves and `connect` rejects on its deadline.

@@ -14,9 +14,10 @@
 // TTL), minting + validating a session id (the `mcp-session-id` header), serving a `DELETE
 // {path}` session-end AND a resumable `GET {path}` server→client SSE channel (each `MCPSession`
 // folds in its own replay log; `session.push` appends + fans out; a reconnect with
-// `Last-Event-ID` replays the missed events). The middleware sets the resolved session on
-// `context.state` under `MCP_SESSION_STATE` so an in-request handler can `push` to it. The
-// request/response streaming surface is the spine's generic SSE seam (`openSSEStream`), reused
+// `Last-Event-ID` replays the missed events). The middleware sets the resolved session as the
+// `context.state.session` property (the `MCPSessionState` slice) so an in-request handler can
+// `push` to it. The request/response streaming surface is the spine's generic SSE seam
+// (`openStream`), reused
 // for a Streamable-HTTP SSE response when the client `Accept`s `text/event-stream` AND for the
 // long-lived resumable GET stream.
 //
@@ -30,7 +31,8 @@
 // core does not.
 
 import type { JSONRPCMessage } from '@src/core'
-import type { SSEStreamInterface } from '../http/types.js'
+import type { StreamInterface } from '@orkestrel/server'
+import type { MCPSession } from './MCPSession.js'
 
 /**
  * Options for `createMCPRoutes` — the path the transport is mounted at and whether an SSE
@@ -73,10 +75,10 @@ export interface HTTPTransportOptions {
  *   bounds how far a reconnecting client may replay. Omit it for the {@link
  *   import('./constants.js').DEFAULT_MCP_SESSION_CAPACITY} default. (The session `ttl` bounds
  *   the session; this `capacity` bounds its replay log — independent knobs.)
- * - `clock` — the `() => number` epoch-ms clock threaded straight through to the underlying
- *   {@link import('../http/middlewares.js').createSession} (its `SessionOptions.clock` seam);
- *   defaults to `Date.now`. The deterministic clock a TTL test advances explicitly instead of
- *   racing a real idle window against wall-clock (AGENTS §16). Production never sets it.
+ * - `clock` — the `() => number` epoch-ms clock {@link import('./middlewares.js').createMCPSession}
+ *   uses directly for its own session-touch / TTL-sweep bookkeeping; defaults to `Date.now`. The
+ *   deterministic clock a TTL test advances explicitly instead of racing a real idle window
+ *   against wall-clock (AGENTS §16). Production never sets it.
  */
 export interface MCPSessionOptions {
 	readonly path?: string
@@ -93,8 +95,8 @@ export interface MCPSessionOptions {
  *
  * @remarks
  * - `id` — the opaque session id (a `crypto.randomUUID()`), echoed in the `mcp-session-id`
- *   header. The app reads it off `context.state` (under {@link
- *   import('./constants.js').MCP_SESSION_STATE}) to address a push.
+ *   header. The app reads it off `context.state.session` (the {@link MCPSessionState} slice
+ *   {@link import('./middlewares.js').createMCPSession} sets) to address a push.
  * - `attach(stream)` — register an OPEN server→client SSE stream (a resumable `GET {path}`)
  *   so future {@link push}es reach it; `detach(stream)` unregisters it (the middleware calls
  *   it when the client disconnects).
@@ -108,10 +110,26 @@ export interface MCPSessionOptions {
  */
 export interface MCPSessionInterface {
 	readonly id: string
-	attach(stream: SSEStreamInterface): void
-	detach(stream: SSEStreamInterface): void
+	attach(stream: StreamInterface): void
+	detach(stream: StreamInterface): void
 	push(message: JSONRPCMessage): string
 	replay(afterId: string): readonly EventStoreEntry[]
+}
+
+/**
+ * The `context.state` slice a {@link import('./middlewares.js').createMCPSession}
+ * middleware sets on a validated / minted request — a consumer's `TState` extends
+ * this so the downstream route handler can read `context.state.session` to `push`
+ * a server-initiated message onto the session's resumable stream.
+ *
+ * @remarks
+ * `session` is set on `initialize` (the minted session) and on every validated
+ * non-`initialize` `POST` (the resolved one); absent when the request never
+ * reached a resolved session (the middleware short-circuits those as a `404`
+ * before calling `next`).
+ */
+export interface MCPSessionState {
+	session?: MCPSessionInterface
 }
 
 /**
@@ -135,6 +153,22 @@ export interface EventStoreEntry {
 }
 
 /**
+ * The closure store entry a {@link import('./middlewares.js').createMCPSession} middleware
+ * keeps per minted session — the live {@link MCPSession} entity plus the epoch-ms instant it
+ * was last touched (the lazy-TTL sweep's idle clock, independent of the session's own
+ * replay-log TTL).
+ *
+ * @remarks
+ * - `session` — the live {@link MCPSession} entity the store keys by session id.
+ * - `touched` — the epoch-ms instant of the last access; mutated (not replaced) on every
+ *   resolved request so the middleware's lazy sweep can evict an idle entry past `ttl`.
+ */
+export interface MCPSessionEntry {
+	readonly session: MCPSession
+	touched: number
+}
+
+/**
  * Options for `createHTTPClientTransport` — the remote MCP server's URL and any extra
  * request headers.
  *
@@ -147,10 +181,17 @@ export interface EventStoreEntry {
  *   `content-type: application/json` and an `Accept` of both `application/json` and
  *   `text/event-stream` (so the server may answer with either framing); a key supplied
  *   here is merged on top.
+ * - `fetch` — the `fetch` implementation to issue each `POST` with; defaults to
+ *   `globalThis.fetch`. Injectable for a test double or a non-global `fetch`.
+ * - `timeout` — an optional per-request timeout in milliseconds; when set, each
+ *   `fetch` call is issued with `signal: AbortSignal.timeout(timeout)`. Omit for no
+ *   transport-level deadline.
  */
 export interface HTTPClientTransportOptions {
 	readonly url: string
 	readonly headers?: Readonly<Record<string, string>>
+	readonly fetch?: typeof fetch
+	readonly timeout?: number
 }
 
 /**
@@ -193,4 +234,52 @@ export interface WebSocketServerOptions {
 export interface WebSocketClientTransportOptions {
 	readonly url: string
 	readonly headers?: Readonly<Record<string, string>>
+}
+
+/**
+ * Options for `createStdioClientTransport` — the child process to spawn as a
+ * stdio-framed MCP server (newline-delimited JSON-RPC over `stdin`/`stdout`).
+ *
+ * @remarks
+ * - `command` — the executable to spawn (e.g. `'node'`, `'./my-mcp-server'`). REQUIRED.
+ * - `args` — the command-line arguments passed to `command`; defaults to none.
+ * - `env` — the environment variables for the spawned child, passed straight to
+ *   `node:child_process`'s `spawn`; when OMITTED the child inherits the full
+ *   `process.env` (the `spawn` default), when PROVIDED it REPLACES the inherited
+ *   environment entirely (`spawn` semantics) — a caller wanting to extend rather
+ *   than replace spreads `process.env` into `env` themselves.
+ */
+export interface StdioClientTransportOptions {
+	readonly command: string
+	readonly args?: readonly string[]
+	readonly env?: Readonly<Record<string, string>>
+}
+
+/**
+ * Options for `createStdioServer` — the injectable stdin/stdout streams the server
+ * transport reads newline-delimited JSON-RPC requests from and writes responses to.
+ *
+ * @remarks
+ * - `input` — the readable stream carrying newline-delimited JSON-RPC requests;
+ *   defaults to `process.stdin`. Injectable for a test double.
+ * - `output` — the writable stream newline-delimited JSON-RPC responses are written
+ *   to; defaults to `process.stdout`. Injectable for a test double.
+ */
+export interface StdioServerOptions {
+	readonly input?: NodeJS.ReadableStream
+	readonly output?: NodeJS.WritableStream
+}
+
+/**
+ * The result of folding one more chunk of raw stdio bytes into a newline-framed
+ * buffer — every COMPLETE line extracted (newline-terminated in the wire bytes) plus
+ * the trailing partial line carried forward as the new `remainder`.
+ *
+ * @remarks
+ * A plain value record (no behavior, §4.5) {@link import('./helpers.js').extractLines}
+ * returns; the caller threads `remainder` back in as the next call's `buffer`.
+ */
+export interface LineExtraction {
+	readonly lines: readonly string[]
+	readonly remainder: string
 }

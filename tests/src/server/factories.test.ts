@@ -1,39 +1,53 @@
-import type { StartedServerInterface } from '../../../setupServer.js'
+import type { MiddlewareHandler } from '@orkestrel/server'
+import type { StartedServerInterface } from '../../setupServer.js'
 import { describe, expect, it } from 'vitest'
 import { createMCPClient } from '@src/core'
+import { createDispatcher } from '@orkestrel/router'
+import { createServer } from '@orkestrel/server/server'
 import {
-	createErrorBoundary,
 	createMCPRoutes,
-	createServer,
-	createTokenGuard,
 	createWebSocketClientTransport,
 	createWebSocketServer,
 	MCP_SESSION_HEADER,
-	signToken,
 } from '@src/server'
-import { collectSSE, createJSONRPCRequest } from '../../../setup.js'
+import { collectSSE, createJSONRPCRequest } from '../../setup.js'
 import {
 	createCalculatorServer,
 	createTeardown,
 	postJSON,
 	startServer,
 	upgradeRequest,
-} from '../../../setupServer.js'
+} from '../../setupServer.js'
 
-// src/server/mcp/factories.ts — createMCPRoutes, the stateless Streamable-HTTP MCP
-// transport, proven over a REAL server + a REAL MCPServer over a REAL ToolManager (stub
-// tools, NO live model) driven with `fetch` (AGENTS §16). The contract the assertions
-// pin down: POST dispatches JSON-RPC; a TRANSPORT failure (malformed JSON / a non-
-// request) is HTTP 400 + a JSON-RPC error body; a DISPATCH result (success OR an in-band
-// JSON-RPC error like method-not-found) is HTTP 200 + the envelope; a notification (no
-// `id`) is 202 + empty; `Accept: text/event-stream` frames the 200 as an SSE `data:`
-// event (decoded with the core SSEParser via collectSSE); GET to the path is the spine's
-// automatic 405; and a token guard mounted IN FRONT 401s an unauthenticated POST
-// (proving the transport is mechanism — policy composes ahead of it). The STATEFUL session
-// layer (`createMCPSession`) is a separate plug-and-play middleware, proven in
-// middlewares.test.ts; here `createMCPRoutes` is stateless-only.
+// src/server/factories.ts — createMCPRoutes, the stateless Streamable-HTTP MCP
+// transport, proven over a REAL @orkestrel/server + a REAL MCPServer over a REAL
+// ToolManager (stub tools, NO live model) driven with `fetch` (AGENTS §16). The
+// contract the assertions pin down: POST dispatches JSON-RPC; a TRANSPORT failure
+// (malformed JSON / a non-request) is HTTP 400 + a JSON-RPC error body; a DISPATCH
+// result (success OR an in-band JSON-RPC error like method-not-found) is HTTP 200 +
+// the envelope; a notification (no `id`) is 202 + empty; `Accept: text/event-stream`
+// frames the 200 as an SSE `data:` event (decoded with the core SSEParser via
+// collectSSE); GET to the path is the spine's automatic 405; and a token-check
+// middleware mounted IN FRONT 401s an unauthenticated POST (proving the transport is
+// mechanism — policy composes ahead of it, via the spine's OWN `use`, no
+// @orkestrel/middleware dependency). The STATEFUL session layer (`createMCPSession`)
+// is a separate plug-and-play middleware, proven in middlewares.test.ts; here
+// `createMCPRoutes` is stateless-only.
 
 const { track } = createTeardown((handle: StartedServerInterface) => handle.stop())
+
+// A minimal bearer-token check middleware, hand-rolled locally (no @orkestrel/middleware
+// dependency) — just enough to prove the transport composes auth IN FRONT rather than
+// baking it in.
+function createBearerGuard(secret: string): MiddlewareHandler<unknown> {
+	return (request, _context, next) => {
+		const header = request.headers.get('authorization')
+		if (header !== `Bearer ${secret}`) {
+			return Response.json({ error: 'unauthorized' }, { status: 401 })
+		}
+		return next()
+	}
+}
 
 // Stand up a server with the stateless MCP transport mounted (optionally with extra
 // middleware / route options), started on an ephemeral port.
@@ -42,17 +56,15 @@ async function startMCP(options?: {
 	readonly path?: string
 	readonly guardSecret?: string
 }): Promise<StartedServerInterface> {
-	const server = createServer()
-	server.use(createErrorBoundary()) // renders a guard 401, never reached by the transport itself
-	if (options?.guardSecret !== undefined) {
-		server.use(createTokenGuard({ secret: options.guardSecret }))
-	}
-	server.route(
+	const dispatcher = createDispatcher<unknown>()
+	dispatcher.add(
 		createMCPRoutes(createCalculatorServer(), {
 			streaming: options?.streaming,
 			path: options?.path,
 		}),
 	)
+	const server = createServer<unknown>({ dispatcher, state: () => undefined })
+	if (options?.guardSecret !== undefined) server.use(createBearerGuard(options.guardSecret))
 	return track(await startServer(server))
 }
 
@@ -226,7 +238,7 @@ describe('createMCPRoutes — the spine answers other verbs', () => {
 })
 
 describe('createMCPRoutes — mechanism, not policy', () => {
-	it('behind a token guard, a POST without a token → 401 (auth composes IN FRONT)', async () => {
+	it('behind a bearer guard, a POST without a token → 401 (auth composes IN FRONT)', async () => {
 		const secret = 'mcp-guard-secret'
 		const handle = await startMCP({ guardSecret: secret })
 		// No Authorization header — the guard short-circuits BEFORE the transport handler.
@@ -234,7 +246,7 @@ describe('createMCPRoutes — mechanism, not policy', () => {
 		expect(denied.status).toBe(401)
 		// A valid token reaches the transport, which dispatches normally.
 		const allowed = await postJSON(handle.base, createJSONRPCRequest({ method: 'ping', id: 11 }), {
-			headers: { authorization: `Bearer ${signToken('client', { secret })}` },
+			headers: { authorization: `Bearer ${secret}` },
 		})
 		expect(allowed.status).toBe(200)
 		expect((await allowed.json()).result).toEqual({})
@@ -276,22 +288,24 @@ describe('createMCPRoutes — the stateless default (no session middleware)', ()
 
 // ── The WebSocket transport, both halves against each other ──────────────────
 //
-// src/server/mcp/{WebSocketServerTransport,WebSocketClientTransport}.ts + createWebSocketServer
-// / createWebSocketClientTransport — the DETERMINISTIC both-transports WS e2e (no live model):
-// a REAL `Server` with `server.upgrade(createWebSocketServer(mcp))` over the same stub-tool
-// MCPServer, started with `startServer`; an `MCPClient` over
+// src/server/transports/{WebSocketServerTransport,WebSocketClientTransport}.ts +
+// createWebSocketServer / createWebSocketClientTransport — the DETERMINISTIC
+// both-transports WS e2e (no live model): a REAL `Server` with
+// `server.upgrade(createWebSocketServer(mcp))` over the same stub-tool MCPServer,
+// started with `startServer`; an `MCPClient` over
 // `createWebSocketClientTransport({ url: <ws>/mcp })` drives `connect()` → `tools()` →
-// `call('add'/'boom')` over REAL WebSocket frames through the REAL spine upgrade seam. Proves
-// the ingress↔egress loop end to end: the handshake, the tool list, a tool-call value
-// round-trip, an erroring tool → `isError` → a local throw, and the upgrade-decline path (a
-// non-WS request to the path, and a WS upgrade to a wrong path, are both declined → destroyed).
+// `call('add'/'boom')` over REAL WebSocket frames through the REAL spine upgrade seam.
+// Proves the ingress↔egress loop end to end: the handshake, the tool list, a tool-call
+// value round-trip, an erroring tool → `isError` → a local throw, and the
+// upgrade-decline path (a non-WS request to the path, and a WS upgrade to a wrong path,
+// are both declined → destroyed).
 
 // Stand up a server exposing the stub-tool MCPServer over WebSocket on an ephemeral port. The
 // WS client transport accepts the `http://` base directly (it converts `ws(s)`→`http(s)`
 // internally; an `http://` URL passes through to the same upgrade endpoint).
 async function startWsMCP(): Promise<StartedServerInterface> {
-	const server = createServer()
-	server.use(createErrorBoundary())
+	const dispatcher = createDispatcher<unknown>()
+	const server = createServer<unknown>({ dispatcher, state: () => undefined })
 	server.upgrade(createWebSocketServer(createCalculatorServer())) // ingress over the spine upgrade seam
 	return track(await startServer(server))
 }

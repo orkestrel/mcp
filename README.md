@@ -1,67 +1,68 @@
-# @orkestrel/worker
+# @orkestrel/mcp
 
-A typed, resource-backed **job worker** for the `@orkestrel` line: a `Worker`
-is a `Queue` (`@orkestrel/queue`) whose handler runs against an automatically
-acquired resource leased from a `Pool` (`@orkestrel/pool`) — released when the
-job settles, even on throw. Composition, not reimplementation: all
-concurrency, retries, per-attempt timeout, abort, and durability are the
-Queue's; all idle reuse and `max` backpressure are the Pool's. The worker is
-observable (a typed `emitter` re-exposes the underlying queue's job lifecycle
-— `enqueue` / `start` / `retry` / `success` / `failure` / `abort` / `drain`).
-For CPU-parallel work, the server surface's `createNodeWorker` specializes the
-core `createWorker` over a pool of `node:worker_threads`, crossing the
-structured-clone boundary with zero `as` via `input` / `result` guards. Part
-of the `@orkestrel` line.
+A typed [Model Context Protocol](https://modelcontextprotocol.io) client/server
+for the `@orkestrel` line, with pluggable HTTP, WebSocket, and stdio
+transports. `createMCPServer` wraps a live `ToolManagerInterface`
+(`@orkestrel/agent`) as an MCP server; `createMCPClient` drives a remote MCP
+server and surfaces its tools as local `ToolInterface`s an agent can call as
+if they were its own. The dispatch core is transport- and provider-agnostic
+(`src/core` — JSON-RPC 2.0, no HTTP, no `as`); every transport (Streamable
+HTTP over `@orkestrel/router` / `@orkestrel/server`, WebSocket over
+`@orkestrel/websocket`, and stdio over `node:child_process`) lives one layer
+out (`src/server`), each mechanism, not policy. Part of the `@orkestrel` line.
 
 ## Install
 
 ```sh
-npm install @orkestrel/worker
+npm install @orkestrel/mcp
 ```
 
 ## Requirements
 
 - Node.js >= 24
 - ESM and CommonJS builds ship for both the core and server entry points
+- `@orkestrel/server` and `@orkestrel/router` are peer dependencies (the HTTP
+  spine the `./server` transports mount onto)
 
 ## Usage
 
-```ts
-import { createWorker } from '@orkestrel/worker'
-
-const worker = createWorker<Query, Connection, Rows>({
-	pool: { create: () => connect(), destroy: (connection) => connection.close() },
-	handler: (query, connection, { signal }) => connection.run(query, signal),
-	concurrency: 4, // up to four jobs in flight; the pool defaults its `max` to match
-	retries: 1,
-})
-
-const rows = await worker.enqueue(query)
-worker.destroy() // tears down the queue, then the pool
-```
-
-CPU-parallel jobs over `node:worker_threads`:
+Expose a tool registry over MCP, mounted on the HTTP spine:
 
 ```ts
-import { createNodeWorker } from '@orkestrel/worker/server'
+import { createMCPServer } from '@orkestrel/mcp'
+import { createMCPRoutes } from '@orkestrel/mcp/server'
+import { createToolManager } from '@orkestrel/agent'
 
-const isNumber = (value: unknown): value is number => typeof value === 'number'
+const tools = createToolManager()
+tools.add({ id: 'add', name: 'add', execute: (a) => Number(a.x) + Number(a.y) })
 
-const worker = createNodeWorker({
-	script: new URL('./double.js', import.meta.url),
-	input: isNumber,
-	result: isNumber,
-	concurrency: 4,
-})
-
-const doubled = await worker.enqueue(21) // 42, computed on a worker thread
+const mcp = createMCPServer({ name: 'calculator', version: '1.0.0', tools })
+const routes = createMCPRoutes(mcp) // POST /mcp dispatches JSON-RPC (JSON or SSE per Accept)
+router.add(routes)
 ```
+
+Drive a remote MCP server as a client, over the same transport-agnostic core:
+
+```ts
+import { createMCPClient } from '@orkestrel/mcp'
+import { createHTTPClientTransport } from '@orkestrel/mcp/server'
+
+const client = createMCPClient({
+	transport: createHTTPClientTransport({ url: 'http://localhost:3000/mcp' }),
+})
+await client.connect()
+const tools = await client.tools()
+const value = await client.call('add', { x: 2, y: 5 })
+```
+
+The SAME `MCPClient` drives a `createWebSocketClientTransport` or
+`createStdioClientTransport` instead — only the injected transport changes.
 
 ## Guide
 
-For the full surface — the `Worker` facade, `createNodeWorker` / `serveWorker`,
-the durable `createJSONQueueStore`, the observable `emitter`, and usage
-patterns — see [`guides/src/worker.md`](guides/src/worker.md).
+For the full surface — the JSON-RPC dispatch core, the three server
+transports (HTTP, WebSocket, stdio), the native session middleware, and
+usage patterns — see [`guides/src/mcp.md`](guides/src/mcp.md).
 
 ## Package
 

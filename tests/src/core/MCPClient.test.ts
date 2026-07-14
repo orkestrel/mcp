@@ -3,16 +3,12 @@ import type {
 	ClientTransportInterface,
 	JSONRPCMessage,
 	MCPServerInterface,
-	ToolManagerInterface,
 } from '@src/core'
+import type { ToolManagerInterface } from '@orkestrel/agent'
 import { describe, expect, it } from 'vitest'
-import {
-	createEmitter,
-	createMCPClient,
-	createMCPServer,
-	createTool,
-	createToolManager,
-} from '@src/core'
+import { createMCPClient, createMCPServer } from '@src/core'
+import { createTool, createToolManager } from '@orkestrel/agent'
+import { createEmitter } from '@orkestrel/emitter'
 
 // MCPClient ↔ a REAL MCPServer over an in-process LOOPBACK transport (AGENTS §16 — a
 // real server + real ToolManager, no mocks of the unit under test). The loopback's

@@ -1,19 +1,20 @@
-import type {
-	ClientTransportEventMap,
-	ClientTransportInterface,
-	EmitterInterface,
-	JSONRPCMessage,
-} from '@src/core'
-import type { NodeWebSocketInterface } from '../../websocket/types.js'
+import type { ClientTransportEventMap, ClientTransportInterface, JSONRPCMessage } from '@src/core'
+import type { EmitterInterface } from '@orkestrel/emitter'
+import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { WebSocketClientTransportOptions } from '../types.js'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
-import { Emitter, isString, parseJSONRPCMessage } from '@src/core'
-import { computeWebSocketAccept, createNodeWebSocket } from '../../websocket/index.js'
-import { WEBSOCKET_VERSION } from '../../websocket/constants.js'
+import { parseJSONRPCMessage } from '@src/core'
+import { isString } from '@orkestrel/contract'
+import { Emitter } from '@orkestrel/emitter'
+import {
+	computeWebSocketAccept,
+	createNodeWebSocket,
+	WEBSOCKET_VERSION,
+} from '@orkestrel/websocket'
 import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
 
 /**

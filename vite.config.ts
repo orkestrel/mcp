@@ -51,12 +51,12 @@ export const guides = (config?: UserConfig): UserConfig =>
 		),
 	)
 
-// Extends srcCore: server-only library (`src/server`, a `node:worker_threads`
-// CPU-parallel worker specializing the core `Worker` — the pool's resource is a
-// spawned thread, driven over a run/abort/reply protocol). Builds a dual ESM+CJS
-// lib for Node and runs its tests in the node environment. Externalizes `node:*`
-// (so `node:worker_threads` is never bundled) AND declared `@orkestrel/*` deps
-// AND `@src/core` → the sibling `dist/src/core` build (format-aware:
+// Extends srcCore: server-only library (`src/server`, the HTTP/WebSocket/stdio
+// transports and session middleware that adapt the core, transport-agnostic MCP
+// client/server over the @orkestrel/server spine). Builds a dual ESM+CJS lib for
+// Node and runs its tests in the node environment. Externalizes `node:*` (so
+// `node:child_process` and friends are never bundled) AND declared `@orkestrel/*`
+// deps AND `@src/core` → the sibling `dist/src/core` build (format-aware:
 // `../core/index.js` for the ESM output, `../core/index.cjs` for the CJS
 // output), exactly as core ships dual-format. Build-only — the test project
 // resolves `@src/core` from source through the shared `resolve` alias.

@@ -1,5 +1,5 @@
 import type { JSONRPCMessage, JSONRPCRequest, JSONRPCResponse } from './types.js'
-import { isNumber, isRecord, isString, isUndefined } from '../contracts/index.js'
+import { isNumber, isRecord, isString, isUndefined } from '@orkestrel/contract'
 
 // AGENTS §14: every guard here is a TOTAL function over the already-`JSON.parse`d
 // value — adversarial input returns `false`, never throws. The raw-string

@@ -1,8 +1,8 @@
-import type { EmitterErrorHandler, JSONRPCResponse, ToolManagerInterface } from '@src/core'
+import type { JSONRPCResponse } from '@src/core'
+import type { EmitterErrorHandler } from '@orkestrel/emitter'
+import type { ToolManagerInterface } from '@orkestrel/agent'
 import {
 	createMCPServer,
-	createTool,
-	createToolManager,
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_INVALID_REQUEST,
 	JSONRPC_METHOD_NOT_FOUND,
@@ -10,7 +10,8 @@ import {
 	MCP_PROTOCOL_VERSION,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { createErrorRecorder, createJSONRPCRequest, recordEmitterEvents } from '../../../setup.js'
+import { createTool, createToolManager } from '@orkestrel/agent'
+import { createErrorRecorder, createJSONRPCRequest, recordEmitterEvents } from '../../setup.js'
 
 // MCPServer is the transport-agnostic JSON-RPC 2.0 dispatch core that exposes a live
 // ToolManager over MCP (AGENTS §16 — a REAL ToolManager with real Tools, no mocks; no

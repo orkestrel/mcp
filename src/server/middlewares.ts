@@ -1,150 +1,157 @@
-import type { Middleware } from '../http/types.js'
-import type { MCPSessionOptions } from './types.js'
+import type { MiddlewareHandler } from '@orkestrel/server'
+import type { MCPSessionEntry, MCPSessionOptions, MCPSessionState } from './types.js'
 import { isInitializeRequest, parseJSONRPCMessage } from '@src/core'
-import { createSession } from '../http/middlewares.js'
-import { bindStreamingAbort, openSSEStream } from '../http/helpers.js'
-import { DEFAULT_MCP_PATH, MCP_SESSION_HEADER, MCP_SESSION_STATE } from './constants.js'
-import { readLastEventId, rejectUnknownSession } from './helpers.js'
+import { openStream } from '@orkestrel/server'
+import { DEFAULT_MCP_PATH, MCP_SESSION_HEADER } from './constants.js'
+import { readLastEventId, readSessionHeader, rejectUnknownSession } from './helpers.js'
 import { MCPSession } from './MCPSession.js'
 
 /**
- * Create the MCP session {@link Middleware} — the plug-and-play stateful layer that fronts a
- * session-agnostic {@link import('./factories.js').createMCPRoutes}. Compose it via
- * `server.use(createMCPSession())`, mirroring `createRateLimiter` / `createTokenGuard` /
- * `createCors`.
+ * Create the native MCP session {@link MiddlewareHandler} — the plug-and-play stateful layer
+ * that fronts a session-agnostic {@link import('./factories.js').createMCPRoutes}. Compose it
+ * via `router.use(createMCPSession())` (or the equivalent middleware seam), mirroring any
+ * other closure-scoped stateful middleware. Has NO dependency on `@orkestrel/middleware` — the
+ * session store, mint-on-`initialize`, and resumable stream are all native to this package.
  *
  * @remarks
- * It BUILDS ON the generic {@link import('../http/middlewares.js').createSession} HTTP primitive
- * — sessions are a first-class, reusable spine mechanism and MCP is its first consumer. The
- * generic resolve / mint / validate-or-reject / `DELETE`-end / idle-TTL machinery (the closure
- * session store, the lazy eviction, the `mcp-session-id` header round-trip) all come from
- * `createSession`; this factory only CONFIGURES it for the MCP wire and adds the ONE
- * MCP-specific piece on top — the resumable server→client `GET` SSE stream.
+ * Owns a closure `Map<string, MCPSessionEntry>` keyed by session id, and a single request
+ * `path` (default {@link DEFAULT_MCP_PATH}); a request to any other path passes straight
+ * through (`next()`).
  *
- * The `createSession` configuration:
- *
- * - `header` is {@link MCP_SESSION_HEADER} (`'mcp-session-id'`), `key` is {@link
- *   MCP_SESSION_STATE}, and `create` builds a fresh {@link import('./MCPSession.js').MCPSession}
- *   (its folded replay log bounded by `options.capacity`). `ttl` is the session idle lifetime.
- * - `mint` returns `true` ONLY for a `POST` whose (cached) body parses to an `initialize`
- *   request — so `initialize` MINTS a session (the id returned in the response header) while
- *   any other unsessioned request does not silently open one. The mint predicate awaits
- *   `context.body()`, which is CACHED, so the downstream route re-reads the same body.
- * - `require` is `true` with `onMissing` = {@link rejectUnknownSession}: a non-`initialize`
- *   request (POST, GET, or DELETE) carrying no VALID session id is a transport-level **404**
- *   with a JSON-RPC error body. (A `DELETE` carrying a valid id is the generic session-END —
- *   `createSession` drops it and answers **204**.)
- *
- * It OWNS a single request `path` (default {@link DEFAULT_MCP_PATH}); a request to any other
- * path passes straight through. For its `path` it delegates to `createSession`, and in the
- * delegate's `next` callback adds the MCP-specific behavior:
- *
- * - **`GET {path}`** — open the resumable server→client SSE stream. `createSession` has already
- *   resolved + validated the session (a missing / unknown / evicted id never reaches here — it
- *   was the **404**) and set it on `context.state`; read it back ({@link MCP_SESSION_STATE},
- *   narrowed with `instanceof MCPSession`, no `as`), `openSSEStream`, read `Last-Event-ID`
- *   ({@link readLastEventId}) and REPLAY every event strictly after it (`session.replay`, an
- *   unknown / evicted cursor replays nothing) onto the stream FIRST, THEN `session.attach(stream)`
- *   (so future `push`es reach it), THEN bind a client disconnect → `session.detach`. Long-lived
- *   — never `end()`ed here. Short-circuits.
- * - **`POST {path}`** — the mint-on-`initialize` / validate-or-404 already ran in `createSession`
- *   (the resolved session is on `context.state`), so this just `await next()`s and the route
- *   dispatches the validated request.
- *
- * The resolved session is set on `context.state` under {@link MCP_SESSION_STATE}, so an
- * in-request handler reads it (`context.state.get(MCP_SESSION_STATE)`) and `push`es a
- * server-initiated message to the session's `GET {path}` stream.
+ * - **`POST {path}`.** Buffers `const text = await request.text()` (so the downstream route
+ *   can re-read it via a freshly-built forwarded `Request`). Resolves a session via {@link
+ *   readSessionHeader}: a VALID id touches the entry and sets `context.state.session`; an
+ *   ABSENT / unknown id whose (guarded) body parses to an `initialize` request ({@link
+ *   isInitializeRequest}) MINTS a fresh {@link MCPSession} (`crypto.randomUUID()`, `capacity`)
+ *   and sets `context.state.session`; neither → {@link rejectUnknownSession} (`404`). It then
+ *   FORWARDS a fresh `Request` carrying the buffered `text` (`next(forwarded)`) — never the
+ *   already-consumed original — so the route re-reads the same body, and stamps the response
+ *   with {@link MCP_SESSION_HEADER}.
+ * - **`GET {path}`.** Resolves the session the same way (no mint — only `initialize` mints);
+ *   an invalid / unknown id is the same `404`. A valid session opens the resumable
+ *   server→client stream via `@orkestrel/server`'s {@link import('@orkestrel/server').openStream}:
+ *   replays every event after the client's `Last-Event-ID` ({@link readLastEventId}) BEFORE
+ *   attaching the stream for live pushes, then attaches; a client disconnect (`request.signal`)
+ *   detaches it. Long-lived — never `end()`ed here.
+ * - **`DELETE {path}`.** Resolves the session; a valid id deletes it from the store and answers
+ *   `204`; an invalid / unknown id is the same `404`.
  *
  * It is MECHANISM, not policy, and ADDITIVE: omit it entirely for the stateless default
  * ({@link import('./factories.js').createMCPRoutes}'s only behavior). The `path` MUST match the
  * `createMCPRoutes` `path` it fronts. The WebSocket transport is inherently one session per
  * connection (the socket IS the session), so this middleware does not apply to it.
  *
- * @param options - Optional `path` (default {@link DEFAULT_MCP_PATH}), `ttl` (session idle
- *   lifetime, ms), `capacity` (the folded per-session replay-log bound), and `clock` (the
- *   deterministic epoch-ms clock threaded to `createSession`); see {@link MCPSessionOptions}
- * @returns A {@link Middleware} that mints / validates sessions + serves the resumable GET / DELETE
+ * @typeParam TState - The consumer's `TState`, which MUST extend {@link MCPSessionState} so
+ *   the resolved session can be threaded through `context.state.session`
+ * @param options - Optional `path` (default {@link DEFAULT_MCP_PATH}), `ttl` (idle-session
+ *   sweep window, ms — omit for sessions that live until an explicit `DELETE`), `capacity`
+ *   (the folded per-session replay-log bound), and `clock` (the deterministic epoch-ms clock;
+ *   defaults to `Date.now`); see {@link MCPSessionOptions}
+ * @returns A {@link MiddlewareHandler} that mints / validates sessions + serves the resumable
+ *   `GET` / `DELETE`
  *
  * @example
  * ```ts
  * import { createMCPServer, createToolManager } from '@src/core'
- * import { createMCPRoutes, createMCPSession, createServer } from '@src/server'
+ * import { createMCPRoutes, createMCPSession } from '@src/server'
  *
  * const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
- * const server = createServer()
- * server.use(createMCPSession({ ttl: 60_000 })) // stateful: mint + validate + resumable GET / DELETE
- * server.route(createMCPRoutes(mcp)) // the route stays session-agnostic
- * await server.start()
+ * router.use(createMCPSession({ ttl: 60_000 })) // stateful: mint + validate + resumable GET / DELETE
+ * router.add(createMCPRoutes(mcp)) // the route stays session-agnostic
  * ```
  */
-export function createMCPSession(options?: MCPSessionOptions): Middleware {
+export function createMCPSession<TState extends MCPSessionState>(
+	options?: MCPSessionOptions,
+): MiddlewareHandler<TState> {
 	const path = options?.path ?? DEFAULT_MCP_PATH
 	const capacity = options?.capacity
-	// The MCP session layer IS the generic `createSession` HTTP primitive configured for the MCP
-	// wire: the `mcp-session-id` header + `mcp:session` state key, an `MCPSession` (folded replay
-	// log) per id, mint-only-on-`initialize`, and require-or-404 (the JSON-RPC unknown-session
-	// body). `createSession` owns the store + lazy idle-TTL eviction + the header round-trip; this
-	// factory adds ONLY the resumable GET stream below. (No duplicated session machinery.)
-	const session = createSession<MCPSession>({
-		header: MCP_SESSION_HEADER,
-		ttl: options?.ttl,
-		key: MCP_SESSION_STATE,
-		clock: options?.clock,
-		create: (id) => new MCPSession(id, { capacity }),
-		// Mint a session only for an `initialize` POST. The predicate awaits the CACHED body
-		// (`context.body()`), so the route re-reads the same value; a malformed / non-message /
-		// non-`initialize` body simply does not mint (it returns `false`) — a fresh client without
-		// a valid session is then the require-404, while a malformed body carrying a VALID session
-		// resolves that session and reaches the route's canonical `-32700` (the session branch wins
-		// before `mint` is consulted, so the route still owns transport-level parse failures).
-		mint: async (context) => {
-			if (context.method !== 'POST') return false
-			try {
-				const request = parseJSONRPCMessage(await context.body())
-				return request !== undefined && isInitializeRequest(request)
-			} catch {
-				return false
+	const ttl = options?.ttl
+	const clock = options?.clock ?? Date.now
+	const store = new Map<string, MCPSessionEntry>()
+
+	return async (request, context, next) => {
+		if (context.url.pathname !== path) return next()
+		sweep()
+
+		if (context.method === 'GET') {
+			const entry = resolve(request)
+			if (entry === undefined) return rejectUnknownSession()
+			const stream = openStream()
+			// A comment write flushes the response headers immediately (the underlying node:http
+			// response only sends headers on its first `write`/`end`) — without it a client's fetch
+			// hangs waiting for headers until the first replay/push write, which may never come.
+			stream.comment('open')
+			const lastEventId = readLastEventId(request)
+			if (lastEventId !== undefined) {
+				// Replay every event STRICTLY AFTER the client's last-seen id BEFORE attaching, so the
+				// missed events arrive in order ahead of any live push.
+				for (const e of entry.session.replay(lastEventId)) {
+					stream.write({ id: e.id, data: JSON.stringify(e.message) })
+				}
 			}
-		},
-		require: true,
-		onMissing: rejectUnknownSession,
-	})
-	return async (context, next) => {
-		// The middleware OWNS only its MCP path — anything else passes straight through.
-		if (context.url.pathname !== path) {
-			await next()
-			return
+			entry.session.attach(stream)
+			if (request.signal.aborted) entry.session.detach(stream)
+			else
+				request.signal.addEventListener('abort', () => entry.session.detach(stream), { once: true })
+			return stream.response
 		}
-		// Delegate the generic resolve / mint-on-initialize / validate-or-404 / DELETE-end to
-		// `createSession`; its `next` callback runs ONLY once a session was resolved or minted (a
-		// missing / unknown id short-circuited as the 404, a DELETE as the 204). There we add the
-		// MCP-specific GET resumable stream; a POST just proceeds to the route dispatch.
-		await session(context, async () => {
-			if (context.method === 'GET') {
-				// Resumable server→client SSE channel. `createSession` set the validated session on
-				// `context.state`; read it back, narrowing with `instanceof` (no `as`, §14) — it is
-				// always present here (an unknown session was the 404), the guard is the type bridge.
-				const resolved = context.state.get(MCP_SESSION_STATE)
-				if (!(resolved instanceof MCPSession)) {
-					await next()
-					return
-				}
-				const stream = openSSEStream(context)
-				const lastEventId = readLastEventId(context)
-				if (lastEventId !== undefined) {
-					// Replay every event STRICTLY AFTER the client's last-seen id BEFORE attaching, so the
-					// missed events arrive in order ahead of any live push (an unknown / evicted cursor
-					// replays nothing — the session's spec-sane choice).
-					for (const entry of resolved.replay(lastEventId)) {
-						stream.write({ id: entry.id, data: JSON.stringify(entry.message) })
-					}
-				}
-				resolved.attach(stream)
-				bindStreamingAbort(context, () => resolved.detach(stream))
-				return
+
+		if (context.method === 'DELETE') {
+			const id = readSessionHeader(request)
+			if (id === undefined || !store.has(id)) return rejectUnknownSession()
+			store.delete(id)
+			return new Response(null, { status: 204 })
+		}
+
+		// POST — buffer the body once so the downstream route can re-read it via a forwarded
+		// Request; only `initialize` mints a fresh session when no valid id is present.
+		const text = await request.text()
+		let entry = resolve(request)
+		if (entry === undefined) {
+			let parsed: unknown
+			try {
+				parsed = parseJSONRPCMessage(JSON.parse(text))
+			} catch {
+				parsed = undefined
 			}
-			// A validated POST (mint-on-initialize / session-echo already passed) — dispatch it.
-			await next()
+			if (parsed !== undefined && isInitializeRequest(parsed)) {
+				const session = new MCPSession(crypto.randomUUID(), { capacity })
+				entry = { session, touched: clock() }
+				store.set(session.id, entry)
+			} else {
+				return rejectUnknownSession()
+			}
+		}
+		context.state.session = entry.session
+		const forwarded = new Request(context.url, {
+			method: 'POST',
+			headers: request.headers,
+			body: text,
 		})
+		const response = await next(forwarded)
+		response.headers.set(MCP_SESSION_HEADER, entry.session.id)
+		return response
+	}
+
+	// Resolve + touch the session named by the request's `mcp-session-id` header, or
+	// `undefined` when the header is absent or names an unknown / evicted session.
+	function resolve(request: Request): MCPSessionEntry | undefined {
+		const id = readSessionHeader(request)
+		if (id === undefined) return undefined
+		const entry = store.get(id)
+		if (entry === undefined) return undefined
+		entry.touched = clock()
+		return entry
+	}
+
+	// Lazy idle-TTL sweep — no background timer (the rate-limiter lazy-window idiom): drop
+	// every session not touched within `ttl` on the next access. Omitted entirely (a no-op)
+	// when `ttl` is unset — sessions then live until an explicit `DELETE`.
+	function sweep(): void {
+		if (ttl === undefined) return
+		const cutoff = clock() - ttl
+		for (const [id, entry] of store) {
+			if (entry.touched <= cutoff) store.delete(id)
+		}
 	}
 }

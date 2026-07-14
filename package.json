@@ -1,22 +1,23 @@
 {
-	"name": "@orkestrel/worker",
+	"name": "@orkestrel/mcp",
 	"version": "0.0.1",
-	"description": "A typed, resource-backed job worker for the @orkestrel line — a Queue paired with a Pool over an execution seam, plus a node:worker_threads server surface for CPU-parallel jobs. Part of the @orkestrel line.",
+	"description": "A typed Model Context Protocol client/server with pluggable HTTP, WebSocket, and stdio transports. Part of the @orkestrel line.",
 	"keywords": [
-		"async",
-		"concurrency",
-		"job-queue",
-		"pool",
+		"json-rpc",
+		"mcp",
+		"model-context-protocol",
+		"sse",
+		"stdio",
+		"transport",
 		"typescript",
-		"worker",
-		"worker-threads"
+		"websocket"
 	],
-	"homepage": "https://github.com/orkestrel/worker#readme",
-	"bugs": "https://github.com/orkestrel/worker/issues",
+	"homepage": "https://github.com/orkestrel/mcp#readme",
+	"bugs": "https://github.com/orkestrel/mcp/issues",
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/orkestrel/worker.git"
+		"url": "git+https://github.com/orkestrel/mcp.git"
 	},
 	"files": [
 		"dist",
@@ -78,11 +79,15 @@
 	"dependencies": {
 		"@orkestrel/agent": "^0.0.2",
 		"@orkestrel/contract": "^0.0.1",
-		"@orkestrel/emitter": "^0.0.1"
+		"@orkestrel/emitter": "^0.0.1",
+		"@orkestrel/sse": "^0.0.1",
+		"@orkestrel/websocket": "^0.0.1"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.58.9",
 		"@orkestrel/guide": "^0.0.1",
+		"@orkestrel/router": "^0.0.1",
+		"@orkestrel/server": "^0.0.1",
 		"@types/node": "^26.1.1",
 		"oxfmt": "^0.58.0",
 		"oxlint": "^1.73.0",
@@ -90,6 +95,10 @@
 		"vite": "^8.1.4",
 		"vite-plugin-dts": "^5.0.3",
 		"vitest": "^4.1.10"
+	},
+	"peerDependencies": {
+		"@orkestrel/router": "^0.0.1",
+		"@orkestrel/server": "^0.0.1"
 	},
 	"engines": {
 		"node": ">=24"

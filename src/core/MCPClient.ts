@@ -1,5 +1,5 @@
-import type { EmitterInterface } from '../emitters/types.js'
-import type { ToolInterface } from '../agents/types.js'
+import type { EmitterInterface } from '@orkestrel/emitter'
+import type { ToolInterface } from '@orkestrel/agent'
 import type {
 	ClientTransportInterface,
 	JSONRPCMessage,
@@ -8,9 +8,9 @@ import type {
 	MCPClientInterface,
 	MCPClientOptions,
 } from './types.js'
-import { Emitter } from '../emitters/Emitter.js'
-import { Tool } from '../agents/tools/Tool.js'
-import { isArray, isRecord, isString } from '../contracts/index.js'
+import { Emitter } from '@orkestrel/emitter'
+import { Tool } from '@orkestrel/agent'
+import { isArray, isRecord, isString } from '@orkestrel/contract'
 import {
 	DEFAULT_MCP_CLIENT_NAME,
 	DEFAULT_MCP_CLIENT_VERSION,
@@ -30,7 +30,7 @@ import { isJSONRPCResponse, isRequestId } from './validators.js'
  *   `notifications/initialized`; `tools()` lists the remote tools and wraps each as a
  *   local {@link ToolInterface} whose `execute` calls back through `call`; `call` runs a
  *   remote `tools/call` and returns the tool's value (a remote `isError: true` throws
- *   locally, so an agent's {@link import('../agents/types.js').ToolManagerInterface}
+ *   locally, so an agent's {@link import('@orkestrel/agent').ToolManagerInterface}
  *   isolates it into a result `error` just like a local throw).
  * - **Request↔response correlation.** Each request is tagged with a monotonic numeric
  *   `id` ({@link #nextId}); a single transport `message` subscription resolves / rejects

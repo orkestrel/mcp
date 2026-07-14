@@ -1,5 +1,5 @@
-import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '../emitters/types.js'
-import type { ToolInterface, ToolManagerInterface } from '../agents/types.js'
+import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
+import type { ToolInterface, ToolManagerInterface } from '@orkestrel/agent'
 
 // JSON-RPC 2.0 wire types (https://www.jsonrpc.org/specification) — the envelope
 // the Model Context Protocol speaks. A request carries a `method` and optional
@@ -321,8 +321,8 @@ export type MCPClientEventMap = {
  *   / {@link import('./constants.js').DEFAULT_MCP_CLIENT_VERSION}.
  * - `timeout` — the per-request deadline in milliseconds: a `tools/list` / `tools/call`
  *   / `initialize` that the server does not answer within it REJECTS (the pending
- *   request is settled by an {@link import('../timeouts/types.js').TimeoutInterface}
- *   deadline, the taverna idiom — never a raw `setTimeout`). Defaults to {@link
+ *   request is settled by an `AbortSignal.timeout(timeout)` deadline — never a raw
+ *   `setTimeout`). Defaults to {@link
  *   import('./constants.js').DEFAULT_MCP_REQUEST_TIMEOUT}.
  * - `on` — the §8 reserved key: initial listeners for the client's
  *   {@link MCPClientEventMap}, wired at construction.
@@ -357,9 +357,9 @@ export interface MCPClientOptions {
  *   `id`; the client subscribes to the transport's `message` event and resolves /
  *   rejects the matching pending request by that `id`. A message that is NOT a response
  *   to a pending request is a server NOTIFICATION — surfaced on `notification`.
- * - **Per-request deadline.** Each request races an {@link
- *   import('../timeouts/types.js').TimeoutInterface} (the taverna idiom): a server that
- *   never replies REJECTS the pending request once the deadline fires, never hanging.
+ * - **Per-request deadline.** Each request races an `AbortSignal.timeout(timeout)`
+ *   deadline: a server that never replies REJECTS the pending request once the
+ *   deadline fires, never hanging.
  * - **Transport-agnostic.** Imports only core siblings — JSON-RPC + the tool vocabulary
  *   + the timeout primitive — with no HTTP and no model; the concrete transport is
  *   injected. Wire fields are narrowed via the contracts guards (no `as`).

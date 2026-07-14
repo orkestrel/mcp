@@ -1,5 +1,6 @@
-import { createMCPServer, createTool, createToolManager } from '@src/core'
+import { createMCPServer } from '@src/core'
 import { describe, expect, it } from 'vitest'
+import { createTool, createToolManager } from '@orkestrel/agent'
 
 // createMCPServer returns a working MCPServerInterface over a live ToolManager
 // (AGENTS §16 — a real registry, no mocks). The behavioral coverage of dispatch /

@@ -1,11 +1,8 @@
-import type {
-	ClientTransportEventMap,
-	ClientTransportInterface,
-	EmitterInterface,
-	JSONRPCMessage,
-} from '@src/core'
-import type { NodeWebSocketInterface } from '../../websocket/types.js'
-import { Emitter, parseJSONRPCMessage } from '@src/core'
+import type { ClientTransportEventMap, ClientTransportInterface, JSONRPCMessage } from '@src/core'
+import type { EmitterInterface } from '@orkestrel/emitter'
+import type { NodeWebSocketInterface } from '@orkestrel/websocket'
+import { parseJSONRPCMessage } from '@src/core'
+import { Emitter } from '@orkestrel/emitter'
 
 /**
  * The per-connection JSON-RPC-over-WebSocket SERVER bridge — wraps a

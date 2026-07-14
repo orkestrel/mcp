@@ -1,5 +1,5 @@
 import type { JSONRPCMessage } from '@src/core'
-import type { SSEStreamInterface } from '../http/types.js'
+import type { StreamInterface } from '@orkestrel/server'
 import type { EventStoreEntry, MCPSessionInterface, MCPSessionOptions } from './types.js'
 import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constants.js'
 
@@ -21,7 +21,7 @@ import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constan
  *   SSE event (`stream.write({ id, data })`). A push with NO attached stream is still logged,
  *   so a client that connects (or reconnects with a `Last-Event-ID`) LATER replays it from the
  *   log. A `write` to a closed stream is a safe no-op (the {@link
- *   import('../http/helpers.js').openSSEStream} contract), so a just-disconnected stream that
+ *   `@orkestrel/server`'s `openStream` contract), so a just-disconnected stream that
  *   has not yet been `detach`ed never throws. A replayed event and the live one carry the
  *   IDENTICAL id (the log assigns it once).
  *
@@ -42,7 +42,7 @@ import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constan
  *   first, so a stale entry is never replayed.
  *
  * - **No transport coupling beyond the SSE seam.** It holds session state + the generic {@link
- *   SSEStreamInterface} handles `attach` was handed — never a raw socket, request, or response.
+ *   StreamInterface} handles `attach` was handed — never a raw socket, request, or response.
  *   The middleware opens the stream (the spine seam) and registers it here; this class only
  *   serializes a message onto the already-open streams.
  *
@@ -61,7 +61,7 @@ import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constan
 export class MCPSession implements MCPSessionInterface {
 	readonly #id: string
 	readonly #events = new Map<string, EventStoreEntry>()
-	readonly #streams = new Set<SSEStreamInterface>()
+	readonly #streams = new Set<StreamInterface>()
 	readonly #capacity: number
 	readonly #ttl: number
 	#counter = 0
@@ -76,11 +76,11 @@ export class MCPSession implements MCPSessionInterface {
 		return this.#id
 	}
 
-	attach(stream: SSEStreamInterface): void {
+	attach(stream: StreamInterface): void {
 		this.#streams.add(stream)
 	}
 
-	detach(stream: SSEStreamInterface): void {
+	detach(stream: StreamInterface): void {
 		this.#streams.delete(stream)
 	}
 

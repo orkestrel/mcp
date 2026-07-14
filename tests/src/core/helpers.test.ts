@@ -1,15 +1,14 @@
-import type { ToolResult } from '@src/core'
+import type { ToolResult } from '@orkestrel/agent'
 import {
 	buildToolDescriptors,
 	buildToolResult,
-	createTool,
-	createToolManager,
 	initializeResult,
 	jsonRPCError,
 	jsonRPCResult,
 	MCP_PROTOCOL_VERSION,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
+import { createTool, createToolManager } from '@orkestrel/agent'
 
 // The pure dispatch builders (AGENTS §5 — exported, independently testable). Each
 // turns a piece of MCP state into the JSON-RPC result payload (or envelope) the

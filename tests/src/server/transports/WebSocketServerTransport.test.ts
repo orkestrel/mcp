@@ -1,14 +1,14 @@
 import type { JSONRPCMessage } from '@src/core'
 import { describe, expect, it } from 'vitest'
+import { WebSocketServerTransport } from '@src/server'
 import {
 	createNodeWebSocket,
 	encodeWebSocketFrame,
-	WebSocketServerTransport,
 	WEBSOCKET_OPCODE_CLOSE,
 	WEBSOCKET_OPCODE_TEXT,
-} from '@src/server'
-import { createJSONRPCRequest } from '../../../../setup.js'
-import { duplexPair, flushSocket, readClientFrames } from '../../../../setupServer.js'
+} from '@orkestrel/websocket'
+import { createJSONRPCRequest } from '../../../setup.js'
+import { duplexPair, flushSocket, readClientFrames } from '../../../setupServer.js'
 
 // src/server/mcp/WebSocketServerTransport.ts — the per-connection JSON-RPC-over-WebSocket
 // SERVER bridge, driven END TO END over an in-memory `node:stream` Duplex PAIR (the shared
