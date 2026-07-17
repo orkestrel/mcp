@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/mcp",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "A typed Model Context Protocol client/server with pluggable HTTP, WebSocket, and stdio transports. Part of the @orkestrel line.",
 	"keywords": [
 		"json-rpc",
@@ -77,7 +77,7 @@
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run check:src && npm run build && npm test"
 	},
 	"dependencies": {
-		"@orkestrel/agent": "^0.0.2",
+		"@orkestrel/agent": "^0.0.4",
 		"@orkestrel/contract": "^0.0.1",
 		"@orkestrel/emitter": "^0.0.1",
 		"@orkestrel/sse": "^0.0.1",
