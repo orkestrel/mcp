@@ -3,7 +3,7 @@
 // (AGENTS §16.1).
 
 import type { IncomingMessage } from 'node:http'
-import type { ServerInterface } from '@orkestrel/server/server'
+import type { ServerInterface } from '@orkestrel/server'
 import type { WebSocketFrame } from '@orkestrel/websocket'
 import type { MCPServerInterface } from '@src/core'
 import { request as httpRequest } from 'node:http'

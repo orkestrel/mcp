@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { createMCPClient, createMCPServer } from '@src/core'
 import { createTool, createToolManager } from '@orkestrel/agent'
 import { createDispatcher } from '@orkestrel/router'
-import { createServer } from '@orkestrel/server/server'
+import { createServer } from '@orkestrel/server'
 import { createHTTPClientTransport, createMCPRoutes } from '@src/server'
 import { createTeardown, startServer } from '../../../setupServer.js'
 

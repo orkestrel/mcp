@@ -1,6 +1,6 @@
 import type { ClientTransportInterface, MCPServerInterface } from '@src/core'
 import type { RouteInput } from '@orkestrel/router'
-import type { UpgradeHandler } from '@orkestrel/server/server'
+import type { UpgradeHandler } from '@orkestrel/server'
 import type {
 	HTTPClientTransportOptions,
 	HTTPTransportOptions,

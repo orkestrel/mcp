@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { createMCPClient } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { createDispatcher } from '@orkestrel/router'
-import { createServer } from '@orkestrel/server/server'
+import { createServer } from '@orkestrel/server'
 import { createWebSocketClientTransport, createWebSocketServer } from '@src/server'
 import { createCalculatorServer, createTeardown, startServer } from '../../../setupServer.js'
 

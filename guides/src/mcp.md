@@ -275,7 +275,7 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 The **WebSocket transport** (`src/server`, via the `@src/server` barrel) is a
 full-duplex alternative to the HTTP transport over a single persistent
 connection. `createWebSocketServer` returns an `UpgradeHandler`
-(`@orkestrel/server/server`) to register on the spine's `server.upgrade(...)`
+(`@orkestrel/server`) to register on the spine's `server.upgrade(...)`
 seam; it composes the lean `@orkestrel/websocket` RFC 6455 wrapper and pumps
 each inbound JSON-RPC request through `mcp.dispatch`.
 `createWebSocketClientTransport` is the egress mirror — a
@@ -669,7 +669,7 @@ application/json` and an `Accept` of BOTH `application/json` and
     is sent (safe against a stateless server).
 16. **The WebSocket transport is the full-duplex ingress over the spine
     upgrade seam (`src/server`).** `createWebSocketServer(mcp, options?)`
-    returns an `UpgradeHandler` (`@orkestrel/server/server`) to register with
+    returns an `UpgradeHandler` (`@orkestrel/server`) to register with
     `server.upgrade(...)`; it composes `@orkestrel/websocket`'s RFC 6455
     wrapper over the spine's generic upgrade seam. It DECLINES (returns
     `false`) when the `Upgrade` header is not `websocket`, the request path
