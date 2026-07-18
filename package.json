@@ -78,7 +78,7 @@
 	},
 	"dependencies": {
 		"@orkestrel/agent": "^0.0.6",
-		"@orkestrel/contract": "^0.0.2",
+		"@orkestrel/contract": "^0.0.3",
 		"@orkestrel/emitter": "^0.0.2",
 		"@orkestrel/sse": "^0.0.2",
 		"@orkestrel/websocket": "^0.0.2"
