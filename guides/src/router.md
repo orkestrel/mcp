@@ -79,6 +79,7 @@ Browser and server usage appear under [Patterns](#patterns).
 | `computeSpecificity`  | function | Compute a path's per-segment specificity vector.                                |
 | `compareSpecificity`  | function | Compare two paths by specificity for a descending sort.                         |
 | `joinPaths`           | function | Join a group prefix and a route path into one `/`-prefixed path.                |
+| `route`               | function | Identity pass-through pinning a `RouteInput`'s literal `Path` at the call site. |
 | `extractHashPath`     | function | Extract the `/`-prefixed pathname from a `location.hash` value.                 |
 | `resolveLocationPath` | function | Resolve the `/`-prefixed pathname to match for the current location.            |
 | `findAnchor`          | function | Find the nearest enclosing `<a>` element a DOM event originated from.           |
@@ -402,6 +403,34 @@ dispatcher.add({ method: 'GET', path: '/health', handler: () => new Response('ok
 await dispatcher.handle(new Request('http://x/missing'), undefined) // logs a 'miss'
 ```
 
+### Typing a route input at the registration site
+
+`route(...)` is a pure identity pass-through with a `const Path extends
+string` generic — wrapping a route literal in it pins `Path` to the LITERAL
+string at the call site (instead of the widened `string` a bare intermediate
+binding would get), so `context.params` types correctly through
+`PathParams` even when the input is built before the `add` call:
+
+```ts
+import { createDispatcher, route } from '@src/core'
+
+const input = route({
+	method: 'GET',
+	path: '/users/:id',
+	handler: (_request, context) => new Response(context.params.id), // typed string
+})
+
+const dispatcher = createDispatcher()
+dispatcher.add(input)
+```
+
+A heterogeneous `RouteInput[]` built by collecting several `route(...)`
+results still widens each element's `Path` to `string` the moment the array
+type is inferred — TypeScript has no per-element literal-preserving array
+type. The realistic ceiling `route` raises is PER-CALL typing at the
+registration site (a single `route({...})` or a direct `add({...})` call),
+not a stored, still-literal-typed array of route records.
+
 ### Introspection and reset
 
 `entries()` lists every registration (or only those matching a pathname —
@@ -594,7 +623,8 @@ const server = http.createServer((incoming) => {
   trailing-slash folding, case sensitivity, the wildcard-not-final throw),
   `decodeParam` (including a malformed `%` escape), `matchPath`,
   `classifySegment` (the literal-vs-param classification fix regression
-  case), `computeSpecificity`, `compareSpecificity`, and `joinPaths`.
+  case), `computeSpecificity`, `compareSpecificity`, `joinPaths`, and `route`
+  (identity pass-through, literal `Path` preservation at the call site).
 - [`tests/src/core/factories.test.ts`](../../tests/src/core/factories.test.ts) —
   `createRouter`/`createDispatcher` round-trips and factory return-type
   assertions.
