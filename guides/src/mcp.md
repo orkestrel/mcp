@@ -55,7 +55,7 @@ Create a server over a live tool registry, then pump message strings through
 `handle` (or call `dispatch` directly with a parsed request):
 
 ```ts
-import { createMCPServer } from '@src/core'
+import { createMCPServer } from '@orkestrel/mcp'
 import { createToolManager } from '@orkestrel/agent'
 
 const tools = createToolManager()
@@ -170,8 +170,8 @@ are likewise deliberately NOT enforced by `createMCPRoutes` / `createMCPSession`
 a body-size guard is front-middleware policy the consumer composes, same as auth.
 
 ```ts
-import { createMCPServer } from '@src/core'
-import { createMCPRoutes } from '@src/server'
+import { createMCPServer } from '@orkestrel/mcp'
+import { createMCPRoutes } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/agent'
 
 const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
@@ -290,8 +290,8 @@ HTTP transports share ONE transport contract. Like the HTTP transport it is
 unauthenticated upgrade).
 
 ```ts
-import { createMCPClient, createMCPServer } from '@src/core'
-import { createWebSocketClientTransport, createWebSocketServer } from '@src/server'
+import { createMCPClient, createMCPServer } from '@orkestrel/mcp'
+import { createWebSocketClientTransport, createWebSocketServer } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/agent'
 
 const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
@@ -354,8 +354,8 @@ line as `message` or `error`) — documented under [HTTP transport §
 Helpers](#helpers-1) since they live in the shared `helpers.ts`.
 
 ```ts
-import { createMCPClient, createMCPServer } from '@src/core'
-import { createStdioClientTransport, createStdioServer } from '@src/server'
+import { createMCPClient, createMCPServer } from '@orkestrel/mcp'
+import { createStdioClientTransport, createStdioServer } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/agent'
 
 const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
@@ -425,7 +425,7 @@ mapping.
 | `handle`   | `Promise<string \| undefined>`          | `JSON.parse` → narrow to a request → `dispatch` → `JSON.stringify`. A parse failure → a `-32700` string; a non-request → a `-32600` string; a notification → `undefined`.             |
 
 ```ts
-import { createMCPServer } from '@src/core'
+import { createMCPServer } from '@orkestrel/mcp'
 import { createToolManager } from '@orkestrel/agent'
 
 const server = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
@@ -449,8 +449,8 @@ tools as local `ToolInterface`s, `call` runs a remote `tools/call`,
 | `call`       | `Promise<unknown>`                  | Run a remote `tools/call`, concat the result's text blocks, throw on `isError`, else parse the JSON value (raw-string fallback).      |
 
 ```ts
-import { createMCPClient } from '@src/core'
-import { createHTTPClientTransport } from '@src/server'
+import { createMCPClient } from '@orkestrel/mcp'
+import { createHTTPClientTransport } from '@orkestrel/mcp/server'
 
 const client = createMCPClient({
 	transport: createHTTPClientTransport({ url: 'http://localhost:3000/mcp' }),
@@ -475,7 +475,7 @@ down.
 | `close` | `Promise<void>` | Close the transport and release resources (fires `close`).                                                          |
 
 ```ts
-import { createHTTPClientTransport } from '@src/server'
+import { createHTTPClientTransport } from '@orkestrel/mcp/server'
 
 const transport = createHTTPClientTransport({ url: 'http://localhost:3000/mcp' })
 transport.emitter.on('message', (message) => log(message))
@@ -500,7 +500,7 @@ and `push`es.
 | `replay` | `readonly EventStoreEntry[]` | Every retained log entry STRICTLY AFTER `afterId`, in order; an unknown / evicted cursor replays nothing (the spec-sane resume).               |
 
 ```ts
-import { createMCPSession } from '@src/server'
+import { createMCPSession } from '@orkestrel/mcp/server'
 
 const middleware = createMCPSession({ ttl: 60_000 })
 // an in-request handler addresses the resolved session via `context.state.session`:
@@ -782,7 +782,7 @@ The headline use: turn a live `ToolManagerInterface` (`@orkestrel/agent`) into
 a server an MCP client drives over a transport.
 
 ```ts
-import { createMCPServer } from '@src/core'
+import { createMCPServer } from '@orkestrel/mcp'
 import { createToolManager } from '@orkestrel/agent'
 
 const tools = createToolManager()
@@ -822,8 +822,8 @@ for stateful resumable streaming; omit it for the byte-identical stateless
 default.
 
 ```ts
-import { createMCPServer } from '@src/core'
-import { createMCPRoutes, createMCPSession } from '@src/server'
+import { createMCPServer } from '@orkestrel/mcp'
+import { createMCPRoutes, createMCPSession } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/agent'
 
 const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
@@ -838,12 +838,12 @@ the three transports unchanged — only the injected `ClientTransportInterface`
 differs.
 
 ```ts
-import { createMCPClient } from '@src/core'
+import { createMCPClient } from '@orkestrel/mcp'
 import {
 	createHTTPClientTransport,
 	createWebSocketClientTransport,
 	createStdioClientTransport,
-} from '@src/server'
+} from '@orkestrel/mcp/server'
 
 const http = createMCPClient({
 	transport: createHTTPClientTransport({ url: 'http://localhost:3000/mcp' }),
@@ -874,7 +874,7 @@ import {
 	isJSONRPCResponse,
 	jsonRPCError,
 	jsonRPCResult,
-} from '@src/core'
+} from '@orkestrel/mcp'
 import { createToolManager } from '@orkestrel/agent'
 
 const tools = createToolManager()
@@ -902,7 +902,7 @@ import {
 	readSessionHeader,
 	rejectUnknownSession,
 	upgradeRequestPath,
-} from '@src/server'
+} from '@orkestrel/mcp/server'
 
 const request = new Request('http://localhost/mcp', { headers: { accept: 'text/event-stream' } })
 acceptsEventStream(request) // true
@@ -922,7 +922,7 @@ The shared line-framing step both stdio transports read their inbound
 messages through.
 
 ```ts
-import { dispatchLines, extractLines } from '@src/server'
+import { dispatchLines, extractLines } from '@orkestrel/mcp/server'
 import { Emitter } from '@orkestrel/emitter'
 
 const emitter = new Emitter()
