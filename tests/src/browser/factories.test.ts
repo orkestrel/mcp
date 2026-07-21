@@ -1,11 +1,15 @@
 import type { MCPSessionState } from '@src/server'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
-import { describe, expect, it } from 'vitest'
-import { createMCPClient } from '@src/core'
+import { describe, expect, it, vi } from 'vitest'
+import { bindClient, bindServer, createDuplexClientTransport, createMCPClient } from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import { createNodeWebSocket } from '@orkestrel/websocket'
-import { createHTTPClientTransport, createWebSocketClientTransport } from '@src/browser'
+import {
+	createHTTPClientTransport,
+	createMessagePortTransport,
+	createWebSocketClientTransport,
+} from '@src/browser'
 import {
 	createMCPRoutes,
 	createMCPSession,
@@ -256,5 +260,128 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 		await transport.send(createJSONRPCRequest())
 
 		expect(errors).toHaveLength(1)
+	})
+})
+
+// ── MessagePort: a genuinely SYMMETRIC MCPTransportInterface, both sides driven by
+// the SAME class over one REAL `new MessageChannel()` (Node ≥ 22 global, AGENTS §16 —
+// no mocks) — port1 bound to a REAL server (`bindServer`), port2 driving a REAL
+// client (`bindClient` + `createDuplexClientTransport`) ──────────────────────────
+
+describe('createMessagePortTransport — a symmetric MCPTransportInterface over a real MessageChannel', () => {
+	it('connect → tools/list → tools/call(add): a value round-trips over port1/port2', async () => {
+		const { port1, port2 } = new MessageChannel()
+		const server = createCalculatorServer()
+		bindServer(server, createMessagePortTransport({ port: port1 }))
+
+		const clientTransport = createMessagePortTransport({ port: port2 })
+		const client = createMCPClient({ transport: createDuplexClientTransport(clientTransport) })
+		bindClient(client, clientTransport)
+
+		await client.connect()
+		expect(client.connected).toBe(true)
+
+		const tools = await client.tools()
+		expect(tools.map((tool) => tool.name)).toEqual(['add', 'boom'])
+
+		const value = await client.call('add', {})
+		expect(value).toBe(5)
+
+		await client.disconnect()
+	})
+
+	it('a remote erroring tool throws locally (isError → throw)', async () => {
+		const { port1, port2 } = new MessageChannel()
+		const server = createCalculatorServer()
+		bindServer(server, createMessagePortTransport({ port: port1 }))
+
+		const clientTransport = createMessagePortTransport({ port: port2 })
+		const client = createMCPClient({ transport: createDuplexClientTransport(clientTransport) })
+		bindClient(client, clientTransport)
+		await client.connect()
+
+		await expect(client.call('boom', {})).rejects.toThrow(/kaboom/)
+		await client.disconnect()
+	})
+
+	it('a non-string postMessage payload is ignored — no crash, no reply', async () => {
+		const { port1, port2 } = new MessageChannel()
+		const transport = createMessagePortTransport({ port: port1 })
+		const received: string[] = []
+		transport.listen((message) => received.push(message))
+
+		port2.postMessage({ not: 'a string' })
+		port2.postMessage('sentinel')
+		await vi.waitFor(() => expect(received).toEqual(['sentinel']))
+	})
+
+	it('a string postMessage payload IS delivered to the registered listen handler', async () => {
+		const { port1, port2 } = new MessageChannel()
+		const transport = createMessagePortTransport({ port: port1 })
+		const received: string[] = []
+		transport.listen((message) => received.push(message))
+
+		port2.postMessage('a plain string message')
+		await vi.waitFor(() => expect(received).toEqual(['a plain string message']))
+	})
+
+	it('close() closes the port — a subsequent postMessage from the peer is undelivered', async () => {
+		const { port1, port2 } = new MessageChannel()
+		const transport = createMessagePortTransport({ port: port1 })
+		const received: string[] = []
+		transport.listen((message) => received.push(message))
+
+		await transport.close()
+		port2.postMessage('after close')
+		await waitForDelay(50)
+
+		expect(received).toEqual([])
+	})
+
+	it('close() fires the registered closed handler exactly once, even called twice', async () => {
+		const { port1 } = new MessageChannel()
+		const transport = createMessagePortTransport({ port: port1 })
+		let closedCalls = 0
+		transport.closed(() => {
+			closedCalls += 1
+		})
+
+		await transport.close()
+		await transport.close()
+
+		expect(closedCalls).toBe(1)
+	})
+
+	it('listen/closed are single-handler-replace — a second registration replaces, never adds', async () => {
+		const { port1, port2 } = new MessageChannel()
+		const transport = createMessagePortTransport({ port: port1 })
+		const first: string[] = []
+		const second: string[] = []
+		transport.listen((message) => first.push(message))
+		transport.listen((message) => second.push(message))
+
+		port2.postMessage('one')
+		await vi.waitFor(() => expect(second).toEqual(['one']))
+		expect(first).toEqual([])
+	})
+
+	it('a messageerror event does not close the transport — later well-formed messages still arrive', async () => {
+		const { port1, port2 } = new MessageChannel()
+		const transport = createMessagePortTransport({ port: port1 })
+		const received: string[] = []
+		let closedCalls = 0
+		transport.listen((message) => received.push(message))
+		transport.closed(() => {
+			closedCalls += 1
+		})
+
+		// Dispatch a genuine `messageerror` event directly on port1 — the real native
+		// event this transport's listener is registered for (a `MessagePort` is a real
+		// `EventTarget`, so this is a real event dispatch, not a mock of the transport).
+		port1.dispatchEvent(new MessageEvent('messageerror', { data: null }))
+		port2.postMessage('still works')
+		await vi.waitFor(() => expect(received).toEqual(['still works']))
+
+		expect(closedCalls).toBe(0)
 	})
 })

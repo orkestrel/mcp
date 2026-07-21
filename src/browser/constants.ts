@@ -12,3 +12,15 @@
  * server unchanged.
  */
 export const MCP_SESSION_HEADER = 'mcp-session-id'
+
+// `serveMCP` server-identity defaults — `src/core`'s `createMCPServer` REQUIRES
+// `name`/`version`, but `ServeMCPOptions` (this face's bootstrap) makes both optional
+// (mirroring the CLIENT identity defaults, `DEFAULT_MCP_CLIENT_NAME` /
+// `DEFAULT_MCP_CLIENT_VERSION`, `src/core/constants.ts`), so `serveMCPScope` falls
+// back to these when a caller omits them.
+
+/** The default server name `serveMCPScope` reports (`initialize`'s `serverInfo.name`) when `options.name` is omitted. */
+export const DEFAULT_MCP_SERVER_NAME = 'taverna'
+
+/** The default server version `serveMCPScope` reports (`initialize`'s `serverInfo.version`) when `options.version` is omitted. */
+export const DEFAULT_MCP_SERVER_VERSION = '1.0.0'

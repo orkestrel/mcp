@@ -1,7 +1,10 @@
-import type { JSONRPCMessage } from '@src/core'
+import type { JSONRPCMessage, MCPServerInterface } from '@src/core'
 import type { SSEParserInterface } from '@orkestrel/sse'
-import { parseJSONRPCMessage } from '@src/core'
+import type { ScopeTransportInterface } from './types.js'
+import { bindServer, parseJSONRPCMessage } from '@src/core'
+import { isString } from '@orkestrel/contract'
 import { createSSEParser } from '@orkestrel/sse'
+import { MessagePortTransport } from './transports/MessagePortTransport.js'
 
 // The MCP browser-transport helpers (AGENTS §4.3 module-scope names — no entity
 // context). `decodeEvent` and `readEventStream` are the browser face's copies of the
@@ -10,6 +13,12 @@ import { createSSEParser } from '@orkestrel/sse'
 // `transports/HTTPClientTransport.ts`) is declared once here too. Both are total and
 // narrow at the boundary, never `as` (AGENTS §14): a malformed / non-message SSE
 // `data:` event is dropped, never thrown.
+//
+// `createScopeMessageListener` is `serve.ts`'s per-event dispatcher, extracted here
+// (AGENTS §5 — no function is declared inside another function body) so
+// `serveMCPScope` merely CALLS it and stores the RETURNED closure (an ordinary
+// value assignment, not an inline function literal) for `addEventListener` /
+// `removeEventListener` to share the same reference.
 
 /**
  * Decode one SSE event's `data` string into a {@link JSONRPCMessage}, or `undefined`
@@ -70,4 +79,55 @@ export async function readEventStream(response: Response): Promise<readonly JSON
 		reader.releaseLock()
 	}
 	return messages
+}
+
+/**
+ * Build `serveMCPScope`'s (`serve.ts`) `message`-event listener — the unified
+ * dispatcher that routes EVERY inbound event on a hostable scope, portless or
+ * port-bearing, to the right binding.
+ *
+ * @remarks
+ * An event carrying at least one port (`event.ports.length > 0`) spawns a fresh
+ * `MessagePortTransport` over `event.ports[0]`, `bindServer`s `server` onto it, and
+ * records a teardown (`unbind` then
+ * `transport.close()`) into `teardowns` — this branch fires on EITHER a
+ * Service-Worker-shaped scope (its normal per-client channel) or a
+ * dedicated-worker-shaped one that happens to receive a port-bearing event (the
+ * unified design's deliberate cross-case, needing no upfront shape flag). An event
+ * with NO ports and a STRING `data` is pushed onto `scopeTransport.deliver` (the
+ * implicit, already-bound scope channel); any other event (no ports, non-string
+ * data) is silently dropped — total (§14), never throws.
+ *
+ * @param server - The `MCPServerInterface` every spawned/implicit binding dispatches over
+ * @param scopeTransport - The implicit scope channel (already `bindServer`-bound) portless events deliver onto
+ * @param teardowns - The shared teardown set `serveMCPScope`'s dispose drains; each port-bearing event adds one entry
+ * @returns The `message`-event listener to register (and later remove) on the scope
+ *
+ * @example
+ * ```ts
+ * const teardowns = new Set<() => void>()
+ * const scopeTransport = createScopeTransport(scope)
+ * bindServer(server, scopeTransport)
+ * const onMessage = createScopeMessageListener(server, scopeTransport, teardowns)
+ * scope.addEventListener('message', onMessage)
+ * ```
+ */
+export function createScopeMessageListener(
+	server: MCPServerInterface,
+	scopeTransport: ScopeTransportInterface,
+	teardowns: Set<() => void>,
+): (event: MessageEvent) => void {
+	return (event: MessageEvent): void => {
+		const ports = event.ports
+		if (ports.length > 0) {
+			const transport = new MessagePortTransport({ port: ports[0] })
+			const unbind = bindServer(server, transport)
+			teardowns.add(() => {
+				unbind()
+				transport.close()
+			})
+			return
+		}
+		if (isString(event.data)) scopeTransport.deliver(event.data)
+	}
 }

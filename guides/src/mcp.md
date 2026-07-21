@@ -477,8 +477,8 @@ _See `extractLines` / `dispatchLines` under [HTTP transport § Helpers](#helpers
 ### Browser transport
 
 The **browser transport** (`src/browser`, via the `@src/browser` barrel /
-`@orkestrel/mcp/browser`) is the page / Web Worker / Service Worker face — two
-CLIENT-only transports driving a REMOTE MCP server from the browser, over the
+`@orkestrel/mcp/browser`) is the page / Web Worker / Service Worker face. Two
+CLIENT-only transports drive a REMOTE MCP server from the browser, over the
 SAME `ClientTransportInterface` the Node face's transports implement, so
 `createMCPClient` consumes either identically. `createWebSocketClientTransport`
 drives the native `WebSocket` global (the host performs the RFC 6455
@@ -490,9 +490,22 @@ client, so a browser client interoperates with an `MCPSession`-based server
 unchanged. Both share their exported NAMES with the Node face's transports —
 same API shape, a different host underneath — deliberately, so a consumer
 swaps `@orkestrel/mcp/server` for `@orkestrel/mcp/browser` with no call-site
-change. This face is DOM-free by construction (type-checked against `lib:
-["ESNext", "WebWorker"]`, no `"dom"`), so it runs identically in a page, a Web
-Worker, and a Service Worker.
+change.
+
+`createMessagePortTransport` is the genuinely NEW capability: MCP over
+`postMessage`. A `MessagePort` is SYMMETRIC, so `MessagePortTransport` is the
+ONE class both a server AND a client bind — it implements `@src/core`'s
+`MCPTransportInterface` directly (not `ClientTransportInterface`), and
+whichever binder it is handed to (`bindServer` or `bindClient`) decides its
+role. `serveMCP` is the `serveWorker` analog: boot an `MCPServer` inside the
+CURRENT Web-Worker-or-Service-Worker scope and wire its message events to it
+— `serveMCPScope(scope, options)` is the exported, scope-parameterized core
+`serveMCP` wraps over `globalThis`, kept separate so a test drives the wiring
+with a scope double instead of a real worker.
+
+This face is DOM-free by construction (type-checked against `lib: ["ESNext",
+"WebWorker"]`, no `"dom"`), so it runs identically in a page, a Web Worker,
+and a Service Worker.
 
 ```ts
 import { createMCPClient } from '@orkestrel/mcp'
@@ -512,10 +525,22 @@ const tools = await http.tools()
 
 #### Factories
 
-| API                              | Kind     | Summary                                                                                                                     |
-| -------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `createWebSocketClientTransport` | function | Create a `ClientTransportInterface` over the native `WebSocket` global that drives a REMOTE MCP server (browser face).      |
-| `createHTTPClientTransport`      | function | Create a `ClientTransportInterface` over the native `fetch` that drives a REMOTE Streamable-HTTP MCP server (browser face). |
+| API                              | Kind     | Summary                                                                                                                                                             |
+| -------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createWebSocketClientTransport` | function | Create a `ClientTransportInterface` over the native `WebSocket` global that drives a REMOTE MCP server (browser face).                                              |
+| `createHTTPClientTransport`      | function | Create a `ClientTransportInterface` over the native `fetch` that drives a REMOTE Streamable-HTTP MCP server (browser face).                                         |
+| `createMessagePortTransport`     | function | Create an `MCPTransportInterface` over a native `MessagePort` — SYMMETRIC, works as either a server or a client carrier depending on the binder it is handed to.    |
+| `createScopeTransport`           | function | Adapt a `ServeMCPScopeInterface` (`self`) into a `ScopeTransportInterface` — the implicit, portless channel `serveMCPScope` binds; internal to `serve.ts`'s wiring. |
+
+#### Bootstrap
+
+The `serveWorker` analog (`src/browser/serve.ts`) — boot an `MCPServer`
+inside a hostable scope and wire its message events to it.
+
+| API             | Kind     | Summary                                                                                                                        |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `serveMCP`      | function | Boot an `MCPServer` inside the CURRENT scope (`globalThis`) — exactly `serveMCPScope(globalThis, options)`. Returns a dispose. |
+| `serveMCPScope` | function | The scope-parameterized core `serveMCP` wraps — testable directly with a scope double. Returns an idempotent dispose.          |
 
 #### Entities
 
@@ -523,19 +548,23 @@ const tools = await http.tools()
 | -------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `WebSocketClientTransport` | class | The browser-face `ClientTransportInterface` over the native `WebSocket` — queues sends until `open`, flushed in order.                      |
 | `HTTPClientTransport`      | class | The browser-face `ClientTransportInterface` over the native `fetch` — POSTs each message, decodes the JSON / SSE reply, echoes the session. |
+| `MessagePortTransport`     | class | The SYMMETRIC `MCPTransportInterface` over a native `MessagePort` — `start()`s at construction, string payloads only, `close()` idempotent. |
 
 #### Constants
 
-| Constant             | Kind  | Value                                                                                                  |
-| -------------------- | ----- | ------------------------------------------------------------------------------------------------------ |
-| `MCP_SESSION_HEADER` | const | `'mcp-session-id'` — the SAME header name as the Node face's `MCP_SESSION_HEADER`, echoed identically. |
+| Constant                     | Kind  | Value                                                                                                  |
+| ---------------------------- | ----- | ------------------------------------------------------------------------------------------------------ |
+| `MCP_SESSION_HEADER`         | const | `'mcp-session-id'` — the SAME header name as the Node face's `MCP_SESSION_HEADER`, echoed identically. |
+| `DEFAULT_MCP_SERVER_NAME`    | const | `'taverna'` — `serveMCPScope`'s default `serverInfo.name` when `options.name` is omitted.              |
+| `DEFAULT_MCP_SERVER_VERSION` | const | `'1.0.0'` — `serveMCPScope`'s default `serverInfo.version` when `options.version` is omitted.          |
 
 #### Helpers
 
-| API               | Kind     | Summary                                                                                                 |
-| ----------------- | -------- | ------------------------------------------------------------------------------------------------------- |
-| `decodeEvent`     | function | Decode one SSE event's `data` string into a `JSONRPCMessage`, or `undefined` (total).                   |
-| `readEventStream` | function | Decode a `fetch` Response's SSE body into the `JSONRPCMessage`s it carried (the egress inverse; total). |
+| API                          | Kind     | Summary                                                                                                                                                                            |
+| ---------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `decodeEvent`                | function | Decode one SSE event's `data` string into a `JSONRPCMessage`, or `undefined` (total).                                                                                              |
+| `readEventStream`            | function | Decode a `fetch` Response's SSE body into the `JSONRPCMessage`s it carried (the egress inverse; total).                                                                            |
+| `createScopeMessageListener` | function | Build `serveMCPScope`'s unified `message`-event listener — a ports-bearing event spawns a per-port binding, a portless string-data event delivers onto the implicit scope channel. |
 
 #### Types
 
@@ -543,6 +572,10 @@ const tools = await http.tools()
 | --------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `WebSocketClientTransportOptions` | interface | `{ url: string; protocols?: string \| readonly string[] }` — the remote WS endpoint + optional subprotocol(s) to request.                                                                                |
 | `HTTPClientTransportOptions`      | interface | `{ url: string; headers?: Record<string, string>; fetch?: typeof fetch; timeout?: number }` — the remote endpoint, extra headers, an injectable `fetch`, and an optional `AbortSignal.timeout` deadline. |
+| `MessagePortTransportOptions`     | interface | `{ port: MessagePort }` — the port half `MessagePortTransport` sends/listens on.                                                                                                                         |
+| `ServeMCPScopeInterface`          | interface | `{ postMessage(message): void; addEventListener('message', listener): void; removeEventListener('message', listener): void }` — the structural shape `serveMCPScope` needs from a hostable scope.        |
+| `ScopeTransportInterface`         | interface | `MCPTransportInterface & { deliver(message: string): void }` — the implicit scope channel `serveMCPScope` binds, plus the internal push entry point `serveMCPScope`'s dispatcher drives it through.      |
+| `ServeMCPOptions`                 | interface | `{ tools: ToolManagerInterface; name?: string; version?: string }` — the registry to expose plus the optional server identity for `serveMCP` / `serveMCPScope`.                                          |
 
 ## Methods
 
@@ -742,9 +775,18 @@ event)`, NOT a domain event) — so a buggy observer can never corrupt a
     exports add no behavioral interface with methods (the factories,
     `acceptsEventStream` / `readSessionHeader` /
     `readLastEventId` / `rejectUnknownSession` / `readEventStream` /
-    `decodeEvent` / `upgradeRequestPath` / `extractLines` / `dispatchLines`
-    are functions; the options interfaces / event maps / `EventStoreEntry` /
-    `LineExtraction` are bags), so they contribute no `## Methods` row.
+    `decodeEvent` / `upgradeRequestPath` / `extractLines` / `dispatchLines` /
+    `createScopeMessageListener` are functions; the options interfaces / event
+    maps / `EventStoreEntry` / `LineExtraction` are bags), so they contribute
+    no `## Methods` row. `MessagePortTransport` (`src/browser`) is likewise
+    excluded: it implements `MCPTransportInterface`, not
+    `ClientTransportInterface`, and `MCPTransportInterface` itself is
+    documented as a `## Surface` Types bag (its members are arrow-typed
+    properties, `readonly send: (message) => …`, not method syntax) rather than
+    a `## Methods` group — the SAME treatment `bindServer`/`bindClient`'s test
+    doubles already give it, so `MessagePortTransport` (and
+    `createScopeTransport`'s returned `ScopeTransportInterface`) add no new
+    `## Methods` row either, consistent with that existing precedent.
 12. **The HTTP transport route is stateless mechanism (`src/server`).**
     `createMCPRoutes(mcp, options?)` returns a SINGLE `POST {path}` route
     (`path` default `DEFAULT_MCP_PATH`). The handler is self-contained (its
@@ -947,6 +989,38 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     transports are type-checked DOM-free (`lib: ["ESNext", "WebWorker"]`,
     proven by `check:src:browser`), so the same code runs in a page, a Web
     Worker, or a Service Worker.
+22. **`MessagePortTransport` is SYMMETRIC; `serveMCP` unifies dedicated-worker
+    and Service-Worker wiring with no upfront shape flag (`src/browser`).**
+    `createMessagePortTransport({ port })` returns an `MCPTransportInterface`
+    (not a `ClientTransportInterface` — the SAME class works as either a
+    server or a client carrier depending on whether it is handed to
+    `bindServer` or `bindClient`/`createDuplexClientTransport`). `port.start()`
+    runs at CONSTRUCTION (there is no separate open step on the port contract
+    for the caller to hook one into); inbound is STRING-ONLY — a non-string
+    `event.data` is dropped, never forwarded (the port contract carries no
+    `error` channel to surface it on); `messageerror` is IGNORED, not routed
+    to `closed` (one bad frame is not a dead channel); `close()` closes the
+    port and fires the registered `closed` handler EXACTLY ONCE, idempotently
+    — there is no native "peer closed" signal for a `MessagePort`, so `closed`
+    fires ONLY from this transport's own `close()`. `listen`/`closed` are
+    single-handler-replace, per the port contract (clause 1's sketch).
+    `serveMCP(options)` is `serveMCPScope(globalThis, options)`; `serveMCPScope`
+    (the exported, scope-parameterized core) creates an `MCPServer` (`name`/
+    `version` defaulting to `DEFAULT_MCP_SERVER_NAME`/`DEFAULT_MCP_SERVER_VERSION`
+    when omitted), `bindServer`s it EAGERLY over a `createScopeTransport(scope)`
+    (the implicit, portless channel — bound once, for the whole lifetime of
+    the returned dispose, so a dedicated worker's very first portless message
+    needs no first-use setup), and registers ONE `scope.addEventListener(
+'message', …)` listener built by `createScopeMessageListener`. That ONE
+    listener handles BOTH shapes uniformly, per event, with no upfront
+    detection flag: `event.ports.length > 0` spawns a FRESH
+    `createMessagePortTransport` + `bindServer` for THAT port (tracked for
+    teardown) — a Service Worker's normal per-client channel, and ALSO a
+    dedicated-worker-shaped scope's cross-case if it happens to receive a
+    port-bearing event; an event with NO ports and a STRING `data` delivers
+    onto the implicit scope channel; any other event is dropped. The returned
+    dispose is IDEMPOTENT: it removes the scope listener, unbinds the implicit
+    channel, and — for every accepted port — unbinds AND closes it.
 
 ## Patterns
 
@@ -1102,4 +1176,59 @@ import { Emitter } from '@orkestrel/emitter'
 const emitter = new Emitter()
 const { lines, remainder } = extractLines('', '{"jsonrpc":"2.0","method":"ping"}\n{"jsonrpc"')
 dispatchLines(emitter, lines) // emits `message` for the complete line above
+```
+
+### Serve MCP from a Web Worker
+
+`serveMCP` is the drop-in entry for a REAL Web Worker's `main.ts` — boot an
+`MCPServer` over the worker's own implicit `postMessage` channel (a dedicated
+worker) or over each connecting client's `MessagePort` (a Service Worker),
+with no upfront shape flag:
+
+```ts
+// worker's entry module:
+import { serveMCP } from '@orkestrel/mcp/browser'
+import { createTool, createToolManager } from '@orkestrel/agent'
+
+const tools = createToolManager()
+tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
+const dispose = serveMCP({ tools, name: 'worker-mcp', version: '1.0.0' })
+// ... on teardown:
+dispose()
+```
+
+`serveMCPScope` is the SAME wiring parameterized over an explicit scope — this
+runnable fence drives it with a minimal `ServeMCPScopeInterface` (the exact
+shape a real worker's `self` satisfies) plus a real `new MessageChannel()`
+standing in for a Service-Worker-shaped client connection, so `tools/list`
+genuinely round-trips with no worker harness:
+
+```ts
+import { serveMCPScope } from '@orkestrel/mcp/browser'
+import { createTool, createToolManager } from '@orkestrel/agent'
+
+const listeners = new Set<(event: MessageEvent) => void>()
+const scope = {
+	postMessage() {},
+	addEventListener: (_type: 'message', listener: (event: MessageEvent) => void) =>
+		listeners.add(listener),
+	removeEventListener: (_type: 'message', listener: (event: MessageEvent) => void) =>
+		listeners.delete(listener),
+}
+
+const tools = createToolManager()
+tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
+const dispose = serveMCPScope(scope, { tools, name: 'worker-mcp', version: '1.0.0' })
+
+const { port1, port2 } = new MessageChannel()
+const reply = new Promise((resolve) =>
+	port2.addEventListener('message', (event) => resolve(event.data)),
+)
+port2.start()
+for (const listener of listeners)
+	listener(new MessageEvent('message', { data: null, ports: [port1] }))
+port2.postMessage('{"jsonrpc":"2.0","method":"tools/list","id":1}')
+
+log(await reply) // '{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"add","inputSchema":{"type":"object"}}]}}'
+dispose() // unbinds every binding, closes every accepted MessagePort
 ```
