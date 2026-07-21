@@ -474,18 +474,90 @@ _See `extractLines` / `dispatchLines` under [HTTP transport § Helpers](#helpers
 | `StdioServerOptions`          | interface | `{ input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream }` — the injectable stream pair (default `process.stdin`/`stdout`).      |
 | `LineExtraction`              | interface | `{ lines: readonly string[]; remainder: string }` — the result of folding one more chunk into the newline-framed buffer (`extractLines`). |
 
+### Browser transport
+
+The **browser transport** (`src/browser`, via the `@src/browser` barrel /
+`@orkestrel/mcp/browser`) is the page / Web Worker / Service Worker face — two
+CLIENT-only transports driving a REMOTE MCP server from the browser, over the
+SAME `ClientTransportInterface` the Node face's transports implement, so
+`createMCPClient` consumes either identically. `createWebSocketClientTransport`
+drives the native `WebSocket` global (the host performs the RFC 6455
+handshake, so this face carries none of the Node client's `node:crypto` /
+`node:http(s)` machinery); `createHTTPClientTransport` drives the native
+`fetch` + `ReadableStream`, decoding the SSE leg with `@orkestrel/sse` and
+honoring the SAME `mcp-session-id` echo semantics as the Node face's HTTP
+client, so a browser client interoperates with an `MCPSession`-based server
+unchanged. Both share their exported NAMES with the Node face's transports —
+same API shape, a different host underneath — deliberately, so a consumer
+swaps `@orkestrel/mcp/server` for `@orkestrel/mcp/browser` with no call-site
+change. This face is DOM-free by construction (type-checked against `lib:
+["ESNext", "WebWorker"]`, no `"dom"`), so it runs identically in a page, a Web
+Worker, and a Service Worker.
+
+```ts
+import { createMCPClient } from '@orkestrel/mcp'
+import { createHTTPClientTransport, createWebSocketClientTransport } from '@orkestrel/mcp/browser'
+
+const ws = createMCPClient({
+	transport: createWebSocketClientTransport({ url: 'ws://localhost:3000/mcp', protocols: 'mcp' }),
+})
+await ws.connect() // the browser handshakes, then the MCP initialize runs over WS frames
+
+const http = createMCPClient({
+	transport: createHTTPClientTransport({ url: 'http://localhost:3000/mcp' }),
+})
+await http.connect()
+const tools = await http.tools()
+```
+
+#### Factories
+
+| API                              | Kind     | Summary                                                                                                                     |
+| -------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `createWebSocketClientTransport` | function | Create a `ClientTransportInterface` over the native `WebSocket` global that drives a REMOTE MCP server (browser face).      |
+| `createHTTPClientTransport`      | function | Create a `ClientTransportInterface` over the native `fetch` that drives a REMOTE Streamable-HTTP MCP server (browser face). |
+
+#### Entities
+
+| API                        | Kind  | Summary                                                                                                                                     |
+| -------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WebSocketClientTransport` | class | The browser-face `ClientTransportInterface` over the native `WebSocket` — queues sends until `open`, flushed in order.                      |
+| `HTTPClientTransport`      | class | The browser-face `ClientTransportInterface` over the native `fetch` — POSTs each message, decodes the JSON / SSE reply, echoes the session. |
+
+#### Constants
+
+| Constant             | Kind  | Value                                                                                                  |
+| -------------------- | ----- | ------------------------------------------------------------------------------------------------------ |
+| `MCP_SESSION_HEADER` | const | `'mcp-session-id'` — the SAME header name as the Node face's `MCP_SESSION_HEADER`, echoed identically. |
+
+#### Helpers
+
+| API               | Kind     | Summary                                                                                                 |
+| ----------------- | -------- | ------------------------------------------------------------------------------------------------------- |
+| `decodeEvent`     | function | Decode one SSE event's `data` string into a `JSONRPCMessage`, or `undefined` (total).                   |
+| `readEventStream` | function | Decode a `fetch` Response's SSE body into the `JSONRPCMessage`s it carried (the egress inverse; total). |
+
+#### Types
+
+| Type                              | Kind      | Shape                                                                                                                                                                                                    |
+| --------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WebSocketClientTransportOptions` | interface | `{ url: string; protocols?: string \| readonly string[] }` — the remote WS endpoint + optional subprotocol(s) to request.                                                                                |
+| `HTTPClientTransportOptions`      | interface | `{ url: string; headers?: Record<string, string>; fetch?: typeof fetch; timeout?: number }` — the remote endpoint, extra headers, an injectable `fetch`, and an optional `AbortSignal.timeout` deadline. |
+
 ## Methods
 
 The public methods of the layer's behavioral interfaces — every call-signature
 member listed (their `readonly` data members stay Surface rows). Each
 implementing class exposes EXACTLY its interface's methods: `MCPServer` ↔
-`MCPServerInterface`, `MCPClient` ↔ `MCPClientInterface`, the FIVE transports
+`MCPServerInterface`, `MCPClient` ↔ `MCPClientInterface`, the SEVEN transports
 `HTTPClientTransport` / `WebSocketServerTransport` / `WebSocketClientTransport`
-/ `StdioClientTransport` / `StdioServerTransport` ↔ `ClientTransportInterface`
-(all five share the one generic bidirectional JSON-RPC carrier — only the
-wire framing differs, so they add no new behavioral interface), and the
-session entity `MCPSession` ↔ `MCPSessionInterface` (the folded replay log is
-private to it).
+/ `StdioClientTransport` / `StdioServerTransport` (`src/server`) PLUS the
+browser face's own `HTTPClientTransport` / `WebSocketClientTransport`
+(`src/browser`, same names, a different host underneath) ↔
+`ClientTransportInterface` (all seven share the one generic bidirectional
+JSON-RPC carrier — only the wire framing / host differs, so they add no new
+behavioral interface), and the session entity `MCPSession` ↔
+`MCPSessionInterface` (the folded replay log is private to it).
 
 #### `MCPServerInterface`
 
@@ -661,12 +733,14 @@ event)`, NOT a domain event) — so a buggy observer can never corrupt a
     the public methods of each behavioral interface — `MCPServerInterface`,
     `MCPClientInterface`, `ClientTransportInterface`, and `MCPSessionInterface`
     — exhaustive, both directions, and each implementing class (`MCPServer` /
-    `MCPClient`; the FIVE transports `HTTPClientTransport` /
+    `MCPClient`; the SEVEN transports `HTTPClientTransport` /
     `WebSocketServerTransport` / `WebSocketClientTransport` /
-    `StdioClientTransport` / `StdioServerTransport`, all five implementing the
-    one `ClientTransportInterface`; and `MCPSession`) exposes the same public
-    methods, no more. The remaining exports add no behavioral interface with
-    methods (the factories, `acceptsEventStream` / `readSessionHeader` /
+    `StdioClientTransport` / `StdioServerTransport` (`src/server`) plus the
+    browser face's own `HTTPClientTransport` / `WebSocketClientTransport`
+    (`src/browser`), all seven implementing the one `ClientTransportInterface`;
+    and `MCPSession`) exposes the same public methods, no more. The remaining
+    exports add no behavioral interface with methods (the factories,
+    `acceptsEventStream` / `readSessionHeader` /
     `readLastEventId` / `rejectUnknownSession` / `readEventStream` /
     `decodeEvent` / `upgradeRequestPath` / `extractLines` / `dispatchLines`
     are functions; the options interfaces / event maps / `EventStoreEntry` /
@@ -848,6 +922,31 @@ env, stdio: ['pipe', 'pipe', 'inherit'] })` (an omitted `env` inherits
     transport's `close`. `close()` kills the child. Both stdio transports'
     `session` is always `undefined` (the process pipe carries no session
     concept).
+21. **The browser transport carries the SAME `ClientTransportInterface`
+    contract over native host APIs (`src/browser`).**
+    `createWebSocketClientTransport({ url, protocols? })` returns a
+    `ClientTransportInterface` whose `start()` opens `new WebSocket(url,
+protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
+    is the host's concern; a connection failure — the native `'error'` event
+    while not yet `OPEN` — REJECTS `start()`); `send` writes each message as
+    ONE text frame once `OPEN`, QUEUING (in order) any message sent before —
+    flushed the moment the socket opens; inbound text frames are `JSON.parse`d
+    (guarded) + narrowed via `parseJSONRPCMessage` onto `message` (a
+    non-text / non-JSON / non-message frame surfaces on `error` and is
+    DROPPED, never thrown); `close()` closes the socket and fires `close`
+    exactly once — a server-initiated close (the native `close` event) fires
+    the SAME `close` exactly once too, guarded so the two never double-emit.
+    `createHTTPClientTransport({ url, headers?, fetch?, timeout? })` returns a
+    `ClientTransportInterface` whose `send` POSTs to `url` over the injectable
+    `fetch` (default `globalThis.fetch`) with the SAME `content-type` /
+    `Accept` / session-echo contract as the Node face's HTTP client (clause 15) — an `application/json` reply is narrowed via `parseJSONRPCMessage`, a
+    `text/event-stream` reply is decoded via the browser face's OWN
+    `readEventStream` (`@orkestrel/sse`, the same decode shape as
+    `src/server`'s), a `202` emits nothing, and any `fetch` / decode failure
+    surfaces on `error` rather than escaping `send` or hanging. Both browser
+    transports are type-checked DOM-free (`lib: ["ESNext", "WebWorker"]`,
+    proven by `check:src:browser`), so the same code runs in a page, a Web
+    Worker, or a Service Worker.
 
 ## Patterns
 
