@@ -155,6 +155,12 @@ export function initializeResult(
  * binder (further inbound messages and the transport's `closed` signal are ignored)
  * WITHOUT closing the transport — closing is the caller's decision.
  *
+ * `listen`/`closed` are REPLACE semantics (§ port contract): the returned unbind
+ * DETACHES by replacing this binder's own handlers with no-ops, so a subsequent
+ * `bindServer` call on the SAME transport is never double-dispatched by a stale
+ * subscription left behind — an unbind→rebind cycle yields exactly one reply per
+ * request.
+ *
  * @param server - The transport-agnostic server to dispatch inbound messages over
  * @param transport - The duplex channel to pipe the server over
  * @returns Detach this binder from the transport (does not close it)
@@ -191,6 +197,8 @@ export function bindServer(
 	})
 	return () => {
 		active = false
+		transport.listen(() => {})
+		transport.closed(() => {})
 	}
 }
 
@@ -213,6 +221,12 @@ export function bindServer(
  * `client.transport.emitter`'s `error` event (never rethrown). The returned unbind
  * DETACHES this binder (further inbound messages and the transport's `closed` signal are
  * ignored) WITHOUT closing the transport.
+ *
+ * `listen`/`closed` are REPLACE semantics (§ port contract): the returned unbind
+ * DETACHES by replacing this binder's own handlers with no-ops, so a subsequent
+ * `bindClient` call on the SAME transport is never double-dispatched by a stale
+ * subscription left behind — an unbind→rebind cycle delivers exactly one `message`
+ * emit per inbound reply.
  *
  * @param client - The transport-agnostic client whose transport to deliver messages onto
  * @param transport - The duplex channel to pipe the client over
@@ -263,5 +277,7 @@ export function bindClient(
 	})
 	return () => {
 		active = false
+		transport.listen(() => {})
+		transport.closed(() => {})
 	}
 }

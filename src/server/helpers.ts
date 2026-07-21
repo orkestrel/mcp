@@ -265,6 +265,18 @@ export function dispatchLines(
  * string for `bindServer`. `closed` bridges `transport`'s `close` event. `close`
  * closes the underlying `transport`.
  *
+ * @remarks Per {@link import('@src/core').MCPTransportInterface}, `listen`/`closed`
+ * each hold THE SINGLE current handler (a second call REPLACES the first, never adds).
+ * Since the underlying `transport.emitter` is ADD-based (`on` subscribes, never
+ * replaces), this bridge installs ONE stable emitter listener per event on first use
+ * and re-routes it to whichever handler is CURRENTLY registered (`undefined` while
+ * none is), so rebinding never double-dispatches.
+ *
+ * @remarks A response whose `result` serializes away (e.g. `undefined`) is dropped by
+ * the message validators on the wire's decode side — an asymmetry the stdio/WS carrier
+ * shares with the streamable-HTTP face, since both round-trip through `JSON.stringify`
+ * / `JSON.parse` before re-validation.
+ *
  * @param transport - The message-channel transport to bridge (stdio or WebSocket)
  * @returns An {@link import('@src/core').MCPTransportInterface} `bindServer` can drive
  *
@@ -277,6 +289,20 @@ export function dispatchLines(
  * ```
  */
 export function bridgeMessageTransport(transport: ClientTransportInterface): MCPTransportInterface {
+	let onMessage: ((message: string) => void) | undefined
+	let onClosed: (() => void) | undefined
+	let subscribed = false
+	function subscribe(): void {
+		if (subscribed) return
+		subscribed = true
+		transport.emitter.on('message', (message) => {
+			if (!isJSONRPCRequest(message)) return
+			onMessage?.(JSON.stringify(message))
+		})
+		transport.emitter.on('close', () => {
+			onClosed?.()
+		})
+	}
 	return {
 		async send(message) {
 			const decoded = decodeEvent(message)
@@ -284,13 +310,12 @@ export function bridgeMessageTransport(transport: ClientTransportInterface): MCP
 			await transport.send(decoded)
 		},
 		listen(handler) {
-			transport.emitter.on('message', (message) => {
-				if (!isJSONRPCRequest(message)) return
-				handler(JSON.stringify(message))
-			})
+			subscribe()
+			onMessage = handler
 		},
 		closed(handler) {
-			transport.emitter.on('close', handler)
+			subscribe()
+			onClosed = handler
 		},
 		async close() {
 			await transport.close()

@@ -279,6 +279,20 @@ describe('bindServer', () => {
 
 		expect(transport.sent).toEqual([])
 	})
+
+	it('rebind after unbind on the SAME transport replies exactly once per request (no double dispatch)', async () => {
+		const mcp = server()
+		const transport = createMemoryTransport()
+		const unbind = bindServer(mcp, transport)
+		unbind()
+		bindServer(mcp, transport)
+
+		transport.deliver(JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 1 })))
+		await Promise.resolve()
+		await Promise.resolve()
+
+		expect(transport.sent).toEqual([JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} })])
+	})
 })
 
 // bindClient — completes the inbound wiring for a REAL MCPClient constructed over
@@ -350,5 +364,55 @@ describe('bindClient', () => {
 		transport.signalClosed()
 
 		expect(closed).toBe(1)
+	})
+
+	it('rebind after unbind on the SAME transport delivers exactly one message emit per reply', async () => {
+		const transport = createMemoryTransport()
+		const mcp = client(transport)
+		const unbind = bindClient(mcp, transport)
+		unbind()
+		bindClient(mcp, transport)
+
+		const seen: unknown[] = []
+		mcp.transport.emitter.on('message', (message) => seen.push(message))
+		transport.deliver(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }))
+		await Promise.resolve()
+
+		expect(seen).toHaveLength(1)
+	})
+
+	it('a client whose duplex transport was NOT bound stays pending rather than resolving or throwing', async () => {
+		const transport = createMemoryTransport()
+		const mcp = client(transport)
+		// No bindClient(mcp, transport) — the inbound half is never wired.
+
+		let settled = false
+		const connecting = mcp.connect().then(
+			() => {
+				settled = true
+			},
+			() => {
+				settled = true
+			},
+		)
+		await Promise.resolve()
+		await Promise.resolve()
+		await Promise.resolve()
+
+		expect(settled).toBe(false)
+		expect(transport.sent).toHaveLength(1) // the outbound initialize request was still written
+
+		// Bind now so the pending connect can be settled and the test doesn't hang.
+		bindClient(mcp, transport)
+		const sentRequest: { id: number } = JSON.parse(transport.sent[0] ?? '{}')
+		transport.deliver(
+			JSON.stringify({
+				jsonrpc: '2.0',
+				id: sentRequest.id,
+				result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: {} },
+			}),
+		)
+		await connecting
+		expect(settled).toBe(true)
 	})
 })
