@@ -160,6 +160,7 @@ Modules (final names per AGENTS §4; anatomy mirrors `src/server`):
    bundled code, so `serveMCP` imports project code freely — the inlined-guards
    AGENTS §5 exception that `node:worker_threads` type-stripping forces does NOT
    apply and must not be copied. Returns a dispose function (unbinds, closes ports).
+
 5. `helpers.ts` / `factories.ts` / `constants.ts` / `types.ts` / `index.ts` — per
    scaffold anatomy; host-global helpers (`generateId` via `crypto.randomUUID`) live
    here, never in core, per the purity law.
@@ -202,14 +203,14 @@ All in the existing Vitest setup (Node ≥ 22 globals), mirror-path under `tests
 
 ## 5. Unit breakdown (delivery order)
 
-| Unit | Content | Acceptance |
-| --- | --- | --- |
-| U0 | Dependency purity gate | DONE (recorded in §2) |
-| U1 | Core: `MCPTransportInterface` + `bindServer`/`bindClient` (+ any additive engine hook they need) + core tests | pure (`check:src:core` with `types: []`), binder tests green, no public-surface breaks |
-| U2 | Node face refactored onto the port | existing server tests pass unchanged; no export/signature diffs |
-| U3 | Browser face scaffold + `WebSocketClientTransport` + `HTTPClientTransport` + tests | `check:src:browser` (WebWorker lib) green; WS + HTTP round trips against the Node face pass |
-| U4 | `MessagePortTransport` + `serveMCP` + tests | MessageChannel round trips, multi-client, dispose, hostile frames all green |
-| U5 | Guides parity + release | all gates green tree-wide; `guides` parity green; version bump + publish (owner) |
+| Unit | Content                                                                                                       | Acceptance                                                                                  |
+| ---- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| U0   | Dependency purity gate                                                                                        | DONE (recorded in §2)                                                                       |
+| U1   | Core: `MCPTransportInterface` + `bindServer`/`bindClient` (+ any additive engine hook they need) + core tests | pure (`check:src:core` with `types: []`), binder tests green, no public-surface breaks      |
+| U2   | Node face refactored onto the port                                                                            | existing server tests pass unchanged; no export/signature diffs                             |
+| U3   | Browser face scaffold + `WebSocketClientTransport` + `HTTPClientTransport` + tests                            | `check:src:browser` (WebWorker lib) green; WS + HTTP round trips against the Node face pass |
+| U4   | `MessagePortTransport` + `serveMCP` + tests                                                                   | MessageChannel round trips, multi-client, dispose, hostile frames all green                 |
+| U5   | Guides parity + release                                                                                       | all gates green tree-wide; `guides` parity green; version bump + publish (owner)            |
 
 U1+U2 ship as one commit (the port is only provable against the refactored face);
 U3+U4 as a second; U5 rides with the final audit. Each lands through the standard
