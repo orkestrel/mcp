@@ -1,9 +1,14 @@
 import type {
+	ClientTransportEventMap,
+	ClientTransportInterface,
+	JSONRPCMessage,
 	MCPClientInterface,
 	MCPClientOptions,
 	MCPServerInterface,
 	MCPServerOptions,
+	MCPTransportInterface,
 } from './types.js'
+import { Emitter } from '@orkestrel/emitter'
 import { MCPClient } from './MCPClient.js'
 import { MCPServer } from './MCPServer.js'
 
@@ -82,4 +87,53 @@ export function createMCPServer(options: MCPServerOptions): MCPServerInterface {
  */
 export function createMCPClient(options: MCPClientOptions): MCPClientInterface {
 	return new MCPClient(options)
+}
+
+/**
+ * Adapt an {@link MCPTransportInterface} (the environment-agnostic duplex message
+ * channel) into a {@link ClientTransportInterface} — the additive bridge that lets
+ * `createMCPClient` run over the new port without any change to `MCPClient`'s
+ * existing shape.
+ *
+ * @remarks
+ * Hand the RESULT to `createMCPClient({ transport })`, then pass the SAME
+ * `transport` to {@link import('./helpers.js').bindClient} to complete the inbound
+ * wiring: `send` serializes each outbound {@link JSONRPCMessage} (or batch, one per
+ * message) and writes it via `transport.send`; `close` closes the underlying
+ * `transport`; `start` is a no-op (the duplex channel is already open by the time
+ * it is handed in — there is no separate connect step at this layer); `session` is
+ * always `undefined` (session correlation is a higher-level concern the duplex port
+ * does not carry). Inbound delivery (`emitter`'s `message` / `close` events) is
+ * `bindClient`'s job, not this factory's — the returned object exposes a `message`-
+ * capable emitter for `bindClient` to push onto.
+ *
+ * @param transport - The duplex channel to adapt
+ * @returns A {@link ClientTransportInterface} `createMCPClient` can drive
+ *
+ * @example
+ * ```ts
+ * const client = createMCPClient({ transport: createDuplexClientTransport(transport) })
+ * const unbind = bindClient(client, transport)
+ * await client.connect()
+ * ```
+ */
+export function createDuplexClientTransport(
+	transport: MCPTransportInterface,
+): ClientTransportInterface {
+	const emitter = new Emitter<ClientTransportEventMap>()
+	return {
+		emitter,
+		session: undefined,
+		async start(): Promise<void> {
+			// The duplex channel is already open by the time it is handed in — no separate
+			// connect step at this layer.
+		},
+		async send(message: JSONRPCMessage | readonly JSONRPCMessage[]): Promise<void> {
+			const messages = Array.isArray(message) ? message : [message]
+			for (const one of messages) await transport.send(JSON.stringify(one))
+		},
+		async close(): Promise<void> {
+			await transport.close()
+		},
+	}
 }

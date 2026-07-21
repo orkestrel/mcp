@@ -123,6 +123,12 @@ export interface MCPServerInfo {
 export type MCPServerEventMap = {
 	/** A request is being dispatched — its `method` and correlating `id` (`null` for a notification). */
 	readonly request: readonly [method: string, id: string | number | null]
+	/**
+	 * A transport-level fault surfaced while a bound {@link MCPTransportInterface} was
+	 * piping a reply out (a `send` throw or rejection from {@link bindServer}). A DOMAIN
+	 * event (a genuine I/O fault), distinct from the emitter's own listener-error channel.
+	 */
+	readonly error: readonly [error: unknown]
 }
 
 /**
@@ -196,6 +202,37 @@ export interface MCPServerInterface {
 	 * @returns The serialized response string, or `undefined` for a notification
 	 */
 	handle(message: string): Promise<string | undefined>
+}
+
+// MCP TRANSPORT PORT — the environment-agnostic duplex message channel an
+// environment face hands the pure engine (`bindServer` / `bindClient` in
+// `./helpers.js`). Framing (WS frames, SSE events, stdio lines, `postMessage`
+// payloads) is entirely the transport's concern; parsing and validation of the
+// JSON-RPC string it carries remain entirely the core's.
+
+/**
+ * A duplex message channel an environment face provides to the pure engine — the
+ * one port `bindServer` and `bindClient` (`./helpers.js`) pipe an
+ * {@link MCPServerInterface} / {@link MCPClientInterface} over.
+ *
+ * @remarks
+ * Messages are already-serialized JSON-RPC strings; the transport owns framing
+ * (a WS text frame, an SSE `data:` event, a newline-terminated stdio line, a
+ * `postMessage` payload) and never parses the string itself. `listen` and
+ * `closed` each register THE SINGLE handler for their event — a second call
+ * REPLACES the first (matching the emitter-free, minimal-surface carrier idiom
+ * `bindServer` / `bindClient` themselves rely on), not an additive subscription
+ * list.
+ */
+export interface MCPTransportInterface {
+	/** Deliver one outbound JSON-RPC message (already serialized). */
+	readonly send: (message: string) => void | Promise<void>
+	/** Register the single inbound-message handler — a second call REPLACES the first. */
+	readonly listen: (handler: (message: string) => void) => void
+	/** Register the single closed handler — a second call REPLACES the first. */
+	readonly closed: (handler: () => void) => void
+	/** Close the underlying channel. */
+	readonly close: () => void | Promise<void>
 }
 
 // MCP CLIENT (the egress side) — the mirror of the server, split the same way: a

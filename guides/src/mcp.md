@@ -84,12 +84,81 @@ thrown tool into a result `error`, which `tools/call` maps to an
 `isError: true` tool result the model can react to — so the server wraps
 `execute` in NO try/catch.
 
+### Bind an `MCPServer` / `MCPClient` to any duplex transport
+
+`bindServer` / `bindClient` pipe an `MCPServerInterface` / `MCPClientInterface`
+over an `MCPTransportInterface` — the environment-agnostic duplex message
+channel (`send` / `listen` / `closed` / `close`, ALL string messages; framing
+is entirely the transport's concern). Every environment face (Node stdio /
+WebSocket, a future browser `MessagePort`) implements this ONE port instead of
+duplicating the dispatch/correlation pump per transport:
+
+```ts
+import {
+	bindClient,
+	bindServer,
+	createDuplexClientTransport,
+	createMCPClient,
+	createMCPServer,
+} from '@orkestrel/mcp'
+import { createToolManager } from '@orkestrel/agent'
+
+// An in-memory duplex channel — a real MCPTransportInterface, the same shape a
+// Node stdio pair or a browser MessagePort would implement.
+function createLoopback() {
+	let onMessage: ((message: string) => void) | undefined
+	let peer: ReturnType<typeof createLoopback> | undefined
+	const transport = {
+		async send(message: string) {
+			peer?.deliver(message)
+		},
+		listen(handler: (message: string) => void) {
+			onMessage = handler
+		},
+		closed() {},
+		async close() {},
+		deliver(message: string) {
+			onMessage?.(message)
+		},
+		connect(other: ReturnType<typeof createLoopback>) {
+			peer = other
+		},
+	}
+	return transport
+}
+const serverSide = createLoopback()
+const clientSide = createLoopback()
+serverSide.connect(clientSide)
+clientSide.connect(serverSide)
+
+const tools = createToolManager()
+tools.add({ id: 'add', name: 'add', execute: (a) => Number(a.x) + Number(a.y) })
+const server = createMCPServer({ name: 'calculator', version: '1.0.0', tools })
+bindServer(server, serverSide)
+
+const client = createMCPClient({ transport: createDuplexClientTransport(clientSide) })
+const unbind = bindClient(client, clientSide)
+await client.connect()
+const value = await client.call('add', { x: 2, y: 5 })
+// value → 7
+unbind() // detaches without closing either side of the loopback
+```
+
+`bindServer`'s unbind stops routing inbound messages through `server.handle`
+(a `transport.closed()` signal does the same); `bindClient`'s unbind stops
+delivering onto `client.transport.emitter`. Neither closes the underlying
+transport — that stays the caller's call. A `send` throw or rejection from
+either binder is caught and surfaced (never an unhandled rejection): a
+server-side one on `server.emitter`'s `error` event, a client-side one on
+`client.transport.emitter`'s `error` event.
+
 ### Factories
 
-| API               | Kind     | Summary                                                                                                                                        |
-| ----------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createMCPServer` | function | Create an `MCPServerInterface` exposing a live `ToolManagerInterface` over JSON-RPC 2.0 (`initialize` / `ping` / `tools/list` / `tools/call`). |
-| `createMCPClient` | function | Create an `MCPClientInterface` that drives a REMOTE server over an injected transport and exposes its tools as local `ToolInterface`s.         |
+| API                           | Kind     | Summary                                                                                                                                                                                |
+| ----------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createMCPServer`             | function | Create an `MCPServerInterface` exposing a live `ToolManagerInterface` over JSON-RPC 2.0 (`initialize` / `ping` / `tools/list` / `tools/call`).                                         |
+| `createMCPClient`             | function | Create an `MCPClientInterface` that drives a REMOTE server over an injected transport and exposes its tools as local `ToolInterface`s.                                                 |
+| `createDuplexClientTransport` | function | Adapt an `MCPTransportInterface` into a `ClientTransportInterface` — the additive bridge letting `createMCPClient` run over the new environment-agnostic port; pair with `bindClient`. |
 
 ### Entities
 
@@ -115,40 +184,43 @@ thrown tool into a result `error`, which `tools/call` maps to an
 
 ### Helpers
 
-| API                    | Kind     | Summary                                                                                                                           |
-| ---------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `isRequestId`          | function | Total guard: a JSON-RPC REQUEST `id` — a string / number / absent (`null` is valid only on a response).                           |
-| `isJSONRPCRequest`     | function | Total guard: a record with `jsonrpc: '2.0'` + a string `method`; an absent `id` ⇒ a notification.                                 |
-| `isJSONRPCResponse`    | function | Total guard: `jsonrpc: '2.0'` + an `id` (string / number / `null`) + EXACTLY ONE of `result` / `error`.                           |
-| `isJSONRPCMessage`     | function | Total guard — the union of `isJSONRPCRequest` and `isJSONRPCResponse`.                                                            |
-| `isInitializeRequest`  | function | Total guard — a `JSONRPCRequest` whose `method` is `'initialize'`.                                                                |
-| `parseJSONRPCMessage`  | function | Narrow an already-parsed value to a `JSONRPCMessage`, or `undefined` (total; sound with `isJSONRPCMessage`).                      |
-| `jsonRPCResult`        | function | Build a success `JSONRPCResponse` — the `id` echoed, the value as `result`.                                                       |
-| `jsonRPCError`         | function | Build an error `JSONRPCResponse` — the `id`, a reserved `code` / `message`, and optional `data`.                                  |
-| `buildToolDescriptors` | function | Map a `ToolManagerInterface`'s definitions to `tools/list` descriptors, renaming `parameters` → `inputSchema`.                    |
-| `buildToolResult`      | function | Map a `ToolResult` (`@orkestrel/agent`) to an MCP tool-call result — the value (or error text + `isError: true`) as a text block. |
-| `initializeResult`     | function | Build the `initialize` result — the negotiated `protocolVersion`, `capabilities`, and `serverInfo`.                               |
+| API                    | Kind     | Summary                                                                                                                                                    |
+| ---------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `isRequestId`          | function | Total guard: a JSON-RPC REQUEST `id` — a string / number / absent (`null` is valid only on a response).                                                    |
+| `isJSONRPCRequest`     | function | Total guard: a record with `jsonrpc: '2.0'` + a string `method`; an absent `id` ⇒ a notification.                                                          |
+| `isJSONRPCResponse`    | function | Total guard: `jsonrpc: '2.0'` + an `id` (string / number / `null`) + EXACTLY ONE of `result` / `error`.                                                    |
+| `isJSONRPCMessage`     | function | Total guard — the union of `isJSONRPCRequest` and `isJSONRPCResponse`.                                                                                     |
+| `isInitializeRequest`  | function | Total guard — a `JSONRPCRequest` whose `method` is `'initialize'`.                                                                                         |
+| `parseJSONRPCMessage`  | function | Narrow an already-parsed value to a `JSONRPCMessage`, or `undefined` (total; sound with `isJSONRPCMessage`).                                               |
+| `jsonRPCResult`        | function | Build a success `JSONRPCResponse` — the `id` echoed, the value as `result`.                                                                                |
+| `jsonRPCError`         | function | Build an error `JSONRPCResponse` — the `id`, a reserved `code` / `message`, and optional `data`.                                                           |
+| `buildToolDescriptors` | function | Map a `ToolManagerInterface`'s definitions to `tools/list` descriptors, renaming `parameters` → `inputSchema`.                                             |
+| `buildToolResult`      | function | Map a `ToolResult` (`@orkestrel/agent`) to an MCP tool-call result — the value (or error text + `isError: true`) as a text block.                          |
+| `initializeResult`     | function | Build the `initialize` result — the negotiated `protocolVersion`, `capabilities`, and `serverInfo`.                                                        |
+| `bindServer`           | function | Pipe an `MCPTransportInterface` into an `MCPServerInterface` — inbound `handle`d, a defined reply `send`; returns an unbind (detaches without closing).    |
+| `bindClient`           | function | Pipe an `MCPTransportInterface` into an `MCPClientInterface` (built over `createDuplexClientTransport`) — completes the inbound wiring; returns an unbind. |
 
 ### Types
 
-| Type                       | Kind      | Shape                                                                                                                                |
-| -------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `JSONRPCRequest`           | interface | `{ jsonrpc: '2.0'; method: string; id?: string \| number; params?: Record<string, unknown> }` — an absent `id` marks a notification. |
-| `JSONRPCErrorData`         | interface | `{ code: number; message: string; data?: unknown }` — the `error` member of a failed response.                                       |
-| `JSONRPCResponse`          | interface | `{ jsonrpc: '2.0'; id: string \| number \| null; result?: unknown; error?: JSONRPCErrorData }` — EITHER `result` OR `error`.         |
-| `JSONRPCMessage`           | type      | `JSONRPCRequest \| JSONRPCResponse` — a message on the wire.                                                                         |
-| `MCPContent`               | interface | `{ type: 'text'; text: string }` — one content block of a tool-call result.                                                          |
-| `MCPToolResult`            | interface | `{ content: readonly MCPContent[]; isError?: boolean }` — the `tools/call` result (`isError` flags a tool failure).                  |
-| `MCPToolDescriptor`        | interface | `{ name: string; description?: string; inputSchema: Record<string, unknown> }` — one `tools/list` entry.                             |
-| `MCPServerInfo`            | interface | `{ name: string; version: string }` — the identity echoed in the `initialize` result.                                                |
-| `MCPServerEventMap`        | type      | `{ request: [method, id] }` — the observation surface.                                                                               |
-| `MCPServerOptions`         | interface | `{ on?; error?; name: string; version: string; tools: ToolManagerInterface; description? }` — options for `createMCPServer`.         |
-| `MCPServerInterface`       | interface | `emitter` / `name` / `version` data members + the `dispatch` / `handle` methods.                                                     |
-| `ClientTransportEventMap`  | type      | `{ message: [JSONRPCMessage]; close: []; error: [unknown] }` — the transport events.                                                 |
-| `ClientTransportInterface` | interface | `emitter` / `session` data members + the `start` / `send` / `close` methods — the client's transport-agnostic carrier.               |
-| `MCPClientEventMap`        | type      | `{ connect: []; disconnect: []; notification: [JSONRPCMessage]; error: [unknown] }`.                                                 |
-| `MCPClientOptions`         | interface | `{ on?; error?; transport: ClientTransportInterface; name?; version?; timeout? }` — options for `createMCPClient`.                   |
-| `MCPClientInterface`       | interface | `emitter` / `connected` / `transport` data members + the `on` / `connect` / `disconnect` / `tools` / `call` methods.                 |
+| Type                       | Kind      | Shape                                                                                                                                                                                                                      |
+| -------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JSONRPCRequest`           | interface | `{ jsonrpc: '2.0'; method: string; id?: string \| number; params?: Record<string, unknown> }` — an absent `id` marks a notification.                                                                                       |
+| `JSONRPCErrorData`         | interface | `{ code: number; message: string; data?: unknown }` — the `error` member of a failed response.                                                                                                                             |
+| `JSONRPCResponse`          | interface | `{ jsonrpc: '2.0'; id: string \| number \| null; result?: unknown; error?: JSONRPCErrorData }` — EITHER `result` OR `error`.                                                                                               |
+| `JSONRPCMessage`           | type      | `JSONRPCRequest \| JSONRPCResponse` — a message on the wire.                                                                                                                                                               |
+| `MCPContent`               | interface | `{ type: 'text'; text: string }` — one content block of a tool-call result.                                                                                                                                                |
+| `MCPToolResult`            | interface | `{ content: readonly MCPContent[]; isError?: boolean }` — the `tools/call` result (`isError` flags a tool failure).                                                                                                        |
+| `MCPToolDescriptor`        | interface | `{ name: string; description?: string; inputSchema: Record<string, unknown> }` — one `tools/list` entry.                                                                                                                   |
+| `MCPServerInfo`            | interface | `{ name: string; version: string }` — the identity echoed in the `initialize` result.                                                                                                                                      |
+| `MCPServerEventMap`        | type      | `{ request: [method, id]; error: [unknown] }` — the observation surface (`error` is a transport fault a bound `bindServer` reply-`send` surfaced).                                                                         |
+| `MCPServerOptions`         | interface | `{ on?; error?; name: string; version: string; tools: ToolManagerInterface; description? }` — options for `createMCPServer`.                                                                                               |
+| `MCPServerInterface`       | interface | `emitter` / `name` / `version` data members + the `dispatch` / `handle` methods.                                                                                                                                           |
+| `MCPTransportInterface`    | interface | `{ send(message: string): void \| Promise<void>; listen(handler): void; closed(handler): void; close(): void \| Promise<void> }` — the environment-agnostic duplex message-channel port `bindServer` / `bindClient` drive. |
+| `ClientTransportEventMap`  | type      | `{ message: [JSONRPCMessage]; close: []; error: [unknown] }` — the transport events.                                                                                                                                       |
+| `ClientTransportInterface` | interface | `emitter` / `session` data members + the `start` / `send` / `close` methods — the client's transport-agnostic carrier.                                                                                                     |
+| `MCPClientEventMap`        | type      | `{ connect: []; disconnect: []; notification: [JSONRPCMessage]; error: [unknown] }`.                                                                                                                                       |
+| `MCPClientOptions`         | interface | `{ on?; error?; transport: ClientTransportInterface; name?; version?; timeout? }` — options for `createMCPClient`.                                                                                                         |
+| `MCPClientInterface`       | interface | `emitter` / `connected` / `transport` data members + the `on` / `connect` / `disconnect` / `tools` / `call` methods.                                                                                                       |
 
 The `emitter`, `name`, and `version` members of `MCPServerInterface` are
 `readonly` data members (Surface rows, above) — its call-signature methods are
@@ -246,17 +318,18 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 
 #### Helpers
 
-| API                    | Kind     | Summary                                                                                                              |
-| ---------------------- | -------- | -------------------------------------------------------------------------------------------------------------------- |
-| `acceptsEventStream`   | function | Whether the request's `Accept` header contains `text/event-stream`.                                                  |
-| `readSessionHeader`    | function | Read the request's `mcp-session-id` header for the stateful transport, or `undefined`.                               |
-| `readLastEventId`      | function | Read the request's `Last-Event-ID` header — the resumable GET-SSE replay cursor, or `undefined`.                     |
-| `rejectUnknownSession` | function | Build the stateful transport's unknown-session reply — a `404` + a JSON-RPC `-32600` "Session not found" body.       |
-| `readEventStream`      | function | Decode a `fetch` Response's SSE body into the `JSONRPCMessage`s it carried (the egress inverse; total).              |
-| `decodeEvent`          | function | Decode one SSE event's `data` string into a `JSONRPCMessage`, or `undefined` (total).                                |
-| `upgradeRequestPath`   | function | Read a raw `node:http` upgrade request's path (no query) for the `createWebSocketServer` upgrade-path match.         |
-| `extractLines`         | function | Fold one more chunk of raw stdio bytes into a newline-framed buffer — complete `lines` + the trailing `remainder`.   |
-| `dispatchLines`        | function | Decode and deliver each complete newline-framed line onto a `ClientTransportEventMap` emitter (`message` / `error`). |
+| API                      | Kind     | Summary                                                                                                                                                                                                             |
+| ------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `acceptsEventStream`     | function | Whether the request's `Accept` header contains `text/event-stream`.                                                                                                                                                 |
+| `readSessionHeader`      | function | Read the request's `mcp-session-id` header for the stateful transport, or `undefined`.                                                                                                                              |
+| `readLastEventId`        | function | Read the request's `Last-Event-ID` header — the resumable GET-SSE replay cursor, or `undefined`.                                                                                                                    |
+| `rejectUnknownSession`   | function | Build the stateful transport's unknown-session reply — a `404` + a JSON-RPC `-32600` "Session not found" body.                                                                                                      |
+| `readEventStream`        | function | Decode a `fetch` Response's SSE body into the `JSONRPCMessage`s it carried (the egress inverse; total).                                                                                                             |
+| `decodeEvent`            | function | Decode one SSE event's `data` string into a `JSONRPCMessage`, or `undefined` (total).                                                                                                                               |
+| `upgradeRequestPath`     | function | Read a raw `node:http` upgrade request's path (no query) for the `createWebSocketServer` upgrade-path match.                                                                                                        |
+| `extractLines`           | function | Fold one more chunk of raw stdio bytes into a newline-framed buffer — complete `lines` + the trailing `remainder`.                                                                                                  |
+| `dispatchLines`          | function | Decode and deliver each complete newline-framed line onto a `ClientTransportEventMap` emitter (`message` / `error`).                                                                                                |
+| `bridgeMessageTransport` | function | Adapt a message-channel `ClientTransportInterface` (stdio / WebSocket server transports) into the core `MCPTransportInterface` port — what `createStdioServer` / `createWebSocketServer` pipe through `bindServer`. |
 
 #### Types
 
@@ -306,10 +379,10 @@ await client.connect() // the RFC 6455 handshake, then the MCP initialize over f
 
 #### Factories
 
-| API                              | Kind     | Summary                                                                                                                                            |
-| -------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createWebSocketServer`          | function | Mount an `MCPServerInterface` over WebSocket — returns an `UpgradeHandler` for `server.upgrade(...)` (claims an MCP WS upgrade, pumps `dispatch`). |
-| `createWebSocketClientTransport` | function | Create a `ClientTransportInterface` that drives a REMOTE MCP server over a WebSocket (the WS egress mirror).                                       |
+| API                              | Kind     | Summary                                                                                                                                                         |
+| -------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createWebSocketServer`          | function | Mount an `MCPServerInterface` over WebSocket — returns an `UpgradeHandler` for `server.upgrade(...)` (claims an MCP WS upgrade, pipes it through `bindServer`). |
+| `createWebSocketClientTransport` | function | Create a `ClientTransportInterface` that drives a REMOTE MCP server over a WebSocket (the WS egress mirror).                                                    |
 
 #### Entities
 
@@ -326,7 +399,7 @@ await client.connect() // the RFC 6455 handshake, then the MCP initialize over f
 
 #### Helpers
 
-_None specific to this section — `upgradeRequestPath` (used by `createWebSocketServer`) is documented under [HTTP transport § Helpers](#helpers-1)._
+_`upgradeRequestPath` (used by `createWebSocketServer`) and `bridgeMessageTransport` (which `createWebSocketServer` pipes its transport through `bindServer` with) are documented under [HTTP transport § Helpers](#helpers-1)._
 
 #### Types
 
@@ -342,16 +415,18 @@ third server transport — newline-delimited JSON-RPC over a process's own
 `stdin`/`stdout` (the server side) or a spawned child process's piped stdio
 (the client side). `createStdioServer` wraps `options.input` / `options.output`
 (defaulting to `process.stdin` / `process.stdout`, injectable for tests) as a
-`ClientTransportInterface` and pumps each inbound JSON-RPC request through
-`mcp.dispatch`, writing a defined response back as one newline-terminated
-line (a notification writes nothing). `createStdioClientTransport` is the
-egress mirror — it spawns `options.command` (`node:child_process.spawn`) with
-`options.args` / `options.env`, piping the child's `stdin`/`stdout` for the
-JSON-RPC channel (`stderr` inherits the parent's for diagnostics). Both share
-the newline-framing helpers `extractLines` (fold a raw chunk into complete
-lines + a carried remainder) and `dispatchLines` (decode + emit each complete
-line as `message` or `error`) — documented under [HTTP transport §
-Helpers](#helpers-1) since they live in the shared `helpers.ts`.
+`ClientTransportInterface`, bridges it to the core `MCPTransportInterface` port
+via `bridgeMessageTransport`, and pipes it through `bindServer` — each inbound
+JSON-RPC request runs through `mcp.dispatch`, writing a defined response back
+as one newline-terminated line (a notification writes nothing).
+`createStdioClientTransport` is the egress mirror — it spawns `options.command`
+(`node:child_process.spawn`) with `options.args` / `options.env`, piping the
+child's `stdin`/`stdout` for the JSON-RPC channel (`stderr` inherits the
+parent's for diagnostics). Both share the newline-framing helpers
+`extractLines` (fold a raw chunk into complete lines + a carried remainder)
+and `dispatchLines` (decode + emit each complete line as `message` or
+`error`) — documented under [HTTP transport § Helpers](#helpers-1) since they
+live in the shared `helpers.ts`.
 
 ```ts
 import { createMCPClient, createMCPServer } from '@orkestrel/mcp'
@@ -371,10 +446,10 @@ const tools = await client.tools()
 
 #### Factories
 
-| API                          | Kind     | Summary                                                                                                                         |
-| ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `createStdioClientTransport` | function | Create a `ClientTransportInterface` that spawns a CHILD PROCESS MCP server and drives it over its piped stdio.                  |
-| `createStdioServer`          | function | Pump an `MCPServerInterface` over newline-delimited JSON-RPC on `stdin`/`stdout` (or injected streams) — `{ start(); stop() }`. |
+| API                          | Kind     | Summary                                                                                                                                            |
+| ---------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createStdioClientTransport` | function | Create a `ClientTransportInterface` that spawns a CHILD PROCESS MCP server and drives it over its piped stdio.                                     |
+| `createStdioServer`          | function | Pipe an `MCPServerInterface` (via `bindServer`) over newline-delimited JSON-RPC on `stdin`/`stdout` (or injected streams) — `{ start(); stop() }`. |
 
 #### Entities
 

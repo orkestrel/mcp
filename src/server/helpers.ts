@@ -1,10 +1,20 @@
-import type { ClientTransportEventMap, JSONRPCMessage } from '@src/core'
+import type {
+	ClientTransportEventMap,
+	ClientTransportInterface,
+	JSONRPCMessage,
+	MCPTransportInterface,
+} from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { SSEParserInterface } from '@orkestrel/sse'
 import type { IncomingMessage } from 'node:http'
 import type { LineExtraction } from './types.js'
 import { createSSEParser } from '@orkestrel/sse'
-import { JSONRPC_INVALID_REQUEST, jsonRPCError, parseJSONRPCMessage } from '@src/core'
+import {
+	isJSONRPCRequest,
+	JSONRPC_INVALID_REQUEST,
+	jsonRPCError,
+	parseJSONRPCMessage,
+} from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { MCP_SESSION_HEADER } from './constants.js'
 
@@ -234,5 +244,56 @@ export function dispatchLines(
 			continue
 		}
 		emitter.emit('message', message)
+	}
+}
+
+/**
+ * Bridge a message-channel {@link ClientTransportInterface} (the shape the stdio and
+ * WebSocket SERVER transports already implement) into the environment-agnostic
+ * {@link import('@src/core').MCPTransportInterface} port — the adapter
+ * {@link import('./factories.js').createStdioServer} and {@link
+ * import('./factories.js').createWebSocketServer} pipe through `bindServer`, so the
+ * request/reply/error pump those two factories used to hand-roll identically now
+ * lives ONCE in the core binder.
+ *
+ * @remarks
+ * `send` decodes the already-serialized reply string back to a {@link JSONRPCMessage}
+ * and writes it via `transport.send` (the SAME `JSON.stringify` the underlying
+ * transport already performs, so the wire bytes are unchanged). `listen` filters
+ * `transport`'s `message` event to REQUESTS ONLY — a stray response is ignored,
+ * exactly as the prior hand-rolled pumps did — and re-serializes each one back to a
+ * string for `bindServer`. `closed` bridges `transport`'s `close` event. `close`
+ * closes the underlying `transport`.
+ *
+ * @param transport - The message-channel transport to bridge (stdio or WebSocket)
+ * @returns An {@link import('@src/core').MCPTransportInterface} `bindServer` can drive
+ *
+ * @example
+ * ```ts
+ * import { bindServer } from '@src/core'
+ *
+ * const transport = new StdioServerTransport(process.stdin, process.stdout)
+ * bindServer(mcp, bridgeMessageTransport(transport))
+ * ```
+ */
+export function bridgeMessageTransport(transport: ClientTransportInterface): MCPTransportInterface {
+	return {
+		async send(message) {
+			const decoded = decodeEvent(message)
+			if (decoded === undefined) return
+			await transport.send(decoded)
+		},
+		listen(handler) {
+			transport.emitter.on('message', (message) => {
+				if (!isJSONRPCRequest(message)) return
+				handler(JSON.stringify(message))
+			})
+		},
+		closed(handler) {
+			transport.emitter.on('close', handler)
+		},
+		async close() {
+			await transport.close()
+		},
 	}
 }

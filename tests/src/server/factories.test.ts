@@ -1,16 +1,18 @@
 import type { MiddlewareHandler } from '@orkestrel/server'
 import type { StartedServerInterface } from '../../setupServer.js'
+import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { createMCPClient } from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import {
 	createMCPRoutes,
+	createStdioServer,
 	createWebSocketClientTransport,
 	createWebSocketServer,
 	MCP_SESSION_HEADER,
 } from '@src/server'
-import { collectSSE, createJSONRPCRequest } from '../../setup.js'
+import { collectSSE, createJSONRPCRequest, waitForDelay } from '../../setup.js'
 import {
 	createCalculatorServer,
 	createTeardown,
@@ -376,5 +378,70 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 			'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
 		})
 		expect(outcome.claimed).toBe(false)
+	})
+})
+
+// createStdioServer — the new seam: it now pipes its transport through the core
+// bindServer port (via bridgeMessageTransport) rather than a hand-rolled pump. Proven
+// over REAL PassThrough streams + a REAL MCPServer (AGENTS §16) — the request → reply
+// line round trip, a notification writing nothing, and a dispatch fault (an unknown
+// method reply, the in-band case; the transport-fault case is pinned at the core
+// binder level in tests/src/core/helpers.test.ts) all behave exactly as before.
+describe('createStdioServer — pipes stdio through the core bindServer port', () => {
+	function stdio() {
+		const input = new PassThrough()
+		const output = new PassThrough()
+		return { input, output }
+	}
+
+	async function readLine(output: PassThrough): Promise<string> {
+		return new Promise((resolve) => {
+			let buffer = ''
+			output.on('data', (chunk: Buffer) => {
+				buffer += chunk.toString()
+				const newline = buffer.indexOf('\n')
+				if (newline !== -1) resolve(buffer.slice(0, newline))
+			})
+		})
+	}
+
+	it('dispatches an inbound request line and writes the reply line back', async () => {
+		const { input, output } = stdio()
+		const handle = createStdioServer(createCalculatorServer(), { input, output })
+		handle.start()
+
+		const reply = readLine(output)
+		input.write(`${JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 1 }))}\n`)
+
+		expect(JSON.parse(await reply)).toEqual({ jsonrpc: '2.0', id: 1, result: {} })
+		handle.stop()
+	})
+
+	it('writes nothing for a notification (no id → no reply)', async () => {
+		const { input, output } = stdio()
+		const handle = createStdioServer(createCalculatorServer(), { input, output })
+		handle.start()
+
+		const chunks: string[] = []
+		output.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
+		input.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`)
+		await waitForDelay(20)
+
+		expect(chunks).toEqual([])
+		handle.stop()
+	})
+
+	it('ignores a stray response line (not a request) rather than dispatching it', async () => {
+		const { input, output } = stdio()
+		const handle = createStdioServer(createCalculatorServer(), { input, output })
+		handle.start()
+
+		const chunks: string[] = []
+		output.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
+		input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} })}\n`)
+		await waitForDelay(20)
+
+		expect(chunks).toEqual([])
+		handle.stop()
 	})
 })

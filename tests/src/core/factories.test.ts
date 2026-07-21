@@ -1,6 +1,36 @@
-import { createMCPServer } from '@src/core'
+import type { MCPTransportInterface } from '@src/core'
+import { createDuplexClientTransport, createMCPServer } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/agent'
+
+// A minimal in-memory MCPTransportInterface double (AGENTS §16 — real, not a mock):
+// `send` records every outbound string, `close` counts calls; `listen`/`closed` are
+// unused by these adapter-only tests (they exercise createDuplexClientTransport's
+// OWN send/start/close forwarding, not inbound delivery — that is bindClient's job,
+// covered in helpers.test.ts).
+function createMemoryTransport(): MCPTransportInterface & {
+	readonly sent: readonly string[]
+	readonly closedCalls: number
+} {
+	const sent: string[] = []
+	let closedCalls = 0
+	return {
+		async send(message) {
+			sent.push(message)
+		},
+		listen() {},
+		closed() {},
+		async close() {
+			closedCalls += 1
+		},
+		get sent() {
+			return sent
+		},
+		get closedCalls() {
+			return closedCalls
+		},
+	}
+}
 
 // createMCPServer returns a working MCPServerInterface over a live ToolManager
 // (AGENTS §16 — a real registry, no mocks). The behavioral coverage of dispatch /
@@ -46,5 +76,52 @@ describe('createMCPServer', () => {
 		await server.dispatch({ jsonrpc: '2.0', method: 'ping', id: 1 })
 
 		expect(seen).toEqual([['ping', 1]])
+	})
+})
+
+describe('createDuplexClientTransport', () => {
+	it('reports no session (the duplex port carries none)', () => {
+		const adapted = createDuplexClientTransport(createMemoryTransport())
+
+		expect(adapted.session).toBeUndefined()
+	})
+
+	it('start is a no-op (the duplex channel is already open)', async () => {
+		const adapted = createDuplexClientTransport(createMemoryTransport())
+
+		await expect(adapted.start()).resolves.toBeUndefined()
+	})
+
+	it('send serializes ONE message and writes it via the duplex transport', async () => {
+		const transport = createMemoryTransport()
+		const adapted = createDuplexClientTransport(transport)
+
+		await adapted.send({ jsonrpc: '2.0', method: 'ping', id: 1 })
+
+		expect(transport.sent).toEqual([JSON.stringify({ jsonrpc: '2.0', method: 'ping', id: 1 })])
+	})
+
+	it('send unrolls a batch into ONE duplex write per message', async () => {
+		const transport = createMemoryTransport()
+		const adapted = createDuplexClientTransport(transport)
+
+		await adapted.send([
+			{ jsonrpc: '2.0', method: 'a', id: 1 },
+			{ jsonrpc: '2.0', method: 'b', id: 2 },
+		])
+
+		expect(transport.sent).toEqual([
+			JSON.stringify({ jsonrpc: '2.0', method: 'a', id: 1 }),
+			JSON.stringify({ jsonrpc: '2.0', method: 'b', id: 2 }),
+		])
+	})
+
+	it('close closes the underlying duplex transport', async () => {
+		const transport = createMemoryTransport()
+		const adapted = createDuplexClientTransport(transport)
+
+		await adapted.close()
+
+		expect(transport.closedCalls).toBe(1)
 	})
 })
