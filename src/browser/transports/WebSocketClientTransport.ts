@@ -4,6 +4,7 @@ import type { WebSocketClientTransportOptions } from '../types.js'
 import { parseJSONRPCMessage } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
+import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
 
 /**
  * The browser-face WebSocket CLIENT transport for the Model Context Protocol — a
@@ -29,7 +30,9 @@ import { Emitter } from '@orkestrel/emitter'
  * - **`close()`** closes the underlying socket and fires `close` (idempotent); the
  *   socket's native `close` event (a server-initiated close) fires the SAME `close`
  *   exactly once total — `close()` first flips the guard, so the native event never
- *   double-emits.
+ *   double-emits. **This transport is not reusable after `close()`** — a `send` issued
+ *   after `close()` is silently dropped (not queued, not delivered even on a later
+ *   `start()`).
  * - **Observable (§13).** Owns the `emitter` ({@link ClientTransportEventMap}); every
  *   emit the emitter isolates a listener throw; `error` is a DOMAIN event (a
  *   transport-level fault).
@@ -53,12 +56,17 @@ export class WebSocketClientTransport implements ClientTransportInterface {
 		this.#emitter = new Emitter<ClientTransportEventMap>()
 		this.#url = options.url
 		const protocols = options.protocols
+		// Default to MCP_WEBSOCKET_SUBPROTOCOL when `protocols` is omitted — matching
+		// createWebSocketServer's unconditional echo. An empty array means "no subprotocol",
+		// overriding the default explicitly for foreign servers.
 		this.#protocols =
 			typeof protocols === 'string'
 				? protocols
 				: protocols === undefined
-					? undefined
-					: [...protocols]
+					? MCP_WEBSOCKET_SUBPROTOCOL
+					: protocols.length === 0
+						? undefined
+						: [...protocols]
 	}
 
 	get emitter(): EmitterInterface<ClientTransportEventMap> {
@@ -100,6 +108,9 @@ export class WebSocketClientTransport implements ClientTransportInterface {
 	}
 
 	async send(message: JSONRPCMessage | readonly JSONRPCMessage[]): Promise<void> {
+		// After close(), silently drop — never queue (a closed transport is not reusable;
+		// queued messages would resurrect on a later start() which is not a supported pattern).
+		if (this.#closed) return
 		const messages = Array.isArray(message) ? message : [message]
 		for (const one of messages) {
 			const text = JSON.stringify(one)

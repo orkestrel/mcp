@@ -1,6 +1,6 @@
 import type { JSONRPCMessage, MCPServerInterface } from '@src/core'
 import type { SSEParserInterface } from '@orkestrel/sse'
-import type { ScopeTransportInterface } from './types.js'
+import type { ServeMCPOptions, ScopeTransportInterface } from './types.js'
 import { bindServer, parseJSONRPCMessage } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { createSSEParser } from '@orkestrel/sse'
@@ -87,20 +87,25 @@ export async function readEventStream(response: Response): Promise<readonly JSON
  * port-bearing, to the right binding.
  *
  * @remarks
- * An event carrying at least one port (`event.ports.length > 0`) spawns a fresh
- * `MessagePortTransport` over `event.ports[0]`, `bindServer`s `server` onto it, and
- * records a teardown (`unbind` then
- * `transport.close()`) into `teardowns` — this branch fires on EITHER a
- * Service-Worker-shaped scope (its normal per-client channel) or a
- * dedicated-worker-shaped one that happens to receive a port-bearing event (the
- * unified design's deliberate cross-case, needing no upfront shape flag). An event
+ * Port-bearing events (`event.ports.length > 0`) are gated by `options.accept` FIRST
+ * — when the gate returns `false` the event is dropped entirely (no binding, no reply).
+ * Accepted events spawn a fresh `MessagePortTransport` over `event.ports[0]`,
+ * `bindServer` `server` onto it, and record a teardown (`unbind` then `transport.close()`)
+ * into `teardowns`. A port that was already seen is IGNORED — repeated delivery of the
+ * same `MessagePort` would create duplicate bindings over one port (→ duplicated replies),
+ * so the listener tracks seen ports and silently drops repeats.
+ *
+ * This branch fires on EITHER a Service-Worker-shaped scope (its normal per-client
+ * channel) or a dedicated-worker-shaped one that happens to receive a port-bearing event
+ * (the unified design's deliberate cross-case, needing no upfront shape flag). An event
  * with NO ports and a STRING `data` is pushed onto `scopeTransport.deliver` (the
- * implicit, already-bound scope channel); any other event (no ports, non-string
- * data) is silently dropped — total (§14), never throws.
+ * implicit, already-bound scope channel); any other event (no ports, non-string data)
+ * is silently dropped — total (§14), never throws.
  *
  * @param server - The `MCPServerInterface` every spawned/implicit binding dispatches over
  * @param scopeTransport - The implicit scope channel (already `bindServer`-bound) portless events deliver onto
  * @param teardowns - The shared teardown set `serveMCPScope`'s dispose drains; each port-bearing event adds one entry
+ * @param options - The `ServeMCPOptions` (for `options.accept`)
  * @returns The `message`-event listener to register (and later remove) on the scope
  *
  * @example
@@ -108,7 +113,7 @@ export async function readEventStream(response: Response): Promise<readonly JSON
  * const teardowns = new Set<() => void>()
  * const scopeTransport = createScopeTransport(scope)
  * bindServer(server, scopeTransport)
- * const onMessage = createScopeMessageListener(server, scopeTransport, teardowns)
+ * const onMessage = createScopeMessageListener(server, scopeTransport, teardowns, options)
  * scope.addEventListener('message', onMessage)
  * ```
  */
@@ -116,11 +121,19 @@ export function createScopeMessageListener(
 	server: MCPServerInterface,
 	scopeTransport: ScopeTransportInterface,
 	teardowns: Set<() => void>,
+	options: ServeMCPOptions,
 ): (event: MessageEvent) => void {
+	const seen = new Set<MessagePort>()
 	return (event: MessageEvent): void => {
 		const ports = event.ports
 		if (ports.length > 0) {
-			const transport = new MessagePortTransport({ port: ports[0] })
+			// Gate: consult accept (origin/identity check) before binding.
+			if (options.accept !== undefined && !options.accept(event)) return
+			const port = ports[0]
+			// Deduplicate: repeated delivery of the same port would create duplicate bindings.
+			if (seen.has(port)) return
+			seen.add(port)
+			const transport = new MessagePortTransport({ port })
 			const unbind = bindServer(server, transport)
 			teardowns.add(() => {
 				unbind()

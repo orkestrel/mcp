@@ -25,13 +25,36 @@ import { createScopeMessageListener } from './helpers.js'
  * Service Worker's `self`) and wire its message events to it.
  *
  * @remarks
+ * **Trust boundary — mechanism, not policy.** `serveMCPScope` exposes the ENTIRE
+ * supplied `tools` registry to EVERY client the scope accepts a port from, with NO
+ * built-in origin or identity check. In a Service Worker that means every same-origin
+ * context the SW controls (any window, worker, or iframe can
+ * `controller.postMessage(msg, [port])` and get a fully-bound server with complete
+ * tool-call access). Origin allow-listing, handshake tokens, and any other gating are
+ * the embedding application's responsibility — compose a guard in front. Use the
+ * `accept` option to gate port-bearing events before binding: return `false` to drop
+ * the event entirely (no binding, no reply).
+ *
+ * **Lifetime / per-client binding accumulation.** Each accepted port-bearing event
+ * creates a fresh `MessagePortTransport` + `bindServer` binding that lives for the
+ * scope's lifetime — there is NO per-client reaping, because `MessagePort` provides
+ * no "peer closed" signal. For bounded, long-lived client sets this is fine; embedders
+ * with high client churn must track and invoke the dispose function themselves to
+ * avoid unbounded accumulation.
+ *
+ * **Portless events on a Service-Worker-shaped scope.** A client CAN call
+ * `controller.postMessage('a string')` (a portless message), so the eagerly-bound
+ * implicit scope channel is not entirely unreachable in that shape. It IS harmless:
+ * `ServiceWorkerGlobalScope` has no `self.postMessage`, so the reply path
+ * (`scopeTransport.send` → `scope.postMessage`) throws, and `bindServer` routes the
+ * throw to the server emitter's `error` event (see `@src/core bindServer`) — the
+ * un-repliable reply is correctly dropped.
+ *
  * Binds the implicit scope channel EAGERLY (at call time, not lazily on first use) —
  * `bindServer` is called once against a {@link import('./types.js').ScopeTransportInterface}
  * wrapping `scope` for the whole lifetime of the returned dispose, so a dedicated
  * worker's very first portless message is served with no first-use setup cost or
- * ordering hazard. A Service-Worker-shaped scope simply never posts a portless
- * message (every client connects via its own `MessagePort`), so the eagerly-bound
- * implicit channel sits idle and harmless in that shape.
+ * ordering hazard.
  *
  * Every inbound `message` event is inspected structurally: `event.ports.length > 0`
  * spawns a fresh {@link import('./factories.js').createMessagePortTransport} +
@@ -43,16 +66,18 @@ import { createScopeMessageListener } from './helpers.js'
  * @param scope - The hostable scope to wire (structurally, `self` inside a worker)
  * @param options - `tools` (the live registry to expose; REQUIRED), optional
  *   `name`/`version` (default {@link import('./constants.js').DEFAULT_MCP_SERVER_NAME} /
- *   {@link import('./constants.js').DEFAULT_MCP_SERVER_VERSION}); see
- *   {@link ServeMCPOptions}
+ *   {@link import('./constants.js').DEFAULT_MCP_SERVER_VERSION}), optional `accept`
+ *   (origin/identity gate for port-bearing events); see {@link ServeMCPOptions}
  * @returns A dispose function — unbinds every binding, closes every accepted
  *   `MessagePort`, and removes the scope's `message` listener. Idempotent.
  *
  * @example
  * ```ts
- * const { port1, port2 } = new MessageChannel()
  * const scope = { postMessage() {}, addEventListener() {}, removeEventListener() {} }
- * const dispose = serveMCPScope(scope, { tools: createToolManager() })
+ * const dispose = serveMCPScope(scope, {
+ *   tools: createToolManager(),
+ *   accept: (event) => event.origin === 'https://my-app.example.com',
+ * })
  * // ... later:
  * dispose()
  * ```
@@ -66,7 +91,7 @@ export function serveMCPScope(scope: ServeMCPScopeInterface, options: ServeMCPOp
 	const scopeTransport = createScopeTransport(scope)
 	const unbindScope = bindServer(server, scopeTransport)
 	const teardowns = new Set<() => void>()
-	const onMessage = createScopeMessageListener(server, scopeTransport, teardowns)
+	const onMessage = createScopeMessageListener(server, scopeTransport, teardowns, options)
 	scope.addEventListener('message', onMessage)
 	let disposed = false
 	return () => {
@@ -89,8 +114,12 @@ export function serveMCPScope(scope: ServeMCPScopeInterface, options: ServeMCPOp
  * wiring stays independently testable (AGENTS §5) — drive {@link serveMCPScope}
  * directly with a scope double for a test, and this thin wrapper for real deploys.
  *
+ * **Trust boundary and lifecycle** — see {@link serveMCPScope}'s `@remarks`. The same
+ * considerations apply: ENTIRE tool registry exposed to every accepted port-bearing
+ * event; use `accept` to gate; per-client bindings accumulate for the scope's lifetime.
+ *
  * @param options - `tools` (the live registry to expose; REQUIRED), optional
- *   `name`/`version`; see {@link ServeMCPOptions}
+ *   `name`/`version`, optional `accept` (origin/identity gate); see {@link ServeMCPOptions}
  * @returns A dispose function — see {@link serveMCPScope}
  *
  * @example

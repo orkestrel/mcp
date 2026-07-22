@@ -512,7 +512,9 @@ import { createMCPClient } from '@orkestrel/mcp'
 import { createHTTPClientTransport, createWebSocketClientTransport } from '@orkestrel/mcp/browser'
 
 const ws = createMCPClient({
-	transport: createWebSocketClientTransport({ url: 'ws://localhost:3000/mcp', protocols: 'mcp' }),
+	// No `protocols` needed — defaults to MCP_WEBSOCKET_SUBPROTOCOL ('mcp'), matching
+	// createWebSocketServer's unconditional echo. Override only for foreign servers.
+	transport: createWebSocketClientTransport({ url: 'ws://localhost:3000/mcp' }),
 })
 await ws.connect() // the browser handshakes, then the MCP initialize runs over WS frames
 
@@ -552,30 +554,31 @@ inside a hostable scope and wire its message events to it.
 
 #### Constants
 
-| Constant                     | Kind  | Value                                                                                                  |
-| ---------------------------- | ----- | ------------------------------------------------------------------------------------------------------ |
-| `MCP_SESSION_HEADER`         | const | `'mcp-session-id'` — the SAME header name as the Node face's `MCP_SESSION_HEADER`, echoed identically. |
-| `DEFAULT_MCP_SERVER_NAME`    | const | `'taverna'` — `serveMCPScope`'s default `serverInfo.name` when `options.name` is omitted.              |
-| `DEFAULT_MCP_SERVER_VERSION` | const | `'1.0.0'` — `serveMCPScope`'s default `serverInfo.version` when `options.version` is omitted.          |
+| Constant                     | Kind  | Value                                                                                                                                                                                                                                                                                                   |
+| ---------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MCP_SESSION_HEADER`         | const | `'mcp-session-id'` — the SAME header name as the Node face's `MCP_SESSION_HEADER`, echoed identically.                                                                                                                                                                                                  |
+| `MCP_WEBSOCKET_SUBPROTOCOL`  | const | `'mcp'` — the WebSocket subprotocol `createWebSocketClientTransport` requests by default, matching `createWebSocketServer`'s unconditional echo. Per RFC 6455 §4.1 a client must fail the connection if the server returns a subprotocol it did not request; Node ≥ 22 (undici) enforces this strictly. |
+| `DEFAULT_MCP_SERVER_NAME`    | const | `'taverna'` — `serveMCPScope`'s default `serverInfo.name` when `options.name` is omitted.                                                                                                                                                                                                               |
+| `DEFAULT_MCP_SERVER_VERSION` | const | `'1.0.0'` — `serveMCPScope`'s default `serverInfo.version` when `options.version` is omitted.                                                                                                                                                                                                           |
 
 #### Helpers
 
-| API                          | Kind     | Summary                                                                                                                                                                            |
-| ---------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `decodeEvent`                | function | Decode one SSE event's `data` string into a `JSONRPCMessage`, or `undefined` (total).                                                                                              |
-| `readEventStream`            | function | Decode a `fetch` Response's SSE body into the `JSONRPCMessage`s it carried (the egress inverse; total).                                                                            |
-| `createScopeMessageListener` | function | Build `serveMCPScope`'s unified `message`-event listener — a ports-bearing event spawns a per-port binding, a portless string-data event delivers onto the implicit scope channel. |
+| API                          | Kind     | Summary                                                                                                                                                                                                                            |
+| ---------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `decodeEvent`                | function | Decode one SSE event's `data` string into a `JSONRPCMessage`, or `undefined` (total).                                                                                                                                              |
+| `readEventStream`            | function | Decode a `fetch` Response's SSE body into the `JSONRPCMessage`s it carried (the egress inverse; total).                                                                                                                            |
+| `createScopeMessageListener` | function | Build `serveMCPScope`'s unified `message`-event listener — a port-bearing event is gated by `accept`, deduped by seen port, then spawns a per-port binding; a portless string-data event delivers onto the implicit scope channel. |
 
 #### Types
 
-| Type                              | Kind      | Shape                                                                                                                                                                                                    |
-| --------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WebSocketClientTransportOptions` | interface | `{ url: string; protocols?: string \| readonly string[] }` — the remote WS endpoint + optional subprotocol(s) to request.                                                                                |
-| `HTTPClientTransportOptions`      | interface | `{ url: string; headers?: Record<string, string>; fetch?: typeof fetch; timeout?: number }` — the remote endpoint, extra headers, an injectable `fetch`, and an optional `AbortSignal.timeout` deadline. |
-| `MessagePortTransportOptions`     | interface | `{ port: MessagePort }` — the port half `MessagePortTransport` sends/listens on.                                                                                                                         |
-| `ServeMCPScopeInterface`          | interface | `{ postMessage(message): void; addEventListener('message', listener): void; removeEventListener('message', listener): void }` — the structural shape `serveMCPScope` needs from a hostable scope.        |
-| `ScopeTransportInterface`         | interface | `MCPTransportInterface & { deliver(message: string): void }` — the implicit scope channel `serveMCPScope` binds, plus the internal push entry point `serveMCPScope`'s dispatcher drives it through.      |
-| `ServeMCPOptions`                 | interface | `{ tools: ToolManagerInterface; name?: string; version?: string }` — the registry to expose plus the optional server identity for `serveMCP` / `serveMCPScope`.                                          |
+| Type                              | Kind      | Shape                                                                                                                                                                                                                            |
+| --------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WebSocketClientTransportOptions` | interface | `{ url: string; protocols?: string \| readonly string[] }` — the remote WS endpoint + optional subprotocol(s) (default `MCP_WEBSOCKET_SUBPROTOCOL`; pass `[]` for no subprotocol).                                               |
+| `HTTPClientTransportOptions`      | interface | `{ url: string; headers?: Record<string, string>; fetch?: typeof fetch; timeout?: number }` — the remote endpoint, extra headers, an injectable `fetch`, and an optional `AbortSignal.timeout` deadline.                         |
+| `MessagePortTransportOptions`     | interface | `{ port: MessagePort }` — the port half `MessagePortTransport` sends/listens on.                                                                                                                                                 |
+| `ServeMCPScopeInterface`          | interface | `{ postMessage(message): void; addEventListener('message', listener): void; removeEventListener('message', listener): void }` — the structural shape `serveMCPScope` needs from a hostable scope.                                |
+| `ScopeTransportInterface`         | interface | `MCPTransportInterface & { deliver(message: string): void }` — the implicit scope channel `serveMCPScope` binds, plus the internal push entry point `serveMCPScope`'s dispatcher drives it through.                              |
+| `ServeMCPOptions`                 | interface | `{ tools: ToolManagerInterface; name?: string; version?: string; accept?: (event: MessageEvent) => boolean }` — the registry to expose, optional server identity, and optional port-event gate for `serveMCP` / `serveMCPScope`. |
 
 ## Methods
 
@@ -1196,6 +1199,29 @@ const dispose = serveMCP({ tools, name: 'worker-mcp', version: '1.0.0' })
 // ... on teardown:
 dispose()
 ```
+
+> **Trust boundary — mechanism, not policy.** `serveMCP` exposes the ENTIRE
+> `tools` registry to every client the scope accepts a port from, with NO
+> built-in origin or identity check. In a Service Worker every same-origin
+> context the SW controls (any window, worker, or iframe) can
+> `controller.postMessage(msg, [port])` and receive a fully-bound server with
+> complete tool-call access. Gating — origin allow-listing, handshake tokens,
+> or any other check — is the embedding application's responsibility. Compose a
+> guard in front using the `accept` option:
+>
+> ```ts
+> serveMCP({
+> 	tools,
+> 	accept: (event) => event.origin === 'https://my-app.example.com',
+> })
+> ```
+
+> **Lifetime / per-client binding accumulation.** Each accepted port-bearing
+> event creates a fresh binding that lives for the scope's lifetime — there is
+> no per-client reaping, because `MessagePort` gives no "peer closed" signal.
+> `serveMCP` suits bounded, long-lived client sets. Embedders with high client
+> churn must manage lifecycle themselves (dispose and re-serve, or wrap the
+> scope in their own reaping layer).
 
 `serveMCPScope` is the SAME wiring parameterized over an explicit scope — this
 runnable fence drives it with a minimal `ServeMCPScopeInterface` (the exact

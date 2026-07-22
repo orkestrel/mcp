@@ -200,6 +200,127 @@ describe('serveMCPScope — dispose', () => {
 	})
 })
 
+describe('serveMCPScope — accept option (A2)', () => {
+	it('accept returning false drops the event: no binding, no reply', async () => {
+		const double = createScopeDouble()
+		const dispose = serveMCPScope(double.scope, {
+			tools: createCalculatorTools(),
+			accept: () => false,
+		})
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		double.dispatch({ ports: [port1] })
+		port2.postMessage(JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 1 })))
+		await new Promise((resolve) => setTimeout(resolve, 30))
+
+		// No binding was created — nothing replies.
+		expect(replies).toEqual([])
+
+		dispose()
+	})
+
+	it('accept filtering by event.data token: only a matching token gets bound', async () => {
+		// Simulates a handshake-token gate: only events where event.data is 'allow' get bound.
+		const double = createScopeDouble()
+		const dispose = serveMCPScope(double.scope, {
+			tools: createCalculatorTools(),
+			accept: (event) => event.data === 'allow',
+		})
+
+		const allowed = new MessageChannel()
+		const denied = new MessageChannel()
+		const allowedReplies: unknown[] = []
+		const deniedReplies: unknown[] = []
+		allowed.port2.addEventListener('message', (event: MessageEvent) =>
+			allowedReplies.push(event.data),
+		)
+		denied.port2.addEventListener('message', (event: MessageEvent) =>
+			deniedReplies.push(event.data),
+		)
+		allowed.port2.start()
+		denied.port2.start()
+
+		// The denied port carries no matching token — should be rejected.
+		double.dispatch({ data: 'deny', ports: [denied.port1] })
+		// The allowed port carries the expected token — should be bound.
+		double.dispatch({ data: 'allow', ports: [allowed.port1] })
+
+		allowed.port2.postMessage(JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 1 })))
+		await vi.waitFor(() => expect(allowedReplies).toHaveLength(1))
+
+		// The allowed port got its reply.
+		expect(JSON.parse(String(allowedReplies[0]))).toEqual({ jsonrpc: '2.0', id: 1, result: {} })
+
+		// The denied port got nothing — binding was rejected.
+		denied.port2.postMessage(JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 2 })))
+		await new Promise((resolve) => setTimeout(resolve, 30))
+		expect(deniedReplies).toEqual([])
+
+		dispose()
+	})
+})
+
+describe('serveMCPScope — dispose mid-flight (A5.2)', () => {
+	it('dispose while a request is in flight: no unhandled rejection; no reply after dispose', async () => {
+		const double = createScopeDouble()
+		const dispose = serveMCPScope(double.scope, { tools: createCalculatorTools() })
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		double.dispatch({ ports: [port1] })
+
+		// Issue a request, then immediately dispose before any reply can arrive.
+		port2.postMessage(
+			JSON.stringify(
+				createJSONRPCRequest({ method: 'tools/call', id: 1, params: { name: 'add' } }),
+			),
+		)
+		dispose()
+
+		// Wait a generous tick — any in-flight processing either completed a clean in-flight
+		// reply before dispose, or was torn down and produced nothing. Either is acceptable;
+		// what is NOT acceptable is an unhandled rejection (would fail the test runner) or a
+		// reply AFTER dispose triggered by a second message.
+		await new Promise((resolve) => setTimeout(resolve, 50))
+
+		const replyCount = replies.length
+		// Attempt a second message after dispose — must produce no additional reply.
+		port2.postMessage(JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 2 })))
+		await new Promise((resolve) => setTimeout(resolve, 30))
+
+		expect(replies.length).toBe(replyCount) // pinned: no reply after dispose
+	})
+})
+
+describe('serveMCPScope — double-port-delivery dedup (A5.3)', () => {
+	it('the same port delivered twice is deduped: only one binding, only one reply per request', async () => {
+		const double = createScopeDouble()
+		const dispose = serveMCPScope(double.scope, { tools: createCalculatorTools() })
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		// Deliver the same MessagePort in two separate message events.
+		double.dispatch({ ports: [port1] })
+		double.dispatch({ ports: [port1] }) // duplicate — must be ignored
+
+		port2.postMessage(JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 1 })))
+		await vi.waitFor(() => expect(replies).toHaveLength(1))
+
+		// Exactly ONE reply — a duplicate binding would produce two replies.
+		expect(replies).toHaveLength(1)
+		expect(JSON.parse(String(replies[0]))).toEqual({ jsonrpc: '2.0', id: 1, result: {} })
+
+		dispose()
+	})
+})
+
 describe('serveMCPScope — hostile inbound', () => {
 	it('malformed JSON string on a bound port produces no unhandled throw (a -32700 reply)', async () => {
 		const double = createScopeDouble()

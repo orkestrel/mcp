@@ -15,14 +15,18 @@ import { isString } from '@orkestrel/contract'
  *   `MCPTransportInterface` and is handed to EITHER `bindServer` or
  *   `bindClient`/`createDuplexClientTransport`; which role it plays comes entirely
  *   from the binder it is given to, not from anything this class decides.
- * - **`start()` at construction.** `MessagePort.start()` is only REQUIRED when
- *   listening via `addEventListener` (as opposed to the `onmessage` setter, which
- *   implies it) — this transport uses `addEventListener`, and `MCPTransportInterface`
- *   has no separate open/connect step for the caller to hook a start into, so the
- *   constructor calls `port.start()` immediately: the port begins dispatching queued
- *   messages the moment the transport exists, matching the port contract's
- *   "already-open duplex channel" shape (the same shape `createDuplexClientTransport`
- *   assumes of every `MCPTransportInterface`, `@src/core`).
+ * - **`start()` at construction — bind synchronously.** `MessagePort.start()` is only
+ *   REQUIRED when listening via `addEventListener` (as opposed to the `onmessage`
+ *   setter, which implies it) — this transport uses `addEventListener`, and
+ *   `MCPTransportInterface` has no separate open/connect step for the caller to hook
+ *   a start into, so the constructor calls `port.start()` immediately: the port
+ *   begins dispatching QUEUED messages the moment the transport exists. This is safe
+ *   inside `serveMCP`'s flow (the transport is synchronously handed to `bindServer`
+ *   before control returns to the event loop), but is a **footgun for direct use**:
+ *   if you construct `new MessagePortTransport({ port })` and then `await` anything
+ *   before calling `listen`, messages that arrived in the gap are DROPPED. **Bind
+ *   synchronously after construction** — do not interleave an `await` between
+ *   `new MessagePortTransport(…)` and `bindServer` / `listen`.
  * - **String payloads only.** `send` posts the message string as-is (`postMessage`
  *   structured-clones it — a string clones to an identical string, so the wire stays
  *   plain JSON-RPC text like every other transport in this package). Inbound: a
