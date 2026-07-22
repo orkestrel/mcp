@@ -15,7 +15,8 @@
 		"noEmit": true,
 		"paths": {
 			"@src/core": ["./src/core/index.ts"],
-			"@src/server": ["./src/server/index.ts"]
+			"@src/server": ["./src/server/index.ts"],
+			"@src/browser": ["./src/browser/index.ts"]
 		}
 	},
 	"exclude": ["node_modules", "dist", "tmp"]

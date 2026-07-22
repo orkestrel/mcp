@@ -12,7 +12,7 @@ import type {
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import {
-	isJSONRPCRequest,
+	bindServer,
 	JSONRPC_INVALID_REQUEST,
 	JSONRPC_PARSE_ERROR,
 	jsonRPCError,
@@ -22,7 +22,7 @@ import { isString } from '@orkestrel/contract'
 import { openStream } from '@orkestrel/server'
 import { createNodeWebSocket, WEBSOCKET_VERSION } from '@orkestrel/websocket'
 import { DEFAULT_MCP_PATH, MCP_WEBSOCKET_SUBPROTOCOL } from './constants.js'
-import { acceptsEventStream, upgradeRequestPath } from './helpers.js'
+import { acceptsEventStream, bridgeMessageTransport, upgradeRequestPath } from './helpers.js'
 import { HTTPClientTransport } from './transports/HTTPClientTransport.js'
 import { StdioClientTransport } from './transports/StdioClientTransport.js'
 import { StdioServerTransport } from './transports/StdioServerTransport.js'
@@ -191,12 +191,13 @@ export function createHTTPClientTransport(
  * - **Claims (returns `true`)** otherwise: it builds `createNodeWebSocket({ socket, key, head,
  *   protocol })` (SERVER mode → writes the `101` handshake, echoing the `subprotocol`, default
  *   {@link MCP_WEBSOCKET_SUBPROTOCOL} `'mcp'`, and sends UNMASKED frames), wraps it in a
- *   {@link WebSocketServerTransport}, and PUMPS: each inbound {@link
- *   import('@src/core').JSONRPCMessage} that is a REQUEST runs through `mcp.dispatch`, and a
- *   defined response is written back as a frame — a NOTIFICATION (`dispatch` → `undefined`)
- *   sends nothing. A non-request message (a stray response) is ignored. The dispatch is
- *   guarded so a `dispatch` / `send` fault surfaces on the transport's `error` event rather
- *   than escaping the (async) message listener.
+ *   {@link WebSocketServerTransport}, and pipes it through the core {@link
+ *   import('@src/core').MCPTransportInterface} port via {@link
+ *   import('./helpers.js').bridgeMessageTransport} + {@link import('@src/core').bindServer}:
+ *   each inbound REQUEST runs through `mcp.dispatch`, and a defined response is written back
+ *   as a frame — a NOTIFICATION sends nothing, and a non-request message (a stray response) is
+ *   ignored. A `dispatch` / `send` fault surfaces on `mcp.emitter`'s `error` event rather than
+ *   escaping the (async) message pump.
  *
  * It is MECHANISM, not policy: compose an auth guard IN FRONT by registering an upgrade
  * handler BEFORE this one — that handler can claim (decline + destroy) an unauthenticated
@@ -233,31 +234,13 @@ export function createWebSocketServer(
 		const version = request.headers['sec-websocket-version']
 		if (!isString(version) || version !== WEBSOCKET_VERSION) return false
 
-		// CLAIM: the wrapper writes the `101` handshake (server mode) and the transport pumps
-		// each request through `mcp.dispatch`, writing back a defined response (a notification
-		// sends nothing). A dispatch / send fault surfaces on the transport `error` event.
+		// CLAIM: the wrapper writes the `101` handshake (server mode) and the transport pipes
+		// through the core port: bindServer dispatches each inbound request and writes back a
+		// defined response (a notification sends nothing); a dispatch / send fault surfaces on
+		// `mcp.emitter`'s `error` event.
 		const ws = createNodeWebSocket({ socket, key, head, protocol: subprotocol })
 		const transport = new WebSocketServerTransport(ws)
-		transport.emitter.on('message', (message) => {
-			if (!isJSONRPCRequest(message)) return
-			void (async () => {
-				try {
-					const response = await mcp.dispatch(message)
-					if (response !== undefined) await transport.send(response)
-				} catch (error) {
-					// Surface a dispatch / send fault on the transport's `error` event — but a
-					// user `'error'` listener that itself throws would (Emitter.emit rethrows the
-					// first listener throw) escape this `void` async listener as an UNHANDLED
-					// rejection and, on Node ≥15, can terminate the process. Swallow that here:
-					// a buggy observer must never crash the server (§13).
-					try {
-						transport.emitter.emit('error', error)
-					} catch {
-						// A throwing `error` listener is the caller's own bug — the end of the line.
-					}
-				}
-			})()
-		})
+		bindServer(mcp, bridgeMessageTransport(transport))
 		void transport.start()
 		return true
 	}
@@ -346,12 +329,13 @@ export function createStdioClientTransport(
  * @remarks
  * Wraps `options.input` (default `process.stdin`) / `options.output` (default
  * `process.stdout`) in a {@link import('./transports/StdioServerTransport.js').StdioServerTransport}
- * and PUMPS: each inbound {@link import('@src/core').JSONRPCMessage} that is a
- * REQUEST runs through `mcp.dispatch`, and a defined response is written back as a
- * newline-terminated line — a NOTIFICATION (`dispatch` → `undefined`) writes
- * nothing. A non-request message is ignored. The dispatch is guarded so a
- * `dispatch` / `send` fault surfaces on the transport's `error` event rather than
- * escaping the (async) message listener.
+ * and pipes it through the core {@link import('@src/core').MCPTransportInterface} port
+ * via {@link import('./helpers.js').bridgeMessageTransport} + {@link
+ * import('@src/core').bindServer}: each inbound REQUEST runs through `mcp.dispatch`, and
+ * a defined response is written back as a newline-terminated line — a NOTIFICATION
+ * writes nothing, and a non-request message is ignored. A `dispatch` / `send` fault
+ * surfaces on `mcp.emitter`'s `error` event rather than escaping the (async) message
+ * pump.
  *
  * @param mcp - The transport-agnostic {@link MCPServerInterface} to expose over stdio
  * @param options - Optional injectable `input` / `output` streams; see
@@ -374,25 +358,7 @@ export function createStdioServer(
 	const input = options?.input ?? process.stdin
 	const output = options?.output ?? process.stdout
 	const transport = new StdioServerTransport(input, output)
-	transport.emitter.on('message', (message) => {
-		if (!isJSONRPCRequest(message)) return
-		void (async () => {
-			try {
-				const response = await mcp.dispatch(message)
-				if (response !== undefined) await transport.send(response)
-			} catch (error) {
-				// Surface a dispatch / send fault on the transport's `error` event — but a user
-				// `'error'` listener that itself throws would (Emitter.emit rethrows the first
-				// listener throw) escape this `void` async listener as an unhandled rejection.
-				// Swallow that here: a buggy observer must never crash the server (§13).
-				try {
-					transport.emitter.emit('error', error)
-				} catch {
-					// A throwing `error` listener is the caller's own bug — the end of the line.
-				}
-			}
-		})()
-	})
+	bindServer(mcp, bridgeMessageTransport(transport))
 	return {
 		start(): void {
 			void transport.start()

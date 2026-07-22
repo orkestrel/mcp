@@ -111,9 +111,42 @@ export const srcServer = (config?: UserConfig): UserConfig =>
 		),
 	)
 
+export const srcBrowser = (config?: UserConfig): UserConfig =>
+	srcCore(
+		mergeConfig(
+			{
+				build: {
+					lib: {
+						entry: resolveWorkspacePath('src/browser/index.ts'),
+						formats: ['es'],
+						fileName: () => 'index.js',
+					},
+					outDir: 'dist/src/browser',
+					target: 'esnext',
+					rolldownOptions: {
+						external: (id: string) => id === '@src/core' || id.startsWith('@orkestrel/'),
+						output: [
+							{
+								format: 'es',
+								entryFileNames: 'index.js',
+								paths: { '@src/core': '../core/index.js' },
+							},
+						],
+					},
+				},
+				test: {
+					name: { label: 'src:browser', color: 'blue' },
+					include: ['tests/src/browser/**/*.test.ts'],
+					exclude: ['tests/src/core/**/*.test.ts'],
+				},
+			},
+			config ?? {},
+		),
+	)
+
 export default defineConfig({
 	resolve,
 	test: {
-		projects: [srcCore, srcServer, guides],
+		projects: [srcCore, srcServer, srcBrowser, guides],
 	},
 })

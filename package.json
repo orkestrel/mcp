@@ -48,6 +48,12 @@
 				"default": "./dist/src/server/index.cjs"
 			}
 		},
+		"./browser": {
+			"import": {
+				"types": "./dist/src/browser/index.d.ts",
+				"default": "./dist/src/browser/index.js"
+			}
+		},
 		"./package.json": "./package.json"
 	},
 	"publishConfig": {
@@ -60,21 +66,24 @@
 		"scaffold": "scaffold",
 		"lint": "oxlint --config .oxlintrc.json --fix .",
 		"check": "tsc --noEmit --project tsconfig.json && npm run check:src",
-		"check:src": "npm run check:src:core && npm run check:src:server",
+		"check:src": "npm run check:src:core && npm run check:src:server && npm run check:src:browser",
 		"check:src:core": "tsc --noEmit -p configs/src/tsconfig.core.json",
 		"check:src:server": "tsc --noEmit -p configs/src/tsconfig.server.json",
+		"check:src:browser": "tsc --noEmit -p configs/src/tsconfig.browser.json",
 		"format": "oxfmt --config .oxfmtrc.json --write .",
 		"format:check": "oxfmt --config .oxfmtrc.json --check .",
 		"lint:check": "oxlint --config .oxlintrc.json .",
 		"test": "npm run test:src && npm run test:guides",
-		"test:src": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:core --project src:server",
+		"test:src": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:core --project src:server --project src:browser",
 		"test:src:core": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:core",
 		"test:src:server": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:server",
+		"test:src:browser": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:browser",
 		"test:guides": "vitest run --config vite.config.ts --reporter=dot --project guides",
 		"build": "npm run clean && npm run build:src",
-		"build:src": "npm run build:src:core && npm run build:src:server",
+		"build:src": "npm run build:src:core && npm run build:src:server && npm run build:src:browser",
 		"build:src:core": "vite build --config configs/src/vite.core.config.ts && npm run copy dist/src/core/index.d.ts dist/src/core/index.d.cts",
 		"build:src:server": "vite build --config configs/src/vite.server.config.ts && npm run copy dist/src/server/index.d.ts dist/src/server/index.d.cts",
+		"build:src:browser": "vite build --config configs/src/vite.browser.config.ts",
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test"
 	},
 	"dependencies": {

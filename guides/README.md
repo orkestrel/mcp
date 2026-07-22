@@ -4,16 +4,17 @@ A dual-axis index into this repository's guides — by concept, and by directory
 
 ## By concept
 
-| Concept | Spec                       | Source                                                   | Tests                                                                            |
-| ------- | -------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| MCP     | [`src/mcp.md`](src/mcp.md) | [`src/core`](../src/core), [`src/server`](../src/server) | [`tests/src/core`](../tests/src/core), [`tests/src/server`](../tests/src/server) |
+| Concept | Spec                       | Source                                                                                    | Tests                                                                                                                         |
+| ------- | -------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| MCP     | [`src/mcp.md`](src/mcp.md) | [`src/core`](../src/core), [`src/server`](../src/server), [`src/browser`](../src/browser) | [`tests/src/core`](../tests/src/core), [`tests/src/server`](../tests/src/server), [`tests/src/browser`](../tests/src/browser) |
 
 ## By directory
 
-| Directory    | Guide                      |
-| ------------ | -------------------------- |
-| `src/core`   | [`src/mcp.md`](src/mcp.md) |
-| `src/server` | [`src/mcp.md`](src/mcp.md) |
+| Directory     | Guide                      |
+| ------------- | -------------------------- |
+| `src/core`    | [`src/mcp.md`](src/mcp.md) |
+| `src/server`  | [`src/mcp.md`](src/mcp.md) |
+| `src/browser` | [`src/mcp.md`](src/mcp.md) |
 
 ## Dependency reference
 
