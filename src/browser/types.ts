@@ -118,12 +118,18 @@ export interface ServeMCPScopeInterface {
  * {@link import('./constants.js').DEFAULT_MCP_SERVER_VERSION}).
  *
  * @remarks
- * - `accept` — optional origin / identity gate consulted **before** a port-bearing
- *   `message` event is accepted; return `false` to drop the event (no binding, no reply).
- *   Use to allow-list origins (`event.origin`) or verify a handshake token in
- *   `event.data`. When omitted, ALL port-bearing events are accepted — which means
- *   every same-origin context that can reach the scope gets full tool-call access.
- *   See `serveMCP`'s trust-boundary note.
+ * - `accept` — optional identity gate consulted **before** a port-bearing `message`
+ *   event is accepted; return `false` to drop the event (no binding, no reply).
+ *   **`accept` gates ONLY port-bearing events** — portless messages bypass it and
+ *   deliver directly to the implicit scope channel (the tool executes, blind; in a
+ *   Service Worker the reply is silently dropped — see `serveMCPScope`'s portless note).
+ *   Prefer a handshake token in `event.data` as the primary pattern
+ *   (e.g. `(event) => event.data === token`) — for same-origin worker/MessagePort
+ *   messages `event.origin` is frequently the empty string, making origin
+ *   allow-listing unreliable; origin checks are meaningful for cross-origin
+ *   `postMessage` only. When omitted, ALL port-bearing events are accepted — every
+ *   same-origin context that can reach the scope gets full tool-call access.
+ *   See `serveMCPScope`'s trust-boundary and portless-events notes.
  */
 export interface ServeMCPOptions {
 	readonly tools: ToolManagerInterface
