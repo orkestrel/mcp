@@ -127,7 +127,8 @@ describe('createWebSocketClientTransport — the browser client against the Node
 		const handle = await startRawWsServer((ws) => {
 			serverSocket = ws
 		})
-		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
+		// Raw WS server — no subprotocol echo; pass [] to opt out of the 'mcp' default.
+		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp`, protocols: [] })
 		let closeCount = 0
 		transport.emitter.on('close', () => {
 			closeCount += 1
@@ -144,7 +145,8 @@ describe('createWebSocketClientTransport — the browser client against the Node
 		const handle = await startRawWsServer((ws) => {
 			ws.send('not valid json-rpc')
 		})
-		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
+		// Raw WS server — no subprotocol echo; pass [] to opt out of the 'mcp' default.
+		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp`, protocols: [] })
 		const errors: unknown[] = []
 		transport.emitter.on('error', (error) => errors.push(error))
 
@@ -155,6 +157,47 @@ describe('createWebSocketClientTransport — the browser client against the Node
 
 		expect(errors.length).toBeGreaterThan(0)
 		await transport.close()
+	})
+
+	it('R2: default protocols (no option) connects against createWebSocketServer (which echoes mcp)', async () => {
+		// createWebSocketServer unconditionally echoes Sec-WebSocket-Protocol: mcp; per
+		// RFC 6455 §4.1 a client must fail if the server returns a subprotocol it did not
+		// request. Omitting `protocols` now defaults to MCP_WEBSOCKET_SUBPROTOCOL — this
+		// test proves the default matches the server's echo (no connection failure).
+		const handle = await startWsMCP()
+		const client = createMCPClient({
+			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
+		})
+
+		await client.connect()
+		expect(client.connected).toBe(true)
+
+		const tools = await client.tools()
+		expect(tools.map((tool) => tool.name)).toEqual(['add', 'boom'])
+
+		await client.disconnect()
+	})
+
+	it('A3: send() after close() silently drops the message — no throw, no delivery', async () => {
+		// Pin the post-close semantics: a message sent after close() is dropped, not queued.
+		// This test uses a live server so any wrongly-queued message would surface on reconnect.
+		const handle = await startWsMCP()
+		const transport = createWebSocketClientTransport({
+			url: `${handle.base}/mcp`,
+		})
+		const received: unknown[] = []
+		transport.emitter.on('message', (message) => received.push(message))
+
+		await transport.start()
+		await transport.close()
+
+		// Send after close — must not throw and the message must never arrive.
+		await expect(
+			transport.send(createJSONRPCRequest({ method: 'ping', id: 99 })),
+		).resolves.toBeUndefined()
+		await waitForDelay(50)
+
+		expect(received).toEqual([])
 	})
 })
 

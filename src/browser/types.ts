@@ -27,9 +27,14 @@ import type { ToolManagerInterface } from '@orkestrel/agent'
  * - `url` — the absolute `ws://` / `wss://` (or `http://` / `https://`, accepted by
  *   the native `WebSocket` constructor the same way) URL of the remote server's
  *   WebSocket endpoint. REQUIRED.
- * - `protocols` — the WebSocket subprotocol(s) to request, forwarded verbatim as the
- *   native `WebSocket` constructor's second argument (e.g. `'mcp'` to match the Node
- *   face's `MCP_WEBSOCKET_SUBPROTOCOL`). Omit for no subprotocol negotiation.
+ * - `protocols` — the WebSocket subprotocol(s) to request. **Defaults to
+ *   {@link import('./constants.js').MCP_WEBSOCKET_SUBPROTOCOL} (`'mcp'`)**, matching
+ *   `createWebSocketServer`'s unconditional `Sec-WebSocket-Protocol: mcp` echo. Per
+ *   RFC 6455 §4.1 a client must fail the connection if the server returns a subprotocol
+ *   it did not request; Node ≥ 22 (undici) enforces this strictly, so the default saves
+ *   you from that trap when connecting to this repo's own server. Override only when
+ *   targeting a foreign server that speaks a different (or no) subprotocol — pass `[]`
+ *   to request no subprotocol at all.
  */
 export interface WebSocketClientTransportOptions {
 	readonly url: string
@@ -111,9 +116,18 @@ export interface ServeMCPScopeInterface {
  * `MCPServerOptions` (`@src/core`) but with `name`/`version` OPTIONAL (defaulting to
  * {@link import('./constants.js').DEFAULT_MCP_SERVER_NAME} /
  * {@link import('./constants.js').DEFAULT_MCP_SERVER_VERSION}).
+ *
+ * @remarks
+ * - `accept` — optional origin / identity gate consulted **before** a port-bearing
+ *   `message` event is accepted; return `false` to drop the event (no binding, no reply).
+ *   Use to allow-list origins (`event.origin`) or verify a handshake token in
+ *   `event.data`. When omitted, ALL port-bearing events are accepted — which means
+ *   every same-origin context that can reach the scope gets full tool-call access.
+ *   See `serveMCP`'s trust-boundary note.
  */
 export interface ServeMCPOptions {
 	readonly tools: ToolManagerInterface
 	readonly name?: string
 	readonly version?: string
+	readonly accept?: (event: MessageEvent) => boolean
 }

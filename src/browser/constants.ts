@@ -24,3 +24,20 @@ export const DEFAULT_MCP_SERVER_NAME = 'taverna'
 
 /** The default server version `serveMCPScope` reports (`initialize`'s `serverInfo.version`) when `options.version` is omitted. */
 export const DEFAULT_MCP_SERVER_VERSION = '1.0.0'
+
+// The WebSocket subprotocol constant, declared here independently of the Node face's
+// `MCP_WEBSOCKET_SUBPROTOCOL` (`src/server/constants.ts`) — peer environment faces share
+// no import (AGENTS §2), so the same value is declared twice. The browser face's
+// `WebSocketClientTransport` defaults to this value when `protocols` is omitted, matching
+// `createWebSocketServer`'s unconditional echo.
+
+/**
+ * The WebSocket subprotocol `createWebSocketClientTransport` requests by default —
+ * `'mcp'`, matching `createWebSocketServer`'s unconditional `Sec-WebSocket-Protocol:
+ * mcp` echo. Per RFC 6455 §4.1 a client MUST fail the connection if the server returns
+ * a subprotocol it did not request; Node ≥ 22 (undici) enforces this strictly, so the
+ * default bakes the correct value in. Override `WebSocketClientTransportOptions.protocols`
+ * only when connecting to a foreign server that speaks a different subprotocol (or `[]`
+ * for no subprotocol negotiation at all).
+ */
+export const MCP_WEBSOCKET_SUBPROTOCOL = 'mcp'
