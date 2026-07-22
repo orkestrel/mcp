@@ -374,12 +374,12 @@ createContract(syncReportShape()).schema // the `SyncReport` schema — the comp
 Lowercase value builders — every builder returns a fresh object and OMITS absent optional
 keys entirely, so its output round-trips the exact-record validators above.
 
-| API          | Kind     | Builds…                                                                                                                                                                                                                                     |
-| ------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dependency` | function | a `Dependency` from name / range / optional `optional` flag (omitted entirely when absent).                                                                                                                                                 |
-| `override`   | function | an `Override` from path / content.                                                                                                                                                                                                          |
-| `member`     | function | a `Member` from name / category / summary / surface (`surface` defaults `'core'`).                                                                                                                                                          |
-| `blueprint`  | function | a `Blueprint` from a name + a partial of the rest — `version` / `engines` default (`DEFAULT_VERSION` / `DEFAULT_ENGINES`), `surfaces` defaults `['core']`, and `keywords` / `dependencies` / `peers` / `extras` / `overrides` default `[]`. |
+| API          | Kind     | Builds…                                                                                                                                                                                                                                                                |
+| ------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dependency` | function | a `Dependency` from name / range / optional `optional` flag (omitted entirely when absent).                                                                                                                                                                            |
+| `override`   | function | an `Override` from path / content.                                                                                                                                                                                                                                     |
+| `member`     | function | a `Member` from name / category / summary / surface (`surface` defaults `'core'`).                                                                                                                                                                                     |
+| `blueprint`  | function | a `Blueprint` from a name + a partial of the rest — `version` / `engines` default (`DEFAULT_VERSION` / `DEFAULT_ENGINES`), `surfaces` defaults `['core']`, `keywords` / `dependencies` / `peers` / `extras` / `overrides` default `[]`, and `engine` defaults `false`. |
 
 ```ts
 import { blueprint, dependency, override } from '@orkestrel/scaffold'

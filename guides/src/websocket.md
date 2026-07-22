@@ -8,7 +8,7 @@
 
 ```ts
 import { createServer } from 'node:http'
-import { createNodeWebSocket } from '@src/server'
+import { createNodeWebSocket } from '@orkestrel/websocket'
 
 // A node:http server hands every upgrade request a raw socket; this wrapper takes it
 // from there. Passing the client's `sec-websocket-key` selects SERVER mode — the
@@ -124,7 +124,7 @@ These invariants hold across `src/server` ↔ `websocket.md`:
 The handle is fully driven through its `emitter` — attach as many observers as you like; a throw in one is isolated and never reaches the socket.
 
 ```ts
-import { createNodeWebSocket } from '@src/server'
+import { createNodeWebSocket } from '@orkestrel/websocket'
 
 server.on('upgrade', (request, socket, head) => {
 	const ws = createNodeWebSocket({
@@ -140,7 +140,7 @@ server.on('upgrade', (request, socket, head) => {
 ### Stream-decode frames across chunk boundaries
 
 ```ts
-import { parseWebSocketFrame } from '@src/server'
+import { parseWebSocketFrame } from '@orkestrel/websocket'
 
 let buffer = Buffer.alloc(0)
 socket.on('data', (chunk: Buffer) => {
@@ -157,7 +157,7 @@ socket.on('data', (chunk: Buffer) => {
 ### Encode a frame to the wire (server unmasked, client masked)
 
 ```ts
-import { encodeWebSocketFrame, WEBSOCKET_OPCODE_TEXT } from '@src/server'
+import { encodeWebSocketFrame, WEBSOCKET_OPCODE_TEXT } from '@orkestrel/websocket'
 
 socket.write(encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, 'hello')) // server→client (unmasked)
 socket.write(encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, 'hello', { masked: true })) // client→server
@@ -166,7 +166,7 @@ socket.write(encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, 'hello', { masked: true
 ### Compute the handshake accept token
 
 ```ts
-import { computeWebSocketAccept } from '@src/server'
+import { computeWebSocketAccept } from '@orkestrel/websocket'
 
 computeWebSocketAccept('dGhlIHNhbXBsZSBub25jZQ==') // 's3pPLMBiTxaQ9kYGzzhZRbK+xOo=' (RFC 6455 §1.3)
 ```
@@ -174,7 +174,7 @@ computeWebSocketAccept('dGhlIHNhbXBsZSBub25jZQ==') // 's3pPLMBiTxaQ9kYGzzhZRbK+x
 ### Keep a connection alive, and tear it down on demand
 
 ```ts
-import { createNodeWebSocket } from '@src/server'
+import { createNodeWebSocket } from '@orkestrel/websocket'
 
 const ws = createNodeWebSocket({ socket })
 ws.emitter.on('pong', () => console.log('peer is alive'))

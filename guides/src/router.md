@@ -22,7 +22,7 @@ Register routes on a `Router`, resolve the most-specific match, and dispatch
 fetch-standard requests through a `Dispatcher`:
 
 ```ts
-import { createDispatcher, createRouter } from '@src/core'
+import { createDispatcher, createRouter } from '@orkestrel/router'
 
 const router = createRouter<{ readonly page: string }>()
 router.add({ path: '/users/:id', meta: { page: 'profile' } })
@@ -333,7 +333,7 @@ lets a later registration replace an earlier one in place instead of adding
 a duplicate candidate.
 
 ```ts
-import { createRouter } from '@src/core'
+import { createRouter } from '@orkestrel/router'
 
 const router = createRouter<{ readonly page: string }>({
 	key: (entry) => entry.path,
@@ -351,7 +351,7 @@ A literal segment always outranks a param, which always outranks a wildcard,
 compared left-to-right at the earliest differing segment:
 
 ```ts
-import { createRouter } from '@src/core'
+import { createRouter } from '@orkestrel/router'
 
 const router = createRouter<{ readonly handler: string }>()
 router.add([
@@ -367,7 +367,7 @@ router.match('/files/a/b.png')?.meta.handler // 'catchAll'
 ### Method-dimensioned dispatch (auto-HEAD, auto-OPTIONS, 405)
 
 ```ts
-import { createDispatcher } from '@src/core'
+import { createDispatcher } from '@orkestrel/router'
 
 const dispatcher = createDispatcher()
 dispatcher.add({ method: 'GET', path: '/health', handler: () => new Response('ok') })
@@ -391,7 +391,7 @@ notAllowed.status // 405
 ### Observing dispatch outcomes
 
 ```ts
-import { createDispatcher } from '@src/core'
+import { createDispatcher } from '@orkestrel/router'
 
 const dispatcher = createDispatcher({
 	on: {
@@ -412,7 +412,7 @@ binding would get), so `context.params` types correctly through
 `PathParams` even when the input is built before the `add` call:
 
 ```ts
-import { createDispatcher, route } from '@src/core'
+import { createDispatcher, route } from '@orkestrel/router'
 
 const input = route({
 	method: 'GET',
@@ -439,7 +439,7 @@ every entry while leaving the router usable; `Dispatcher.destroy()` tears
 down its emitter.
 
 ```ts
-import { createDispatcher, createRouter } from '@src/core'
+import { createDispatcher, createRouter } from '@orkestrel/router'
 
 const router = createRouter<{ readonly page: string }>()
 router.add([
@@ -459,7 +459,7 @@ dispatcher.destroy() // tears down the #emitter; router.entries() is still valid
 ### Hash-mode navigation
 
 ```ts
-import { createNavigator } from '@src/browser'
+import { createNavigator } from '@orkestrel/router/browser'
 
 const navigator = createNavigator({
 	routes: [
@@ -478,7 +478,7 @@ navigator.destroy() // stop() plus tear down the #emitter
 ### History mode with link interception
 
 ```ts
-import { createNavigator } from '@src/browser'
+import { createNavigator } from '@orkestrel/router/browser'
 
 const navigator = createNavigator({
 	routes: [{ path: '/users/:id', meta: { title: 'User' } }],
@@ -495,7 +495,7 @@ A guard may veto synchronously or asynchronously; a superseded guard's
 verdict is discarded via its own `signal`.
 
 ```ts
-import { createNavigator } from '@src/browser'
+import { createNavigator } from '@orkestrel/router/browser'
 
 const navigator = createNavigator({
 	routes: [
@@ -513,8 +513,8 @@ navigator.start()
 ### Basic server
 
 ```ts
-import { createListener } from '@src/server'
-import { createDispatcher } from '@src/core'
+import { createListener } from '@orkestrel/router/server'
+import { createDispatcher } from '@orkestrel/router'
 import http from 'node:http'
 
 const dispatcher = createDispatcher<{ readonly requestId: string }>()
@@ -538,8 +538,8 @@ error handling around `dispatcher.handle`, for instance), compose
 `buildRequest`/`sendResponse` directly:
 
 ```ts
-import { buildRequest, sendResponse } from '@src/server'
-import { createDispatcher } from '@src/core'
+import { buildRequest, sendResponse } from '@orkestrel/router/server'
+import { createDispatcher } from '@orkestrel/router'
 import http from 'node:http'
 
 const dispatcher = createDispatcher()
@@ -560,7 +560,7 @@ server.listen(0)
 ### Observing client disconnect
 
 ```ts
-import { buildRequest } from '@src/server'
+import { buildRequest } from '@orkestrel/router/server'
 import http from 'node:http'
 
 const server = http.createServer((incoming) => {
