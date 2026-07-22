@@ -42,13 +42,19 @@ import { createScopeMessageListener } from './helpers.js'
  * with high client churn must track and invoke the dispose function themselves to
  * avoid unbounded accumulation.
  *
- * **Portless events on a Service-Worker-shaped scope.** A client CAN call
- * `controller.postMessage('a string')` (a portless message), so the eagerly-bound
- * implicit scope channel is not entirely unreachable in that shape. It IS harmless:
- * `ServiceWorkerGlobalScope` has no `self.postMessage`, so the reply path
- * (`scopeTransport.send` → `scope.postMessage`) throws, and `bindServer` routes the
- * throw to the server emitter's `error` event (see `@src/core bindServer`) — the
- * un-repliable reply is correctly dropped.
+ * **Portless events and the implicit scope channel.** A portless `message` event
+ * (e.g. `controller.postMessage('<json-rpc>')` in a Service Worker) delivers its
+ * string directly to the implicit scope transport — **the tool EXECUTES** — even
+ * though no reply can reach the caller. In a `ServiceWorkerGlobalScope` the reply
+ * path (`scopeTransport.send` → `scope.postMessage`) throws (no `self.postMessage`),
+ * and `bindServer` routes the throw to the server emitter's `error` event (see
+ * `@src/core bindServer`), so the un-repliable reply is dropped. The net effect is
+ * **blind side-effecting ingress**: the tool runs but the caller gets no result.
+ * Crucially, **`accept` does NOT gate this channel** — it is consulted only for
+ * port-bearing events. In a Service Worker, if `accept` is your sole guard, ensure
+ * all clients connect through transferred `MessagePort`s (port-bearing messages), or
+ * restrict the exposed tools to side-effect-free operations, or validate a token
+ * inside the tools themselves.
  *
  * Binds the implicit scope channel EAGERLY (at call time, not lazily on first use) —
  * `bindServer` is called once against a {@link import('./types.js').ScopeTransportInterface}
@@ -76,7 +82,8 @@ import { createScopeMessageListener } from './helpers.js'
  * const scope = { postMessage() {}, addEventListener() {}, removeEventListener() {} }
  * const dispose = serveMCPScope(scope, {
  *   tools: createToolManager(),
- *   accept: (event) => event.origin === 'https://my-app.example.com',
+ *   // Prefer token-in-data — event.origin is empty for same-origin worker messages.
+ *   accept: (event) => event.data === 'my-secret-token',
  * })
  * // ... later:
  * dispose()

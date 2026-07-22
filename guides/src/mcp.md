@@ -1201,20 +1201,30 @@ dispose()
 ```
 
 > **Trust boundary — mechanism, not policy.** `serveMCP` exposes the ENTIRE
-> `tools` registry to every client the scope accepts a port from, with NO
+> `tools` registry to every client that delivers a port-bearing message, with NO
 > built-in origin or identity check. In a Service Worker every same-origin
 > context the SW controls (any window, worker, or iframe) can
 > `controller.postMessage(msg, [port])` and receive a fully-bound server with
-> complete tool-call access. Gating — origin allow-listing, handshake tokens,
-> or any other check — is the embedding application's responsibility. Compose a
-> guard in front using the `accept` option:
+> complete tool-call access. Gating is the embedding application's responsibility;
+> compose a guard in front using the `accept` option. Prefer a handshake token in
+> `event.data` — for same-origin worker/MessagePort messages `event.origin` is
+> frequently the empty string, making origin allow-listing unreliable:
 >
 > ```ts
 > serveMCP({
 > 	tools,
-> 	accept: (event) => event.origin === 'https://my-app.example.com',
+> 	// Prefer token-in-data — event.origin is empty for same-origin worker messages.
+> 	accept: (event) => event.data === 'my-secret-token',
 > })
 > ```
+>
+> ⚠️ **`accept` gates only port-bearing events.** A portless
+> `controller.postMessage('<json-rpc>')` delivers its string to the implicit
+> scope channel — **the tool executes** (blind side-effecting ingress) and the
+> reply is silently dropped (`ServiceWorkerGlobalScope` has no `self.postMessage`).
+> If `accept` is your sole guard in a Service Worker, ensure all clients connect
+> through transferred ports, or restrict the exposed registry to side-effect-free
+> tools, or validate a token inside the tools themselves.
 
 > **Lifetime / per-client binding accumulation.** Each accepted port-bearing
 > event creates a fresh binding that lives for the scope's lifetime — there is
