@@ -2,14 +2,21 @@ import type { MCPServerInterface } from '@src/core'
 import {
 	JSONRPC_INVALID_REQUEST,
 	JSONRPC_PARSE_ERROR,
+	SUPPORTED_PROTOCOL_VERSIONS,
 	jsonRPCError,
 	parseJSONRPCMessage,
 } from '@src/core'
 import { openStream } from '@orkestrel/server'
+import { MCP_PROTOCOL_VERSION_HEADER } from './constants.js'
 import { acceptsEventStream } from './helpers.js'
 
 /**
  * Create the Streamable-HTTP POST handler used by `createMCPRoutes`.
+ *
+ * @remarks
+ * A present `mcp-protocol-version` header must name a supported revision; an
+ * unsupported value returns an HTTP `400` JSON-RPC invalid-request error without
+ * dispatching. An absent header is accepted for the initialize/bootstrap request.
  *
  * @param mcp - The transport-agnostic MCP server to dispatch through
  * @param streaming - Whether an event-stream response may be negotiated
@@ -34,6 +41,17 @@ export function createMCPPostHandler(
 	streaming: boolean,
 ): (request: Request) => Promise<Response> {
 	return async (request): Promise<Response> => {
+		const protocol = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
+		if (protocol !== null && !SUPPORTED_PROTOCOL_VERSIONS.includes(protocol)) {
+			return Response.json(
+				jsonRPCError(
+					null,
+					JSONRPC_INVALID_REQUEST,
+					`Unsupported MCP protocol version '${protocol}'`,
+				),
+				{ status: 400 },
+			)
+		}
 		let text: string
 		try {
 			text = await request.text()

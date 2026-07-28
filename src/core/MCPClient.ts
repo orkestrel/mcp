@@ -16,7 +16,9 @@ import {
 	DEFAULT_MCP_CLIENT_VERSION,
 	DEFAULT_MCP_REQUEST_TIMEOUT,
 	MCP_PROTOCOL_VERSION,
+	SUPPORTED_PROTOCOL_VERSIONS,
 } from './constants.js'
+import { MCPError } from './errors.js'
 import { isJSONRPCResponse, isRequestId } from './validators.js'
 
 /**
@@ -26,8 +28,9 @@ import { isJSONRPCResponse, isRequestId } from './validators.js'
  *
  * @remarks
  * - **The mirror of `MCPServer`.** The server DISPATCHES requests over a tool registry;
- *   this client ISSUES them over a transport. `connect` runs `initialize` then sends
- *   `notifications/initialized`; `tools()` lists the remote tools and wraps each as a
+ *   this client ISSUES them over a transport. `connect` runs `initialize`, validates and
+ *   exposes the negotiated `protocol`, then sends `notifications/initialized`; `tools()`
+ *   lists the remote tools and wraps each as a
  *   local {@link ToolInterface} whose `execute` calls back through `call`; `call` runs a
  *   remote `tools/call` and returns the tool's value (a remote `isError: true` throws
  *   locally, so an agent's {@link import('@orkestrel/agent').ToolManagerInterface}
@@ -75,6 +78,7 @@ export class MCPClient implements MCPClientInterface {
 	>()
 	#nextId = 0
 	#connected = false
+	#protocol: string | undefined = undefined
 
 	constructor(options: MCPClientOptions) {
 		this.#emitter = new Emitter<MCPClientEventMap>({
@@ -98,6 +102,10 @@ export class MCPClient implements MCPClientInterface {
 		return this.#connected
 	}
 
+	get protocol(): string | undefined {
+		return this.#protocol
+	}
+
 	get transport(): ClientTransportInterface {
 		return this.#transport
 	}
@@ -115,11 +123,20 @@ export class MCPClient implements MCPClientInterface {
 		// The MCP handshake: negotiate the protocol version + advertise (empty) client
 		// capabilities + identify ourselves, then mark connected and fire the no-args
 		// `notifications/initialized` (a notification — no id, no response).
-		await this.#request('initialize', {
+		const result = await this.#request('initialize', {
 			protocolVersion: MCP_PROTOCOL_VERSION,
 			capabilities: {},
 			clientInfo: { name: this.#name, version: this.#version },
 		})
+		const protocol = isRecord(result) ? result['protocolVersion'] : undefined
+		if (!isString(protocol) || !SUPPORTED_PROTOCOL_VERSIONS.includes(protocol)) {
+			await this.#transport.close()
+			if (isString(protocol)) {
+				throw new Error(`MCP server negotiated unsupported protocol version '${protocol}'`)
+			}
+			throw new Error('MCP server returned a non-string protocol version')
+		}
+		this.#protocol = protocol
 		this.#connected = true
 		await this.#transport.send({ jsonrpc: '2.0', method: 'notifications/initialized' })
 		this.#emitter.emit('connect')
@@ -128,6 +145,7 @@ export class MCPClient implements MCPClientInterface {
 	async disconnect(): Promise<void> {
 		if (!this.#connected) return
 		this.#connected = false
+		this.#protocol = undefined
 		// Reject every still-pending request so no caller hangs past a disconnect, then
 		// clear the map and tear the transport down.
 		for (const id of this.#pending.keys()) {
@@ -205,7 +223,7 @@ export class MCPClient implements MCPClientInterface {
 				if (message.error !== undefined) {
 					this.#settle(
 						message.id,
-						new Error(`MCP error ${message.error.code}: ${message.error.message}`),
+						new MCPError(message.error.message, message.error.code, message.error.data),
 						true,
 					)
 				} else {

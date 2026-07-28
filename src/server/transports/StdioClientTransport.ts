@@ -25,8 +25,8 @@ import { dispatchLines, extractLines } from '../helpers.js'
  *   {@link dispatchLines} helper — a well-formed {@link JSONRPCMessage} emits
  *   `message`, a malformed line emits `error` (§14, never throws). The child's
  *   `close` bridges to this transport's `close`.
- * - **Outbound (`send`).** `send(message | messages)` writes ONE newline-terminated
- *   `JSON.stringify`d line per message to the child's `stdin`.
+ * - **Outbound (`send`).** `send(message)` writes one newline-terminated
+ *   `JSON.stringify`d line to the child's `stdin`.
  * - **`close()`** kills the child process and fires `close` (idempotent).
  * - **Observable (§13).** Owns the `emitter` ({@link ClientTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
@@ -78,11 +78,10 @@ export class StdioClientTransport implements ClientTransportInterface {
 		child.on('error', (error) => this.#emitter.emit('error', error))
 	}
 
-	async send(message: JSONRPCMessage | readonly JSONRPCMessage[]): Promise<void> {
+	async send(message: JSONRPCMessage): Promise<void> {
 		const child = this.#child
 		if (child === undefined) throw new Error('stdio transport is not connected')
-		const messages = Array.isArray(message) ? message : [message]
-		for (const one of messages) child.stdin.write(`${JSON.stringify(one)}\n`)
+		child.stdin.write(`${JSON.stringify(message)}\n`)
 	}
 
 	async close(): Promise<void> {

@@ -37,7 +37,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   event (the reply the {@link import('@src/core').MCPClientInterface} correlates by `id`); a
  *   non-JSON / non-message frame surfaces on `error` and is dropped (§14). The socket's `close`
  *   / `error` bridge to this transport's events.
- * - **Outbound (`send`).** `send(message | messages)` writes ONE masked text frame per message.
+ * - **Outbound (`send`).** `send(message)` writes one masked text frame.
  * - **`close()`** closes the underlying socket and fires `close` (idempotent).
  * - **URL scheme.** `options.url` accepts a `ws://` / `wss://` URL or an `http://` / `https://`
  *   one; a `ws(s)` scheme is converted to `http(s)` for the underlying upgrade request (`wss`
@@ -127,11 +127,10 @@ export class WebSocketClientTransport implements ClientTransportInterface {
 		})
 	}
 
-	async send(message: JSONRPCMessage | readonly JSONRPCMessage[]): Promise<void> {
+	async send(message: JSONRPCMessage): Promise<void> {
 		const socket = this.#socket
 		if (socket === undefined) throw new Error('WebSocket transport is not connected')
-		const messages = Array.isArray(message) ? message : [message]
-		for (const one of messages) socket.send(JSON.stringify(one))
+		socket.send(JSON.stringify(message))
 	}
 
 	async close(): Promise<void> {

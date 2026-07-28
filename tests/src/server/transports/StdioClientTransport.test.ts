@@ -111,16 +111,14 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		await transport.close()
 	})
 
-	it('a batch send writes one line per message, each replied to independently', async () => {
+	it('sequential sends write one line per message, each replied to independently', async () => {
 		const transport = spawnClient()
 		const messages: JSONRPCMessage[] = []
 		transport.emitter.on('message', (message) => messages.push(message))
 		await transport.start()
 
-		await transport.send([
-			createJSONRPCRequest({ method: 'ping', id: 1 }),
-			createJSONRPCRequest({ method: 'ping', id: 2 }),
-		])
+		await transport.send(createJSONRPCRequest({ method: 'ping', id: 1 }))
+		await transport.send(createJSONRPCRequest({ method: 'ping', id: 2 }))
 		await waitForDelay(300)
 
 		expect(messages).toEqual([

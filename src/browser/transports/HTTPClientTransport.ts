@@ -1,9 +1,10 @@
 import type { ClientTransportEventMap, ClientTransportInterface, JSONRPCMessage } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { HTTPClientTransportOptions } from '../types.js'
-import { parseJSONRPCMessage } from '@src/core'
+import { isJSONRPCResponse, parseJSONRPCMessage } from '@src/core'
+import { isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
-import { MCP_SESSION_HEADER } from '../constants.js'
+import { MCP_PROTOCOL_VERSION_HEADER, MCP_SESSION_HEADER } from '../constants.js'
 import { readEventStream } from '../helpers.js'
 
 /**
@@ -16,7 +17,7 @@ import { readEventStream } from '../helpers.js'
  *
  * @remarks
  * - **Request/response over `fetch`.** `send(message)` POSTs the JSON-serialized
- *   message (or batch) to `options.url` with `content-type: application/json` and an
+ *   message to `options.url` with `content-type: application/json` and an
  *   `Accept` of BOTH `application/json` and `text/event-stream` (so the server may
  *   answer with either framing) — plus any `options.headers` (e.g. an
  *   `Authorization` bearer). It then decodes the reply and emits each decoded
@@ -28,13 +29,14 @@ import { readEventStream } from '../helpers.js'
  *   face's own `readEventStream`) — the inverse of the server's `openStream` seam, so
  *   the wire round-trips. A `202` Accepted (a notification) carries no body and emits
  *   nothing.
- * - **Session echo.** `start()` / `close()` are no-ops (a request/response transport
+ * - **Session and protocol echo.** `start()` / `close()` are no-ops (a request/response transport
  *   holds no long-lived connection). The `mcp-session-id` response header, when a
  *   STATEFUL server sends one (on `initialize`), is captured into `session` and then
  *   ECHOED as the `mcp-session-id` request header on every SUBSEQUENT request — so an
- *   `MCPClient` passes a stateful server's session validation. Before `initialize`
- *   returns an id, `session` is `undefined` and no header is sent (safe against a
- *   stateless server, which neither sends nor expects one).
+ *   `MCPClient` passes a stateful server's session validation. The initialize result's
+ *   `protocolVersion` is likewise captured and echoed as `mcp-protocol-version` on every
+ *   subsequent request, as required by the 2025-06-18 Streamable-HTTP transport. Before
+ *   initialize returns, neither captured header is sent.
  * - **Total at the boundary (§14).** Every reply is narrowed (`parseJSONRPCMessage`,
  *   the SSE decoder) — a non-message reply is dropped, never asserted; a `fetch` /
  *   decode failure surfaces on the `error` event rather than escaping `send`.
@@ -55,6 +57,7 @@ export class HTTPClientTransport implements ClientTransportInterface {
 	readonly #fetch: typeof fetch
 	readonly #timeout: number | undefined
 	#session: string | undefined = undefined
+	#protocol: string | undefined = undefined
 
 	constructor(options: HTTPClientTransportOptions) {
 		this.#emitter = new Emitter<ClientTransportEventMap>()
@@ -77,7 +80,7 @@ export class HTTPClientTransport implements ClientTransportInterface {
 		// `fetch` on demand. Nothing to arm.
 	}
 
-	async send(message: JSONRPCMessage | readonly JSONRPCMessage[]): Promise<void> {
+	async send(message: JSONRPCMessage): Promise<void> {
 		let response: Response
 		try {
 			response = await this.#fetch(this.#url, {
@@ -89,6 +92,9 @@ export class HTTPClientTransport implements ClientTransportInterface {
 					// `initialize` returns one `#session` is undefined → no header (safe for a
 					// stateless server). A caller `headers` key still wins (merged last).
 					...(this.#session === undefined ? {} : { [MCP_SESSION_HEADER]: this.#session }),
+					...(this.#protocol === undefined
+						? {}
+						: { [MCP_PROTOCOL_VERSION_HEADER]: this.#protocol }),
 					...this.#headers,
 				},
 				body: JSON.stringify(message),
@@ -120,16 +126,28 @@ export class HTTPClientTransport implements ClientTransportInterface {
 		const type = response.headers.get('content-type') ?? ''
 		try {
 			if (type.includes('text/event-stream')) {
-				for (const message of await readEventStream(response))
-					this.#emitter.emit('message', message)
+				for (const message of await readEventStream(response)) this.#deliverMessage(message)
 				return
 			}
 			if (type.includes('application/json')) {
 				const message = parseJSONRPCMessage(await response.json())
-				if (message !== undefined) this.#emitter.emit('message', message)
+				if (message !== undefined) this.#deliverMessage(message)
 			}
 		} catch (error) {
 			this.#emitter.emit('error', error)
 		}
+	}
+
+	// Capture the negotiated protocol from the initialize result before emitting the
+	// message, so the next request carries its required protocol-version header.
+	#deliverMessage(message: JSONRPCMessage): void {
+		if (
+			isJSONRPCResponse(message) &&
+			isRecord(message.result) &&
+			isString(message.result['protocolVersion'])
+		) {
+			this.#protocol = message.result['protocolVersion']
+		}
+		this.#emitter.emit('message', message)
 	}
 }

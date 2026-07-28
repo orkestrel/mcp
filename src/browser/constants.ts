@@ -1,8 +1,8 @@
 // The MCP browser-transport constants (AGENTS §5 constants file) — the wire-level
-// header name the browser-face HTTP client transport echoes, matching the Node
-// face's `MCP_SESSION_HEADER` (`src/server/constants.ts`) byte-for-byte. The browser
-// face imports nothing from `src/server` (peer environment faces, per AGENTS §2), so
-// the literal is declared once here too — the SAME string, not a shared symbol.
+// header names the browser-face HTTP client transport echoes, matching the Node
+// face's session and protocol-version headers byte-for-byte. The browser face imports
+// nothing from `src/server` (peer environment faces, per AGENTS §2), so the literals
+// are declared once here too — the SAME strings, not shared symbols.
 
 /**
  * The Streamable-HTTP transport header that carries the MCP session id. The browser
@@ -12,6 +12,13 @@
  * server unchanged.
  */
 export const MCP_SESSION_HEADER = 'mcp-session-id'
+
+/**
+ * The Streamable-HTTP transport header carrying the negotiated MCP protocol version
+ * on every post-initialize request. The browser HTTP client captures the initialize
+ * result's `protocolVersion` and sends this header on each subsequent request.
+ */
+export const MCP_PROTOCOL_VERSION_HEADER = 'mcp-protocol-version'
 
 // `serveMCP` server-identity defaults — `src/core`'s `createMCPServer` REQUIRES
 // `name`/`version`, but `ServeMCPOptions` (this face's bootstrap) makes both optional

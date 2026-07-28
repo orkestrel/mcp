@@ -1,11 +1,10 @@
 // The MCP HTTP-transport constants (AGENTS §5 constants file) — the wire-level header
 // names, the default mount path, and the folded event-log bounds. The HEADER names are
 // the Streamable-HTTP transport's session /
-// protocol-version headers: they go LIVE when a `createMCPSession` middleware is mounted
-// (it mints the session id into `MCP_SESSION_HEADER` on `initialize` and reads it back on
-// subsequent requests); the stateless `createMCPRoutes` default neither sets nor reads
-// them. The transport-agnostic dispatch core (`src/core/mcp`) deliberately does NOT carry
-// these — header names belong to the HTTP transport, here.
+// protocol-version headers. `createMCPSession` owns the optional session id, while
+// `createMCPRoutes` validates a present protocol version on every POST. The
+// transport-agnostic dispatch core deliberately does NOT carry these — header names
+// belong to the HTTP transport, here.
 
 /**
  * The Streamable-HTTP transport header that carries the MCP session id. When a {@link
@@ -16,10 +15,13 @@
 export const MCP_SESSION_HEADER = 'mcp-session-id'
 
 /**
- * The Streamable-HTTP transport header that carries the negotiated MCP protocol version
- * on a subsequent request. The version is negotiated in the `initialize` JSON-RPC result
- * body; a stateful transport MAY additionally read this header to pin the per-request
- * protocol version (optional — the result body remains the source of truth).
+ * The Streamable-HTTP transport header carrying the negotiated MCP protocol version
+ * on every post-initialize client request.
+ *
+ * @remarks
+ * Required by MCP 2025-06-18 after initialization. Both HTTP client transports
+ * capture the initialize result's `protocolVersion` and send it on subsequent
+ * requests; `createMCPRoutes` rejects a present unsupported value before dispatch.
  */
 export const MCP_PROTOCOL_VERSION_HEADER = 'mcp-protocol-version'
 

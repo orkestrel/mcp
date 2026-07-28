@@ -59,7 +59,8 @@ export function createMCPServer(options: MCPServerOptions): MCPServerInterface {
  * @remarks
  * The egress mirror of {@link createMCPServer}: where the server exposes a local tool
  * registry over MCP, the client USES a remote server's tools. `connect()` handshakes,
- * `tools()` lists + wraps the remote tools (each `execute` calls back over the wire),
+ * validates and exposes the negotiated protocol, `tools()` lists + wraps the remote
+ * tools (each `execute` calls back over the wire),
  * and `call(name, args)` runs a remote `tools/call` (a remote tool failure throws
  * locally, so an agent's {@link import('@orkestrel/agent').ToolManagerInterface}
  * isolates it). The transport is injected — a concrete one (the HTTP transport over
@@ -98,8 +99,8 @@ export function createMCPClient(options: MCPClientOptions): MCPClientInterface {
  * @remarks
  * Hand the RESULT to `createMCPClient({ transport })`, then pass the SAME
  * `transport` to {@link import('./helpers.js').bindClient} to complete the inbound
- * wiring: `send` serializes each outbound {@link JSONRPCMessage} (or batch, one per
- * message) and writes it via `transport.send`; `close` closes the underlying
+ * wiring: `send` serializes each outbound {@link JSONRPCMessage} and writes it via
+ * `transport.send`; `close` closes the underlying
  * `transport`; `start` is a no-op (the duplex channel is already open by the time
  * it is handed in — there is no separate connect step at this layer); `session` is
  * always `undefined` (session correlation is a higher-level concern the duplex port
@@ -128,9 +129,8 @@ export function createDuplexClientTransport(
 			// The duplex channel is already open by the time it is handed in — no separate
 			// connect step at this layer.
 		},
-		async send(message: JSONRPCMessage | readonly JSONRPCMessage[]): Promise<void> {
-			const messages = Array.isArray(message) ? message : [message]
-			for (const one of messages) await transport.send(JSON.stringify(one))
+		async send(message: JSONRPCMessage): Promise<void> {
+			await transport.send(JSON.stringify(message))
 		},
 		async close(): Promise<void> {
 			await transport.close()

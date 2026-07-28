@@ -119,7 +119,7 @@ describe('WebSocketServerTransport — send writes response frames the client de
 		await transport.close()
 	})
 
-	it('writes one frame per message for a batch send', async () => {
+	it('writes one frame per sequential send', async () => {
 		const [server, client] = duplexPair()
 		const { frames } = readClientFrames(client)
 		const ws = createNodeWebSocket({ socket: server, key: CLIENT_KEY })
@@ -127,14 +127,13 @@ describe('WebSocketServerTransport — send writes response frames the client de
 		await transport.start()
 		await flushSocket()
 
-		const batch: readonly JSONRPCMessage[] = [
-			{ jsonrpc: '2.0', id: 1, result: { a: 1 } },
-			{ jsonrpc: '2.0', id: 2, result: { b: 2 } },
-		]
-		await transport.send(batch)
+		const first: JSONRPCMessage = { jsonrpc: '2.0', id: 1, result: { a: 1 } }
+		const second: JSONRPCMessage = { jsonrpc: '2.0', id: 2, result: { b: 2 } }
+		await transport.send(first)
+		await transport.send(second)
 		await flushSocket()
 
-		expect(decodeResponses(frames)).toEqual(batch)
+		expect(decodeResponses(frames)).toEqual([first, second])
 		await transport.close()
 	})
 })

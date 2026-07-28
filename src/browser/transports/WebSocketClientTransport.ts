@@ -107,17 +107,14 @@ export class WebSocketClientTransport implements ClientTransportInterface {
 		})
 	}
 
-	async send(message: JSONRPCMessage | readonly JSONRPCMessage[]): Promise<void> {
+	async send(message: JSONRPCMessage): Promise<void> {
 		// After close(), silently drop — never queue (a closed transport is not reusable;
 		// queued messages would resurrect on a later start() which is not a supported pattern).
 		if (this.#closed) return
-		const messages = Array.isArray(message) ? message : [message]
-		for (const one of messages) {
-			const text = JSON.stringify(one)
-			const socket = this.#socket
-			if (socket !== undefined && socket.readyState === WebSocket.OPEN) socket.send(text)
-			else this.#queue.push(text)
-		}
+		const text = JSON.stringify(message)
+		const socket = this.#socket
+		if (socket !== undefined && socket.readyState === WebSocket.OPEN) socket.send(text)
+		else this.#queue.push(text)
 	}
 
 	async close(): Promise<void> {

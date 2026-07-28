@@ -99,12 +99,12 @@ describe('MCPServer — initialize', () => {
 		expect(result['serverInfo']).toEqual({ name: 'test-server', version: '1.2.3' })
 	})
 
-	it('echoes a supported requested protocol version', async () => {
+	it('falls back when the requested protocol version requires unsupported batching', async () => {
 		const response = await server().dispatch(
 			createJSONRPCRequest({ params: { protocolVersion: '2025-03-26' } }),
 		)
 
-		expect(resultOf(response)['protocolVersion']).toBe('2025-03-26')
+		expect(resultOf(response)['protocolVersion']).toBe(MCP_PROTOCOL_VERSION)
 	})
 
 	it('falls back to the default for an unsupported requested version', async () => {

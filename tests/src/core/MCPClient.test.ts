@@ -6,7 +6,7 @@ import type {
 } from '@src/core'
 import type { ToolManagerInterface } from '@orkestrel/agent'
 import { describe, expect, it } from 'vitest'
-import { createMCPClient, createMCPServer } from '@src/core'
+import { createMCPClient, createMCPServer, isMCPError, MCP_PROTOCOL_VERSION } from '@src/core'
 import { createTool, createToolManager } from '@orkestrel/agent'
 import { createEmitter } from '@orkestrel/emitter'
 
@@ -55,20 +55,58 @@ function createLoopback(
 		async start() {
 			started += 1
 		},
-		async send(message: JSONRPCMessage | readonly JSONRPCMessage[]) {
-			const messages = Array.isArray(message) ? message : [message]
-			for (const one of messages) {
-				if ('method' in one) sent.push(one.method)
-				const response = await server.dispatch(one)
-				// `gate(method)` true → withhold the response (the request stays pending), to
-				// drive the timeout / disconnect tests; otherwise emit it for id correlation.
-				if (
-					response !== undefined &&
-					(gate === undefined || !('method' in one) || !gate(one.method))
-				) {
-					emitter.emit('message', response)
-				}
+		async send(message: JSONRPCMessage) {
+			if (!('method' in message)) return
+			sent.push(message.method)
+			const response = await server.dispatch(message)
+			// `gate(method)` true → withhold the response (the request stays pending), to
+			// drive the timeout / disconnect tests; otherwise emit it for id correlation.
+			if (response !== undefined && (gate === undefined || !gate(message.method))) {
+				emitter.emit('message', response)
 			}
+		},
+		async close() {
+			closed += 1
+		},
+	}
+}
+
+// A protocol-faithful boundary fixture for an initialize result a conforming local
+// MCPServer cannot produce: it answers only `initialize`, with the caller-selected
+// protocol value, and records lifecycle/message behavior around the failed handshake.
+function createNegotiationTransport(protocol: unknown): LoopbackInterface {
+	const emitter = createEmitter<ClientTransportEventMap>()
+	const sent: string[] = []
+	let started = 0
+	let closed = 0
+	return {
+		emitter,
+		session: undefined,
+		get sent() {
+			return sent
+		},
+		get started() {
+			return started
+		},
+		get closed() {
+			return closed
+		},
+		async start() {
+			started += 1
+		},
+		async send(message) {
+			if (!('method' in message)) return
+			sent.push(message.method)
+			if (message.method !== 'initialize' || message.id === undefined) return
+			emitter.emit('message', {
+				jsonrpc: '2.0',
+				id: message.id,
+				result: {
+					protocolVersion: protocol,
+					capabilities: {},
+					serverInfo: { name: 'fixture', version: '1.0.0' },
+				},
+			})
 		},
 		async close() {
 			closed += 1
@@ -114,6 +152,7 @@ describe('MCPClient — connect (the initialize handshake)', () => {
 		await client.connect()
 
 		expect(client.connected).toBe(true)
+		expect(client.protocol).toBe(MCP_PROTOCOL_VERSION)
 		expect(loopback.started).toBe(1)
 		// The handshake sends `initialize` then the `notifications/initialized` notification.
 		expect(loopback.sent).toEqual(['initialize', 'notifications/initialized'])
@@ -139,6 +178,33 @@ describe('MCPClient — connect (the initialize handshake)', () => {
 		const loopback = createLoopback(serverWithTools())
 		const client = createMCPClient({ transport: loopback })
 		expect(client.transport).toBe(loopback)
+	})
+
+	it('rejects an unsupported negotiated protocol, closes, and sends no initialized notification', async () => {
+		const loopback = createNegotiationTransport('2099-01-01')
+		const client = createMCPClient({ transport: loopback })
+
+		expect(client.protocol).toBeUndefined()
+		await expect(client.connect()).rejects.toThrow(
+			"MCP server negotiated unsupported protocol version '2099-01-01'",
+		)
+		expect(client.connected).toBe(false)
+		expect(client.protocol).toBeUndefined()
+		expect(loopback.closed).toBe(1)
+		expect(loopback.sent).toEqual(['initialize'])
+	})
+
+	it('rejects a non-string negotiated protocol and closes before initialization completes', async () => {
+		const loopback = createNegotiationTransport(42)
+		const client = createMCPClient({ transport: loopback })
+
+		await expect(client.connect()).rejects.toThrow(
+			'MCP server returned a non-string protocol version',
+		)
+		expect(client.connected).toBe(false)
+		expect(client.protocol).toBeUndefined()
+		expect(loopback.closed).toBe(1)
+		expect(loopback.sent).toEqual(['initialize'])
 	})
 })
 
@@ -253,6 +319,34 @@ describe('MCPClient — id correlation', () => {
 		expect(seen).toHaveLength(1)
 		expect(seen[0]).toEqual({ jsonrpc: '2.0', method: 'notifications/progress' })
 	})
+
+	it('preserves a remote JSON-RPC error code and data as an MCPError', async () => {
+		const loopback = createLoopback(serverWithTools(), (method) => method === 'tools/list')
+		const client = createMCPClient({ transport: loopback })
+		await client.connect()
+		const pending = client.tools()
+		loopback.emitter.emit('message', {
+			jsonrpc: '2.0',
+			id: 2,
+			error: {
+				code: -32042,
+				message: 'Remote failure',
+				data: { retry: false },
+			},
+		})
+
+		let caught: unknown
+		try {
+			await pending
+		} catch (error) {
+			caught = error
+		}
+		expect(isMCPError(caught)).toBe(true)
+		if (!isMCPError(caught)) throw new Error('Expected an MCPError')
+		expect(caught.message).toBe('Remote failure')
+		expect(caught.code).toBe(-32042)
+		expect(caught.context).toEqual({ retry: false })
+	})
 })
 
 describe('MCPClient — per-request timeout', () => {
@@ -278,6 +372,7 @@ describe('MCPClient — disconnect', () => {
 		await client.disconnect()
 
 		expect(client.connected).toBe(false)
+		expect(client.protocol).toBeUndefined()
 		expect(loopback.closed).toBe(1)
 		await expect(pending).rejects.toThrow(/disconnected/)
 	})

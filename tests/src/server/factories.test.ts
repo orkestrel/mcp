@@ -10,6 +10,7 @@ import {
 	createStdioServer,
 	createWebSocketClientTransport,
 	createWebSocketServer,
+	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
 } from '@src/server'
 import {
@@ -136,6 +137,33 @@ describe('createMCPRoutes — dispatch the four MCP methods', () => {
 })
 
 describe('createMCPRoutes — transport vs in-band outcomes', () => {
+	it('POST with a supported protocol-version header → 200', async () => {
+		const handle = await startMCP()
+		const response = await postJSON(handle.base, createJSONRPCRequest({ method: 'ping', id: 12 }), {
+			headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' },
+		})
+
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({ jsonrpc: '2.0', id: 12, result: {} })
+	})
+
+	it('POST with an unsupported protocol-version header → 400 + a JSON-RPC error body', async () => {
+		const handle = await startMCP()
+		const response = await postJSON(handle.base, createJSONRPCRequest({ method: 'ping', id: 13 }), {
+			headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2099-01-01' },
+		})
+
+		expect(response.status).toBe(400)
+		expect(await response.json()).toEqual({
+			jsonrpc: '2.0',
+			id: null,
+			error: {
+				code: -32600,
+				message: "Unsupported MCP protocol version '2099-01-01'",
+			},
+		})
+	})
+
 	it('POST a notification (no id) → 202 with an empty body', async () => {
 		const handle = await startMCP()
 		const response = await postJSON(

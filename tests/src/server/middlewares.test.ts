@@ -11,6 +11,7 @@ import {
 	createHTTPClientTransport,
 	createMCPRoutes,
 	createMCPSession,
+	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
 } from '@src/server'
 import {
@@ -129,6 +130,43 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		expect(listed.status).toBe(200)
 		const body = await listed.json()
 		expect(body.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['add', 'boom'])
+	})
+
+	it('a post-initialize request with the supported protocol-version header succeeds', async () => {
+		const handle = await startSession()
+		const init = await postJSON(handle.base, createJSONRPCRequest())
+		const id = init.headers.get(MCP_SESSION_HEADER)
+		const response = await postSession(
+			handle.base,
+			id ?? undefined,
+			createJSONRPCRequest({ method: 'ping', id: 7 }),
+			{ [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' },
+		)
+
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({ jsonrpc: '2.0', id: 7, result: {} })
+	})
+
+	it('a post-initialize request with an unsupported protocol-version header is rejected', async () => {
+		const handle = await startSession()
+		const init = await postJSON(handle.base, createJSONRPCRequest())
+		const id = init.headers.get(MCP_SESSION_HEADER)
+		const response = await postSession(
+			handle.base,
+			id ?? undefined,
+			createJSONRPCRequest({ method: 'ping', id: 8 }),
+			{ [MCP_PROTOCOL_VERSION_HEADER]: '2099-01-01' },
+		)
+
+		expect(response.status).toBe(400)
+		expect(await response.json()).toEqual({
+			jsonrpc: '2.0',
+			id: null,
+			error: {
+				code: -32600,
+				message: "Unsupported MCP protocol version '2099-01-01'",
+			},
+		})
 	})
 
 	it('a non-initialize POST with NO session id → 404 + a JSON-RPC error body', async () => {

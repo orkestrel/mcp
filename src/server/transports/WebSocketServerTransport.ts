@@ -24,8 +24,8 @@ import { Emitter } from '@orkestrel/emitter'
  *   parsed envelope the {@link import('@src/core').MCPServerInterface} pump dispatches), while
  *   a non-JSON or non-message frame is surfaced on `error` and DROPPED, never thrown (§14). It
  *   also bridges the socket's `close` → this transport's `close`, and the socket's `error`.
- * - **Outbound (`send`).** `send(message | messages)` writes ONE text frame per message
- *   (`nodeWs.send(JSON.stringify(...))`); the underlying wrapper no-ops a write on a
+ * - **Outbound (`send`).** `send(message)` writes one text frame
+ *   (`nodeWs.send(JSON.stringify(message))`); the underlying wrapper no-ops a write on a
  *   non-open socket, so a closed connection drops silently rather than throwing.
  * - **`close()`** closes the underlying socket (the RFC 6455 close handshake) and fires the
  *   transport's `close` event (idempotent — a second `close`, or a socket-driven close, emits
@@ -65,11 +65,10 @@ export class WebSocketServerTransport implements ClientTransportInterface {
 		this.#socket.emitter.on('error', (error) => this.#emitter.emit('error', error))
 	}
 
-	async send(message: JSONRPCMessage | readonly JSONRPCMessage[]): Promise<void> {
-		// One text frame per message (a batch is unrolled). The wrapper drops a write on a
-		// non-open socket, so a closed connection is a silent no-op rather than a throw.
-		const messages = Array.isArray(message) ? message : [message]
-		for (const one of messages) this.#socket.send(JSON.stringify(one))
+	async send(message: JSONRPCMessage): Promise<void> {
+		// The wrapper drops a write on a non-open socket, so a closed connection is a
+		// silent no-op rather than a throw.
+		this.#socket.send(JSON.stringify(message))
 	}
 
 	async close(): Promise<void> {

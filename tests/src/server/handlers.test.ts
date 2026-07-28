@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createMCPPostHandler } from '@src/server'
+import { createMCPPostHandler, MCP_PROTOCOL_VERSION_HEADER } from '@src/server'
 import {
 	collectSSE,
 	createCalculatorServer,
@@ -19,6 +19,47 @@ describe('createMCPPostHandler', () => {
 
 		expect(response.status).toBe(200)
 		expect(await response.json()).toEqual({ jsonrpc: '2.0', id: 1, result: {} })
+	})
+
+	it('accepts a supported protocol-version header', async () => {
+		const handler = createMCPPostHandler(createCalculatorServer(), false)
+		const response = await handler(
+			new Request('http://localhost/mcp', {
+				method: 'POST',
+				headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' },
+				body: JSON.stringify(createJSONRPCRequest({ method: 'ping' })),
+			}),
+		)
+
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({ jsonrpc: '2.0', id: 1, result: {} })
+	})
+
+	it('rejects an unsupported protocol-version header before dispatch', async () => {
+		const mcp = createCalculatorServer()
+		let requests = 0
+		mcp.emitter.on('request', () => {
+			requests += 1
+		})
+		const handler = createMCPPostHandler(mcp, false)
+		const response = await handler(
+			new Request('http://localhost/mcp', {
+				method: 'POST',
+				headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2099-01-01' },
+				body: JSON.stringify(createJSONRPCRequest({ method: 'ping' })),
+			}),
+		)
+
+		expect(response.status).toBe(400)
+		expect(requests).toBe(0)
+		expect(await response.json()).toEqual({
+			jsonrpc: '2.0',
+			id: null,
+			error: {
+				code: -32600,
+				message: "Unsupported MCP protocol version '2099-01-01'",
+			},
+		})
 	})
 
 	it('returns a parse error for malformed JSON', async () => {

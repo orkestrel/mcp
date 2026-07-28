@@ -22,8 +22,8 @@ import { dispatchLines, extractLines } from '../helpers.js'
  *   well-formed {@link JSONRPCMessage} re-emits on `message`, a malformed line
  *   emits `error` (§14, never throws). `input`'s `close` bridges to this
  *   transport's `close`.
- * - **Outbound (`send`).** `send(message | messages)` writes ONE newline-terminated
- *   `JSON.stringify`d line per message to `output`.
+ * - **Outbound (`send`).** `send(message)` writes one newline-terminated
+ *   `JSON.stringify`d line to `output`.
  * - **`close()`** fires this transport's `close` (idempotent) — the injected streams
  *   are owned by the caller (typically `process.stdin`/`process.stdout`, which must
  *   never be closed out from under the process) and are not torn down here.
@@ -65,9 +65,8 @@ export class StdioServerTransport implements ClientTransportInterface {
 		this.#input.on('error', (error) => this.#emitter.emit('error', error))
 	}
 
-	async send(message: JSONRPCMessage | readonly JSONRPCMessage[]): Promise<void> {
-		const messages = Array.isArray(message) ? message : [message]
-		for (const one of messages) this.#output.write(`${JSON.stringify(one)}\n`)
+	async send(message: JSONRPCMessage): Promise<void> {
+		this.#output.write(`${JSON.stringify(message)}\n`)
 	}
 
 	async close(): Promise<void> {

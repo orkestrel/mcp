@@ -2,11 +2,15 @@ import type { MCPClientInterface, MCPServerInterface } from '@src/core'
 import type { MiddlewareHandler } from '@orkestrel/server'
 import type { StartedServerInterface } from '../../../setupServer.js'
 import { describe, expect, it } from 'vitest'
-import { createMCPClient, createMCPServer } from '@src/core'
+import { createMCPClient, createMCPServer, MCP_PROTOCOL_VERSION } from '@src/core'
 import { createTool, createToolManager } from '@orkestrel/agent'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
-import { createHTTPClientTransport, createMCPRoutes } from '@src/server'
+import {
+	createHTTPClientTransport,
+	createMCPRoutes,
+	MCP_PROTOCOL_VERSION_HEADER,
+} from '@src/server'
 import { createTeardown, startServer } from '../../../setupServer.js'
 
 // src/server/mcp/HTTPClientTransport.ts — the HTTP CLIENT transport, proven END-TO-END
@@ -166,6 +170,27 @@ describe('HTTPClientTransport — policy composes in front', () => {
 })
 
 describe('HTTPClientTransport — lifecycle', () => {
+	it('captures the initialize result and sends its protocol on the subsequent request', async () => {
+		const dispatcher = createDispatcher<unknown>()
+		dispatcher.add(createMCPRoutes(mcpServer(), { streaming: false }))
+		const server = createServer<unknown>({ dispatcher, state: () => undefined })
+		const handle = track(await startServer(server))
+		const protocols: (string | null)[] = []
+		const transport = createHTTPClientTransport({
+			url: `${handle.base}/mcp`,
+			fetch: (input, init) => {
+				protocols.push(new Headers(init?.headers).get(MCP_PROTOCOL_VERSION_HEADER))
+				return fetch(input, init)
+			},
+		})
+		const client = createMCPClient({ transport })
+
+		await client.connect()
+
+		expect(protocols).toEqual([null, MCP_PROTOCOL_VERSION])
+		await client.disconnect()
+	})
+
 	it('exposes session undefined for the stateless v1 server and closes cleanly', async () => {
 		const { client } = await connectClient({ streaming: false })
 

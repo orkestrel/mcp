@@ -214,8 +214,8 @@ export function createCalculatorServer(): MCPServerInterface {
 
 /**
  * Create an in-process {@link ClientTransportInterface} that dispatches directly against a
- * given {@link MCPServerInterface} — no wire, no network. Each `send` dispatches every
- * request in the batch through `mcp.dispatch` and emits each DEFINED response (a
+ * given {@link MCPServerInterface} — no wire, no network. Each `send` dispatches its
+ * request through `mcp.dispatch` and emits a DEFINED response (a
  * notification produces none) on the `message` event, mirroring how a real transport
  * surfaces replies.
  *
@@ -229,12 +229,9 @@ export function createLoopbackTransport(mcp: MCPServerInterface): ClientTranspor
 		session: undefined,
 		async start() {},
 		async send(message) {
-			const messages = Array.isArray(message) ? message : [message]
-			for (const one of messages) {
-				if (!('method' in one)) continue
-				const response = await mcp.dispatch(one)
-				if (response !== undefined) emitter.emit('message', response)
-			}
+			if (!('method' in message)) return
+			const response = await mcp.dispatch(message)
+			if (response !== undefined) emitter.emit('message', response)
 		},
 		async close() {
 			emitter.emit('close')

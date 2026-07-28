@@ -1,5 +1,5 @@
 // MCP protocol revisions + the reserved JSON-RPC 2.0 error codes. The negotiated
-// protocol version is the current rev unless the client requests a SUPPORTED prior
+// protocol version is the current rev unless the client requests a supported
 // one (see `initializeResult` in ./helpers.js). Transport-level header names
 // (session / version headers) belong to the HTTP transport sub-chunk, NOT here.
 
@@ -7,18 +7,16 @@
 export const MCP_PROTOCOL_VERSION = '2025-06-18'
 
 /**
- * The MCP protocol revisions this server can negotiate — the current
- * {@link MCP_PROTOCOL_VERSION} plus a prior rev a client may still request.
+ * The MCP protocol revisions this server can negotiate.
  *
  * @remarks
  * `initialize` echoes the client's requested `protocolVersion` when it appears in
  * this list, else falls back to {@link MCP_PROTOCOL_VERSION}. Frozen so the list is
- * an immutable contract.
+ * an immutable contract. The package does not advertise `2025-03-26` because that
+ * revision mandates JSON-RPC batching, while this package accepts only individual
+ * JSON-RPC messages.
  */
-export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([
-	'2025-06-18',
-	'2025-03-26',
-])
+export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze(['2025-06-18'])
 
 /** JSON-RPC 2.0 reserved error: invalid JSON was received (the message did not parse). */
 export const JSONRPC_PARSE_ERROR = -32700

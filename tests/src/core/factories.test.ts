@@ -101,21 +101,6 @@ describe('createDuplexClientTransport', () => {
 		expect(transport.sent).toEqual([JSON.stringify({ jsonrpc: '2.0', method: 'ping', id: 1 })])
 	})
 
-	it('send unrolls a batch into ONE duplex write per message', async () => {
-		const transport = createMemoryTransport()
-		const adapted = createDuplexClientTransport(transport)
-
-		await adapted.send([
-			{ jsonrpc: '2.0', method: 'a', id: 1 },
-			{ jsonrpc: '2.0', method: 'b', id: 2 },
-		])
-
-		expect(transport.sent).toEqual([
-			JSON.stringify({ jsonrpc: '2.0', method: 'a', id: 1 }),
-			JSON.stringify({ jsonrpc: '2.0', method: 'b', id: 2 }),
-		])
-	})
-
 	it('close closes the underlying duplex transport', async () => {
 		const transport = createMemoryTransport()
 		const adapted = createDuplexClientTransport(transport)

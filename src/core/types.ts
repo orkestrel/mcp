@@ -277,10 +277,10 @@ export type ClientTransportEventMap = {
  *
  * @remarks
  * The mirror of the server's "a transport pumps strings through `handle`": here the
- * {@link MCPClientInterface} hands the transport a {@link JSONRPCMessage} (or a batch)
- * via `send`, and the transport delivers each decoded reply back through the
+ * {@link MCPClientInterface} hands the transport one {@link JSONRPCMessage} via
+ * `send`, and the transport delivers each decoded reply back through the
  * `message` event the client subscribed to. The minimal carrier surface (§21): a
- * `start` (open the connection / arm any reader), `send` (write a message or batch),
+ * `start` (open the connection / arm any reader), `send` (write one message),
  * and `close` (tear down). `session` exposes a server-assigned session id once a
  * stateful transport has one (`undefined` for the stateless v1) — reserved for the
  * later sessions tier. Concrete transports (the HTTP transport over `fetch`, a future
@@ -298,7 +298,7 @@ export interface ClientTransportInterface {
 	 */
 	start(): Promise<void>
 	/**
-	 * Send one JSON-RPC message (or a batch) to the remote server.
+	 * Send one JSON-RPC message to the remote server.
 	 *
 	 * @remarks
 	 * Each decoded reply is surfaced on the `emitter`'s `message` event — `send`
@@ -306,10 +306,10 @@ export interface ClientTransportInterface {
 	 * transport, its synchronous reply emitted), not when a logical response arrives;
 	 * the {@link MCPClientInterface} awaits the response through its `id` correlation.
 	 *
-	 * @param message - One message, or a batch of them, to write to the wire
-	 * @returns Resolves once the message(s) have been sent
+	 * @param message - The message to write to the wire
+	 * @returns Resolves once the message has been sent
 	 */
-	send(message: JSONRPCMessage | readonly JSONRPCMessage[]): Promise<void>
+	send(message: JSONRPCMessage): Promise<void>
 	/**
 	 * Close the transport — end the connection and release resources.
 	 *
@@ -384,7 +384,8 @@ export interface MCPClientOptions {
  * @remarks
  * - **The mirror of {@link MCPServerInterface}.** Where the server DISPATCHES requests
  *   over a tool registry, the client ISSUES them over a transport: `connect` runs the
- *   `initialize` handshake (then sends `notifications/initialized`); `tools()` lists
+ *   `initialize` handshake, validates and exposes the negotiated `protocol` (then sends
+ *   `notifications/initialized`); `tools()` lists
  *   the remote tools and wraps each as a local {@link ToolInterface} whose `execute`
  *   calls back through `call`; `call(name, args)` runs a remote `tools/call` and
  *   returns the tool's value (a remote tool FAILURE — `isError: true` — throws locally,
@@ -408,6 +409,11 @@ export interface MCPClientInterface {
 	readonly emitter: EmitterInterface<MCPClientEventMap>
 	/** Whether the `initialize` handshake has completed and the client is connected. */
 	readonly connected: boolean
+	/**
+	 * The MCP protocol revision negotiated by {@link connect}, or `undefined` before
+	 * connecting and after {@link disconnect}.
+	 */
+	readonly protocol: string | undefined
 	/** The injected transport the client drives the remote server over. */
 	readonly transport: ClientTransportInterface
 	/**
@@ -423,11 +429,14 @@ export interface MCPClientInterface {
 	): void
 	/**
 	 * Connect to the remote server — open the transport and run the `initialize`
-	 * handshake (then send `notifications/initialized`).
+	 * handshake, validate its negotiated protocol, then send
+	 * `notifications/initialized`.
 	 *
 	 * @remarks
 	 * Idempotent — a second `connect` while already connected is a no-op. On success
-	 * the `connect` event fires.
+	 * {@link protocol} contains a supported revision and the `connect` event fires. A
+	 * non-string or unsupported revision closes the transport and rejects without
+	 * connecting or sending the initialized notification.
 	 *
 	 * @returns Resolves once the handshake completes and the client is connected
 	 */
@@ -438,7 +447,7 @@ export interface MCPClientInterface {
 	 *
 	 * @remarks
 	 * Idempotent — a second `disconnect` while already disconnected is a no-op. The
-	 * `disconnect` event fires.
+	 * `disconnect` event fires and {@link protocol} becomes `undefined`.
 	 *
 	 * @returns Resolves once the transport is closed
 	 */

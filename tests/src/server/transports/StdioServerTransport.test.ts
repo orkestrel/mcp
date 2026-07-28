@@ -140,21 +140,20 @@ describe('StdioServerTransport — send writes response lines the peer decodes',
 		await transport.close()
 	})
 
-	it('writes one line per message for a batch send', async () => {
+	it('writes one line per sequential send', async () => {
 		const input = new PassThrough()
 		const output = new PassThrough()
 		const { lines } = collectLines(output)
 		const transport = new StdioServerTransport(input, output)
 		await transport.start()
 
-		const batch: readonly JSONRPCMessage[] = [
-			{ jsonrpc: '2.0', id: 1, result: { a: 1 } },
-			{ jsonrpc: '2.0', id: 2, result: { b: 2 } },
-		]
-		await transport.send(batch)
+		const first: JSONRPCMessage = { jsonrpc: '2.0', id: 1, result: { a: 1 } }
+		const second: JSONRPCMessage = { jsonrpc: '2.0', id: 2, result: { b: 2 } }
+		await transport.send(first)
+		await transport.send(second)
 		await waitForDelay()
 
-		expect(lines().map((line) => JSON.parse(line))).toEqual(batch)
+		expect(lines().map((line) => JSON.parse(line))).toEqual([first, second])
 		await transport.close()
 	})
 })

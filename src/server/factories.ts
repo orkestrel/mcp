@@ -38,6 +38,9 @@ import { WebSocketServerTransport } from './transports/WebSocketServerTransport.
  * - A **transport** failure — a malformed JSON body, or a parsed value that is not a
  *   JSON-RPC REQUEST — is an HTTP `400` carrying a JSON-RPC error BODY (`-32700` Parse
  *   error / `-32600` Invalid Request, id `null`).
+ * - A present `mcp-protocol-version` header is validated before dispatch: a supported
+ *   value proceeds, while an unsupported value returns HTTP `400` with a JSON-RPC
+ *   `-32600` body. An absent value proceeds for initialize/bootstrap compatibility.
  * - A **dispatch** result — a success OR an IN-BAND JSON-RPC error from `mcp.dispatch`
  *   (e.g. `-32601` method-not-found) — is an HTTP `200` carrying the JSON-RPC response
  *   envelope (the error is in-band per JSON-RPC, NOT an HTTP error).
@@ -101,8 +104,10 @@ export function createMCPRoutes<TState = unknown>(
  * and the reply is surfaced on the transport's `message` event for the client's id
  * correlation. Add `options.headers` (e.g. an `Authorization` bearer) to reach a guarded
  * server. `start` / `close` hold no connection; against a STATEFUL server it captures the
- * `mcp-session-id` from `initialize` and echoes it on later requests, so the same
- * `MCPClient` passes session validation (a stateless server sends none).
+ * `mcp-session-id` from `initialize` and echoes it on later requests. It also captures
+ * the initialize result's `protocolVersion` and sends `mcp-protocol-version` on every
+ * subsequent request, so the same `MCPClient` passes the session and 2025-06-18
+ * protocol gates without caller wiring.
  *
  * @param options - `url` (the remote endpoint; REQUIRED), optional `headers` merged onto
  *   every request, optional `fetch` (default `globalThis.fetch`), and optional `timeout`

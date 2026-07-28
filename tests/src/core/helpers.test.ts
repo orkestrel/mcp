@@ -172,8 +172,10 @@ describe('initializeResult', () => {
 		})
 	})
 
-	it('echoes a supported requested version', () => {
-		expect(initializeResult('s', '1.0.0', '2025-03-26')['protocolVersion']).toBe('2025-03-26')
+	it('falls back when the requested version requires unsupported batching', () => {
+		expect(initializeResult('s', '1.0.0', '2025-03-26')['protocolVersion']).toBe(
+			MCP_PROTOCOL_VERSION,
+		)
 	})
 
 	it('falls back to the default for an unsupported requested version', () => {

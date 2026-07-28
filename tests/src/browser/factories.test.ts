@@ -5,6 +5,7 @@ import {
 	createHTTPClientTransport,
 	createMessagePortTransport,
 	createWebSocketClientTransport,
+	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
 	MCP_WEBSOCKET_SUBPROTOCOL,
 } from '@src/browser'
@@ -199,6 +200,25 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 			{ headers: { [MCP_SESSION_HEADER]: session ?? '' } },
 		)
 		expect(allowed.status).toBe(200)
+	})
+
+	it('captures the negotiated protocol and sends it on the subsequent real fetch request', async () => {
+		const protocols: (string | null)[] = []
+		const transport = createHTTPClientTransport({
+			url: `${serverURL}/mcp`,
+			fetch: (input, init) => {
+				protocols.push(new Headers(init?.headers).get(MCP_PROTOCOL_VERSION_HEADER))
+				return fetch(input, init)
+			},
+		})
+		const client = createMCPClient({ transport })
+
+		await client.connect()
+
+		// The initialize POST has no protocol header. The initialized notification does;
+		// its successful real-Chromium exchange also proves the CORS preflight admitted it.
+		expect(protocols).toEqual([null, '2025-06-18'])
+		await client.disconnect()
 	})
 
 	it('decodes the Streamable-HTTP SSE reply leg (the default framing this client requests)', async () => {
