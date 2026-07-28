@@ -71,7 +71,11 @@ async function connectClient(options?: {
 	readonly guardSecret?: string
 }): Promise<{ readonly client: MCPClientInterface; readonly handle: StartedServerInterface }> {
 	const dispatcher = createDispatcher<unknown>()
-	dispatcher.add(createMCPRoutes(mcpServer(), { streaming: options?.streaming }))
+	dispatcher.add(
+		createMCPRoutes(mcpServer(), {
+			...(options?.streaming !== undefined ? { streaming: options.streaming } : {}),
+		}),
+	)
 	const server = createServer<unknown>({ dispatcher, state: () => undefined })
 	if (options?.guardSecret !== undefined) server.use(createBearerGuard(options.guardSecret))
 	const handle = track(await startServer(server))
@@ -80,7 +84,10 @@ async function connectClient(options?: {
 			? { authorization: `Bearer ${options.guardSecret}` }
 			: undefined
 	const client = createMCPClient({
-		transport: createHTTPClientTransport({ url: `${handle.base}/mcp`, headers }),
+		transport: createHTTPClientTransport({
+			url: `${handle.base}/mcp`,
+			...(headers !== undefined ? { headers } : {}),
+		}),
 	})
 	await client.connect()
 	return { client, handle }

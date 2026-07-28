@@ -177,20 +177,18 @@ export function bindServer(
 	transport: MCPTransportInterface,
 ): () => void {
 	let active = true
-	transport.listen((message) => {
+	transport.listen(async (message) => {
 		if (!active) return
-		void (async () => {
+		try {
+			const response = await server.handle(message)
+			if (response !== undefined) await transport.send(response)
+		} catch (error) {
 			try {
-				const response = await server.handle(message)
-				if (response !== undefined) await transport.send(response)
-			} catch (error) {
-				try {
-					server.emitter.emit('error', error)
-				} catch {
-					// A throwing `error` listener is the caller's own bug — the end of the line.
-				}
+				server.emitter.emit('error', error)
+			} catch {
+				// A throwing `error` listener is the caller's own bug — the end of the line.
 			}
-		})()
+		}
 	})
 	transport.closed(() => {
 		active = false

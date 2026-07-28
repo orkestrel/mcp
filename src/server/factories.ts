@@ -11,18 +11,12 @@ import type {
 } from './types.js'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
-import {
-	bindServer,
-	JSONRPC_INVALID_REQUEST,
-	JSONRPC_PARSE_ERROR,
-	jsonRPCError,
-	parseJSONRPCMessage,
-} from '@src/core'
+import { bindServer } from '@src/core'
 import { isString } from '@orkestrel/contract'
-import { openStream } from '@orkestrel/server'
 import { createNodeWebSocket, WEBSOCKET_VERSION } from '@orkestrel/websocket'
 import { DEFAULT_MCP_PATH, MCP_WEBSOCKET_SUBPROTOCOL } from './constants.js'
-import { acceptsEventStream, bridgeMessageTransport, upgradeRequestPath } from './helpers.js'
+import { createMCPPostHandler } from './handlers.js'
+import { bridgeMessageTransport, upgradeRequestPath } from './helpers.js'
 import { HTTPClientTransport } from './transports/HTTPClientTransport.js'
 import { StdioClientTransport } from './transports/StdioClientTransport.js'
 import { StdioServerTransport } from './transports/StdioServerTransport.js'
@@ -89,47 +83,7 @@ export function createMCPRoutes<TState = unknown>(
 		method: 'POST',
 		path,
 		name: 'mcp',
-		handler: async (request) => {
-			let text: string
-			try {
-				text = await request.text()
-			} catch {
-				// A malformed JSON body is a TRANSPORT failure — HTTP 400 + a JSON-RPC -32700.
-				return Response.json(jsonRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'), {
-					status: 400,
-				})
-			}
-			let parsed: unknown
-			try {
-				parsed = JSON.parse(text)
-			} catch {
-				return Response.json(jsonRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'), {
-					status: 400,
-				})
-			}
-			const rpcRequest = parseJSONRPCMessage(parsed)
-			if (rpcRequest === undefined || !('method' in rpcRequest)) {
-				// Not a JSON-RPC request (a response, or any non-message) — HTTP 400 + -32600.
-				// `'method' in rpcRequest` narrows the message union to `JSONRPCRequest` (no `as`).
-				return Response.json(jsonRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request'), {
-					status: 400,
-				})
-			}
-			const response = await mcp.dispatch(rpcRequest)
-			if (response === undefined) {
-				// A notification (no `id`) yields no response — 202 Accepted, no body.
-				return new Response(null, { status: 202 })
-			}
-			if (streaming && acceptsEventStream(request)) {
-				// Streamable-HTTP SSE response: one `data:` event with the JSON-RPC envelope, then end.
-				const s = openStream()
-				s.write({ data: JSON.stringify(response) })
-				s.end()
-				return s.response
-			}
-			// A dispatch result — success OR an in-band JSON-RPC error — is HTTP 200 + the envelope.
-			return Response.json(response)
-		},
+		handler: createMCPPostHandler(mcp, streaming),
 	}
 	return [post]
 }

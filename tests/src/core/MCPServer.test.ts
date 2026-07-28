@@ -11,7 +11,12 @@ import {
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/agent'
-import { createErrorRecorder, createJSONRPCRequest, recordEmitterEvents } from '../../setup.js'
+import {
+	createErrorRecorder,
+	createJSONRPCNotification,
+	createJSONRPCRequest,
+	recordEmitterEvents,
+} from '../../setup.js'
 
 // MCPServer is the transport-agnostic JSON-RPC 2.0 dispatch core that exposes a live
 // ToolManager over MCP (AGENTS §16 — a REAL ToolManager with real Tools, no mocks; no
@@ -240,17 +245,13 @@ describe('MCPServer — tools/call', () => {
 
 describe('MCPServer — notifications & unknown methods', () => {
 	it('returns no response for a request without an id (a notification)', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({ method: 'ping', id: undefined }),
-		)
+		const response = await server().dispatch(createJSONRPCNotification('ping'))
 
 		expect(response).toBeUndefined()
 	})
 
 	it('returns no response for notifications/initialized', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({ method: 'notifications/initialized', id: undefined }),
-		)
+		const response = await server().dispatch(createJSONRPCNotification('notifications/initialized'))
 
 		expect(response).toBeUndefined()
 	})
@@ -266,9 +267,7 @@ describe('MCPServer — notifications & unknown methods', () => {
 	})
 
 	it('returns no response for an unknown-method notification (no id)', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({ method: 'does/not/exist', id: undefined }),
-		)
+		const response = await server().dispatch(createJSONRPCNotification('does/not/exist'))
 
 		expect(response).toBeUndefined()
 	})
@@ -348,7 +347,7 @@ describe('MCPServer — request event (§13)', () => {
 	it('fires request with a null id for a notification', async () => {
 		const mcp = server()
 		const events = recordEmitterEvents(mcp.emitter, MCP_EVENTS)
-		await mcp.dispatch(createJSONRPCRequest({ method: 'notifications/initialized', id: undefined }))
+		await mcp.dispatch(createJSONRPCNotification('notifications/initialized'))
 
 		expect(events.request.calls).toEqual([['notifications/initialized', null]])
 	})

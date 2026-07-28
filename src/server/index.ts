@@ -1,6 +1,7 @@
-export type * from './types.js'
+export * from './types.js'
 export * from './constants.js'
 export * from './helpers.js'
+export * from './handlers.js'
 export * from './transports/HTTPClientTransport.js'
 export * from './MCPSession.js'
 export * from './transports/WebSocketServerTransport.js'

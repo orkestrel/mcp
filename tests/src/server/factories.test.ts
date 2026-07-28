@@ -12,7 +12,12 @@ import {
 	createWebSocketServer,
 	MCP_SESSION_HEADER,
 } from '@src/server'
-import { collectSSE, createJSONRPCRequest, waitForDelay } from '../../setup.js'
+import {
+	collectSSE,
+	createJSONRPCNotification,
+	createJSONRPCRequest,
+	waitForDelay,
+} from '../../setup.js'
 import {
 	createCalculatorServer,
 	createTeardown,
@@ -61,8 +66,8 @@ async function startMCP(options?: {
 	const dispatcher = createDispatcher<unknown>()
 	dispatcher.add(
 		createMCPRoutes(createCalculatorServer(), {
-			streaming: options?.streaming,
-			path: options?.path,
+			...(options?.streaming !== undefined ? { streaming: options.streaming } : {}),
+			...(options?.path !== undefined ? { path: options.path } : {}),
 		}),
 	)
 	const server = createServer<unknown>({ dispatcher, state: () => undefined })
@@ -139,7 +144,7 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 		const handle = await startMCP()
 		const response = await postJSON(
 			handle.base,
-			createJSONRPCRequest({ method: 'notifications/initialized', id: undefined }),
+			createJSONRPCNotification('notifications/initialized'),
 		)
 		expect(response.status).toBe(202)
 		expect(await response.text()).toBe('')

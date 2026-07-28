@@ -296,6 +296,7 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | API                         | Kind     | Summary                                                                                                                                                                          |
 | --------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `createMCPRoutes`           | function | Mount an `MCPServerInterface` on the router spine — returns the `RouteInput[]` for `router.add(...)` (a single STATELESS `POST` route).                                          |
+| `createMCPPostHandler`      | function | Create the stateless Streamable-HTTP POST handler directly for a custom route integration.                                                                                       |
 | `createHTTPClientTransport` | function | Create a `ClientTransportInterface` over `fetch` that drives a REMOTE Streamable-HTTP MCP server (the egress mirror).                                                            |
 | `createMCPSession`          | function | Create the opt-in native session `MiddlewareHandler` — closure store + mint-on-`initialize` + require-404 + the resumable `GET` SSE stream; mount in front of `createMCPRoutes`. |
 
@@ -527,16 +528,16 @@ const tools = await http.tools()
 
 #### Factories
 
-| API                              | Kind     | Summary                                                                                                                                                             |
-| -------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createWebSocketClientTransport` | function | Create a `ClientTransportInterface` over the native `WebSocket` global that drives a REMOTE MCP server (browser face).                                              |
-| `createHTTPClientTransport`      | function | Create a `ClientTransportInterface` over the native `fetch` that drives a REMOTE Streamable-HTTP MCP server (browser face).                                         |
-| `createMessagePortTransport`     | function | Create an `MCPTransportInterface` over a native `MessagePort` — SYMMETRIC, works as either a server or a client carrier depending on the binder it is handed to.    |
-| `createScopeTransport`           | function | Adapt a `ServeMCPScopeInterface` (`self`) into a `ScopeTransportInterface` — the implicit, portless channel `serveMCPScope` binds; internal to `serve.ts`'s wiring. |
+| API                              | Kind     | Summary                                                                                                                                                          |
+| -------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createWebSocketClientTransport` | function | Create a `ClientTransportInterface` over the native `WebSocket` global that drives a REMOTE MCP server (browser face).                                           |
+| `createHTTPClientTransport`      | function | Create a `ClientTransportInterface` over the native `fetch` that drives a REMOTE Streamable-HTTP MCP server (browser face).                                      |
+| `createMessagePortTransport`     | function | Create an `MCPTransportInterface` over a native `MessagePort` — SYMMETRIC, works as either a server or a client carrier depending on the binder it is handed to. |
+| `createScopeTransport`           | function | Adapt a `ServeMCPScopeInterface` (`self`) into a `ScopeTransportInterface` — the implicit, portless channel `serveMCPScope` binds.                               |
 
 #### Bootstrap
 
-The `serveWorker` analog (`src/browser/serve.ts`) — boot an `MCPServer`
+The `serveWorker` analog (the bootstrap factories in `src/browser/factories.ts`) — boot an `MCPServer`
 inside a hostable scope and wire its message events to it.
 
 | API             | Kind     | Summary                                                                                                                        |
@@ -1147,6 +1148,7 @@ harness.
 ```ts
 import {
 	acceptsEventStream,
+	createMCPPostHandler,
 	decodeEvent,
 	readEventStream,
 	readLastEventId,
@@ -1157,6 +1159,7 @@ import {
 
 const request = new Request('http://localhost/mcp', { headers: { accept: 'text/event-stream' } })
 acceptsEventStream(request) // true
+createMCPPostHandler(mcp, true) // the same stateless POST handler createMCPRoutes mounts
 readSessionHeader(request) // undefined — no mcp-session-id header
 readLastEventId(request) // undefined — no Last-Event-ID header
 rejectUnknownSession() // a 404 JSON-RPC error Response

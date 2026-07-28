@@ -85,12 +85,6 @@ export class WebSocketClientTransport implements ClientTransportInterface {
 		const send = secure ? httpsRequest : httpRequest
 
 		await new Promise<void>((resolve, reject) => {
-			let settled = false
-			const fail = (error: Error): void => {
-				if (settled) return
-				settled = true
-				reject(error)
-			}
 			const request = send({
 				hostname: url.hostname,
 				port: url.port.length > 0 ? Number(url.port) : secure ? 443 : 80,
@@ -111,26 +105,23 @@ export class WebSocketClientTransport implements ClientTransportInterface {
 				const accept = response.headers['sec-websocket-accept']
 				if (!isString(accept) || accept !== computeWebSocketAccept(key)) {
 					socket.destroy()
-					fail(new Error('WebSocket handshake failed: Sec-WebSocket-Accept mismatch'))
+					reject(new Error('WebSocket handshake failed: Sec-WebSocket-Accept mismatch'))
 					return
 				}
 				const ws = createNodeWebSocket({ socket, head })
 				this.#socket = ws
 				this.#bind(ws)
-				if (!settled) {
-					settled = true
-					resolve()
-				}
+				resolve()
 			})
 
 			// A plain (non-101) response means the server declined the upgrade.
 			request.on('response', (response) => {
 				response.resume()
-				fail(new Error(`WebSocket upgrade declined with status ${response.statusCode ?? 0}`))
+				reject(new Error(`WebSocket upgrade declined with status ${response.statusCode ?? 0}`))
 			})
 			// A connection-level failure (refused, DNS, reset).
 			request.on('error', (error) =>
-				fail(error instanceof Error ? error : new Error(String(error))),
+				reject(error instanceof Error ? error : new Error(String(error))),
 			)
 			request.end()
 		})

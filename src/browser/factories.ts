@@ -3,9 +3,13 @@ import type {
 	HTTPClientTransportOptions,
 	MessagePortTransportOptions,
 	ScopeTransportInterface,
+	ServeMCPOptions,
 	ServeMCPScopeInterface,
 	WebSocketClientTransportOptions,
 } from './types.js'
+import { bindServer, createMCPServer } from '@src/core'
+import { DEFAULT_MCP_SERVER_NAME, DEFAULT_MCP_SERVER_VERSION } from './constants.js'
+import { createScopeMessageListener } from './helpers.js'
 import { HTTPClientTransport } from './transports/HTTPClientTransport.js'
 import { MessagePortTransport } from './transports/MessagePortTransport.js'
 import { WebSocketClientTransport } from './transports/WebSocketClientTransport.js'
@@ -124,7 +128,7 @@ export function createMessagePortTransport(
 /**
  * Adapt a hostable {@link ServeMCPScopeInterface} (`self` in a dedicated Web Worker,
  * or any structurally matching double) into a {@link ScopeTransportInterface} — the
- * implicit, portless message channel `serveMCPScope` (`serve.ts`) binds for the
+ * implicit, portless message channel `serveMCPScope` binds for the
  * dedicated-worker shape.
  *
  * @remarks
@@ -166,4 +170,49 @@ export function createScopeTransport(scope: ServeMCPScopeInterface): ScopeTransp
 			onMessage?.(message)
 		},
 	}
+}
+
+/**
+ * Boot an `MCPServer` inside a hostable worker scope and wire its message events to it.
+ *
+ * @remarks
+ * Port-bearing events are gated by `options.accept`, deduplicated by port, and receive
+ * their own `MessagePortTransport` binding. Portless string events use the scope's
+ * implicit channel. The returned disposer removes the listener, unbinds the implicit
+ * channel, and closes every accepted port binding.
+ *
+ * @param scope - The hostable worker scope to wire
+ * @param options - The tools, optional identity, and optional port-event gate
+ * @returns An idempotent disposer for every binding owned by this call
+ */
+export function serveMCPScope(scope: ServeMCPScopeInterface, options: ServeMCPOptions): () => void {
+	const server = createMCPServer({
+		tools: options.tools,
+		name: options.name ?? DEFAULT_MCP_SERVER_NAME,
+		version: options.version ?? DEFAULT_MCP_SERVER_VERSION,
+	})
+	const scopeTransport = createScopeTransport(scope)
+	const unbindScope = bindServer(server, scopeTransport)
+	const teardowns = new Set<() => void>()
+	const onMessage = createScopeMessageListener(server, scopeTransport, teardowns, options)
+	scope.addEventListener('message', onMessage)
+	let disposed = false
+	return () => {
+		if (disposed) return
+		disposed = true
+		scope.removeEventListener('message', onMessage)
+		unbindScope()
+		for (const teardown of teardowns) teardown()
+		teardowns.clear()
+	}
+}
+
+/**
+ * Boot an `MCPServer` inside the current hostable worker scope.
+ *
+ * @param options - The tools, optional identity, and optional port-event gate
+ * @returns The disposer returned by {@link serveMCPScope}
+ */
+export function serveMCP(options: ServeMCPOptions): () => void {
+	return serveMCPScope(globalThis, options)
 }

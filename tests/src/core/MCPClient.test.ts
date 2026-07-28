@@ -317,6 +317,8 @@ describe('MCPClient — §13 observer safety', () => {
 
 		expect(client.connected).toBe(true)
 		expect(errors).toHaveLength(1)
-		expect(errors[0][1]).toBe('connect')
+		const error = errors[0]
+		if (error === undefined) throw new Error('Expected the connect listener error')
+		expect(error[1]).toBe('connect')
 	})
 })

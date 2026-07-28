@@ -291,18 +291,13 @@ export function dispatchLines(
 export function bridgeMessageTransport(transport: ClientTransportInterface): MCPTransportInterface {
 	let onMessage: ((message: string) => void) | undefined
 	let onClosed: (() => void) | undefined
-	let subscribed = false
-	function subscribe(): void {
-		if (subscribed) return
-		subscribed = true
-		transport.emitter.on('message', (message) => {
-			if (!isJSONRPCRequest(message)) return
-			onMessage?.(JSON.stringify(message))
-		})
-		transport.emitter.on('close', () => {
-			onClosed?.()
-		})
-	}
+	transport.emitter.on('message', (message) => {
+		if (!isJSONRPCRequest(message)) return
+		onMessage?.(JSON.stringify(message))
+	})
+	transport.emitter.on('close', () => {
+		onClosed?.()
+	})
 	return {
 		async send(message) {
 			const decoded = decodeEvent(message)
@@ -310,11 +305,9 @@ export function bridgeMessageTransport(transport: ClientTransportInterface): MCP
 			await transport.send(decoded)
 		},
 		listen(handler) {
-			subscribe()
 			onMessage = handler
 		},
 		closed(handler) {
-			subscribe()
 			onClosed = handler
 		},
 		async close() {

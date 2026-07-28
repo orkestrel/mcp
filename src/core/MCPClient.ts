@@ -66,13 +66,21 @@ export class MCPClient implements MCPClientInterface {
 	// `disconnect`. Genuinely private glue (§5): the settler shape lives inline here.
 	readonly #pending = new Map<
 		string | number,
-		{ resolve: (value: unknown) => void; reject: (error: Error) => void }
+		{
+			readonly resolve: (value: unknown) => void
+			readonly reject: (reason?: unknown) => void
+			readonly deadline: AbortSignal
+			readonly timeout: () => void
+		}
 	>()
 	#nextId = 0
 	#connected = false
 
 	constructor(options: MCPClientOptions) {
-		this.#emitter = new Emitter<MCPClientEventMap>({ on: options.on, error: options.error })
+		this.#emitter = new Emitter<MCPClientEventMap>({
+			...(options.on !== undefined ? { on: options.on } : {}),
+			...(options.error !== undefined ? { error: options.error } : {}),
+		})
 		this.#transport = options.transport
 		this.#name = options.name ?? DEFAULT_MCP_CLIENT_NAME
 		this.#version = options.version ?? DEFAULT_MCP_CLIENT_VERSION
@@ -122,10 +130,9 @@ export class MCPClient implements MCPClientInterface {
 		this.#connected = false
 		// Reject every still-pending request so no caller hangs past a disconnect, then
 		// clear the map and tear the transport down.
-		for (const pending of this.#pending.values()) {
-			pending.reject(new Error('MCP client disconnected'))
+		for (const id of this.#pending.keys()) {
+			this.#settle(id, new Error('MCP client disconnected'), true)
 		}
-		this.#pending.clear()
 		await this.#transport.close()
 		this.#emitter.emit('disconnect')
 	}
@@ -179,31 +186,11 @@ export class MCPClient implements MCPClientInterface {
 		}
 		return new Promise<unknown>((resolve, reject) => {
 			const deadline = AbortSignal.timeout(this.#timeout)
-			// Settle once: clear the pending entry + detach the deadline listener, whichever
-			// of (response | deadline | send-failure) fires first.
-			const settle = (): void => {
-				this.#pending.delete(id)
-				deadline.removeEventListener('abort', onDeadline)
-			}
-			const onDeadline = (): void => {
-				settle()
-				reject(new Error(`MCP request '${method}' timed out after ${this.#timeout}ms`))
-			}
-			deadline.addEventListener('abort', onDeadline, { once: true })
-			this.#pending.set(id, {
-				resolve: (value) => {
-					settle()
-					resolve(value)
-				},
-				reject: (error) => {
-					settle()
-					reject(error)
-				},
-			})
+			const timeout = this.#timeoutRequest.bind(this, id, method)
+			deadline.addEventListener('abort', timeout, { once: true })
+			this.#pending.set(id, { resolve, reject, deadline, timeout })
 			this.#transport.send(request).catch((error: unknown) => {
-				const pending = this.#pending.get(id)
-				if (pending === undefined) return
-				pending.reject(error instanceof Error ? error : new Error(String(error)))
+				this.#settle(id, error instanceof Error ? error : new Error(String(error)), true)
 			})
 		})
 	}
@@ -214,12 +201,15 @@ export class MCPClient implements MCPClientInterface {
 	// `notification` event.
 	#receive(message: JSONRPCMessage): void {
 		if (isJSONRPCResponse(message) && isRequestId(message.id)) {
-			const pending = this.#pending.get(message.id)
-			if (pending !== undefined) {
+			if (this.#pending.has(message.id)) {
 				if (message.error !== undefined) {
-					pending.reject(new Error(`MCP error ${message.error.code}: ${message.error.message}`))
+					this.#settle(
+						message.id,
+						new Error(`MCP error ${message.error.code}: ${message.error.message}`),
+						true,
+					)
 				} else {
-					pending.resolve(message.result)
+					this.#settle(message.id, message.result, false)
 				}
 				return
 			}
@@ -241,7 +231,7 @@ export class MCPClient implements MCPClientInterface {
 			execute: (args: Readonly<Record<string, unknown>>) => Promise<unknown>
 		} = {
 			name,
-			execute: (args) => this.call(name, args),
+			execute: this.call.bind(this, name),
 		}
 		if (isString(description)) options.description = description
 		if (isRecord(inputSchema)) options.parameters = inputSchema
@@ -259,5 +249,18 @@ export class MCPClient implements MCPClientInterface {
 			if (isRecord(block) && isString(block['text'])) parts.push(block['text'])
 		}
 		return parts.join('\n')
+	}
+
+	#timeoutRequest(id: string | number, method: string): void {
+		this.#settle(id, new Error(`MCP request '${method}' timed out after ${this.#timeout}ms`), true)
+	}
+
+	#settle(id: string | number, value: unknown, failed: boolean): void {
+		const pending = this.#pending.get(id)
+		if (pending === undefined) return
+		this.#pending.delete(id)
+		pending.deadline.removeEventListener('abort', pending.timeout)
+		if (failed) pending.reject(value)
+		else pending.resolve(value)
 	}
 }

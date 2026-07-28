@@ -64,7 +64,10 @@ export class MCPServer implements MCPServerInterface {
 	readonly #tools: ToolManagerInterface
 
 	constructor(options: MCPServerOptions) {
-		this.#emitter = new Emitter<MCPServerEventMap>({ on: options.on, error: options.error })
+		this.#emitter = new Emitter<MCPServerEventMap>({
+			...(options.on !== undefined ? { on: options.on } : {}),
+			...(options.error !== undefined ? { error: options.error } : {}),
+		})
 		this.#name = options.name
 		this.#version = options.version
 		this.#tools = options.tools

@@ -141,7 +141,7 @@ Modules (final names per AGENTS §4; anatomy mirrors `src/server`):
    `postMessage`. One transport class both sides use (a `MessagePort` is symmetric);
    client and server roles come from which binder it is handed to. `start()`s the
    port, serializes messages as plain strings, maps `messageerror`/close to `closed`.
-4. `serve.ts` — the `serveWorker` analog:
+4. `factories.ts` — the `serveWorker`-analog bootstrap factories:
 
    ```ts
    export interface ServeMCPOptions {

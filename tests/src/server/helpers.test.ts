@@ -44,7 +44,7 @@ function rpcMessage(overrides?: Parameters<typeof createJSONRPCRequest>[0]): JSO
 // `readLastEventId`) takes directly, no stub crossing needed (§14 — `Request` IS the
 // boundary type now).
 function requestWithHeaders(headers?: Record<string, string>): Request {
-	return new Request('http://localhost/mcp', { headers })
+	return new Request('http://localhost/mcp', headers !== undefined ? { headers } : {})
 }
 
 // src/server/helpers.ts — `acceptsEventStream`, the pure `Accept`-header reader the MCP

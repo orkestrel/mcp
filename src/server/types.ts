@@ -129,7 +129,7 @@ export interface MCPSessionInterface {
  * before calling `next`).
  */
 export interface MCPSessionState {
-	session?: MCPSessionInterface
+	readonly session?: MCPSessionInterface
 }
 
 /**
@@ -160,12 +160,12 @@ export interface EventStoreEntry {
  *
  * @remarks
  * - `session` — the live {@link MCPSession} entity the store keys by session id.
- * - `touched` — the epoch-ms instant of the last access; mutated (not replaced) on every
+ * - `touched` — the epoch-ms instant of the last access; the entry is replaced on every
  *   resolved request so the middleware's lazy sweep can evict an idle entry past `ttl`.
  */
 export interface MCPSessionEntry {
 	readonly session: MCPSession
-	touched: number
+	readonly touched: number
 }
 
 /**

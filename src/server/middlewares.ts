@@ -71,11 +71,32 @@ export function createMCPSession<TState extends MCPSessionState>(
 
 	return async (request, context, next) => {
 		if (context.url.pathname !== path) return next()
-		sweep()
+		if (ttl !== undefined) {
+			const cutoff = clock() - ttl
+			for (const [id, entry] of store) {
+				if (entry.touched <= cutoff) store.delete(id)
+			}
+		}
+
+		if (context.method === 'DELETE') {
+			const id = readSessionHeader(request)
+			if (id === undefined || !store.delete(id)) return rejectUnknownSession()
+			return new Response(null, { status: 204 })
+		}
+
+		let entry: MCPSessionEntry | undefined
+		const id = readSessionHeader(request)
+		if (id !== undefined) {
+			const current = store.get(id)
+			if (current !== undefined) {
+				entry = { session: current.session, touched: clock() }
+				store.set(id, entry)
+			}
+		}
 
 		if (context.method === 'GET') {
-			const entry = resolve(request)
 			if (entry === undefined) return rejectUnknownSession()
+			const session = entry.session
 			const stream = openStream()
 			// A comment write flushes the response headers immediately (the underlying node:http
 			// response only sends headers on its first `write`/`end`) — without it a client's fetch
@@ -85,28 +106,19 @@ export function createMCPSession<TState extends MCPSessionState>(
 			if (lastEventId !== undefined) {
 				// Replay every event STRICTLY AFTER the client's last-seen id BEFORE attaching, so the
 				// missed events arrive in order ahead of any live push.
-				for (const e of entry.session.replay(lastEventId)) {
+				for (const e of session.replay(lastEventId)) {
 					stream.write({ id: e.id, data: JSON.stringify(e.message) })
 				}
 			}
-			entry.session.attach(stream)
-			if (request.signal.aborted) entry.session.detach(stream)
-			else
-				request.signal.addEventListener('abort', () => entry.session.detach(stream), { once: true })
+			session.attach(stream)
+			if (request.signal.aborted) session.detach(stream)
+			else request.signal.addEventListener('abort', () => session.detach(stream), { once: true })
 			return stream.response
-		}
-
-		if (context.method === 'DELETE') {
-			const id = readSessionHeader(request)
-			if (id === undefined || !store.has(id)) return rejectUnknownSession()
-			store.delete(id)
-			return new Response(null, { status: 204 })
 		}
 
 		// POST — buffer the body once so the downstream route can re-read it via a forwarded
 		// Request; only `initialize` mints a fresh session when no valid id is present.
 		const text = await request.text()
-		let entry = resolve(request)
 		if (entry === undefined) {
 			let parsed: unknown
 			try {
@@ -115,14 +127,19 @@ export function createMCPSession<TState extends MCPSessionState>(
 				parsed = undefined
 			}
 			if (parsed !== undefined && isInitializeRequest(parsed)) {
-				const session = new MCPSession(crypto.randomUUID(), { capacity })
+				const session = new MCPSession(
+					crypto.randomUUID(),
+					capacity !== undefined ? { capacity } : {},
+				)
 				entry = { session, touched: clock() }
 				store.set(session.id, entry)
 			} else {
 				return rejectUnknownSession()
 			}
 		}
-		context.state.session = entry.session
+		if (!Reflect.set(context.state, 'session', entry.session)) {
+			throw new Error('MCP session state is not writable')
+		}
 		const forwarded = new Request(context.url, {
 			method: 'POST',
 			headers: request.headers,
@@ -131,27 +148,5 @@ export function createMCPSession<TState extends MCPSessionState>(
 		const response = await next(forwarded)
 		response.headers.set(MCP_SESSION_HEADER, entry.session.id)
 		return response
-	}
-
-	// Resolve + touch the session named by the request's `mcp-session-id` header, or
-	// `undefined` when the header is absent or names an unknown / evicted session.
-	function resolve(request: Request): MCPSessionEntry | undefined {
-		const id = readSessionHeader(request)
-		if (id === undefined) return undefined
-		const entry = store.get(id)
-		if (entry === undefined) return undefined
-		entry.touched = clock()
-		return entry
-	}
-
-	// Lazy idle-TTL sweep — no background timer (the rate-limiter lazy-window idiom): drop
-	// every session not touched within `ttl` on the next access. Omitted entirely (a no-op)
-	// when `ttl` is unset — sessions then live until an explicit `DELETE`.
-	function sweep(): void {
-		if (ttl === undefined) return
-		const cutoff = clock() - ttl
-		for (const [id, entry] of store) {
-			if (entry.touched <= cutoff) store.delete(id)
-		}
 	}
 }

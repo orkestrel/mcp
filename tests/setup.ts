@@ -151,14 +151,31 @@ export function waitForDelay(ms = 0): Promise<void> {
  * Build a well-formed {@link JSONRPCRequest} — the default `{ jsonrpc: '2.0', method:
  * 'initialize', id: 1 }` merged with per-call overrides (a different `method` / `id`, or a
  * `params` payload), so the MCP dispatch / transport tests name only the field that
- * matters instead of re-typing the envelope (AGENTS §16.1). Omitting `id` via overrides
- * (`{ id: undefined }`) yields a notification.
+ * matters instead of re-typing the envelope (AGENTS §16.1).
  *
  * @param overrides - Fields to override on the default request (`method` / `id` / `params`)
  * @returns The assembled JSON-RPC request
  */
 export function createJSONRPCRequest(overrides?: Partial<JSONRPCRequest>): JSONRPCRequest {
 	return { jsonrpc: '2.0', method: 'initialize', id: 1, ...overrides }
+}
+
+/**
+ * Build a JSON-RPC notification whose absent `id` means no response is produced.
+ *
+ * @param method - The notification method
+ * @param params - Optional notification parameters
+ * @returns A request envelope with `id` omitted
+ */
+export function createJSONRPCNotification(
+	method: string,
+	params?: JSONRPCRequest['params'],
+): JSONRPCRequest {
+	return {
+		jsonrpc: '2.0',
+		method,
+		...(params !== undefined ? { params } : {}),
+	}
 }
 
 // ── In-process loopback MCP client transport (env-agnostic scenario builder) ─
@@ -285,4 +302,10 @@ export function createManualClock(start = 0): ManualClockInterface {
 			instant += ms
 		},
 	}
+}
+
+/** Whether a repository-relative Vue SFC path belongs to the private browser application. */
+export function isBrowserVuePath(path: string): boolean {
+	const normalized = path.replaceAll('\\', '/')
+	return normalized.startsWith('app/browser/')
 }

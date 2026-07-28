@@ -16,7 +16,7 @@ import type { ToolManagerInterface } from '@orkestrel/agent'
 // CLIENT-only carriers above, a `MessagePort` is SYMMETRIC — the same class is handed
 // to EITHER `bindServer` or `bindClient` (`@src/core`), the role coming from which
 // binder it is given to. `ServeMCPOptions` / `ServeMCPScopeInterface` back the
-// `serve.ts` bootstrap that wires a Web Worker's / Service Worker's own message
+// bootstrap factories that wire a Web Worker's / Service Worker's own message
 // events (and any `MessagePort` they carry) to an `MCPServer`.
 
 /**
@@ -101,7 +101,7 @@ export interface ScopeTransportInterface extends MCPTransportInterface {
  * dedicated-worker implicit reply channel), and `addEventListener` /
  * `removeEventListener` for `'message'` (every inbound event, portless or
  * port-bearing, arrives through the SAME listener — see {@link ServeMCPOptions}'s
- * doc and `serve.ts`). A real `self` / `globalThis` inside a worker satisfies this
+ * doc and the bootstrap factories). A real `self` / `globalThis` inside a worker satisfies this
  * structurally (it exposes far more, which this narrower shape ignores).
  */
 export interface ServeMCPScopeInterface {

@@ -5,7 +5,7 @@ import { createTool, createToolManager } from '@orkestrel/agent'
 import { serveMCPScope } from '@src/browser'
 import { createJSONRPCRequest } from '../../setup.js'
 
-// serveMCPScope (`src/browser/serve.ts`) — the exported, scope-parameterized core
+// serveMCPScope (`src/browser/factories.ts`) — the exported, scope-parameterized core
 // `serveMCP` wraps over `globalThis`. Driven here with SCOPE DOUBLES (AGENTS §16 — a
 // real object satisfying `ServeMCPScopeInterface`'s structural shape, not a mock of
 // this package's own code) covering BOTH shapes the unified design serves: a

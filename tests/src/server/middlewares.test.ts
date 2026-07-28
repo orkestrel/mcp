@@ -73,9 +73,9 @@ async function startSession(options?: {
 	const server = createServer<AppState>({ dispatcher, state: () => ({}) })
 	server.use(
 		createMCPSession<AppState>({
-			ttl: options?.ttl,
-			capacity: options?.capacity,
-			clock: options?.clock,
+			...(options?.ttl !== undefined ? { ttl: options.ttl } : {}),
+			...(options?.capacity !== undefined ? { capacity: options.capacity } : {}),
+			...(options?.clock !== undefined ? { clock: options.clock } : {}),
 		}),
 	)
 	if (options?.push !== undefined) server.use(pushTrigger(options.push))

@@ -8,6 +8,10 @@
 		"moduleDetection": "force",
 		"resolveJsonModule": true,
 		"strict": true,
+		"verbatimModuleSyntax": true,
+		"noUncheckedIndexedAccess": true,
+		"noUncheckedSideEffectImports": true,
+		"exactOptionalPropertyTypes": true,
 		"noImplicitOverride": true,
 		"noFallthroughCasesInSwitch": true,
 		"forceConsistentCasingInFileNames": true,
@@ -15,8 +19,8 @@
 		"noEmit": true,
 		"paths": {
 			"@src/core": ["./src/core/index.ts"],
-			"@src/server": ["./src/server/index.ts"],
-			"@src/browser": ["./src/browser/index.ts"]
+			"@src/browser": ["./src/browser/index.ts"],
+			"@src/server": ["./src/server/index.ts"]
 		}
 	},
 	"exclude": ["node_modules", "dist", "tmp"]

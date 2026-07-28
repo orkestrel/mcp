@@ -14,7 +14,7 @@ import { MessagePortTransport } from './transports/MessagePortTransport.js'
 // narrow at the boundary, never `as` (AGENTS §14): a malformed / non-message SSE
 // `data:` event is dropped, never thrown.
 //
-// `createScopeMessageListener` is `serve.ts`'s per-event dispatcher, extracted here
+// `createScopeMessageListener` is the bootstrap factory's per-event dispatcher, extracted here
 // (AGENTS §5 — no function is declared inside another function body) so
 // `serveMCPScope` merely CALLS it and stores the RETURNED closure (an ordinary
 // value assignment, not an inline function literal) for `addEventListener` /
@@ -82,7 +82,7 @@ export async function readEventStream(response: Response): Promise<readonly JSON
 }
 
 /**
- * Build `serveMCPScope`'s (`serve.ts`) `message`-event listener — the unified
+ * Build `serveMCPScope`'s `message`-event listener — the unified
  * dispatcher that routes EVERY inbound event on a hostable scope, portless or
  * port-bearing, to the right binding.
  *
@@ -130,6 +130,7 @@ export function createScopeMessageListener(
 			// Gate: consult accept (origin/identity check) before binding.
 			if (options.accept !== undefined && !options.accept(event)) return
 			const port = ports[0]
+			if (port === undefined) return
 			// Deduplicate: repeated delivery of the same port would create duplicate bindings.
 			if (seen.has(port)) return
 			seen.add(port)
