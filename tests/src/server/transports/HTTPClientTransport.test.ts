@@ -200,4 +200,61 @@ describe('HTTPClientTransport — lifecycle', () => {
 		await client.disconnect()
 		expect(client.connected).toBe(false)
 	})
+
+	it('ignores an unsupported negotiated protocol — no header on the next request', async () => {
+		// A fixture route that replies to `initialize` with an UNSUPPORTED `protocolVersion`
+		// (never sent by the shipped server) — the transport must not capture it.
+		const dispatcher = createDispatcher<unknown>()
+		dispatcher.add({
+			method: 'POST',
+			path: '/mcp',
+			handler: async (request) => {
+				const body = (await request.json()) as { readonly id: unknown }
+				return Response.json({
+					jsonrpc: '2.0',
+					id: body.id,
+					result: { protocolVersion: '2099-01-01' },
+				})
+			},
+		})
+		const server = createServer<unknown>({ dispatcher, state: () => undefined })
+		const handle = track(await startServer(server))
+		const protocols: (string | null)[] = []
+		const transport = createHTTPClientTransport({
+			url: `${handle.base}/mcp`,
+			fetch: (input, init) => {
+				protocols.push(new Headers(init?.headers).get(MCP_PROTOCOL_VERSION_HEADER))
+				return fetch(input, init)
+			},
+		})
+
+		await transport.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
+		await transport.send({ jsonrpc: '2.0', id: 2, method: 'ping', params: {} })
+
+		expect(protocols).toEqual([null, null])
+	})
+
+	it('close() clears the captured protocol — a new request carries no header', async () => {
+		const dispatcher = createDispatcher<unknown>()
+		dispatcher.add(createMCPRoutes(mcpServer(), { streaming: false }))
+		const server = createServer<unknown>({ dispatcher, state: () => undefined })
+		const handle = track(await startServer(server))
+		const protocols: (string | null)[] = []
+		const transport = createHTTPClientTransport({
+			url: `${handle.base}/mcp`,
+			fetch: (input, init) => {
+				protocols.push(new Headers(init?.headers).get(MCP_PROTOCOL_VERSION_HEADER))
+				return fetch(input, init)
+			},
+		})
+		const client = createMCPClient({ transport })
+
+		await client.connect()
+		expect(protocols).toEqual([null, MCP_PROTOCOL_VERSION])
+
+		await client.disconnect()
+		await transport.send({ jsonrpc: '2.0', id: 99, method: 'ping', params: {} })
+
+		expect(protocols).toEqual([null, MCP_PROTOCOL_VERSION, null])
+	})
 })

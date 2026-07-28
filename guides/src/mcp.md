@@ -194,7 +194,7 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 | `isJSONRPCResponse`    | function | Total guard: `jsonrpc: '2.0'` + an `id` (string / number / `null`) + EXACTLY ONE of `result` / `error`.                                                    |
 | `isJSONRPCMessage`     | function | Total guard — the union of `isJSONRPCRequest` and `isJSONRPCResponse`.                                                                                     |
 | `isInitializeRequest`  | function | Total guard — a `JSONRPCRequest` whose `method` is `'initialize'`.                                                                                         |
-| `isMCPError`           | function | Total guard — `true` only for a real `MCPError`, including safe handling of hostile inputs.                                                                |
+| `isMCPError`           | function | Total guard — `true` only for a real `MCPError`.                                                                                                           |
 | `parseJSONRPCMessage`  | function | Narrow an already-parsed value to a `JSONRPCMessage`, or `undefined` (total; sound with `isJSONRPCMessage`).                                               |
 | `jsonRPCResult`        | function | Build a success `JSONRPCResponse` — the `id` echoed, the value as `result`.                                                                                |
 | `jsonRPCError`         | function | Build an error `JSONRPCResponse` — the `id`, a reserved `code` / `message`, and optional `data`.                                                           |
@@ -227,13 +227,13 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 | `MCPClientInterface`       | interface | `emitter` / `connected` / `protocol` / `transport` data members + the `on` / `connect` / `disconnect` / `tools` / `call` methods.                                                                                          |
 
 The `emitter`, `name`, and `version` members of `MCPServerInterface` are
-`readonly` data members (Surface rows, above) — its call-signature methods are
-documented under [Methods](#methods). Likewise the `emitter` / `connected` /
-`protocol` / `transport` members of `MCPClientInterface` and the `emitter` / `session`
-members of `ClientTransportInterface` are data members; their methods are
-under [Methods](#methods). The `id` member of `MCPSessionInterface` is
-likewise a data member; its methods (`attach` / `detach` / `push` / `replay`)
-are under [Methods](#methods).
+`readonly` data members (Surface rows, above) — its call-signature methods
+are documented under [Methods](#methods). Likewise the `emitter` /
+`connected` / `protocol` / `transport` members of `MCPClientInterface` and
+the `emitter` / `session` members of `ClientTransportInterface` are data
+members; their methods are under [Methods](#methods). The `id` member of
+`MCPSessionInterface` is likewise a data member; its methods (`attach` /
+`detach` / `push` / `replay`) are under [Methods](#methods).
 
 ### HTTP transport
 
@@ -262,10 +262,10 @@ in-band JSON-RPC error) is HTTP `200` with the envelope; a notification is
 `202` with no body. A client that `Accept`s `text/event-stream` gets the reply
 framed as one `@orkestrel/server` `openStream` SSE `data:` event, then the
 stream ends; otherwise a plain JSON body — the JSON-RPC envelope is identical.
-On every POST, an absent `mcp-protocol-version` header is accepted for the
-legacy bootstrap path; a present supported value dispatches normally, while a
-present unsupported value is rejected before dispatch with HTTP `400` and a
-JSON-RPC `-32600` body.
+On every POST an absent `mcp-protocol-version` header is accepted — the
+`initialize` request cannot carry one yet; a present supported value
+dispatches normally, while a present unsupported value is rejected before
+dispatch with HTTP `400` and a JSON-RPC `-32600` body.
 `GET` / `DELETE` to the path fall through to whatever the router does with an
 unmatched method (the resumable server→client GET-SSE channel + session-end
 live in the session middleware below).
@@ -487,20 +487,21 @@ _See `extractLines` / `dispatchLines` under [HTTP transport § Helpers](#helpers
 ### Browser transport
 
 The **browser transport** (`src/browser`, via the `@src/browser` barrel /
-`@orkestrel/mcp/browser`) is the page / Web Worker / Service Worker face. Two
-CLIENT-only transports drive a REMOTE MCP server from the browser, over the
-SAME `ClientTransportInterface` the Node face's transports implement, so
-`createMCPClient` consumes either identically. `createWebSocketClientTransport`
-drives the native `WebSocket` global (the host performs the RFC 6455
-handshake, so this face carries none of the Node client's `node:crypto` /
-`node:http(s)` machinery); `createHTTPClientTransport` drives the native
-`fetch` + `ReadableStream`, decoding the SSE leg with `@orkestrel/sse` and
-honoring the SAME `mcp-session-id` and `mcp-protocol-version` echo semantics
-as the Node face's HTTP client, so a browser client interoperates with an
-`MCPSession`-based server unchanged. Both share their exported NAMES with the Node face's transports —
-same API shape, a different host underneath — deliberately, so a consumer
-swaps `@orkestrel/mcp/server` for `@orkestrel/mcp/browser` with no call-site
-change.
+`@orkestrel/mcp/browser`) is the page / Web Worker / Service Worker face.
+Two CLIENT-only transports drive a REMOTE MCP server from the browser,
+over the SAME `ClientTransportInterface` the Node face's transports
+implement, so `createMCPClient` consumes either identically.
+`createWebSocketClientTransport` drives the native `WebSocket` global (the
+host performs the RFC 6455 handshake, so this face carries none of the
+Node client's `node:crypto` / `node:http(s)` machinery);
+`createHTTPClientTransport` drives the native `fetch` + `ReadableStream`,
+decoding the SSE leg with `@orkestrel/sse` and honoring the SAME
+`mcp-session-id` and `mcp-protocol-version` echo semantics as the Node
+face's HTTP client, so a browser client interoperates with an
+`MCPSession`-based server unchanged. Both share their exported NAMES with
+the Node face's transports — same API shape, a different host underneath
+— deliberately, so a consumer swaps `@orkestrel/mcp/server` for
+`@orkestrel/mcp/browser` with no call-site change.
 
 `createMessagePortTransport` is the genuinely NEW capability: MCP over
 `postMessage`. A `MessagePort` is SYMMETRIC, so `MessagePortTransport` is the
@@ -735,10 +736,10 @@ tools: {} }, serverInfo: { name, version } }`, the version NEGOTIATED
    requested version falls back). The list currently contains only
    `'2025-06-18'`: the package does not advertise `'2025-03-26'`, whose
    mandatory JSON-RPC batching this single-message implementation does not
-   support. `ping` → `{}`. `tools/list` → `{ tools }`,
-   each tool a `MCPToolDescriptor` (its `parameters` renamed to `inputSchema`,
-   defaulting to `{ type: 'object' }`). `tools/call` → the executed tool's
-   `MCPToolResult`.
+   support. `ping` → `{}`. `tools/list` → `{ tools }`, each tool a
+   `MCPToolDescriptor` (its `parameters` renamed to `inputSchema`,
+   defaulting to `{ type: 'object' }`). `tools/call` → the executed
+   tool's `MCPToolResult`.
 5. **Tool errors are tool results, not protocol errors.** `tools/call` reads
    `params.name` (a string) + `params.arguments` (a record, default `{}`),
    narrowed via `@orkestrel/contract`'s guards (no `as`); a missing /
@@ -850,23 +851,24 @@ name, version } }`), then validates the result's `protocolVersion`. A
     agent's `ToolManager` isolates it into a result `error` exactly like a
     local throw. `disconnect()` rejects every pending request, clears
     `protocol`, closes the transport, and fires `disconnect` (idempotent).
-14. **Client correlation + deadline + notifications.** Each request is tagged
-    with a monotonic numeric `id`; a SINGLE transport `message` subscription
-    resolves / rejects the matching pending request by `id` (an `error`
-    response rejects with `MCPError`, a `result` resolves) — concurrent
-    requests each route to their own pending. `MCPError` preserves the peer's
-    human message, numeric `code`, and optional `error.data` as `context`;
-    local disconnect and timeout failures remain plain `Error`s. A message that is
-    NOT a correlated response is a server NOTIFICATION, re-surfaced on the
-    `notification` event. Every request races `AbortSignal.timeout(timeout)`
-    (never a raw `setTimeout`; default `DEFAULT_MCP_REQUEST_TIMEOUT`): a
-    server that never replies REJECTS the pending request (`timed out`)
-    rather than hanging. A `send` write failure rejects its own pending
-    request. Observable: the client owns an `emitter` (`MCPClientEventMap`)
-    firing `connect` / `disconnect` / `notification` / `error`; the emitter
-    isolates a listener throw, routing it to its `error` handler (the `error`
-    option, NOT a domain event); `on(...)` is the convenience forward to
-    `emitter.on`.
+14. **Client correlation + deadline + notifications.** Each request is
+    tagged with a monotonic numeric `id`; a SINGLE transport `message`
+    subscription resolves / rejects the matching pending request by `id`
+    (an `error` response rejects with `MCPError`, a `result` resolves) —
+    concurrent requests each route to their own pending. `MCPError`
+    preserves the peer's human message, numeric `code`, and optional
+    `error.data` as `context`; local disconnect and timeout failures
+    remain plain `Error`s. A message that is NOT a correlated response is
+    a server NOTIFICATION, re-surfaced on the `notification` event. Every
+    request races `AbortSignal.timeout(timeout)` (never a raw
+    `setTimeout`; default `DEFAULT_MCP_REQUEST_TIMEOUT`): a server that
+    never replies REJECTS the pending request (`timed out`) rather than
+    hanging. A `send` write failure rejects its own pending request.
+    Observable: the client owns an `emitter` (`MCPClientEventMap`) firing
+    `connect` / `disconnect` / `notification` / `error`; the emitter
+    isolates a listener throw, routing it to its `error` handler (the
+    `error` option, NOT a domain event); `on(...)` is the convenience
+    forward to `emitter.on`.
 15. **The HTTP CLIENT transport drives a remote server over `fetch`
     (`src/server`).** `createHTTPClientTransport({ url, headers?, fetch?,
 timeout? })` returns a `ClientTransportInterface` whose `send` POSTs one

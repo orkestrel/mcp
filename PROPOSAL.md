@@ -1,12 +1,27 @@
 # PROPOSAL — MCP 2026-07-28 adoption and multi-version support
 
-> Status: **proposal only — nothing implemented.** Produced 2026-07-28 from live primary-source
-> research and a full adversarial design pass (Opus 5 planner vs GPT-5.6 Sol analyst on the
-> same brief, reconciled by the orchestrator). Deferred to a dedicated session by the owner's
-> decision. Baseline when written: `b77ee07` (branch + main), version 0.0.6 unpublished.
-> Replaces the previous PROPOSAL.md (environment-agnostic faces), which shipped fully with
-> 0.0.6 and remains in git history at `a2f983b`. This document is self-contained; the session
-> journals behind it were ephemeral.
+> Status: **adoption not implemented; §3 conformance fixes shipped.** Produced 2026-07-28
+> from live primary-source research and a full adversarial design pass (Opus 5 planner vs
+> GPT-5.6 Sol analyst on the same brief, reconciled by the orchestrator). The 2026-07-28
+> adoption itself is deferred to a dedicated session by the owner's decision. Baseline when
+> written: `b77ee07` (branch + main), version 0.0.6 unpublished. Replaces the previous
+> PROPOSAL.md (environment-agnostic faces), which shipped fully with 0.0.6 and remains in
+> git history at `a2f983b`. This document is self-contained; the session journals behind it
+> were ephemeral.
+>
+> **Update, later 2026-07-28 — current-version conformance fixes shipped.** §3 defects 1, 2,
+> 3, and 5 are fixed on this branch as 0.0.6 content, independently audited (Opus design-fit,
+> Sol correctness, mechanical checker) and verified green on all five gates including the
+> real-Chromium browser suite. §3.4 and §3.6 remain intentionally deferred to the adoption.
+> Consequences for the plan below: `SUPPORTED_PROTOCOL_VERSIONS` is now `['2025-06-18']`
+> (§4.2's removal of 2025-03-26 is done; the three-revision expansion remains adoption
+> work); the batch arm of `ClientTransportInterface.send` is already deleted (drop it from
+> U0's content); `src/core/errors.ts` with `MCPError`/`isMCPError` already exists (U1
+> extends rather than creates it); `MCPClientInterface` already exposes the negotiated
+> revision as `protocol` (the adoption's §4.3/§9.5 naming decision applies on top); the
+> `MCP-Protocol-Version` header is live end to end with capture gated to supported versions
+> and cleared on transport `close()` (U4/U5 keep only `Mcp-Method`/`Mcp-Name` and the
+> status-map work).
 
 ## Why this exists
 
@@ -190,27 +205,32 @@ field list beyond `mode`/`elicitationId`.
 
 ## 3. Defects and gaps found (stand regardless of adoption; all source-verified)
 
-1. **`MCP_PROTOCOL_VERSION_HEADER` is dead code** — declared at `src/server/constants.ts:24`,
+Status: items 1, 2, 3, and 5 are **FIXED** on this branch (see the status update at the
+top); items 4 and 6 remain open by design, resolved by the adoption. The descriptions below
+are preserved as written at proposal time — the cited lines describe the pre-fix state.
+
+1. **FIXED** — **`MCP_PROTOCOL_VERSION_HEADER` is dead code** — declared at `src/server/constants.ts:24`,
    referenced tree-wide only by its own declaration and one guide row. 2025-06-18+ REQUIRES
    HTTP clients to send `MCP-Protocol-Version` on every post-initialize request and servers
    to validate it. Neither client face sends it; no middleware reads it.
-2. **The client ignores the negotiated version** — `MCPClient.connect` discards the entire
+2. **FIXED** — **The client ignores the negotiated version** — `MCPClient.connect` discards the entire
    `initialize` result: no validation, no disconnect-on-unsupported (the spec's rule), and
    the negotiated version is unavailable to the transport layer (which needs it for gap 1).
-3. **2025-03-26 support is overclaimed** — it sits in `SUPPORTED_PROTOCOL_VERSIONS`, but that
+3. **FIXED** — **2025-03-26 support is overclaimed** — it sits in `SUPPORTED_PROTOCOL_VERSIONS`, but that
    revision's JSON-RPC batching is not implemented: `parseJSONRPCMessage`
    (`src/core/parsers.ts:24`) narrows via `isJSONRPCMessage` and rejects arrays;
    `MCPServer.handle` answers a batch with `-32600`. Only outbound transport signatures
    nominally accept arrays (`ClientTransportInterface.send`), a capability no caller uses.
-4. **`createMCPSession` would 404 every modern stateless request**
+4. **Open (adoption)** — **`createMCPSession` would 404 every modern stateless request**
    (`src/server/middlewares.ts:129-138`): a POST that neither carries a known session id nor
    parses as `initialize` is rejected. A 2026-07-28 request satisfies neither. Highest-value
    single fix in the adoption.
-5. **`MCPError` structure is unreachable** — remote failures become stringly-typed `Error`s
+5. **FIXED** — **`MCPError` structure is unreachable** — remote failures become stringly-typed `Error`s
    (`MCPClient` `#settle`), so `error.code`/`error.data` are lost; the modern `-32022` retry
    (which must read `data.supported`) is impossible today.
-6. Dead declarations: `MCPServerInfo` (`src/core/types.ts:105`) exported but unused;
-   `MCPServerOptions.description` declared "reserved" and unused.
+6. **Open (adoption)** — Dead declarations: `MCPServerInfo` (`src/core/types.ts:105`)
+   exported but unused; `MCPServerOptions.description` declared "reserved" and unused.
+   Resolved by U0's `MCPIdentity` regrouping.
 
 ---
 

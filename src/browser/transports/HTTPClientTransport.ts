@@ -1,7 +1,7 @@
 import type { ClientTransportEventMap, ClientTransportInterface, JSONRPCMessage } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { HTTPClientTransportOptions } from '../types.js'
-import { isJSONRPCResponse, parseJSONRPCMessage } from '@src/core'
+import { isJSONRPCResponse, parseJSONRPCMessage, SUPPORTED_PROTOCOL_VERSIONS } from '@src/core'
 import { isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { MCP_PROTOCOL_VERSION_HEADER, MCP_SESSION_HEADER } from '../constants.js'
@@ -29,14 +29,18 @@ import { readEventStream } from '../helpers.js'
  *   face's own `readEventStream`) — the inverse of the server's `openStream` seam, so
  *   the wire round-trips. A `202` Accepted (a notification) carries no body and emits
  *   nothing.
- * - **Session and protocol echo.** `start()` / `close()` are no-ops (a request/response transport
- *   holds no long-lived connection). The `mcp-session-id` response header, when a
- *   STATEFUL server sends one (on `initialize`), is captured into `session` and then
- *   ECHOED as the `mcp-session-id` request header on every SUBSEQUENT request — so an
- *   `MCPClient` passes a stateful server's session validation. The initialize result's
- *   `protocolVersion` is likewise captured and echoed as `mcp-protocol-version` on every
- *   subsequent request, as required by the 2025-06-18 Streamable-HTTP transport. Before
- *   initialize returns, neither captured header is sent.
+ * - **Session and protocol echo.** `start()` is a no-op (a
+ *   request/response transport opens no long-lived connection). The
+ *   `mcp-session-id` response header, when a STATEFUL server sends one (on
+ *   `initialize`), is captured into `session` and then ECHOED as the
+ *   `mcp-session-id` request header on every SUBSEQUENT request — so an
+ *   `MCPClient` passes a stateful server's session validation. The
+ *   initialize result's `protocolVersion` is likewise captured, but only
+ *   when it is a SUPPORTED value, and echoed as `mcp-protocol-version` on
+ *   every subsequent request, as required by the 2025-06-18 Streamable-HTTP
+ *   transport. Before initialize returns, neither captured header is sent.
+ *   `close()` clears the captured protocol so a reconnect's `initialize`
+ *   POST is headerless; the captured `session` persists across `close()`.
  * - **Total at the boundary (§14).** Every reply is narrowed (`parseJSONRPCMessage`,
  *   the SSE decoder) — a non-message reply is dropped, never asserted; a `fetch` /
  *   decode failure surfaces on the `error` event rather than escaping `send`.
@@ -113,7 +117,10 @@ export class HTTPClientTransport implements ClientTransportInterface {
 		await this.#deliver(response)
 	}
 
+	// Clear the captured protocol before emitting `close`, so a reconnect's `initialize`
+	// POST carries no `mcp-protocol-version` header (the captured `session` is untouched).
 	async close(): Promise<void> {
+		this.#protocol = undefined
 		this.#emitter.emit('close')
 	}
 
@@ -126,25 +133,27 @@ export class HTTPClientTransport implements ClientTransportInterface {
 		const type = response.headers.get('content-type') ?? ''
 		try {
 			if (type.includes('text/event-stream')) {
-				for (const message of await readEventStream(response)) this.#deliverMessage(message)
+				for (const message of await readEventStream(response)) this.#capture(message)
 				return
 			}
 			if (type.includes('application/json')) {
 				const message = parseJSONRPCMessage(await response.json())
-				if (message !== undefined) this.#deliverMessage(message)
+				if (message !== undefined) this.#capture(message)
 			}
 		} catch (error) {
 			this.#emitter.emit('error', error)
 		}
 	}
 
-	// Capture the negotiated protocol from the initialize result before emitting the
-	// message, so the next request carries its required protocol-version header.
-	#deliverMessage(message: JSONRPCMessage): void {
+	// Capture the negotiated SUPPORTED protocol from the initialize result before emitting
+	// the message, so the next request carries its required protocol-version header; any
+	// other value (missing or unsupported) is ignored and leaves `#protocol` unchanged.
+	#capture(message: JSONRPCMessage): void {
 		if (
 			isJSONRPCResponse(message) &&
 			isRecord(message.result) &&
-			isString(message.result['protocolVersion'])
+			isString(message.result['protocolVersion']) &&
+			SUPPORTED_PROTOCOL_VERSIONS.includes(message.result['protocolVersion'])
 		) {
 			this.#protocol = message.result['protocolVersion']
 		}

@@ -9,6 +9,7 @@ import {
 	MCP_SESSION_HEADER,
 	MCP_WEBSOCKET_SUBPROTOCOL,
 } from '@src/browser'
+import { isRecord } from '@orkestrel/contract'
 import {
 	createCalculatorServer,
 	createJSONRPCRequest,
@@ -219,6 +220,44 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 		// its successful real-Chromium exchange also proves the CORS preflight admitted it.
 		expect(protocols).toEqual([null, '2025-06-18'])
 		await client.disconnect()
+	})
+
+	it('rejects an unsupported negotiated protocol (F4) and never captures its header', async () => {
+		// Force the JSON reply framing (already a supported server response shape) and
+		// rewrite the initialize result's `protocolVersion` to an UNSUPPORTED value in
+		// flight — the real network round-trip stays real; only the injected `fetch`
+		// mutates the decoded body, so `MCPClient` must reject the handshake (F4) and the
+		// transport must never have captured the unsupported value.
+		const protocols: (string | null)[] = []
+		const transport = createHTTPClientTransport({
+			url: `${serverURL}/mcp`,
+			fetch: async (input, init) => {
+				protocols.push(new Headers(init?.headers).get(MCP_PROTOCOL_VERSION_HEADER))
+				const headers = new Headers(init?.headers)
+				headers.set('accept', 'application/json')
+				const response = await fetch(input, { ...init, headers })
+				const body: unknown = await response.json()
+				if (isRecord(body) && isRecord(body['result'])) {
+					body['result']['protocolVersion'] = '2099-01-01'
+				}
+				return new Response(JSON.stringify(body), {
+					status: response.status,
+					headers: response.headers,
+				})
+			},
+		})
+		const client = createMCPClient({ transport })
+
+		await expect(client.connect()).rejects.toThrow(
+			"MCP server negotiated unsupported protocol version '2099-01-01'",
+		)
+
+		// The capture gate: a further request through the SAME transport instance still
+		// carries no `mcp-protocol-version` header — the unsupported value was never
+		// captured, and `MCPClient.connect`'s `transport.close()` on the failed handshake
+		// left nothing to clear.
+		await transport.send(createJSONRPCRequest({ method: 'ping', id: 99 }))
+		expect(protocols).toEqual([null, null])
 	})
 
 	it('decodes the Streamable-HTTP SSE reply leg (the default framing this client requests)', async () => {
