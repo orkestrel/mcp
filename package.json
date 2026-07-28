@@ -87,7 +87,7 @@
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test"
 	},
 	"dependencies": {
-		"@orkestrel/agent": "^0.0.8",
+		"@orkestrel/agent": "^0.0.9",
 		"@orkestrel/contract": "^0.0.8",
 		"@orkestrel/emitter": "^0.0.4",
 		"@orkestrel/sse": "^0.0.4",
