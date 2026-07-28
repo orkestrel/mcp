@@ -943,6 +943,7 @@ export const srcBrowser = (config?: UserConfig): UserConfig =>
 					include: hasChromium ? ['tests/src/browser/**/*.test.ts'] : [],
 					passWithNoTests: !hasChromium,
 					exclude: ['tests/src/core/**/*.test.ts'],
+					globalSetup: './tests/setupBrowserServer.ts',
 					setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts'],
 					browser: {
 						enabled: hasChromium,

@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { createMCPPostHandler } from '@src/server'
-import { collectSSE, createJSONRPCNotification, createJSONRPCRequest } from '../../setup.js'
-import { createCalculatorServer } from '../../setupServer.js'
+import {
+	collectSSE,
+	createCalculatorServer,
+	createJSONRPCNotification,
+	createJSONRPCRequest,
+} from '../../setup.js'
 
 describe('createMCPPostHandler', () => {
 	it('returns a JSON response for an id-bearing request', async () => {

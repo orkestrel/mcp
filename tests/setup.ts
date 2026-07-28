@@ -10,6 +10,8 @@ import type {
 	JSONRPCRequest,
 	MCPServerInterface,
 } from '@src/core'
+import { createMCPServer } from '@src/core'
+import { createTool, createToolManager } from '@orkestrel/agent'
 import { createEmitter } from '@orkestrel/emitter'
 import { createSSEParser } from '@orkestrel/sse'
 
@@ -178,6 +180,29 @@ export function createJSONRPCNotification(
 	}
 }
 
+// ── Canonical MCP server fixture (the calculator over a ToolManager) ─────────
+
+/**
+ * Build the canonical calculator {@link MCPServerInterface} the MCP transport tests
+ * share — a real server over a real `ToolManager` carrying an `add` tool plus a `boom`
+ * tool that throws, so every transport proves both the value and error paths.
+ *
+ * @returns The MCP server over the `add` and `boom` registry
+ */
+export function createCalculatorServer(): MCPServerInterface {
+	const tools = createToolManager()
+	tools.add(createTool({ name: 'add', execute: () => 5 }))
+	tools.add(
+		createTool({
+			name: 'boom',
+			execute: () => {
+				throw new Error('kaboom')
+			},
+		}),
+	)
+	return createMCPServer({ name: 'calculator', version: '1.0.0', tools })
+}
+
 // ── In-process loopback MCP client transport (env-agnostic scenario builder) ─
 //
 // AGENTS §16.1: the `ClientTransportInterface` doc for `@src/core` names "the in-process
@@ -215,6 +240,26 @@ export function createLoopbackTransport(mcp: MCPServerInterface): ClientTranspor
 			emitter.emit('close')
 		},
 	}
+}
+
+/**
+ * POST a JSON value to a real HTTP fixture endpoint.
+ *
+ * @param base - The fixture server's base URL
+ * @param body - The JSON value to serialize
+ * @param options - Optional request headers and endpoint path
+ * @returns The real fetch response
+ */
+export function postJSON(
+	base: string,
+	body: unknown,
+	options?: { readonly headers?: Readonly<Record<string, string>>; readonly path?: string },
+): Promise<Response> {
+	return fetch(`${base}${options?.path ?? '/mcp'}`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json', ...options?.headers },
+		body: JSON.stringify(body),
+	})
 }
 
 // ── SSE response decoding (environment-agnostic) ─────────────────────────────

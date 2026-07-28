@@ -60,7 +60,7 @@ export class HTTPClientTransport implements ClientTransportInterface {
 		this.#emitter = new Emitter<ClientTransportEventMap>()
 		this.#url = options.url
 		this.#headers = options.headers ?? {}
-		this.#fetch = options.fetch ?? globalThis.fetch
+		this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis)
 		this.#timeout = options.timeout
 	}
 

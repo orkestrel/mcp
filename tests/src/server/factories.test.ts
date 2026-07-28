@@ -14,17 +14,13 @@ import {
 } from '@src/server'
 import {
 	collectSSE,
+	createCalculatorServer,
 	createJSONRPCNotification,
 	createJSONRPCRequest,
+	postJSON,
 	waitForDelay,
 } from '../../setup.js'
-import {
-	createCalculatorServer,
-	createTeardown,
-	postJSON,
-	startServer,
-	upgradeRequest,
-} from '../../setupServer.js'
+import { createTeardown, startServer, upgradeRequest } from '../../setupServer.js'
 
 // src/server/factories.ts — createMCPRoutes, the stateless Streamable-HTTP MCP
 // transport, proven over a REAL @orkestrel/server + a REAL MCPServer over a REAL

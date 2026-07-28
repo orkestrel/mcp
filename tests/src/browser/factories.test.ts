@@ -1,76 +1,36 @@
-import type { MCPSessionState } from '@src/server'
-import type { NodeWebSocketInterface } from '@orkestrel/websocket'
-import { describe, expect, it, vi } from 'vitest'
+import type { JSONRPCMessage } from '@src/core'
+import { describe, expect, inject, it, vi } from 'vitest'
 import { bindClient, bindServer, createDuplexClientTransport, createMCPClient } from '@src/core'
-import { createDispatcher } from '@orkestrel/router'
-import { createServer } from '@orkestrel/server'
-import { createNodeWebSocket } from '@orkestrel/websocket'
 import {
 	createHTTPClientTransport,
 	createMessagePortTransport,
 	createWebSocketClientTransport,
-} from '@src/browser'
-import {
-	createMCPRoutes,
-	createMCPSession,
-	createWebSocketServer,
 	MCP_SESSION_HEADER,
 	MCP_WEBSOCKET_SUBPROTOCOL,
-} from '@src/server'
-import { isString } from '@orkestrel/contract'
-import { createJSONRPCRequest, waitForDelay } from '../../setup.js'
-import { createCalculatorServer, createTeardown, postJSON, startServer } from '../../setupServer.js'
-import type { StartedServerInterface } from '../../setupServer.js'
+} from '@src/browser'
+import {
+	createCalculatorServer,
+	createJSONRPCRequest,
+	postJSON,
+	waitForDelay,
+} from '../../setup.js'
 
 // src/browser/factories.ts + src/browser/transports — the browser-face CLIENT
 // transports (`createWebSocketClientTransport` over the native `WebSocket` global,
-// `createHTTPClientTransport` over native `fetch`), proven against THIS repo's own
-// Node-face servers (`createWebSocketServer` / `createMCPRoutes`, both `@src/server`)
-// on a real ephemeral-port HTTP server (AGENTS §16 — no mocks). Node ≥ 22 supplies
-// global `WebSocket` / `fetch`, so the browser face is testable in plain Vitest.
+// `createHTTPClientTransport` over native `fetch`), proven in real Chromium against
+// this repo's real Node-face server running outside the browser module graph. Vitest
+// global setup injects only its loopback URL; no Node/server implementation reaches
+// the page.
 
-interface AppState extends MCPSessionState {}
-
-const { track } = createTeardown((handle: StartedServerInterface) => handle.stop())
-const { track: trackSession } = createTeardown((handle: StartedServerInterface<AppState>) =>
-	handle.stop(),
-)
+const serverURL = inject('server')
 
 // ── WebSocket: the browser client against the Node-face WS server ────────────
 
-async function startWsMCP(): Promise<StartedServerInterface> {
-	const dispatcher = createDispatcher<unknown>()
-	const server = createServer<unknown>({ dispatcher, state: () => undefined })
-	server.upgrade(createWebSocketServer(createCalculatorServer()))
-	return track(await startServer(server))
-}
-
-// A raw (non-MCP) WS upgrade server that hands the caller the live NodeWebSocket the
-// moment it opens — for the malformed-inbound-frame scenario, where the peer writes a
-// frame that is not valid JSON-RPC (something no well-behaved MCP server ever sends).
-async function startRawWsServer(
-	onOpen: (ws: NodeWebSocketInterface) => void,
-): Promise<StartedServerInterface> {
-	const dispatcher = createDispatcher<unknown>()
-	const server = createServer<unknown>({ dispatcher, state: () => undefined })
-	server.upgrade((request, socket, head) => {
-		const upgrade = request.headers['upgrade']
-		if (!isString(upgrade) || upgrade.toLowerCase() !== 'websocket') return false
-		const key = request.headers['sec-websocket-key']
-		if (!isString(key)) return false
-		const ws = createNodeWebSocket({ socket, key, head })
-		onOpen(ws)
-		return true
-	})
-	return track(await startServer(server))
-}
-
 describe('createWebSocketClientTransport — the browser client against the Node-face WS server', () => {
 	it('connect → tools/list → tools/call(add): a value round-trips over real WebSocket frames', async () => {
-		const handle = await startWsMCP()
 		const client = createMCPClient({
 			transport: createWebSocketClientTransport({
-				url: `${handle.base}/mcp`,
+				url: `${serverURL}/mcp`,
 				protocols: MCP_WEBSOCKET_SUBPROTOCOL,
 			}),
 		})
@@ -89,10 +49,9 @@ describe('createWebSocketClientTransport — the browser client against the Node
 	})
 
 	it('a remote erroring tool throws locally (isError → throw)', async () => {
-		const handle = await startWsMCP()
 		const client = createMCPClient({
 			transport: createWebSocketClientTransport({
-				url: `${handle.base}/mcp`,
+				url: `${serverURL}/mcp`,
 				protocols: MCP_WEBSOCKET_SUBPROTOCOL,
 			}),
 		})
@@ -102,12 +61,11 @@ describe('createWebSocketClientTransport — the browser client against the Node
 	})
 
 	it('queues sends issued before open and flushes them, in order, once the socket opens', async () => {
-		const handle = await startWsMCP()
 		const transport = createWebSocketClientTransport({
-			url: `${handle.base}/mcp`,
+			url: `${serverURL}/mcp`,
 			protocols: MCP_WEBSOCKET_SUBPROTOCOL,
 		})
-		const received: unknown[] = []
+		const received: JSONRPCMessage[] = []
 		transport.emitter.on('message', (message) => received.push(message))
 
 		// Issue two requests WITHOUT awaiting `start()` first — both are queued pre-open.
@@ -117,36 +75,31 @@ describe('createWebSocketClientTransport — the browser client against the Node
 		await starting
 
 		await waitForDelay(50)
-		expect(received.map((message) => (message as { id: number }).id)).toEqual([1, 2])
+		expect(received.map((message) => message.id)).toEqual([1, 2])
 
 		await transport.close()
 	})
 
 	it('a server-initiated close fires the transport close event exactly once', async () => {
-		let serverSocket: NodeWebSocketInterface | undefined
-		const handle = await startRawWsServer((ws) => {
-			serverSocket = ws
+		const transport = createWebSocketClientTransport({
+			url: `${serverURL}/close`,
+			protocols: [],
 		})
-		// Raw WS server — no subprotocol echo; pass [] to opt out of the 'mcp' default.
-		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp`, protocols: [] })
 		let closeCount = 0
 		transport.emitter.on('close', () => {
 			closeCount += 1
 		})
 		await transport.start()
-
-		serverSocket?.close()
 		await waitForDelay(50)
 
 		expect(closeCount).toBe(1)
 	})
 
 	it('a malformed inbound frame surfaces on error and does not throw', async () => {
-		const handle = await startRawWsServer((ws) => {
-			ws.send('not valid json-rpc')
+		const transport = createWebSocketClientTransport({
+			url: `${serverURL}/malformed`,
+			protocols: [],
 		})
-		// Raw WS server — no subprotocol echo; pass [] to opt out of the 'mcp' default.
-		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp`, protocols: [] })
 		const errors: unknown[] = []
 		transport.emitter.on('error', (error) => errors.push(error))
 
@@ -164,9 +117,8 @@ describe('createWebSocketClientTransport — the browser client against the Node
 		// RFC 6455 §4.1 a client must fail if the server returns a subprotocol it did not
 		// request. Omitting `protocols` now defaults to MCP_WEBSOCKET_SUBPROTOCOL — this
 		// test proves the default matches the server's echo (no connection failure).
-		const handle = await startWsMCP()
 		const client = createMCPClient({
-			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
+			transport: createWebSocketClientTransport({ url: `${serverURL}/mcp` }),
 		})
 
 		await client.connect()
@@ -181,9 +133,8 @@ describe('createWebSocketClientTransport — the browser client against the Node
 	it('A3: send() after close() silently drops the message — no throw, no delivery', async () => {
 		// Pin the post-close semantics: a message sent after close() is dropped, not queued.
 		// This test uses a live server so any wrongly-queued message would surface on reconnect.
-		const handle = await startWsMCP()
 		const transport = createWebSocketClientTransport({
-			url: `${handle.base}/mcp`,
+			url: `${serverURL}/mcp`,
 		})
 		const received: unknown[] = []
 		transport.emitter.on('message', (message) => received.push(message))
@@ -203,37 +154,10 @@ describe('createWebSocketClientTransport — the browser client against the Node
 
 // ── HTTP: the browser client against the Node-face streamable-HTTP session server ─
 
-async function startHttpMCP(): Promise<StartedServerInterface<AppState>> {
-	const dispatcher = createDispatcher<AppState>()
-	dispatcher.add(createMCPRoutes<AppState>(createCalculatorServer()))
-	const server = createServer<AppState>({ dispatcher, state: () => ({}) })
-	server.use(createMCPSession<AppState>())
-	return trackSession(await startServer(server))
-}
-
-async function startBrokenHttpServer(): Promise<StartedServerInterface> {
-	const dispatcher = createDispatcher<unknown>()
-	dispatcher.add([
-		{
-			method: 'POST',
-			path: '/mcp',
-			name: 'broken',
-			handler: () =>
-				new Response('not valid json', {
-					status: 500,
-					headers: { 'content-type': 'application/json' },
-				}),
-		},
-	])
-	const server = createServer<unknown>({ dispatcher, state: () => undefined })
-	return track(await startServer(server))
-}
-
 describe('createHTTPClientTransport — the browser client against the Node-face streamable-HTTP session server', () => {
 	it('connect → tools/list → tools/call(add): a value round-trips over fetch + SSE', async () => {
-		const handle = await startHttpMCP()
 		const client = createMCPClient({
-			transport: createHTTPClientTransport({ url: `${handle.base}/mcp` }),
+			transport: createHTTPClientTransport({ url: `${serverURL}/mcp` }),
 		})
 
 		await client.connect()
@@ -249,8 +173,7 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 	})
 
 	it('captures the mcp-session-id on initialize and reuses it across two sequential requests', async () => {
-		const handle = await startHttpMCP()
-		const transport = createHTTPClientTransport({ url: `${handle.base}/mcp` })
+		const transport = createHTTPClientTransport({ url: `${serverURL}/mcp` })
 		expect(transport.session).toBeUndefined()
 
 		await transport.send(createJSONRPCRequest())
@@ -267,14 +190,11 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 
 		// A raw request confirms the id genuinely gates access — without it the same
 		// non-initialize call is rejected.
-		const denied = await postJSON(
-			handle.base,
-			createJSONRPCRequest({ method: 'tools/list', id: 3 }),
-		)
+		const denied = await postJSON(serverURL, createJSONRPCRequest({ method: 'tools/list', id: 3 }))
 		expect(denied.status).toBe(404)
 
 		const allowed = await postJSON(
-			handle.base,
+			serverURL,
 			createJSONRPCRequest({ method: 'tools/list', id: 4 }),
 			{ headers: { [MCP_SESSION_HEADER]: session ?? '' } },
 		)
@@ -282,8 +202,7 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 	})
 
 	it('decodes the Streamable-HTTP SSE reply leg (the default framing this client requests)', async () => {
-		const handle = await startHttpMCP()
-		const transport = createHTTPClientTransport({ url: `${handle.base}/mcp` })
+		const transport = createHTTPClientTransport({ url: `${serverURL}/mcp` })
 		const messages: unknown[] = []
 		transport.emitter.on('message', (message) => messages.push(message))
 
@@ -295,8 +214,7 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 	})
 
 	it('a server error response surfaces on the error event rather than hanging', async () => {
-		const handle = await startBrokenHttpServer()
-		const transport = createHTTPClientTransport({ url: `${handle.base}/mcp` })
+		const transport = createHTTPClientTransport({ url: `${serverURL}/broken` })
 		const errors: unknown[] = []
 		transport.emitter.on('error', (error) => errors.push(error))
 
@@ -307,7 +225,7 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 })
 
 // ── MessagePort: a genuinely SYMMETRIC MCPTransportInterface, both sides driven by
-// the SAME class over one REAL `new MessageChannel()` (Node ≥ 22 global, AGENTS §16 —
+// the SAME class over one REAL native `new MessageChannel()` (AGENTS §16 —
 // no mocks) — port1 bound to a REAL server (`bindServer`), port2 driving a REAL
 // client (`bindClient` + `createDuplexClientTransport`) ──────────────────────────
 

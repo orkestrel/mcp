@@ -13,8 +13,14 @@ import {
 	createMCPSession,
 	MCP_SESSION_HEADER,
 } from '@src/server'
-import { createJSONRPCRequest, createManualClock, readSSEStream } from '../../setup.js'
-import { createCalculatorServer, createTeardown, postJSON, startServer } from '../../setupServer.js'
+import {
+	createCalculatorServer,
+	createJSONRPCRequest,
+	createManualClock,
+	postJSON,
+	readSSEStream,
+} from '../../setup.js'
+import { createTeardown, startServer } from '../../setupServer.js'
 
 // ── createMCPSession — the plug-and-play stateful session middleware ──────────
 //

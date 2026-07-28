@@ -5,12 +5,9 @@
 import type { IncomingMessage } from 'node:http'
 import type { ServerInterface } from '@orkestrel/server'
 import type { WebSocketFrame } from '@orkestrel/websocket'
-import type { MCPServerInterface } from '@src/core'
 import { request as httpRequest } from 'node:http'
 import { Duplex, PassThrough } from 'node:stream'
 import { afterEach } from 'vitest'
-import { createMCPServer } from '@src/core'
-import { createTool, createToolManager } from '@orkestrel/agent'
 import { parseWebSocketFrame } from '@orkestrel/websocket'
 
 // ── HTTP request stub (the §14 boundary-narrowing pattern) ───────────────────
@@ -254,30 +251,6 @@ export async function startServer<TState>(
 	}
 }
 
-/**
- * POST `body` as a JSON request to `base` + `path` and resolve the `fetch` Response —
- * the shared MCP-transport driver (AGENTS §16.1). Sets `content-type:
- * application/json` (the caller's `headers` merge on top, so a test can add an
- * `Accept`), `JSON.stringify`s the body, and defaults `path` to `'/mcp'`.
- *
- * @param base - The server's bound base URL (e.g. `http://127.0.0.1:<port>`)
- * @param body - The JSON-RPC message (or any value) to send as the request body
- * @param options - Optional `headers` (merged over the JSON content type) and `path`
- *   (defaults to `'/mcp'`)
- * @returns The `fetch` Response
- */
-export function postJSON(
-	base: string,
-	body: unknown,
-	options?: { headers?: Record<string, string>; path?: string },
-): Promise<Response> {
-	return fetch(`${base}${options?.path ?? '/mcp'}`, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json', ...options?.headers },
-		body: JSON.stringify(body),
-	})
-}
-
 // ── Raw HTTP upgrade driver (the WebSocket transport's upgrade seam) ─────────
 //
 // AGENTS §16.1: the `Server.upgrade(...)` seam tests drive a REAL `node:http` protocol
@@ -343,35 +316,4 @@ export function upgradeRequest(
 		})
 		request.end()
 	})
-}
-
-// ── Canonical MCP server fixture (the calculator over a ToolManager) ─────────
-//
-// AGENTS §16.1: the `createCalculatorServer()` factory the MCP transport / middleware
-// tests share — a REAL {@link MCPServerInterface} over a REAL `ToolManager` carrying
-// the canonical `add` stub (returns 5) plus a `boom` tool that throws `'kaboom'` (→ an
-// `isError: true` in-band result), so every transport e2e proves BOTH a value
-// round-trip and the tool-error path WITHOUT a live model (§16).
-
-/**
- * Build the canonical calculator {@link MCPServerInterface} the MCP transport tests
- * share — a REAL server (`name: 'calculator'`, `version: '1.0.0'`) over a REAL
- * `ToolManager` carrying the canonical `add` stub (returns 5) plus a `boom` tool that
- * throws `'kaboom'`, so a `tools/call` proves both a value round-trip and the
- * tool-error → `isError: true` in-band result (AGENTS §16.1). No mocks, no live model.
- *
- * @returns The running {@link MCPServerInterface} over the `add` + `boom` registry
- */
-export function createCalculatorServer(): MCPServerInterface {
-	const tools = createToolManager()
-	tools.add(createTool({ name: 'add', execute: () => 5 }))
-	tools.add(
-		createTool({
-			name: 'boom',
-			execute: () => {
-				throw new Error('kaboom')
-			},
-		}),
-	)
-	return createMCPServer({ name: 'calculator', version: '1.0.0', tools })
 }

@@ -8,7 +8,8 @@ import { isRecord } from '@orkestrel/contract'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import { createWebSocketClientTransport, createWebSocketServer } from '@src/server'
-import { createCalculatorServer, createTeardown, startServer } from '../../../setupServer.js'
+import { createCalculatorServer } from '../../../setup.js'
+import { createTeardown, startServer } from '../../../setupServer.js'
 
 // src/server/mcp/WebSocketClientTransport.ts — the WebSocket CLIENT transport (the egress
 // mirror of createWebSocketServer), proven END TO END against the shipped createWebSocketServer
