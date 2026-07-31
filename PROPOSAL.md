@@ -45,6 +45,18 @@
 > context), and §8.8–§8.11 (new evidence tasks). §1's verified research, §3's defects, §4's
 > design spine — **including §4.2's supported-revision ruling, which is unchanged** — and §9's
 > adversarial record stand as written.
+>
+> **Correction pass, 2026-07-31 (post-amendment audit).** Seven defects were substantiated
+> against source and are fixed in place below. Four are **pre-existing** — written before the
+> amendment and missed by it: §4.2/§4.8's headerless-legacy-POST default, which contradicted
+> §1.2's scoped permission (withdrawn in §4.2); §5's `Mcp-Param-*` row, which called an unmet
+> client-side MUST an exclusion (now a **declared conformance gap**, not a non-goal); §4.8's
+> "three headers on every POST", which over-applied `Mcp-Name` (§1.4.6 binds it to three named
+> methods); and U0/U1 rows scheduling work that already shipped in 0.0.8. Three were
+> **introduced by the amendment**: the discriminator's presence-vs-string contradiction
+> (§4.1/§4.5), A4's supersession acceptance criterion standing ahead of the §8.10 evidence that
+> establishes it, and the absent handler/dispatch signatures that A4 and A5 both require (now
+> specified in §4.3). Nothing below describes shipped behavior; the status line above governs.
 
 ## Why this exists
 
@@ -269,13 +281,24 @@ divergences ruled by the orchestrator in §9 with dissents preserved.
   (2026-07-28). Legacy = `initialize` handshake (2025-11-25, 2025-06-18).
 - **The discriminator is structural, per-request, never stored:**
 
-  > A request is modern **iff** `params._meta['io.modelcontextprotocol/protocolVersion']`
-  > is present. Nothing else.
+  > A request is modern **iff** the key
+  > `params._meta['io.modelcontextprotocol/protocolVersion']` is **present**. Presence of the
+  > key, nothing else — not its value, not its type.
 
   This single rule is load-bearing: a legacy 2025-06-18 request may legally carry
   `_meta.progressToken`, so keying on "`_meta` exists" would misclassify it. Keying on the
   version token keeps legacy `_meta` working and makes "present but incomplete" exactly the
   modern `-32602` case.
+
+  **Presence routes; validity answers.** The discriminator and the validation of what the key
+  holds are two steps, and conflating them inverts the outcome: if routing required a *string*
+  value, then `_meta[MCP_META_VERSION] = 7` would fall through to the legacy branch and be
+  answered as a handshake request, when §1.2 says a modern request with malformed `_meta`
+  requireds owes `-32602` (HTTP 400). So step one is `isModernRequest` — key present, era is
+  modern, irrevocably. Step two is `parseRequestContext`, modern-scoped, which rejects a
+  non-string version, a missing `capabilities`, or any other malformed required with `-32602`.
+  A request cannot escape the modern branch by carrying a *bad* version; only by carrying no
+  version key at all.
 
 - Consequences: no era flag on `MCPServer` (one server serves both eras on one endpoint —
   which a dual-era HTTP mount requires anyway); no era in any options bag; the client pins
@@ -306,11 +329,34 @@ export const SUPPORTED_PROTOCOL_VERSIONS: readonly MCPVersion[] = Object.freeze(
 | 2026-07-28 | **Support — default, modern era**                  | `/specification/latest`; its mandated tools-only surface is fully implementable with zero speculative capability.                                                                                                                                                                            |
 | 2025-11-25 | **Support — legacy era** (planner dissented; §9.1) | Site-labeled "current"; the dominant deployed client population today. Tools-only mandatory delta is tiny: Origin→403 on the HTTP face, 2020-12 dialect, validation-as-execution-error. Optional surfaces (tasks, icons, URL elicitation, SSE polling) are NOT adopted and never advertised. |
 | 2025-06-18 | **Support — legacy era**                           | The currently implemented revision; the legacy anchor the widest older ecosystem speaks.                                                                                                                                                                                                     |
-| 2025-03-26 | **Remove** (both engines agree; source-verified)   | Advertised today while its batching MUST is violated (§3.3). Delete the row rather than implement batching that 2025-06-18 removed again. Consequence: a headerless legacy HTTP request is treated as 2025-06-18, the only honest reading once pre-2025-06-18 support is dropped.            |
+| 2025-03-26 | **Remove** (both engines agree; source-verified)   | Advertised today while its batching MUST is violated (§3.3). Delete the row rather than implement batching that 2025-06-18 removed again. Consequence: the headerless default disappears with it — see the ruling below.                                                                     |
 | 2024-11-05 | **Exclude** (both agree)                           | Requires the HTTP+SSE two-endpoint transport this package never implemented and 2026-07-28 deprecates. Advertising the version without its transport is a false handshake.                                                                                                                   |
 
 The list order is meaningful: it is the client's preference order and the `server/discover`
 advertisement.
+
+**Headerless legacy POST — the default is withdrawn (corrects pre-existing text).** The
+earlier reading, "a headerless legacy HTTP request is treated as 2025-06-18", was written as a
+consequence of removing 2025-03-26 and does not survive §1.2: the research permits treating a
+headerless request as a version at all *only* for servers that still serve pre-2025-06-18
+clients, and dropping 2025-03-26 is exactly the decision to stop being one. A REQUIRED header
+cannot be defaulted by the same act that removes the only license to default it. **Where the
+research and the ruling conflict, the research wins**, so:
+
+- The library **infers no version from an absent header.** There is nothing to infer: the
+  legacy branch is revision-invariant on the tools-only surface (§4.6, §9.4), so it answers
+  correctly without knowing which legacy revision it is speaking.
+- Where a legacy session exists, the version pinned at `initialize` governs (§4.8) — a
+  negotiated fact, not a default.
+- `initialize` itself is legitimately headerless: 2025-06-18 requires the header on
+  *post-initialize* requests (§3.1), and no version is negotiated before the handshake.
+- A header naming an unsupported revision is still `-32022`, unchanged.
+
+What remains open is only whether a *post-initialize* legacy POST that omits the REQUIRED
+header must be rejected with 400 + `-32020` or tolerated: §1.2 records the permission that no
+longer applies to us, not the obligation that replaces it. Evidence task §8.12 settles it
+before U4 ships; until then the design promises no defaulting either way, and the guide states
+the gap rather than a behavior.
 
 ### 4.3 Type contracts (`src/core/types.ts`) — planner shape adopted
 
@@ -335,16 +381,77 @@ Changed:
   new `version?: MCPVersion` (pin; absent ⇒ negotiate).
 - `MCPClientInterface`: new `readonly version: MCPVersion | undefined` (the negotiated
   revision) and `discover(): Promise<MCPDiscoverResult>`.
-- `ClientTransportInterface.send`: **batch arm deleted** — `send(message: JSONRPCMessage)`.
-  2026-07-28 forbids batching, no caller uses the array arm, and deletion enforces the MUST
-  in the type system. (Also delete the array fan-out in `createDuplexClientTransport`.)
+- `ClientTransportInterface.send`: **batch arm deleted — already shipped**, not adoption work
+  (`src/core/types.ts:312` is `send(message: JSONRPCMessage)`; `createDuplexClientTransport`
+  has no array fan-out, `src/core/factories.ts:121-139`). Recorded here because the reasoning
+  still holds: 2026-07-28 forbids batching and the deletion enforces the MUST in the types.
 - No `MCPCapabilities` type: capabilities stay `Readonly<Record<string, unknown>>` (open
   wire record; a named type would also force a pluralized type name).
 
-New error contract (`src/core/errors.ts`, new file):
-`class MCPError extends Error { readonly code: number; readonly context: unknown }` +
-`isMCPError`. Carries JSON-RPC `code` and `data` so the `-32022` retry can read
-`data.supported`. Required by `typescript.md`'s error rules; fixes gap §3.5.
+Error contract — **already shipped, not adoption work**: `src/core/errors.ts:18-51` exports
+`class MCPError extends Error { readonly code: number; readonly context: unknown }` and
+`isMCPError`, carrying JSON-RPC `code` and `data` so the `-32022` retry can read
+`data.supported`. It fixed gap §3.5 in 0.0.8. The adoption **extends** it (the modern codes of
+§4.4 and the `-32021`/`-32022` paths); it does not create it.
+
+**Dispatch and handler signatures (specified 2026-07-31; the amendment left this gap).**
+`MCPServerInterface` today exposes exactly `dispatch(request): Promise<JSONRPCResponse |
+undefined>` and `handle(message): Promise<string | undefined>` (`src/core/types.ts:181-205`).
+Neither can carry an abort signal (A5) or a held-open result (A4), so both amendment units
+depended on a seam that no contract described. The revised shape:
+
+```ts
+/** Per-request execution options every dispatched handler receives. */
+export interface MCPDispatchOptions {
+	/** Aborts when the caller's request ends — a closed HTTP response stream, a stdio cancel. */
+	readonly signal?: AbortSignal
+}
+
+/**
+ * A held-open modern result: each `yield` is a notification (a `JSONRPCRequest` with no
+ * `id`, `types.ts:20-27`); the `return` value is the terminating response — for
+ * `subscriptions/listen`, the empty complete result of a graceful close (§1.4.5).
+ */
+export type MCPStream = AsyncGenerator<JSONRPCRequest, JSONRPCResponse>
+
+/** The string-boundary mirror of `MCPStream` — the same sequence, already serialized. */
+export type MCPTextStream = AsyncGenerator<string, string>
+
+/** One modern method, registered on the seam that dispatches it (§5.1.5). */
+export type MCPMethodHandler = (
+	request: JSONRPCRequest,
+	options: MCPDispatchOptions,
+) => Promise<JSONRPCResponse | MCPStream | undefined>
+```
+
+and on the interfaces:
+
+```ts
+dispatch(request: JSONRPCRequest, options?: MCPDispatchOptions): Promise<JSONRPCResponse | MCPStream | undefined>
+handle(message: string, options?: MCPDispatchOptions): Promise<string | MCPTextStream | undefined>
+```
+
+Four properties make this the shape rather than an arbitrary one:
+
+- **The signal is an options bag, not a positional parameter.** It is a per-request execution
+  concern with exactly one leaf today; a bag absorbs the next one without widening the arity
+  again. `MCPRequestContext` (the parsed `_meta` projection) keeps its name and its job —
+  these are unrelated axes, and naming both "context" would collapse them.
+- **Streams live in the return type, not a second method.** §5.1.5 requires one dispatch path
+  with no precedence puzzle; a sibling `stream()` would force every transport to ask "is this
+  a stream method?" before calling anything. One call, one narrowing point
+  (`Symbol.asyncIterator in result`), at the one place that already pumps messages onto a
+  transport.
+- **The generator's `return` is the response.** Held-open closure is not an out-of-band event
+  in 2026-07-28 — it is a result (§1.4.5), so it belongs where a result belongs. Consuming a
+  stream and consuming a unary response therefore end the same way.
+- **The string boundary mirrors the typed one.** `handle` is documented as the string
+  boundary and `dispatch` as the typed core (`types.ts:167-174`); `MCPTextStream` keeps that
+  split intact so `bindServer` serializes and `send`s each message with no second parse.
+
+Both parameters are optional at the public call, so every existing caller compiles unchanged
+and a transport that cannot stream (or cannot abort) simply never supplies or narrows one.
+This supersedes §9.4's ruling **only for the signal** — see §9.4's amendment.
 
 ### 4.4 Constants (`src/core/constants.ts` + server face)
 
@@ -373,8 +480,8 @@ face gets the same header constants in `src/browser/constants.ts`.
 
 | File                           | Symbol                                                                                      | Contract                                                                                                                                                      |
 | ------------------------------ | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/core/validators.ts`       | `isModernRequest`                                                                           | Total; `true` iff `_meta[MCP_META_VERSION]` is a string. The discriminator.                                                                                   |
-| `src/core/parsers.ts`          | `parseRequestContext`                                                                       | Total coercer → `MCPRequestContext \| undefined`. Soundness pair: defined ⇒ `isModernRequest` true; guard-true + undefined parse = exactly the `-32602` case. |
+| `src/core/validators.ts`       | `isModernRequest`                                                                           | Total; `true` iff `params._meta` carries the `MCP_META_VERSION` **key** — presence only, never the value's type (§4.1). The discriminator.                    |
+| `src/core/parsers.ts`          | `parseRequestContext`                                                                       | Total coercer → `MCPRequestContext \| undefined`; the modern-scoped validity step. Soundness pair: defined ⇒ `isModernRequest` true; guard-true + undefined parse = exactly the `-32602` case, which now includes a non-string version. |
 | `src/core/inferers.ts` (new)   | `inferEra(version)`                                                                         | Revision→era; unsupported ⇒ `undefined`.                                                                                                                      |
 | `src/core/helpers.ts`          | `buildInitializeResult` (rename of `initializeResult`)                                      | Negotiates over the LEGACY subset only — `initialize` asking for `'2026-07-28'` gets the newest legacy version back; the client decides.                      |
 | `src/core/helpers.ts`          | `buildDiscoverResult`, `buildModernResult`, `buildCallResult` (rename of `buildToolResult`) | `buildModernResult` is the ONE stamping site for `resultType` + `_meta` serverInfo + (when ttl supplied) `ttlMs`/`cacheScope`.                                |
@@ -384,11 +491,11 @@ face gets the same header constants in `src/browser/constants.ts`.
 ### 4.6 `MCPServer` — one dispatch, two branches
 
 ```text
-era = isModernRequest(request) ? 'modern' : 'legacy'
+era = isModernRequest(request) ? 'modern' : 'legacy'   // key presence only (§4.1)
 emit('request', method, id ?? null, era)
 notification (no id) ⇒ undefined (unchanged)
 modern branch:
-  parseRequestContext undefined        ⇒ -32602
+  parseRequestContext undefined        ⇒ -32602   (incl. a present-but-non-string version)
   version ∉ SUPPORTED                  ⇒ -32022 { supported, requested }
   methods: server/discover, tools/list, tools/call; all else (incl. initialize, ping) ⇒ -32601
   every result through buildModernResult; discover + tools/list carry cache fields, tools/call does not
@@ -397,7 +504,9 @@ legacy branch: today's switch, byte-identical responses (no resultType, no cache
 
 The modern method set is **extended, not replaced**, by the amendment: §5.1.5 turns the
 hard-coded arm list into a registrable seam, and §5.1.2 registers `subscriptions/listen`
-through it. The branch structure, the discriminator, and the legacy arm are unchanged.
+through it. The branch structure, the discriminator, and the legacy arm are unchanged; what
+does change is the signature the branch dispatches through — every arm becomes an
+`MCPMethodHandler` receiving `MCPDispatchOptions` and free to return an `MCPStream` (§4.3).
 
 `-32021` is never emitted (no implemented method requires a client capability — nothing here
 elicits, samples, or reads roots); the constant and `MCPError` recognition still ship because
@@ -439,12 +548,19 @@ divergence appears; the HTTP session middleware pins the negotiated version at i
 
 - **Node HTTP ingress** (`handlers.ts`, new `inferers.ts`, `middlewares.ts`):
   - Modern POST: `MCP-Protocol-Version` REQUIRED and MUST equal body `_meta` version;
-    `Mcp-Method` REQUIRED = body method; `Mcp-Name` REQUIRED on `tools/call` = `params.name`.
+    `Mcp-Method` REQUIRED = body method; `Mcp-Name` REQUIRED **only** on the three methods
+    §1.4.6 names — `tools/call` (= `params.name`), `resources/read` and `prompts/get`
+    (= `params.uri`/`params.name`), of which this package implements only `tools/call`.
+    Ingress therefore requires `Mcp-Name` on `tools/call` and MUST NOT require it on
+    `server/discover` or `tools/list`, which carry no name or URI to derive it from.
     Violation ⇒ 400 + `-32020`.
   - Status map (modern only): 202 notification; 400 for `-32020`/`-32021`/`-32022`/`-32602`;
     404 for `-32601`; 200 otherwise. Legacy requests keep today's uniform 200 in-band errors
     — nothing regresses.
-  - Headerless legacy POST ⇒ treated as 2025-06-18 (only honest reading; §4.2).
+  - Headerless legacy POST ⇒ **no version is inferred** (§4.2, corrected): the legacy branch
+    is revision-invariant, a session's version comes from its handshake, and `initialize`
+    itself is legitimately headerless. Whether a post-initialize omission must be rejected
+    with 400 + `-32020` is §8.12's evidence, not a default.
   - Origin gate: same-origin/no-origin allowed by default; cross-origin requires explicit
     `origins` allowlist option; invalid ⇒ 403. Mechanism only — which origins is consumer
     policy. (Planner dissented; §9.2.)
@@ -452,9 +568,15 @@ divergence appears; the HTTP session middleware pins the negotiated version at i
   - **`createMCPSession` passes modern-shaped POSTs straight through via `next()`, ignoring
     `Mcp-Session-Id`** (fixes gap §3.4); it stays the legacy session layer otherwise and pins
     each session's negotiated legacy version.
-- **Both HTTP client transports** (Node + browser) set the three headers on every POST — all
-  derivable from the message the transport already holds, so `send(message)` needs no
-  widening. Session echo stays legacy-only.
+- **Both HTTP client transports** (Node + browser) stamp **modern** POSTs with
+  `MCP-Protocol-Version` and `Mcp-Method` — always, on every modern request — and with
+  `Mcp-Name` **only where the method carries one** (`tools/call`; `resources/read` and
+  `prompts/get` are excluded surfaces, §5). `server/discover` and `tools/list` carry two
+  headers, not three: §1.4.6 scopes `Mcp-Name` to named methods, and there is nothing in
+  either body to derive it from. Legacy POSTs keep `MCP-Protocol-Version` alone — `Mcp-Method`
+  and `Mcp-Name` are 2026-07-28 additions and must not be stamped on a handshake-era request.
+  Every value is derivable from the message the transport already holds, so `send(message)`
+  still needs no widening.
 - **WebSocket, stdio, MessagePort**: no changes — no headers; era rides in `_meta`.
   `serveMCP` inherits dual-era for free because it composes the core server.
 
@@ -466,8 +588,11 @@ divergence appears; the HTTP session middleware pins the negotiated version at i
 - **Construction-time `era` option**: is precisely the cross-request inference the
   statelessness doctrine forbids, hoisted a level; unknowable for a public endpoint;
   a stored label that can disagree with the request in hand.
-- **`MCPDispatchContext` on `dispatch`/`handle`** (analyst): unnecessary while legacy
-  responses are revision-invariant on the tools-only surface; recorded as the fallback.
+- **`MCPDispatchContext` on `dispatch`/`handle`** (analyst): rejected **as a version carrier**
+  — legacy responses are revision-invariant on the tools-only surface, and that half of the
+  ruling stands. The *second parameter itself* is no longer avoidable: A5 must deliver an
+  abort signal to a running handler, so §4.3 adds `MCPDispatchOptions`. The analyst was right
+  about the arity and wrong about the payload; recorded as such in §9.4.
 - **Widening `send(message, context?)`** (analyst): needed only by `Mcp-Param-*` projection;
   see §8.2 before ever adopting.
 
@@ -477,6 +602,10 @@ divergence appears; the HTTP session middleware pins the negotiated version at i
 
 "Implement" = shipped and tested in the adoption campaign. "Exclude" = intentionally absent
 AND named in the guide's new **Declared non-goals** subsection — never silently dropped.
+**"Declared conformance gap"** is a third, harsher ruling added on 2026-07-31: a spec MUST
+this package does not satisfy. It is not a non-goal, because a non-goal is a capability we
+chose not to build, and a MUST is not ours to decline. It gets its own guide subsection naming
+the clause, the consequence for a consumer, and the unit that would close it.
 
 Rows marked **amended** were ruled on 2026-07-28 with "no consumer exists" as their stated
 reason, and re-ruled on 2026-07-31 once `@orkestrel/supervisor` became that consumer. §5.1
@@ -494,9 +623,10 @@ old reason. A row without an **amended** mark is unchanged.
 | Method seam for revisions/extensions beyond the built-in set                      | **Implement — amended (§5.1)**                                         | §4.6's modern branch answers three hard-coded methods and `-32601` for everything else, so `subscriptions/listen` and every Tasks method would each need another `switch` arm in core. Consumer: `@orkestrel/supervisor` needs the first and may want the rest. |
 | `resultType` on every modern result                                               | Implement                                                              | Mandatory; one stamping site; client treats absent as complete.                                                                                                                                                                                                 |
 | MRTR production (`inputRequests`/`requestState`)                                  | **Implement, `ElicitRequest` only — amended (§5.1)**                   | Consumer: `@orkestrel/supervisor`'s `reply` path needs operator input in band. Sampling and roots stay excluded (deprecated, no consumer). `requestState` is opaque and attacker-controlled from the server's view ⇒ MUST be integrity-protected.               |
-| `subscriptions/listen`                                                            | **Implement, modern-only — amended (§5.1)**                            | The producer that did not exist now does: `@orkestrel/supervisor`'s normalized observation stream. Held-open streams get their own seam rather than being forced through one-request→one-response dispatch.                                                     |
-| `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` headers                          | Implement (both HTTP faces + ingress validation)                       | REQUIRED; derivable from the in-hand message; closes gap §3.1.                                                                                                                                                                                                  |
-| `Mcp-Param-*` + `x-mcp-header` + Base64 encoding                                  | **Exclude — knowingly declined; decision deferred to evidence** (§8.2) | Projection requires the tool schema (client-only knowledge) reaching the HTTP transport — an HTTP-shaped widening of the transport-agnostic port across seven implementations. Isolated as an optional final unit (U7) so it stays droppable/adoptable.         |
+| `subscriptions/listen`                                                            | **Implement, modern-only — amended (§5.1)**                            | The producer that did not exist now does: `@orkestrel/supervisor`'s normalized observation stream. A held-open result gets its own return arm (`MCPStream`, §4.3) rather than being forced through one-request→one-response dispatch. Second-listen behavior is §8.10's evidence, not a settled criterion. |
+| `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` headers                          | Implement (both HTTP faces + ingress validation)                       | REQUIRED; derivable from the in-hand message; closes gap §3.1. `Mcp-Name` is scoped to the named methods §1.4.6 lists — on our surface, `tools/call` alone (§4.8, corrected).                                                                                    |
+| `Mcp-Param-*` + `x-mcp-header` client-side projection                             | **Declared conformance gap — not a non-goal** (§5.1.9; §8.2 may close) | §1.4.6 records a client-side MUST, so calling this an exclusion misstated it (pre-existing). We do not satisfy it: the projection needs the tool schema (client-only knowledge) inside the HTTP transport, an HTTP-shaped widening of the transport-agnostic port. U7 remains the isolated unit that would close it. |
+| `x-mcp-header` server-side annotation + invalid-definition filtering              | Exclude — vacuously satisfied                                          | The MUST to keep invalid annotated definitions out of `tools/list` binds a server that accepts the annotation. Installed `@orkestrel/tool` definitions carry no `x-mcp-header`, so none exists to be invalid. If A7 or a later contract admits the annotation, the filter ships with it. |
 | HTTP status mapping (202/400/403/404/405)                                         | Implement (modern-scoped)                                              | Legacy keeps today's uniform 200 in-band errors; modern gets the exact codes. 405 GET/DELETE is already true of a session-free mount — documented, not coded.                                                                                                   |
 | Modern HTTP disconnect-cancellation                                               | **Implement — amended (§5.1)**                                         | 2026-07-28 removes client→server notifications over HTTP: closing the response stream IS the cancellation signal (`notifications/cancelled` survives on stdio only). Today `request.signal` only detaches an SSE session (`middlewares.ts:114-115`).            |
 | `X-Accel-Buffering: no` + SSE comment keep-alives                                 | Implement                                                              | SHOULD; trivial; comment-flush idiom already exists.                                                                                                                                                                                                            |
@@ -528,7 +658,9 @@ now expired. **`@orkestrel/supervisor`** — one package (core + server) that ru
 durably, detached from the client that started them, with a human in the loop — is the
 consumer. A fifth row (structured tool output) was declined for a different reason, and only
 half of it flips. Three more gaps surfaced that no row had named at all. Each entry below
-gives the old ruling, the new one, the reason, and what consumes it.
+gives the old ruling, the new one, the reason, and what consumes it. Entry 9 is the exception:
+it changes no decision and has no consumer — it relabels a pre-existing row whose ruling was
+never ours to make.
 
 Two properties of that consumer do the work, and both come from its binding verdict rather
 than from any preference of this document. First, **the client disconnects on purpose**: a
@@ -574,11 +706,20 @@ input request can arrive minutes after the call that started the work already re
    verbatim: `notifications/subscriptions/acknowledged` first, every notification stamped with
    `_meta['io.modelcontextprotocol/subscriptionId']`, graceful closure as an empty complete
    result.
-   **Where the one-subscription-per-epoch invariant lives.** MCP supplies the mechanism — at
-   most one live stream per subscription key, and superseding a key gracefully closes the
-   stream it replaces. The key's *meaning* is the consumer's: `@orkestrel/supervisor` binds it
-   to its epoch, which is what makes "one subscription per epoch" true without MCP ever
-   learning the word "epoch". Mechanism here, policy there.
+   **Where the one-subscription-per-epoch invariant lives.** MCP supplies the mechanism; the
+   key's *meaning* is the consumer's: `@orkestrel/supervisor` binds it to its epoch, which is
+   what makes "one subscription per epoch" true without MCP ever learning the word "epoch".
+   Mechanism here, policy there.
+   **The supersession rule is a proposal, not yet a criterion.** "At most one live stream per
+   key, and a superseding listen gracefully closes the stream it replaces" is the design
+   intent, and it is the reading this document prefers — but §1.4.5 verified only the happy
+   path, and §8.10 exists precisely because what a server may do when a second
+   `subscriptions/listen` arrives for a live key is unresolved. An acceptance criterion cannot
+   stand ahead of the evidence task that establishes it, so A4's criteria (§6.2) assert only
+   what §1.4.5 verifies; §8.10 either confirms this rule and promotes it to a criterion, or
+   replaces it, before A4 is dispatched. Two plausible answers it must choose between — close
+   the older stream, or reject the newer listen — differ in observable behavior, and guessing
+   which is spec-conformant would be exactly the self-attestation §8.6 warns about.
    **Modern-only, stated as a limit.** `subscriptions/listen` is a 2026-07-28 method, and the
    supervisor targets modern first. A legacy-era client still gets `start`, `inspect`, and
    `reply`; its observation path remains the existing session stream's
@@ -622,6 +763,11 @@ input request can arrive minutes after the call that started the work already re
    the same mechanism they are dispatched by — no second dispatch path, no precedence puzzle,
    and an unregistered method still `-32601`. This **extends** §4.6's method set; it does not
    contradict the branch structure, the discriminator, or the era rules.
+   **The handler's type is `MCPMethodHandler` (§4.3)** — `(request, options) => Promise<
+   JSONRPCResponse | MCPStream | undefined>`. That signature is what makes flips 2 and 6
+   implementable at all: without the `MCPStream` arm a held-open method has no way to answer,
+   and without `MCPDispatchOptions` a running handler never learns its caller left. The
+   amendment named both requirements and specified neither; §4.3 now does.
 
 6. **Modern HTTP disconnect-cancellation — newly surfaced.** 2026-07-28 removes client→server
    notifications over HTTP: closing the response stream *is* the cancellation signal, and
@@ -629,9 +775,10 @@ input request can arrive minutes after the call that started the work already re
    place — detaching an SSE session stream (`src/server/middlewares.ts:114-115`) — and no
    signal reaches a running `tools/call`. For a bounded tool that is harmless. For a
    supervisor holding a subscription stream and an external process it is the difference
-   between a disconnect and a leak. The signal is plumbed to the handler; what a handler does
-   with it stays the consumer's (the verdict is emphatic that requested cancellation is not
-   observed termination).
+   between a disconnect and a leak. The signal is plumbed to the handler **through
+   `MCPDispatchOptions.signal` (§4.3)** — the contract the amendment assumed and did not
+   write; what a handler does with it stays the consumer's (the verdict is emphatic that
+   requested cancellation is not observed termination).
 
 7. **Hostile-input limits and protocol-faithful fixtures — newly surfaced.** `handle()`
    `JSON.parse`s an unbounded string, and nothing bounds `_meta` size or key count,
@@ -647,6 +794,25 @@ input request can arrive minutes after the call that started the work already re
    A store arrives as an injected contract, exactly as `ToolManagerInterface` does today.
    Absent A7 there is no store, no storage dependency, and no dormant interface.
 
+9. **`Mcp-Param-*` — Exclude ⇒ declared conformance gap (corrects pre-existing text).** Not a
+   flip: the decision is unchanged and U7 is still unscheduled. What changes is the honesty of
+   the label. §1.4.6 records that HTTP clients **MUST support** the `x-mcp-header` projection;
+   §5 called it an exclusion and §8.2 deferred the decision, which together read as though
+   declining were ours to decline. It is not. An unbuilt MUST is a gap in conformance, and the
+   guide says so in its own subsection rather than burying it among capabilities we chose not
+   to build.
+   **What it actually costs a consumer**, stated plainly: against a foreign 2026-07-28 server
+   whose tool schemas annotate `x-mcp-header`, our HTTP client transports send those params in
+   the body only. If such servers accept body params — the reading §8.2 tests — nothing breaks
+   and the gap is cosmetic; if any of them require the header projection, those tools are
+   uncallable through this client until U7 lands. That is the whole exposure, and it is
+   bounded to foreign modern servers using an optional annotation.
+   **The server half is a separate row and is vacuously satisfied**: the MUST to exclude
+   invalid annotated tool definitions from `tools/list` binds a server that accepts the
+   annotation, and installed `@orkestrel/tool` definitions carry no `x-mcp-header` field, so
+   there is no definition that could be invalid. Nothing is hidden from a caller, which was
+   the planner's original objection (§9.3) to implementing the filter half alone.
+
 ---
 
 ## 6. Unit decomposition and routing ledger
@@ -659,13 +825,13 @@ mechanical; `verifier` = gates.
 
 | Unit | Content                                                                                                                                                                                                                                                                                                                                                                                                                              | Owned files                                                                                                          | Engine                 | Depends on              |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ---------------------- | ----------------------- |
-| U0   | Rename sweep, zero behavior change: `MCPToolResult`→`MCPCallResult`, `buildToolResult`→`buildCallResult`, `initializeResult`→`buildInitializeResult`, `jsonRPCResult`/`jsonRPCError`→`buildJSONRPCResult`/`buildJSONRPCError`, `MCPServerInfo`→deleted, `name`+`version`→`identity` (both options bags + server interface), `description`→`instructions`, delete batch arm of `send` + array branch of `createDuplexClientTransport` | core/server/browser sources + all touched tests                                                                      | `builder` (Sonnet)     | —                       |
-| U1   | Modern contract + pure leaves: §4.3 types, §4.4 constants, `errors.ts`, `isModernRequest`, `parseRequestContext` (soundness both directions), `inferEra`, `buildDiscoverResult`, `buildModernResult`                                                                                                                                                                                                                                 | `src/core/{types,constants,validators,parsers,inferers,errors,helpers,index}.ts` + tests                             | `implementer` (Sol)    | U0                      |
+| U0   | Rename sweep, zero behavior change: `MCPToolResult`→`MCPCallResult`, `buildToolResult`→`buildCallResult`, `initializeResult`→`buildInitializeResult`, `jsonRPCResult`/`jsonRPCError`→`buildJSONRPCResult`/`buildJSONRPCError`, `MCPServerInfo`→deleted, `name`+`version`→`identity` (both options bags + server interface), `description`→`instructions`. **The batch-arm deletion is NOT in this unit — it shipped in 0.0.8** (`types.ts:312`, `factories.ts:121-139`) | core/server/browser sources + all touched tests                                                                      | `builder` (Sonnet)     | —                       |
+| U1   | Modern contract + pure leaves: §4.3 types (incl. `MCPDispatchOptions`/`MCPStream`/`MCPTextStream`/`MCPMethodHandler`), §4.4 constants, **extensions to the shipped `errors.ts`** (`MCPError`/`isMCPError` already exist, `errors.ts:18-51`), `isModernRequest` (key presence), `parseRequestContext` (soundness both directions), `inferEra`, `buildDiscoverResult`, `buildModernResult`                                                                                | `src/core/{types,constants,validators,parsers,inferers,errors,helpers,index}.ts` + tests                             | `implementer` (Sol)    | U0                      |
 | U2   | Dual-era server dispatch (§4.6)                                                                                                                                                                                                                                                                                                                                                                                                      | `src/core/MCPServer.ts` + test                                                                                       | `implementer` (Sol)    | U1                      |
 | U3   | Dual-era client (§4.7): discover-first connect, legacy fallback with validated initialize result, `version` getter, `discover()`, `MCPError` surfacing, one-retry `-32022`, result-type safety                                                                                                                                                                                                                                       | `src/core/MCPClient.ts` + test                                                                                       | `implementer` (Sol)    | U1 (serialize after U2) |
 | U4   | Node HTTP conformance (§4.8): header validation, status map, Origin gate, session passthrough for modern POSTs, session version pinning, client-transport headers, `X-Accel-Buffering`                                                                                                                                                                                                                                               | `src/server/{handlers,helpers,inferers,constants,types,middlewares}.ts`, `transports/HTTPClientTransport.ts` + tests | `implementer` (Sol)    | U2, U3                  |
-| U5   | Browser face parity: same three headers on the fetch transport; environment isolation proven                                                                                                                                                                                                                                                                                                                                         | `src/browser/{types,constants,helpers,factories}.ts`, `transports/HTTPClientTransport.ts` + tests                    | `implementer` (Sol)    | U3                      |
-| U6   | Guide + parity + **Declared non-goals** section (names every §5 exclusion incl. `Mcp-Param-*` with its rationale and Origin policy split); Contract clauses for the wire-name rule, the discriminator, the per-era status map, the three supported revisions; `## Methods` bijection covers `discover`                                                                                                                               | `guides/src/mcp.md`                                                                                                  | `implementer` (Opus 5) | U0–U5                   |
+| U5   | Browser face parity: the same header rule on the fetch transport (version + method always on modern; name only on `tools/call`); environment isolation proven                                                                                                                                                                                                                                                                                                                                         | `src/browser/{types,constants,helpers,factories}.ts`, `transports/HTTPClientTransport.ts` + tests                    | `implementer` (Sol)    | U3                      |
+| U6   | Guide + parity + **Declared non-goals** section (names every §5 exclusion and the Origin policy split) + a separate **Declared conformance gaps** section (`Mcp-Param-*` client projection: the §1.4.6 clause, the consumer-visible cost, and U7 as its closer — §5.1.9); Contract clauses for the wire-name rule, the discriminator (**key presence**, §4.1), the header scope (`Mcp-Name` on named methods only), the per-era status map, the three supported revisions, and the headerless-POST rule §8.12 settles; `## Methods` bijection covers `discover`                                                                                                                               | `guides/src/mcp.md`                                                                                                  | `implementer` (Opus 5) | U0–U5                   |
 | U7   | `Mcp-Param-*` (NOT scheduled; only if §8.2 evidence flips the exclusion): first widens `ClientTransportInterface.send`, deliberately last so nothing depends on it                                                                                                                                                                                                                                                                   | —                                                                                                                    | —                      | U6                      |
 
 Order: U0 → U1 → U2 → U3 → U4 → U5 → U6, with the §6.1 amendment units slotting in after U5
@@ -674,11 +840,13 @@ and before the guide unit. Each nontrivial unit gets the standard audit chain
 independent verifier runs the five gates, including the real-Chromium browser suite for U5).
 Key acceptance details preserved from the design pass: modern `tools/call` carries
 `resultType` but NO `ttlMs`; a modern request naming `'2024-11-05'` gets `-32022` with exact
-`supported`/`requested`; `_meta` with version but no capabilities ⇒ `-32602`; legacy responses
-byte-identical to pre-change golden strings; a modern POST through `createMCPSession` reaches
-the route (200) with `Mcp-Session-Id` ignored; `-32022` triggers exactly one retry with a NEW
-id and no third attempt; a `resultType: 'input_required'` result throws an `MCPError` naming
-it.
+`supported`/`requested`; `_meta` with version but no capabilities ⇒ `-32602`; **a `_meta`
+version key holding a non-string value ⇒ `-32602`, never legacy dispatch** (§4.1); legacy
+responses byte-identical to pre-change golden strings; a modern POST through
+`createMCPSession` reaches the route (200) with `Mcp-Session-Id` ignored; `-32022` triggers
+exactly one retry with a NEW id and no third attempt; a `resultType: 'input_required'` result
+throws an `MCPError` naming it; **a modern `tools/list` POST carries `MCP-Protocol-Version`
+and `Mcp-Method` and NO `Mcp-Name`, and ingress accepts it** (§1.4.6).
 
 ### 6.1 Amendment units (§5.1)
 
@@ -689,11 +857,11 @@ clean committed baseline, disjoint owned files, mirrored `tests/src/**` per unit
 
 | Unit | Content                                                                                                                                                                                                                                   | Owned files                                                                                                                | Engine                 | Depends on               |
 | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------ |
-| A1   | Method seam (§5.1.5): a registrable modern method handler; `server/discover`, `tools/list`, `tools/call` registered through the same mechanism that dispatches them; unregistered ⇒ `-32601`; legacy branch untouched                     | `src/core/{types,MCPServer,helpers,index}.ts` + tests                                                                      | `implementer` (Opus 5) | U5                       |
+| A1   | Method seam (§5.1.5) **and the revised signatures (§4.3)**: `MCPDispatchOptions`, `MCPStream`/`MCPTextStream`, `MCPMethodHandler`; `dispatch`/`handle` gain the optional options parameter and the stream return arm; `server/discover`, `tools/list`, `tools/call` registered through the same mechanism that dispatches them; unregistered ⇒ `-32601`; legacy branch untouched | `src/core/{types,MCPServer,helpers,index}.ts` + tests                                                                      | `implementer` (Opus 5) | U5                       |
 | A2   | Protocol-native results (§5.1.4): `structuredContent` alongside the text block on `tools/call`; `outputSchema` explicitly NOT added                                                                                                       | `src/core/{types,helpers}.ts` + tests                                                                                      | `implementer` (Sol)    | U5 (serialize after A1)  |
 | A3   | MRTR production (§5.1.1): `ElicitRequest` only; `InputRequiredResult` shape; `inputResponses` + byte-exact `requestState` on retry; signed-state round-trip through `@orkestrel/server`'s `signToken`/`verifyToken`; server-side `-32021` | `src/core/{types,constants,parsers,validators,helpers,MCPServer}.ts` + tests                                               | `implementer` (Sol)    | A1, A2                   |
-| A4   | `subscriptions/listen` + `_meta.subscriptionId` (§5.1.2): acknowledged-first stream, per-notification stamping, one live stream per key, graceful closure of a superseded stream, empty complete result on close; modern-only             | `src/core/{types,constants,helpers,MCPServer}.ts`, held-open stream seam in `src/server/{handlers,middlewares}.ts` + tests | `implementer` (Sol)    | A1                       |
-| A5   | Disconnect-cancellation (§5.1.6): the request's abort signal reaches the dispatched handler; closed HTTP response stream = cancellation; stdio keeps `notifications/cancelled`; no HTTP client→server notifications                       | `src/core/{types,MCPServer}.ts`, `src/server/{types,handlers,middlewares}.ts`, `src/browser/{types,helpers}.ts` + tests    | `implementer` (Sol)    | A1, A4                   |
+| A4   | `subscriptions/listen` + `_meta.subscriptionId` (§5.1.2), returned as an `MCPStream`: acknowledged-first stream, per-notification stamping, empty complete result on close; modern-only. **Second-listen/supersession behavior is set by §8.10 before dispatch, not assumed** | `src/core/{types,constants,helpers,MCPServer}.ts`, held-open stream seam in `src/server/{handlers,middlewares}.ts` + tests | `implementer` (Sol)    | A1                       |
+| A5   | Disconnect-cancellation (§5.1.6): the request's abort signal reaches the dispatched handler through `MCPDispatchOptions.signal` (§4.3, landed in A1); closed HTTP response stream = cancellation; stdio keeps `notifications/cancelled`; no HTTP client→server notifications                       | `src/core/{types,MCPServer}.ts`, `src/server/{types,handlers,middlewares}.ts`, `src/browser/{types,helpers}.ts` + tests    | `implementer` (Sol)    | A1, A4                   |
 | A6   | Hostile-input limits + protocol-faithful fixtures (§5.1.7): bounded message bytes, `_meta` size/key count, `requestState` size, content size, live subscriptions; configurable with secure defaults; fixture peers on the wire            | `src/core/{types,constants,parsers}.ts`, `src/server/{types,constants,handlers}.ts`, `tests/fixtures/**` + tests           | `implementer` (Sol)    | A2, A3, A4, A5           |
 | A7   | Tasks extension (§5.1.3) — **NOT scheduled**; adopt only once a client that negotiates `io.modelcontextprotocol/tasks` exists: `tasks/get`/`tasks/update`/`tasks/cancel`, unsolicited `CreateTaskResult`, injected task store             | —                                                                                                                          | —                      | A1; a negotiating client |
 
@@ -706,7 +874,10 @@ capability.
 - **A1** — a method registered after construction dispatches; an unregistered modern method
   still returns `-32601`; the three built-in modern methods are registered through the seam
   (grep proves no second dispatch path); every legacy response stays byte-identical to its
-  pre-change golden string.
+  pre-change golden string. Signatures: `dispatch(request)` and `handle(message)` still
+  compile and behave identically with the options argument omitted; a handler returning an
+  `MCPStream` is narrowed at exactly one site per boundary; an aborted `options.signal` is
+  observable inside a registered handler (A5 proves it over a real transport).
 - **A2** — a `tools/call` result carries `structuredContent` AND the text block; a value-less
   result still produces a valid result; `tools/list` descriptors carry no `outputSchema`; the
   modern result still carries `resultType` and no `ttlMs` (the §6 rule holds).
@@ -719,11 +890,14 @@ capability.
   still throws a named `MCPError` on a foreign `input_required` (§4.7).
 - **A4** — the first stream message is `notifications/subscriptions/acknowledged`; every
   subsequent notification carries `_meta['io.modelcontextprotocol/subscriptionId']` equal to
-  the listen request's id; a second listen on a live key gracefully closes the first with an
-  empty complete result and exactly one stream survives; a legacy-era `subscriptions/listen`
-  returns `-32601`.
-- **A5** — aborting the HTTP request aborts the signal the handler observes, proven by a real
-  transport rather than a synthesized signal; a stdio `notifications/cancelled` still routes;
+  the listen request's id; a graceful close ends the `MCPStream` by returning an empty complete
+  result; a legacy-era `subscriptions/listen` returns `-32601`. **Deliberately not asserted
+  here:** what happens when a second listen arrives for a live key. §1.4.5 verified the happy
+  path only, and §8.10 is the task that establishes the rule — its answer becomes A4's final
+  criterion and is written into this list before A4 is dispatched. Shipping A4 against an
+  assumed supersession rule would freeze a guess into a test.
+- **A5** — aborting the HTTP request aborts the `options.signal` the handler observes, proven
+  by a real transport rather than a synthesized signal; a stdio `notifications/cancelled` still routes;
   no client→server notification is ever POSTed; a cancelled call reports requested
   cancellation without asserting observed termination.
 - **A6** — a message over the byte cap is rejected with a protocol error and never parsed; an
@@ -760,10 +934,11 @@ capability.
 1. **2025-03-26 batching normativity** (sharpens an already-made removal): confirm the exact
    MUST/SHOULD wording for receiving batches in 2025-03-26 `basic/transports`. Removal stands
    on the two-endpoint/OAuth lineage regardless.
-2. **`Mcp-Param-*` binding strength** (gates U7): does the clients-MUST-support clause bind
-   all clients or only streamable-HTTP clients? Do real 2026-07-28 servers require
-   header-projected params rather than accepting body params? If yes → adopt U7 and widen
-   `send`; if no → the guide's declared non-goal stands.
+2. **`Mcp-Param-*` binding strength** (gates U7; sizes a declared conformance gap, §5.1.9):
+   does the clients-MUST-support clause bind all clients or only streamable-HTTP clients? Do
+   real 2026-07-28 servers require header-projected params rather than accepting body params?
+   If yes → adopt U7 and widen `send`; if no → the gap stays declared and inert. Either way
+   the guide names it as an unmet MUST, not as a non-goal — that part is not evidence-gated.
 3. **Session-middleware passthrough wording**: "modern-only servers ignore `Mcp-Session-Id`" —
    confirm it binds dual-era servers with a mounted session layer (chosen reading:
    passthrough + ignore) vs. a 400 reading.
@@ -796,14 +971,27 @@ Added by the 2026-07-31 amendment (§5.1). Each gates its unit; none reopens a �
    `schema/2026-07-28/schema.ts`, plus whether a server advertising only `ElicitRequest`
    production owes anything to a client that declared sampling or roots. §1.4.4 is the
    overview reading; A3 needs the schema.
-10. **Subscription lifecycle at depth** (gates A4): the acknowledged-notification shape, what
-    a server may do when a second `subscriptions/listen` arrives for a live key, and whether
-    graceful closure has any required payload beyond an empty complete result. §1.4.5 covers
-    the happy path only.
+10. **Subscription lifecycle at depth** (gates A4 — and **owns** A4's supersession criterion,
+    §6.2): the acknowledged-notification shape, what a server may do when a second
+    `subscriptions/listen` arrives for a live key (close the older stream? reject the newer
+    listen? both permitted?), and whether graceful closure has any required payload beyond an
+    empty complete result. §1.4.5 covers the happy path only, so this task must return before
+    A4 is dispatched, not merely before it is audited; its answer is written into §6.2 as the
+    criterion §5.1.2's provisional rule is not yet entitled to be.
 11. **Tasks extension per-method shapes** (gates A7, already flagged unverified in §1.6): the
     `tasks/get`/`tasks/update`/`tasks/cancel` wire shapes beyond the overview page, and
     whether any client negotiates `io.modelcontextprotocol/tasks` at all. A negative answer
     keeps A7 unscheduled, which costs nothing (§5.1.3).
+
+Added by the 2026-07-31 correction pass (§4.2).
+
+12. **Headerless post-initialize legacy POST** (gates U4): with 2025-03-26 removed, §1.2's
+    permission to read a headerless request as a version no longer applies to this server, and
+    §1.2 records no replacement obligation. Quote the 2025-06-18 and 2026-07-28 transport text
+    on a missing `MCP-Protocol-Version` for a *legacy* request: reject with 400 + `-32020`, or
+    accept and proceed? The answer sets one line of §4.8's ingress rule. Until it returns, the
+    design defaults nothing (§4.2) — and defaulting to 2025-06-18, the previous text, is the
+    one answer already ruled out.
 
 ## 9. Adversarial record (dissents preserved)
 
@@ -822,12 +1010,21 @@ Added by the 2026-07-31 amendment (§5.1). Each gates its unit; none reopens a �
 3. **`Mcp-Param-*`** — analyst: implement (conformance; filter invalid tools). Planner:
    decline (architectural leak of HTTP into the transport-agnostic port; implementing only
    the filter half hides tools with no compensating capability). **Ruling: exclude from the
-   first campaign, isolate as U7, decide on §8.2 evidence.**
+   first campaign, isolate as U7, decide on §8.2 evidence.** **Amended 2026-07-31:** the
+   scheduling is untouched, but the analyst was right that this is a conformance question and
+   the word "exclude" was wrong for it — §1.4.6 makes the client projection a MUST, so it is
+   recorded as a declared conformance gap (§5.1.9). The planner's filter-half objection is
+   answered separately: with no `x-mcp-header` in any installed tool definition, the
+   server-side filter is vacuous and hides nothing.
 4. **Dispatch context parameter** — analyst: add `MCPDispatchContext` for per-binding legacy
    pinning. Planner: keep `dispatch(request)` — legacy responses are revision-invariant on
-   this surface. **Ruling: planner** (simpler contract); analyst's mechanism recorded as the
-   fallback if legacy behavior ever diverges by revision; the HTTP session middleware pins
-   versions at its own layer.
+   this surface. **Ruling: planner** (simpler contract); the HTTP session middleware pins
+   versions at its own layer. **Amended 2026-07-31:** the ruling holds on its stated ground —
+   no version travels on the parameter — but a second parameter now exists anyway, because
+   A5's abort signal has nowhere else to ride. §4.3 adds `MCPDispatchOptions { signal? }`,
+   optional at every call site. The analyst's arity was right for a reason neither engine
+   argued at the time; its payload was not adopted and legacy pinning stays at the session
+   layer.
 5. **Naming set** — planner's shape adopted wholesale (subjective domain per the engine
    split): `MCPIdentity` regrouping, operation-named results, `MCPVersion`/`MCPEra`, no
    `send()` widening; analyst's additional `buildJSONRPCResult`/`buildJSONRPCError` renames
@@ -840,8 +1037,10 @@ Added by the 2026-07-31 amendment (§5.1). Each gates its unit; none reopens a �
 1. Read this document top to bottom; it inlines everything (the research distillate, the
    verified inventory, both designs' substance, the reconciliation, and the 2026-07-31
    amendment in §5.1/§6.1).
-2. Run the §8 evidence tasks first (one research dispatch; cheap) — §8.1–§8.7 gate the U
-   units, §8.8–§8.11 gate the A units.
+2. Run the §8 evidence tasks first (one research dispatch; cheap) — §8.1–§8.7 and §8.12 gate
+   the U units, §8.8–§8.11 gate the A units. Two are hard gates rather than sharpeners: §8.12
+   sets U4's headerless rule, and §8.10 sets A4's supersession criterion (§6.2) — neither unit
+   may be dispatched on an assumed answer.
 3. Re-verify the §1.1 ledger against `/specification/latest` (§8.7).
 4. Execute U0 → U5, then the §6.1 amendment units A1 → A6, then U6, under the repository's
    operating contract (serialized writers from clean baselines, adversarial audits,
