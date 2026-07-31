@@ -1071,6 +1071,23 @@ already shipped under this rule.
 | U6   | Guide + parity + **Declared non-goals** section (names every §5 exclusion and the Origin policy split) + a separate **Declared conformance gaps** section covering **both** gaps (`Mcp-Param-*` client projection: the §1.4.6 clause, the consumer-visible cost, U7 as its closer — §5.1.9; and tool-invocation rate limiting: the 2025-11-25 clause, the consumer's own obligation, no closer inside this package — §5.1.10); Contract clauses for the wire-name rule, the discriminator (**key presence**, §4.1), the header scope (`Mcp-Name` on named methods only), the per-era status map, the three supported revisions, and the settled three-case headerless-POST rule (§4.2); `## Methods` bijection covers `discover` | `guides/src/mcp.md` structure, voice, and new sections                                                               | `implementer` (Opus 5) | U0–U5                   |
 | U7   | `Mcp-Param-*` (NOT scheduled; only if §8.2 evidence flips the exclusion): first widens `ClientTransportInterface.send`, deliberately last so nothing depends on it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | —                                                                                                                    | —                      | U6                      |
 
+**Amended 2026-07-31 during U1 — two interface members move to their implementing units.** The
+U1 row above said "§4.3 types", which read as _every_ §4.3 declaration including the two that
+add members to an interface a concrete class implements. Those two cannot land in a
+types-only unit: `MCPClientInterface.version` and `discover()` break `MCPClient` (and therefore
+`createMCPClient`), and the `request` event tuple's new `era` element breaks `MCPServer` —
+verified by compile probe as `TS2420`, `TS2554`, and `TS2739`. Satisfying them from U1 would
+mean either editing another unit's files or leaving a placeholder, and a placeholder is
+precisely the "empty stub / deferred logic" `AGENTS.md` forbids.
+
+So the members travel with their implementations: **`MCPClientInterface.version` and
+`discover()` move to U3** (which owns `MCPClient`), and **the `era` event-tuple element moves to
+U2** (which owns `MCPServer`). U1 keeps every standalone type, the constants, the error
+extensions, and all five pure leaves — none of which touch either class, because adding
+_optional_ keys to `MCPCallResult` and `MCPClientOptions` breaks no implementation. This is
+truer to types-first than the original split: a contract member and the code that satisfies it
+belong in one unit, so every unit still reaches green on its own.
+
 Order: U0 → U1 → U2 → U3 → U4 → U5 → U6, with the §6.1 amendment units slotting in after U5
 and before the guide unit. Each nontrivial unit gets the standard audit chain
 (reviewer = Opus design fit; analyst = Sol correctness; checker = mechanical conformance;
