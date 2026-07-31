@@ -41,9 +41,8 @@ import { parseJSONRPCMessage } from './parsers.js'
  *   `parameters` renamed to `inputSchema`); `tools/call` runs a tool by name (the
  *   {@link ToolManagerInterface} isolates a tool throw into a `success: false`
  *   result, which maps to an `isError: true` tool result — so the server adds NO
- *   try/catch). An
- *   unknown method → `-32601`; a `tools/call` with a missing / non-string `name` →
- *   `-32602`.
+ *   try/catch). An unknown method → `-32601`; a `tools/call` with a missing /
+ *   non-string `name` → `-32602`.
  * - **Provider-agnostic.** Imports only core siblings — JSON-RPC + the tool registry,
  *   no HTTP, no model. Wire fields are narrowed via the contracts guards (no `as`).
  * - **Observable (§13).** The owned `emitter` fires `request` at the top of every
