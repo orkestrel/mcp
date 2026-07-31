@@ -1,5 +1,6 @@
-import type { JSONRPCMessage, JSONRPCRequest, JSONRPCResponse } from './types.js'
+import type { JSONRPCMessage, JSONRPCRequest, JSONRPCResponse, MCPVersion } from './types.js'
 import { isNumber, isRecord, isString, isUndefined } from '@orkestrel/contract'
+import { MCP_META_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
 
 // AGENTS §14: every guard here is a TOTAL function over the already-`JSON.parse`d
 // value — adversarial input returns `false`, never throws. The raw-string
@@ -29,6 +30,16 @@ import { isNumber, isRecord, isString, isUndefined } from '@orkestrel/contract'
  */
 export function isRequestId(value: unknown): value is string | number | undefined {
 	return isUndefined(value) || isString(value) || isNumber(value)
+}
+
+/**
+ * Determine whether a value is a supported {@link MCPVersion}.
+ *
+ * @param value - The unknown value to inspect
+ * @returns `true` when the value is one of {@link SUPPORTED_PROTOCOL_VERSIONS}
+ */
+export function isMCPVersion(value: unknown): value is MCPVersion {
+	return isString(value) && SUPPORTED_PROTOCOL_VERSIONS.some((version) => version === value)
 }
 
 /**
@@ -129,4 +140,27 @@ export function isJSONRPCMessage(value: unknown): value is JSONRPCMessage {
  */
 export function isInitializeRequest(value: unknown): value is JSONRPCRequest {
 	return isJSONRPCRequest(value) && value.method === 'initialize'
+}
+
+/**
+ * Determine whether a JSON-RPC request uses the modern per-request MCP wire shape.
+ *
+ * @remarks
+ * Presence routes and validity answers: this guard checks only that
+ * `params._meta` carries the reserved protocol-version key. The key's value is
+ * deliberately not narrowed here, so a present non-string version remains modern
+ * and is rejected later by `parseRequestContext` rather than falling through to
+ * legacy dispatch. Total over hostile and malformed input.
+ *
+ * @param value - The already-parsed value to inspect
+ * @returns `true` when the value is a request carrying the reserved version key
+ */
+export function isModernRequest(value: unknown): value is JSONRPCRequest {
+	try {
+		if (!isJSONRPCRequest(value)) return false
+		const metadata = value.params?.['_meta']
+		return isRecord(metadata) && Object.hasOwn(metadata, MCP_META_VERSION)
+	} catch {
+		return false
+	}
 }

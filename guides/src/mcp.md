@@ -172,18 +172,27 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 
 ### Constants
 
-| Constant                      | Kind  | Value                                                                                   |
-| ----------------------------- | ----- | --------------------------------------------------------------------------------------- |
-| `MCP_PROTOCOL_VERSION`        | const | `'2025-06-18'` — the protocol revision this server implements (the default negotiated). |
-| `SUPPORTED_PROTOCOL_VERSIONS` | const | A frozen list of negotiable revisions (currently only `'2025-06-18'`).                  |
-| `JSONRPC_PARSE_ERROR`         | const | `-32700` — invalid JSON was received (the message did not parse).                       |
-| `JSONRPC_INVALID_REQUEST`     | const | `-32600` — the payload was not a valid Request object.                                  |
-| `JSONRPC_METHOD_NOT_FOUND`    | const | `-32601` — the requested method does not exist.                                         |
-| `JSONRPC_INVALID_PARAMS`      | const | `-32602` — the method's parameters were invalid.                                        |
-| `JSONRPC_SERVER_ERROR`        | const | `-32000` — an implementation-defined server error.                                      |
-| `DEFAULT_MCP_CLIENT_NAME`     | const | `'taverna'` — the default client name reported in the `initialize` handshake.           |
-| `DEFAULT_MCP_CLIENT_VERSION`  | const | `'1.0.0'` — the default client version reported in the `initialize` handshake.          |
-| `DEFAULT_MCP_REQUEST_TIMEOUT` | const | `30000` — the default per-request deadline (ms) an `MCPClient` applies.                 |
+| Constant                      | Kind  | Value                                                                                |
+| ----------------------------- | ----- | ------------------------------------------------------------------------------------ |
+| `MCP_PROTOCOL_VERSION`        | const | `'2026-07-28'` — the current modern protocol revision.                               |
+| `MCP_LEGACY_VERSION`          | const | `'2025-06-18'` — the legacy fallback anchor.                                         |
+| `SUPPORTED_PROTOCOL_VERSIONS` | const | Frozen preference order: `2026-07-28`, `2025-11-25`, `2025-06-18`.                   |
+| `MCP_META_VERSION`            | const | `'io.modelcontextprotocol/protocolVersion'` — reserved request-version metadata key. |
+| `MCP_META_CAPABILITIES`       | const | `'io.modelcontextprotocol/clientCapabilities'` — reserved capability metadata key.   |
+| `MCP_META_CLIENT`             | const | `'io.modelcontextprotocol/clientInfo'` — reserved client-identity metadata key.      |
+| `MCP_META_SERVER`             | const | `'io.modelcontextprotocol/serverInfo'` — reserved server-identity metadata key.      |
+| `MCP_HEADER_MISMATCH`         | const | `-32020` — required HTTP metadata does not match the request body.                   |
+| `MCP_MISSING_CAPABILITY`      | const | `-32021` — an operation needs an undeclared client capability.                       |
+| `MCP_UNSUPPORTED_VERSION`     | const | `-32022` — the request names an unsupported protocol revision.                       |
+| `DEFAULT_MCP_CACHE_TTL`       | const | `60000` — default modern cache freshness lifetime in milliseconds.                   |
+| `JSONRPC_PARSE_ERROR`         | const | `-32700` — invalid JSON was received (the message did not parse).                    |
+| `JSONRPC_INVALID_REQUEST`     | const | `-32600` — the payload was not a valid Request object.                               |
+| `JSONRPC_METHOD_NOT_FOUND`    | const | `-32601` — the requested method does not exist.                                      |
+| `JSONRPC_INVALID_PARAMS`      | const | `-32602` — the method's parameters were invalid.                                     |
+| `JSONRPC_SERVER_ERROR`        | const | `-32000` — an implementation-defined server error.                                   |
+| `DEFAULT_MCP_CLIENT_NAME`     | const | `'taverna'` — the default client name reported in the `initialize` handshake.        |
+| `DEFAULT_MCP_CLIENT_VERSION`  | const | `'1.0.0'` — the default client version reported in the `initialize` handshake.       |
+| `DEFAULT_MCP_REQUEST_TIMEOUT` | const | `30000` — the default per-request deadline (ms) an `MCPClient` applies.              |
 
 ### Helpers
 
@@ -194,12 +203,18 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 | `isJSONRPCResponse`     | function | Total guard: `jsonrpc: '2.0'` + an `id` (string / number / `null`) + EXACTLY ONE of `result` / `error`.                                                    |
 | `isJSONRPCMessage`      | function | Total guard — the union of `isJSONRPCRequest` and `isJSONRPCResponse`.                                                                                     |
 | `isInitializeRequest`   | function | Total guard — a `JSONRPCRequest` whose `method` is `'initialize'`.                                                                                         |
+| `isMCPVersion`          | function | Total guard — narrows a string to a supported `MCPVersion`.                                                                                                |
+| `isModernRequest`       | function | Total guard — modern iff `params._meta` carries the reserved protocol-version key.                                                                         |
 | `isMCPError`            | function | Total guard — `true` only for a real `MCPError`.                                                                                                           |
 | `parseJSONRPCMessage`   | function | Narrow an already-parsed value to a `JSONRPCMessage`, or `undefined` (total; sound with `isJSONRPCMessage`).                                               |
+| `parseRequestContext`   | function | Coerce valid modern metadata to `MCPRequestContext`, or `undefined` for malformed required metadata.                                                       |
+| `inferEra`              | function | Map a supported revision to `modern` or `legacy`; unsupported revisions return `undefined`.                                                                |
 | `buildJSONRPCResult`    | function | Build a success `JSONRPCResponse` — the `id` echoed, the value as `result`.                                                                                |
 | `buildJSONRPCError`     | function | Build an error `JSONRPCResponse` — the `id`, a reserved `code` / `message`, and optional `data`.                                                           |
 | `buildToolDescriptors`  | function | Map a `ToolManagerInterface`'s definitions to `tools/list` descriptors, renaming `parameters` → `inputSchema`.                                             |
 | `buildCallResult`       | function | Map a `ToolResult` (`@orkestrel/tool`) to an MCP tool-call result — the value (or error text + `isError: true`) as a text block.                           |
+| `buildDiscoverResult`   | function | Build the required modern `server/discover` result with supported revisions and cache stamps.                                                              |
+| `buildModernResult`     | function | Stamp a modern result with `resultType`, server metadata, and cache fields only when a TTL is supplied.                                                    |
 | `buildInitializeResult` | function | Build the `initialize` result — the negotiated `protocolVersion`, `capabilities`, and `serverInfo`.                                                        |
 | `bindServer`            | function | Pipe an `MCPTransportInterface` into an `MCPServerInterface` — inbound `handle`d, a defined reply `send`; returns an unbind (detaches without closing).    |
 | `bindClient`            | function | Pipe an `MCPTransportInterface` into an `MCPClientInterface` (built over `createDuplexClientTransport`) — completes the inbound wiring; returns an unbind. |
@@ -212,18 +227,23 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 | `JSONRPCErrorData`         | interface | `{ code: number; message: string; data?: unknown }` — the `error` member of a failed response.                                                                                                                             |
 | `JSONRPCResponse`          | interface | `{ jsonrpc: '2.0'; id: string \| number \| null; result?: unknown; error?: JSONRPCErrorData }` — EITHER `result` OR `error`.                                                                                               |
 | `JSONRPCMessage`           | type      | `JSONRPCRequest \| JSONRPCResponse` — a message on the wire.                                                                                                                                                               |
+| `MCPVersion`               | type      | `'2026-07-28' \| '2025-11-25' \| '2025-06-18'` — a supported protocol revision.                                                                                                                                            |
+| `MCPEra`                   | type      | `'modern' \| 'legacy'` — the structural wire era.                                                                                                                                                                          |
 | `MCPContent`               | interface | `{ type: 'text'; text: string }` — one content block of a tool-call result.                                                                                                                                                |
-| `MCPCallResult`            | interface | `{ content: readonly MCPContent[]; isError?: boolean }` — the `tools/call` result (`isError` flags a tool failure).                                                                                                        |
+| `MCPCallResult`            | interface | `{ content; isError?; resultType?; _meta? }` — a `tools/call` result with optional modern stamps.                                                                                                                          |
+| `MCPListResult`            | interface | `{ tools; resultType?; ttlMs?; cacheScope?; _meta? }` — a legacy or modern `tools/list` result.                                                                                                                            |
 | `MCPToolDescriptor`        | interface | `{ name: string; description?: string; inputSchema: Record<string, unknown> }` — one `tools/list` entry.                                                                                                                   |
 | `MCPIdentity`              | interface | `{ name: string; version: string }` — the identity echoed in the `initialize` result.                                                                                                                                      |
+| `MCPRequestContext`        | interface | `{ version: string; capabilities: Record<string, unknown>; identity?: MCPIdentity }` — validated modern request metadata.                                                                                                  |
+| `MCPDiscoverResult`        | interface | Required modern discovery fields: supported revisions, capabilities, complete-result and cache stamps, optional instructions and metadata.                                                                                 |
 | `MCPServerEventMap`        | type      | `{ request: [method, id]; error: [unknown] }` — the observation surface (`error` is a transport fault a bound `bindServer` reply-`send` surfaced).                                                                         |
-| `MCPServerOptions`         | interface | `{ on?; error?; name: string; version: string; tools: ToolManagerInterface; description? }` — options for `createMCPServer`.                                                                                               |
+| `MCPServerOptions`         | interface | `{ on?; error?; identity; tools; instructions?; cache? }` — options for `createMCPServer`.                                                                                                                                 |
 | `MCPServerInterface`       | interface | `emitter` / `name` / `version` data members + the `dispatch` / `handle` methods.                                                                                                                                           |
 | `MCPTransportInterface`    | interface | `{ send(message: string): void \| Promise<void>; listen(handler): void; closed(handler): void; close(): void \| Promise<void> }` — the environment-agnostic duplex message-channel port `bindServer` / `bindClient` drive. |
 | `ClientTransportEventMap`  | type      | `{ message: [JSONRPCMessage]; close: []; error: [unknown] }` — the transport events.                                                                                                                                       |
 | `ClientTransportInterface` | interface | `emitter` / `session` data members + the `start` / `send` / `close` methods — the client's transport-agnostic carrier.                                                                                                     |
 | `MCPClientEventMap`        | type      | `{ connect: []; disconnect: []; notification: [JSONRPCMessage]; error: [unknown] }`.                                                                                                                                       |
-| `MCPClientOptions`         | interface | `{ on?; error?; transport: ClientTransportInterface; name?; version?; timeout? }` — options for `createMCPClient`.                                                                                                         |
+| `MCPClientOptions`         | interface | `{ on?; error?; transport; identity?; capabilities?; version?; timeout? }` — options for `createMCPClient`.                                                                                                                |
 | `MCPClientInterface`       | interface | `emitter` / `connected` / `protocol` / `transport` data members + the `on` / `connect` / `disconnect` / `tools` / `call` methods.                                                                                          |
 
 The `emitter`, `name`, and `version` members of `MCPServerInterface` are
@@ -1182,6 +1202,51 @@ const remote = new MCPError('Method not found', -32601, { method: 'missing' })
 isMCPError(remote) // true
 remote.code // -32601
 remote.context // { method: 'missing' }
+```
+
+### Route a request by era and build a modern result
+
+The 2026-07-28 era is selected structurally, per request, and never stored. A request is
+modern exactly when its `params._meta` carries the reserved protocol-version **key** — presence
+routes, the value's validity is a separate question answered afterwards, so a malformed version
+still reaches the modern branch and earns its `-32602` there instead of being mistaken for a
+legacy handshake.
+
+```ts
+import {
+	buildDiscoverResult,
+	buildModernResult,
+	inferEra,
+	isMCPVersion,
+	isModernRequest,
+	parseRequestContext,
+} from '@orkestrel/mcp'
+import { createToolManager } from '@orkestrel/tool'
+
+const request = {
+	jsonrpc: '2.0' as const,
+	id: 1,
+	method: 'tools/list',
+	params: { _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', capabilities: {} } },
+}
+
+isModernRequest(request) // true — the key is present
+const context = parseRequestContext(request) // { version, capabilities, identity? }
+context?.version // '2026-07-28'
+
+isMCPVersion('2026-07-28') // true
+isMCPVersion('2024-11-05') // false — not a supported revision
+inferEra('2026-07-28') // 'modern'
+inferEra('2025-11-25') // 'legacy'
+
+// `tools/list` is a cacheable result and carries both `ttlMs` and `cacheScope`;
+// `tools/call` carries neither, because only the former is a `CacheableResult`.
+const listed = buildModernResult({ tools: [] }, { cache: true })
+const discovered = buildDiscoverResult({
+	identity: { name: 'docs', version: '1.0.0' },
+	tools: createToolManager(),
+})
+discovered.supportedVersions // the revisions this server negotiates
 ```
 
 ### Read HTTP request headers and decode SSE bodies directly

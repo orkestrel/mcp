@@ -1,6 +1,12 @@
 import type { JSONRPCMessage } from '@src/core'
 import { describe, expect, inject, it, vi } from 'vitest'
-import { bindClient, bindServer, createDuplexClientTransport, createMCPClient } from '@src/core'
+import {
+	bindClient,
+	bindServer,
+	createDuplexClientTransport,
+	createMCPClient,
+	MCP_PROTOCOL_VERSION,
+} from '@src/core'
 import {
 	createHTTPClientTransport,
 	createMessagePortTransport,
@@ -218,7 +224,7 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 
 		// The initialize POST has no protocol header. The initialized notification does;
 		// its successful real-Chromium exchange also proves the CORS preflight admitted it.
-		expect(protocols).toEqual([null, '2025-06-18'])
+		expect(protocols).toEqual([null, MCP_PROTOCOL_VERSION])
 		await client.disconnect()
 	})
 

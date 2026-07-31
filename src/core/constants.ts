@@ -1,22 +1,66 @@
-// MCP protocol revisions + the reserved JSON-RPC 2.0 error codes. The negotiated
-// protocol version is the current rev unless the client requests a supported
-// one (see `buildInitializeResult` in ./helpers.js). Transport-level header names
-// (session / version headers) belong to the HTTP transport sub-chunk, NOT here.
+import type { MCPVersion } from './types.js'
 
-/** The MCP protocol revision this server implements (the default negotiated version). */
-export const MCP_PROTOCOL_VERSION = '2025-06-18'
+// MCP protocol revisions, reserved modern `_meta` keys, and protocol error codes.
+// Transport-level header names (session / version headers) belong to the HTTP
+// transport, not core.
+
+/**
+ * The revision offered and defaulted to in the legacy `initialize` handshake.
+ *
+ * @remarks
+ * This is deliberately a legacy revision, and the newest one supported. 2026-07-28 is stateless
+ * and defines no `initialize`, so it can never be the handshake's version — a client that offers
+ * it is asking to negotiate a revision with no negotiation.
+ */
+export const MCP_PROTOCOL_VERSION: MCPVersion = '2025-11-25'
+
+/** The legacy fallback anchor used when an initialize request cannot be accepted as modern. */
+export const MCP_LEGACY_VERSION: MCPVersion = '2025-06-18'
 
 /**
  * The MCP protocol revisions this server can negotiate.
  *
  * @remarks
  * `initialize` echoes the client's requested `protocolVersion` when it appears in
- * this list, else falls back to {@link MCP_PROTOCOL_VERSION}. Frozen so the list is
- * an immutable contract. The package does not advertise `2025-03-26` because that
- * revision mandates JSON-RPC batching, while this package accepts only individual
- * JSON-RPC messages.
+ * this list. Frozen in client-preference and discovery-advertisement order. The
+ * package does not advertise `2025-03-26` because that revision mandates JSON-RPC
+ * batching, while this package accepts only individual JSON-RPC messages.
  */
-export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze(['2025-06-18'])
+export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([
+	'2026-07-28',
+	'2025-11-25',
+	'2025-06-18',
+])
+
+/** Reserved modern `_meta` key carrying the request's protocol revision. */
+export const MCP_META_VERSION = 'io.modelcontextprotocol/protocolVersion'
+
+/** Reserved modern `_meta` key carrying the client's open capability record. */
+export const MCP_META_CAPABILITIES = 'io.modelcontextprotocol/clientCapabilities'
+
+/** Reserved modern `_meta` key carrying the optional client identity. */
+export const MCP_META_CLIENT = 'io.modelcontextprotocol/clientInfo'
+
+/** Reserved modern `_meta` key carrying the server identity on results. */
+export const MCP_META_SERVER = 'io.modelcontextprotocol/serverInfo'
+
+/** MCP reserved error: required HTTP metadata does not match the request body. */
+export const MCP_HEADER_MISMATCH = -32020
+
+/** MCP reserved error: an operation needs a client capability that was not declared. */
+export const MCP_MISSING_CAPABILITY = -32021
+
+/** MCP reserved error: a request names an unsupported protocol revision. */
+export const MCP_UNSUPPORTED_VERSION = -32022
+
+/**
+ * Default modern result freshness lifetime in milliseconds.
+ *
+ * @remarks
+ * `ttlMs` is required on cacheable results, while zero means immediately stale
+ * rather than uncached, so the neutral usable default is one minute.
+ */
+export const DEFAULT_MCP_CACHE_TTL = 60_000
 
 /** JSON-RPC 2.0 reserved error: invalid JSON was received (the message did not parse). */
 export const JSONRPC_PARSE_ERROR = -32700

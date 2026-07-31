@@ -64,6 +64,12 @@ export type JSONRPCMessage = JSONRPCRequest | JSONRPCResponse
 // MCP protocol shapes — the result payloads the dispatch methods return, mapped
 // onto the JSON-RPC `result` member.
 
+/** A protocol revision supported by this MCP package. */
+export type MCPVersion = '2026-07-28' | '2025-11-25' | '2025-06-18'
+
+/** The wire era selected by an MCP request's structure. */
+export type MCPEra = 'modern' | 'legacy'
+
 /** One content item of an MCP {@link MCPCallResult} — a `text` block carrying the tool's output. */
 export interface MCPContent {
 	readonly type: 'text'
@@ -84,6 +90,10 @@ export interface MCPCallResult {
 	readonly content: readonly MCPContent[]
 	/** `true` when the tool failed — its error text is in `content`. */
 	readonly isError?: boolean
+	/** The modern result discriminator; absent on a legacy result. */
+	readonly resultType?: 'complete'
+	/** Open modern protocol metadata, including reserved namespaced keys. */
+	readonly _meta?: Readonly<Record<string, unknown>>
 }
 
 /**
@@ -101,10 +111,54 @@ export interface MCPToolDescriptor {
 	readonly inputSchema: Readonly<Record<string, unknown>>
 }
 
+/**
+ * The MCP `tools/list` result — tool descriptors plus optional modern result
+ * stamps.
+ *
+ * @remarks
+ * The wire field names remain verbatim. A modern result requires `resultType`,
+ * `ttlMs`, and `cacheScope`; they remain optional here because the same result
+ * shape also models the unstamped legacy response.
+ */
+export interface MCPListResult {
+	readonly tools: readonly MCPToolDescriptor[]
+	readonly resultType?: 'complete'
+	readonly ttlMs?: number
+	readonly cacheScope?: 'public' | 'private'
+	readonly _meta?: Readonly<Record<string, unknown>>
+}
+
 /** The identity (`name` / `version`) of an MCP server or client. */
 export interface MCPIdentity {
 	readonly name: string
 	readonly version: string
+}
+
+/**
+ * The validated per-request context projected from a modern request's reserved
+ * `_meta` keys.
+ *
+ * @remarks
+ * `version` remains a string so a syntactically valid but unsupported revision
+ * reaches the dedicated unsupported-version path. `capabilities` is an open wire
+ * record; `identity` is optional because client information is recommended but
+ * not required.
+ */
+export interface MCPRequestContext {
+	readonly version: string
+	readonly capabilities: Readonly<Record<string, unknown>>
+	readonly identity?: MCPIdentity
+}
+
+/** The mandatory modern `server/discover` result. */
+export interface MCPDiscoverResult {
+	readonly supportedVersions: readonly MCPVersion[]
+	readonly capabilities: Readonly<Record<string, unknown>>
+	readonly resultType: 'complete'
+	readonly ttlMs: number
+	readonly cacheScope: 'public' | 'private'
+	readonly instructions?: string
+	readonly _meta?: Readonly<Record<string, unknown>>
 }
 
 /**
@@ -141,9 +195,10 @@ export type MCPServerEventMap = {
  * `tools` is the live registry the server dispatches `tools/list` / `tools/call`
  * over — its `definitions()` advertise the tools and its `execute()` runs a call
  * (the manager already isolates a tool throw into a `success: false` result, so
- * the server adds none). `instructions` is a human label for the server
- * (reserved for a future capability — unused by the current dispatch). `on` is
- * the §8 reserved key: initial listeners for the server's
+ * the server adds none). `instructions` is the optional human guidance exposed
+ * by `server/discover`. `cache` configures the modern cache stamps: `ttl` is the
+ * freshness lifetime in milliseconds and `scope` defaults to `'private'`. `on`
+ * is the §8 reserved key: initial listeners for the server's
  * {@link MCPServerEventMap}, wired at construction.
  */
 export interface MCPServerOptions {
@@ -153,8 +208,13 @@ export interface MCPServerOptions {
 	readonly identity: MCPIdentity
 	/** The live tool registry the server exposes over `tools/list` / `tools/call`. */
 	readonly tools: ToolManagerInterface
-	/** A human label for the server (reserved for a future capability; unused by dispatch). */
+	/** Optional human guidance exposed by `server/discover`. */
 	readonly instructions?: string
+	/** Modern cache stamps; omitted values use the protocol-safe defaults. */
+	readonly cache?: {
+		readonly ttl?: number
+		readonly scope?: 'public' | 'private'
+	}
 }
 
 /**
@@ -354,6 +414,9 @@ export type MCPClientEventMap = {
  * - `identity` — identifies the client in the `initialize` handshake (`clientInfo`);
  *   defaults to {@link import('./constants.js').DEFAULT_MCP_CLIENT_NAME} /
  *   {@link import('./constants.js').DEFAULT_MCP_CLIENT_VERSION}.
+ * - `capabilities` — the open client-capability record carried by every modern
+ *   request; defaults to an empty record when the modern client implementation lands.
+ * - `version` — an optional protocol pin; absence lets the modern client negotiate.
  * - `timeout` — the per-request deadline in milliseconds: a `tools/list` / `tools/call`
  *   / `initialize` that the server does not answer within it REJECTS (the pending
  *   request is settled by an `AbortSignal.timeout(timeout)` deadline — never a raw
@@ -368,6 +431,10 @@ export interface MCPClientOptions {
 	readonly error?: EmitterErrorHandler
 	readonly transport: ClientTransportInterface
 	readonly identity?: MCPIdentity
+	/** The open client-capability record carried by modern requests. */
+	readonly capabilities?: Readonly<Record<string, unknown>>
+	/** An optional protocol revision pin; absence permits negotiation. */
+	readonly version?: MCPVersion
 	/** The per-request deadline in milliseconds (default {@link import('./constants.js').DEFAULT_MCP_REQUEST_TIMEOUT}). */
 	readonly timeout?: number
 }

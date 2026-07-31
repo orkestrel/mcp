@@ -4,14 +4,17 @@ import {
 	bindClient,
 	bindServer,
 	buildCallResult,
+	buildDiscoverResult,
 	buildInitializeResult,
 	buildJSONRPCError,
 	buildJSONRPCResult,
+	buildModernResult,
 	buildToolDescriptors,
 	createDuplexClientTransport,
 	createMCPClient,
 	createMCPServer,
-	MCP_PROTOCOL_VERSION,
+	DEFAULT_MCP_CACHE_TTL,
+	MCP_META_SERVER,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -172,25 +175,106 @@ describe('buildCallResult', () => {
 	})
 })
 
+describe('buildModernResult', () => {
+	it('stamps tools/list with both required cache fields, preserving zero as immediately stale', () => {
+		const identity = { name: 'server', version: '1.0.0' }
+
+		expect(buildModernResult({ tools: [] }, identity, 0, 'public')).toEqual({
+			tools: [],
+			resultType: 'complete',
+			ttlMs: 0,
+			cacheScope: 'public',
+			_meta: { [MCP_META_SERVER]: identity },
+		})
+	})
+
+	it('stamps tools/call with resultType and neither cache field', () => {
+		const identity = { name: 'server', version: '1.0.0' }
+		const result: ToolResult = { id: '1', name: 'sum', success: true, value: 7 }
+		const modern = buildModernResult(buildCallResult(result), identity)
+
+		expect(modern).toEqual({
+			content: [{ type: 'text', text: '7' }],
+			resultType: 'complete',
+			_meta: { [MCP_META_SERVER]: identity },
+		})
+		expect(Object.hasOwn(modern, 'ttlMs')).toBe(false)
+		expect(Object.hasOwn(modern, 'cacheScope')).toBe(false)
+	})
+
+	it('defaults a supplied cache lifetime to private scope and preserves existing metadata', () => {
+		const identity = { name: 'server', version: '1.0.0' }
+
+		expect(buildModernResult({ tools: [], _meta: { extension: true } }, identity, 10)).toEqual({
+			tools: [],
+			resultType: 'complete',
+			ttlMs: 10,
+			cacheScope: 'private',
+			_meta: { extension: true, [MCP_META_SERVER]: identity },
+		})
+	})
+})
+
+describe('buildDiscoverResult', () => {
+	it('builds the mandatory discovery result with safe cache defaults', () => {
+		const identity = { name: 'server', version: '1.0.0' }
+
+		expect(buildDiscoverResult({ identity, tools: createToolManager() })).toEqual({
+			supportedVersions: ['2026-07-28', '2025-11-25', '2025-06-18'],
+			capabilities: { tools: {} },
+			resultType: 'complete',
+			ttlMs: DEFAULT_MCP_CACHE_TTL,
+			cacheScope: 'private',
+			_meta: { [MCP_META_SERVER]: identity },
+		})
+	})
+
+	it('carries configured instructions, zero ttl, and public scope', () => {
+		const identity = { name: 'server', version: '1.0.0' }
+
+		expect(
+			buildDiscoverResult({
+				identity,
+				tools: createToolManager(),
+				instructions: 'Use carefully',
+				cache: { ttl: 0, scope: 'public' },
+			}),
+		).toEqual({
+			supportedVersions: ['2026-07-28', '2025-11-25', '2025-06-18'],
+			capabilities: { tools: {} },
+			instructions: 'Use carefully',
+			resultType: 'complete',
+			ttlMs: 0,
+			cacheScope: 'public',
+			_meta: { [MCP_META_SERVER]: identity },
+		})
+	})
+})
+
 describe('buildInitializeResult', () => {
-	it('uses the default protocol version when none requested', () => {
+	it('uses the newest supported legacy revision when none requested', () => {
 		expect(buildInitializeResult('s', '1.0.0')).toEqual({
-			protocolVersion: MCP_PROTOCOL_VERSION,
+			protocolVersion: '2025-11-25',
 			capabilities: { tools: {} },
 			serverInfo: { name: 's', version: '1.0.0' },
 		})
 	})
 
-	it('falls back when the requested version requires unsupported batching', () => {
-		expect(buildInitializeResult('s', '1.0.0', '2025-03-26')['protocolVersion']).toBe(
-			MCP_PROTOCOL_VERSION,
-		)
+	it('echoes either supported legacy revision', () => {
+		expect(buildInitializeResult('s', '1.0.0', '2025-11-25')['protocolVersion']).toBe('2025-11-25')
+		expect(buildInitializeResult('s', '1.0.0', '2025-06-18')['protocolVersion']).toBe('2025-06-18')
 	})
 
-	it('falls back to the default for an unsupported requested version', () => {
-		expect(buildInitializeResult('s', '1.0.0', '1999-01-01')['protocolVersion']).toBe(
-			MCP_PROTOCOL_VERSION,
-		)
+	it('answers a modern initialize request with the newest legacy revision', () => {
+		expect(buildInitializeResult('s', '1.0.0', '2026-07-28')['protocolVersion']).toBe('2025-11-25')
+	})
+
+	it('falls back when the requested revision requires unsupported batching', () => {
+		expect(buildInitializeResult('s', '1.0.0', '2025-03-26')['protocolVersion']).toBe('2025-11-25')
+	})
+
+	it('falls back to the newest legacy revision for an unsupported requested version', () => {
+		expect(buildInitializeResult('s', '1.0.0', '1999-01-01')['protocolVersion']).toBe('2025-11-25')
 	})
 })
 

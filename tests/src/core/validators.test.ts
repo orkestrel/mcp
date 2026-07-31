@@ -3,7 +3,12 @@ import {
 	isJSONRPCMessage,
 	isJSONRPCRequest,
 	isJSONRPCResponse,
+	isMCPVersion,
+	isModernRequest,
 	isRequestId,
+	MCP_META_CAPABILITIES,
+	MCP_META_VERSION,
+	SUPPORTED_PROTOCOL_VERSIONS,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 
@@ -32,6 +37,22 @@ describe('isRequestId', () => {
 	it('rejects an object, an array, and a boolean', () => {
 		for (const value of [{}, { id: 1 }, [], [1], true, false]) {
 			expect(isRequestId(value)).toBe(false)
+		}
+	})
+})
+
+describe('isMCPVersion', () => {
+	it('accepts every supported revision and rejects removed or unknown revisions', () => {
+		for (const version of SUPPORTED_PROTOCOL_VERSIONS) {
+			expect(isMCPVersion(version)).toBe(true)
+		}
+		expect(isMCPVersion('2025-03-26')).toBe(false)
+		expect(isMCPVersion('2024-11-05')).toBe(false)
+	})
+
+	it('is total over non-string values', () => {
+		for (const value of [undefined, null, 7, {}, [], true]) {
+			expect(isMCPVersion(value)).toBe(false)
 		}
 	})
 })
@@ -152,5 +173,54 @@ describe('isInitializeRequest', () => {
 
 	it('rejects a non-request', () => {
 		expect(isInitializeRequest({ jsonrpc: '2.0', id: 1, result: {} })).toBe(false)
+	})
+})
+
+describe('isModernRequest', () => {
+	it('routes a request with the reserved protocol-version key as modern', () => {
+		expect(
+			isModernRequest({
+				jsonrpc: '2.0',
+				method: 'tools/list',
+				id: 1,
+				params: {
+					_meta: {
+						[MCP_META_VERSION]: '2026-07-28',
+						[MCP_META_CAPABILITIES]: {},
+					},
+				},
+			}),
+		).toBe(true)
+	})
+
+	it('routes on key presence even when the protocol-version value is not a string', () => {
+		expect(
+			isModernRequest({
+				jsonrpc: '2.0',
+				method: 'tools/list',
+				id: 1,
+				params: { _meta: { [MCP_META_VERSION]: 7 } },
+			}),
+		).toBe(true)
+	})
+
+	it('does not mistake unrelated legacy metadata for the modern discriminator', () => {
+		expect(
+			isModernRequest({
+				jsonrpc: '2.0',
+				method: 'tools/list',
+				id: 1,
+				params: { _meta: { progressToken: 'token' } },
+			}),
+		).toBe(false)
+	})
+
+	it('is total over hostile and malformed input', () => {
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+
+		for (const value of [proxy, null, [], { params: { _meta: {} } }]) {
+			expect(isModernRequest(value)).toBe(false)
+		}
 	})
 })

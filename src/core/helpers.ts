@@ -3,12 +3,23 @@ import type {
 	JSONRPCResponse,
 	MCPCallResult,
 	MCPClientInterface,
+	MCPDiscoverResult,
+	MCPIdentity,
 	MCPServerInterface,
+	MCPServerOptions,
 	MCPToolDescriptor,
 	MCPTransportInterface,
 } from './types.js'
-import { MCP_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
+import { isRecord } from '@orkestrel/contract'
+import {
+	DEFAULT_MCP_CACHE_TTL,
+	MCP_LEGACY_VERSION,
+	MCP_META_SERVER,
+	SUPPORTED_PROTOCOL_VERSIONS,
+} from './constants.js'
+import { inferEra } from './inferers.js'
 import { parseJSONRPCMessage } from './parsers.js'
+import { isMCPVersion } from './validators.js'
 
 // Pure dispatch builders (AGENTS §5: the dispatch branches stay exported helpers,
 // not hidden privates). Each turns a piece of MCP state into the JSON-RPC `result`
@@ -103,12 +114,91 @@ export function buildCallResult(result: ToolResult): MCPCallResult {
 }
 
 /**
+ * Stamp a result with the modern complete-result discriminator and server
+ * metadata, plus cache fields when the result is cacheable.
+ *
+ * @remarks
+ * This is the single stamping site shared by modern result builders. Supplying
+ * `ttl` adds both schema-coupled fields (`ttlMs` and `cacheScope`); omitting it
+ * adds neither, which keeps `tools/call` distinct from cacheable results.
+ *
+ * @param result - The unstamped result payload
+ * @param identity - The server identity carried under the reserved `_meta` key
+ * @param ttl - Required freshness lifetime for a cacheable result; omit for a non-cacheable result
+ * @param scope - The cache visibility, defaulting to `'private'` when `ttl` is supplied
+ * @returns A copy of the payload with its modern stamps
+ */
+export function buildModernResult<T extends object>(
+	result: T,
+	identity: MCPIdentity,
+	ttl: number,
+	scope?: 'public' | 'private',
+): T & {
+	readonly resultType: 'complete'
+	readonly _meta: Readonly<Record<string, unknown>>
+	readonly ttlMs: number
+	readonly cacheScope: 'public' | 'private'
+}
+export function buildModernResult<T extends object>(
+	result: T,
+	identity: MCPIdentity,
+): T & {
+	readonly resultType: 'complete'
+	readonly _meta: Readonly<Record<string, unknown>>
+}
+export function buildModernResult<T extends object>(
+	result: T,
+	identity: MCPIdentity,
+	ttl?: number,
+	scope?: 'public' | 'private',
+): T & {
+	readonly resultType: 'complete'
+	readonly _meta: Readonly<Record<string, unknown>>
+	readonly ttlMs?: number
+	readonly cacheScope?: 'public' | 'private'
+} {
+	const currentMetadata = isRecord(result) ? result['_meta'] : undefined
+	const metadata = {
+		...(isRecord(currentMetadata) ? currentMetadata : {}),
+		[MCP_META_SERVER]: identity,
+	}
+	if (ttl === undefined) return { ...result, resultType: 'complete', _meta: metadata }
+	return {
+		...result,
+		resultType: 'complete',
+		ttlMs: ttl,
+		cacheScope: scope ?? 'private',
+		_meta: metadata,
+	}
+}
+
+/**
+ * Build the mandatory modern `server/discover` result.
+ *
+ * @param options - The server identity, instructions, and cache configuration
+ * @returns The supported revisions, tools capability, and required modern cache stamps
+ */
+export function buildDiscoverResult(options: MCPServerOptions): MCPDiscoverResult {
+	return buildModernResult(
+		{
+			supportedVersions: SUPPORTED_PROTOCOL_VERSIONS.filter(isMCPVersion),
+			capabilities: { tools: {} },
+			...(options.instructions === undefined ? {} : { instructions: options.instructions }),
+		},
+		options.identity,
+		options.cache?.ttl ?? DEFAULT_MCP_CACHE_TTL,
+		options.cache?.scope,
+	)
+}
+
+/**
  * Build the MCP `initialize` result — the negotiated protocol version, the
  * advertised capabilities, and the server identity.
  *
  * @remarks
  * Version negotiation echoes the client's `requested` version when it is one of the
- * {@link SUPPORTED_PROTOCOL_VERSIONS}, else falls back to {@link MCP_PROTOCOL_VERSION}.
+ * supported legacy revisions. A modern or unsupported request receives the newest
+ * supported legacy revision; the client decides whether to continue.
  * `capabilities.tools` is an empty object — this server advertises the tools
  * capability with no sub-options (no list-changed notification yet).
  *
@@ -122,10 +212,11 @@ export function buildInitializeResult(
 	version: string,
 	requested?: string,
 ): Readonly<Record<string, unknown>> {
+	const newestLegacy =
+		SUPPORTED_PROTOCOL_VERSIONS.find((candidate) => inferEra(candidate) === 'legacy') ??
+		MCP_LEGACY_VERSION
 	const protocolVersion =
-		requested !== undefined && SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
-			? requested
-			: MCP_PROTOCOL_VERSION
+		isMCPVersion(requested) && inferEra(requested) === 'legacy' ? requested : newestLegacy
 	return {
 		protocolVersion,
 		capabilities: { tools: {} },

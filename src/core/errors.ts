@@ -6,13 +6,19 @@
  * {@link MCPClient} throws this error only for a remote JSON-RPC `error` response.
  * Local lifecycle and transport conditions such as disconnects and request timeouts
  * remain plain `Error`s. `context` carries the response's optional `error.data`
- * unchanged and is `undefined` when the peer omitted it.
+ * unchanged and is `undefined` when the peer omitted it. This includes the modern
+ * reserved paths: `-32020` carries no context, `-32021` may carry
+ * `requiredCapabilities`, and `-32022` carries the peer's `supported` revisions and
+ * `requested` revision for negotiation recovery.
  *
  * @example
  * ```ts
- * const error = new MCPError('Method not found', -32601, { method: 'missing' })
- * error.code // -32601
- * error.context // { method: 'missing' }
+ * const error = new MCPError('Unsupported protocol version', -32022, {
+ * 	supported: ['2026-07-28'],
+ * 	requested: '2024-11-05',
+ * })
+ * error.code // -32022
+ * error.context // { supported: ['2026-07-28'], requested: '2024-11-05' }
  * ```
  */
 export class MCPError extends Error {
