@@ -80,6 +80,7 @@ Cross-face and substrate usage appear under [Patterns](#patterns).
 | API                     | Kind     | Summary                                                                                                                                     |
 | ----------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `compose`               | function | Compose an ordered middleware chain around a `terminal` handler (the frozen seam).                                                          |
+| `wrapMiddleware`        | function | Wrap one middleware layer around its downstream handler while enforcing the one-call `next` invariant.                                      |
 | `parseCookies`          | function | Parse a raw `Cookie:` header into a `name → value` lookup.                                                                                  |
 | `isCookieName`          | function | Whether a string is a valid RFC 6265 cookie name (no whitespace).                                                                           |
 | `decodeCookieValue`     | function | Decode a cookie value, falling back to raw text on malformed escapes.                                                                       |
@@ -113,6 +114,7 @@ Cross-face and substrate usage appear under [Patterns](#patterns).
 | `ipv6Network`           | function | Compute the `/64` network of a full IPv6 address, or `undefined`.                                                                           |
 | `clientRateKey`         | function | Collapse a client IP into its rate-limit bucket key (IPv6 `/64`, IPv4 unchanged).                                                           |
 | `serializeEvent`        | function | Serialize one `SSEMessage` to the SSE wire.                                                                                                 |
+| `enqueueStreamText`     | function | Enqueue encoded text into an open byte stream, safely ignoring closed or unstarted streams.                                                 |
 | `openStream`            | function | Open a generic Server-Sent-Events stream over a `ReadableStream` `Response`.                                                                |
 | `isDangerousKey`        | function | Whether a key is a prototype-pollution vector (`__proto__`/`constructor`/`prototype`).                                                      |
 | `scrubPrototype`        | function | Recursively strip prototype-pollution keys from a parsed value in place.                                                                    |
@@ -122,6 +124,7 @@ Cross-face and substrate usage appear under [Patterns](#patterns).
 | `readBody`              | function | Collect + decode a `Request` body — the pipeline behind `context.body()`.                                                                   |
 | `isHTTPError`           | function | Narrow an unknown caught value to an `HTTPError` (including subclasses) — recognized across package copies via a structural brand fallback. |
 | `isAddressInfo`         | function | Whether a `node:net` address is the structured `AddressInfo` shape.                                                                         |
+| `probePort`             | function | Bind and close one throwaway TCP server to resolve an available port.                                                                       |
 | `discoverPort`          | function | Find a free TCP port — try a `preferred` one first, else an ephemeral port.                                                                 |
 
 ### Entities
