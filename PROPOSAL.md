@@ -57,6 +57,25 @@
 > (§4.1/§4.5), A4's supersession acceptance criterion standing ahead of the §8.10 evidence that
 > establishes it, and the absent handler/dispatch signatures that A4 and A5 both require (now
 > specified in §4.3). Nothing below describes shipped behavior; the status line above governs.
+>
+> **Evidence pass, 2026-07-31 — §8 run against primary sources.** Eleven of the twelve evidence
+> tasks returned, read from the spec text and the commit-pinned schema rather than from prose
+> summaries; only §8.2 was outside this pass and stays open. Seven findings **contradicted**
+> this document and are fixed in place: §4.2's three-item 2025-11-25 mandatory surface — one
+> item refuted, several unrecorded MUSTs added, one of them a second declared conformance gap
+> (§4.2, §5.1.10); `ttlMs`'s optionality and the reading of `0` (§4.4); a `-32020` `data` shape
+> that does not exist (§4.4); MRTR's `inputRequests` shape, `requestState` type, and echo
+> position (§5.1.1); A4's supersession rule, **withdrawn** because MCP defines no subscription
+> key for it to govern (§5.1.2, §6.2); §8.6's "no reference peer exists", overturned by a
+> published conformance suite; and the batching MUST's citation page (§8.1). Six more findings
+> **filled gaps** this document simply did not know: `tools/list` owes both `ttlMs` and
+> `cacheScope` (§4.4); elicitation modes are capability-gated and `InputRequiredResult` is
+> method-restricted (§5.1.1); a subscription's closing frame carries a required `_meta`, and
+> stream ordering is per subscription id rather than per channel (§5.1.2); the headerless-POST
+> rule now has three settled cases and the spec clause that settles them (§4.2, §4.8); A7's
+> stated trigger has fired and is re-ruled rather than ignored (§5.1.3); and `CallToolResult`
+> shares its response slot with `InputRequiredResult` (§8.8). §8 now carries an answer and a
+> status per task instead of a question.
 
 ## Why this exists
 
@@ -153,7 +172,8 @@ ListRootsRequest` (only types the client declared); client retries the ORIGINAL 
 5. **`subscriptions/listen`**: held-open response stream; first message per subscription is
    `notifications/subscriptions/acknowledged`; every stream notification carries
    `_meta['io.modelcontextprotocol/subscriptionId']` = the listen request's id; graceful
-   closure = empty complete result.
+   closure is a complete result carrying a **required** `_meta` with that same subscription id
+   (**corrected 2026-07-31** from "empty complete result" — see §5.1.2).
 6. **Required HTTP metadata headers**: `Mcp-Method` (= body method) on all requests;
    `Mcp-Name` (= `params.name`/`params.uri`) on `tools/call`, `resources/read`,
    `prompts/get`; `MCP-Protocol-Version` on all. Optional `Mcp-Param-{Name}` via
@@ -324,16 +344,54 @@ export const SUPPORTED_PROTOCOL_VERSIONS: readonly MCPVersion[] = Object.freeze(
 ])
 ```
 
-| Revision   | Ruling                                             | Why                                                                                                                                                                                                                                                                                          |
-| ---------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-07-28 | **Support — default, modern era**                  | `/specification/latest`; its mandated tools-only surface is fully implementable with zero speculative capability.                                                                                                                                                                            |
-| 2025-11-25 | **Support — legacy era** (planner dissented; §9.1) | Site-labeled "current"; the dominant deployed client population today. Tools-only mandatory delta is tiny: Origin→403 on the HTTP face, 2020-12 dialect, validation-as-execution-error. Optional surfaces (tasks, icons, URL elicitation, SSE polling) are NOT adopted and never advertised. |
-| 2025-06-18 | **Support — legacy era**                           | The currently implemented revision; the legacy anchor the widest older ecosystem speaks.                                                                                                                                                                                                     |
-| 2025-03-26 | **Remove** (both engines agree; source-verified)   | Advertised today while its batching MUST is violated (§3.3). Delete the row rather than implement batching that 2025-06-18 removed again. Consequence: the headerless default disappears with it — see the ruling below.                                                                     |
-| 2024-11-05 | **Exclude** (both agree)                           | Requires the HTTP+SSE two-endpoint transport this package never implemented and 2026-07-28 deprecates. Advertising the version without its transport is a false handshake.                                                                                                                   |
+| Revision   | Ruling                                             | Why                                                                                                                                                                                                                                                                                                                             |
+| ---------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-07-28 | **Support — default, modern era**                  | `/specification/latest`; its mandated tools-only surface is fully implementable with zero speculative capability.                                                                                                                                                                                                               |
+| 2025-11-25 | **Support — legacy era** (planner dissented; §9.1) | Site-labeled "current"; the dominant deployed client population today. Mandatory delta measured 2026-07-31 and **larger than three items** — see below; all of it satisfied except one declared conformance gap (§5.1.10). Optional surfaces (tasks, icons, URL elicitation, SSE polling) are NOT adopted and never advertised. |
+| 2025-06-18 | **Support — legacy era**                           | The currently implemented revision; the legacy anchor the widest older ecosystem speaks.                                                                                                                                                                                                                                        |
+| 2025-03-26 | **Remove** (both engines agree; source-verified)   | Advertised today while its batching MUST is violated (§3.3). Delete the row rather than implement batching that 2025-06-18 removed again. Consequence: the headerless default disappears with it — see the ruling below.                                                                                                        |
+| 2024-11-05 | **Exclude** (both agree)                           | Requires the HTTP+SSE two-endpoint transport this package never implemented and 2026-07-28 deprecates. Advertising the version without its transport is a false handshake.                                                                                                                                                      |
 
 The list order is meaningful: it is the client's preference order and the `server/discover`
 advertisement.
+
+**The 2025-11-25 mandatory surface — measured, and larger than the row claimed (§8.5
+answered).** The three-item reading above did not survive its own evidence task. Two items are
+confirmed: an invalid `Origin` MUST get 403, and JSON Schema 2020-12 is not one MUST but
+**three** — support 2020-12, validate against the declared or default dialect and handle an
+unsupported dialect gracefully, and keep the schemas themselves valid. The third item is
+**refuted and struck**: `server/tools` § Error Handling carries no server-binding keyword at
+all. It is a descriptive classification, and its only keywords bind the _client_, which SHOULD
+surface execution errors to the model. "Validation-as-execution-error" was never a MUST on us,
+so it no longer appears in the row above and must not reappear in the guide.
+
+The surface is also wider than any three items. A tools-only 2025-11-25 server is additionally
+bound to declare the `tools` capability; to keep `inputSchema` a valid JSON Schema object
+rather than `null`; to the base protocol and lifecycle in full (an id present on every request
+and never `null`, notifications answered with nothing, an integer error `code`; `initialize`
+first, the server's capabilities in its response, the version-negotiation response rules, and
+both parties respecting the negotiated version and using only negotiated capabilities); to
+`security_best_practices` (MUST NOT accept a token not issued for this server, MUST verify
+every inbound request, MUST NOT authenticate with sessions, MUST use secure non-deterministic
+session ids); and — from `server/tools` § Security Considerations — to validate all tool
+inputs, implement proper access controls, **rate limit tool invocations**, and sanitize tool
+outputs.
+
+**§9.1 said to revisit if a larger mandatory surface surfaced. It has, and the ruling to keep
+2025-11-25 survives.** Every added MUST is either already satisfied by the implementation or is
+generic base-protocol and lifecycle behavior this package implements regardless of which
+revision it is speaking — with exactly one genuine exposure. **"Rate limit tool invocations" is
+a MUST this library does not satisfy**: a rate limit is a decision about a specific caller's
+traffic against a specific deployment's capacity, which the mechanism-not-policy law puts with
+the consumer, not with the framework. That makes it a **declared conformance gap** in the
+§5.1.9 sense — the second one, alongside `Mcp-Param-*` — recorded in §5.1.10 and named in U6's
+gaps section with its clause, its consumer-visible consequence, and its closer. A declared gap
+is not a reason to drop the revision; it is the honest alternative to a silent omission.
+
+**2025-03-26's removal is ours, not upstream's.** The revision is still live on the spec site
+and still one of the six the versioning page lists; nothing was withdrawn. Dropping it is this
+library's decision, taken because its batching MUST is unimplemented (§3.3). Neither the row
+above nor the guide may read as though the ecosystem retired it.
 
 **Headerless legacy POST — the default is withdrawn (corrects pre-existing text).** The
 earlier reading, "a headerless legacy HTTP request is treated as 2025-06-18", was written as a
@@ -352,11 +410,44 @@ research and the ruling conflict, the research wins**, so:
   _post-initialize_ requests (§3.1), and no version is negotiated before the handshake.
 - A header naming an unsupported revision is still `-32022`, unchanged.
 
-What remains open is only whether a _post-initialize_ legacy POST that omits the REQUIRED
-header must be rejected with 400 + `-32020` or tolerated: §1.2 records the permission that no
-longer applies to us, not the obligation that replaces it. Evidence task §8.12 settles it
-before U4 ships; until then the design promises no defaulting either way, and the guide states
-the gap rather than a behavior.
+**Settled 2026-07-31 (§8.12 answered); the withdrawal was right for the reason it guessed at.**
+The paragraph above withdrew the default on caution — a REQUIRED header cannot be defaulted by
+the same act that removes the only license to default it — and the primary text turns out to
+say precisely that. 2025-06-18 and 2025-11-25 are word-for-word identical here, and the
+defaulting SHOULD carries its own scope (bold on the scoping clause is ours; the source bolds
+only `SHOULD`):
+
+> For backwards compatibility, if the server does _not_ receive an `MCP-Protocol-Version`
+> header, **and has no other way to identify the version - for example, by relying on the
+> protocol version negotiated during initialization** - the server **SHOULD** assume protocol
+> version `2025-03-26`.
+
+The negotiated version is the clause's own example of having another way, so on a live legacy
+session the antecedent is unsatisfied and the `2025-03-26` default never engages at all. That
+is exactly the corrected reasoning above — "the version pinned at `initialize` governs, a
+negotiated fact, not a default" — now with direct textual support instead of inference. The
+adjacent `400` MUST is triggered by an invalid or unsupported header _value_; on a _missing_
+header both legacy revisions are silent. 2026-07-28 carries the scoping the earlier reading had
+misattributed to them:
+
+> A server that supports clients implementing protocol versions earlier than `2025-06-18`
+> (which did not define the `MCP-Protocol-Version` header) **MAY** treat a request that omits
+> the header as protocol version `2025-03-26`. A server that does not support such clients
+> **MUST** reject a request without the header per Server Validation.
+
+Having removed 2025-03-26, we are in the spec's own words a server that does not support such
+clients, and Server Validation resolves to HTTP 400 + `-32020` over a failure list that
+explicitly includes a missing required standard header. **The ingress rule, three cases:**
+
+- **Legacy `initialize`** — legitimately headerless; no version is negotiated yet. Accept.
+- **Legacy post-`initialize` request on a live session, no header** — accept, and the session's
+  negotiated version governs. The legacy text's own scoping says the default does not engage
+  precisely because we have another way to know.
+- **Any other headerless request** — modern, or legacy with no session to consult — nothing
+  identifies the era, so **reject: HTTP 400 + `-32020`**.
+
+Defaulting to 2025-06-18 stays ruled out, now on evidence rather than on caution. U4 ships this
+rule and U6 states it as behavior, not as a gap.
 
 ### 4.3 Type contracts (`src/core/types.ts`) — planner shape adopted
 
@@ -410,7 +501,8 @@ export interface MCPDispatchOptions {
 /**
  * A held-open modern result: each `yield` is a notification (a `JSONRPCRequest` with no
  * `id`, `types.ts:20-27`); the `return` value is the terminating response — for
- * `subscriptions/listen`, the empty complete result of a graceful close (§1.4.5).
+ * `subscriptions/listen`, the complete result of a graceful close, which carries a required
+ * `_meta` naming the subscription id (§5.1.2).
  */
 export type MCPStream = AsyncGenerator<JSONRPCRequest, JSONRPCResponse>
 
@@ -469,8 +561,31 @@ export const DEFAULT_MCP_CACHE_TTL = 60_000 // ttlMs is REQUIRED ⇒ needs a def
 
 `MCP_` (not `JSONRPC_`) prefix on the new codes mirrors the spec's own allocation split.
 Cache scope defaults to **`'private'`** — a mechanism library cannot know whether a
-`ToolManager` is per-tenant; `'public'` is opt-in. (Analyst preferred `ttl: 0`; evidence task
-§8.4 settles whether `0` is schema-legal before freezing the default.)
+`ToolManager` is per-tenant; `'public'` is opt-in.
+
+**Corrected 2026-07-31 (§8.4 answered).** Three schema findings bind this section:
+
+- **`ttlMs` is REQUIRED and `@minimum 0`, and `0` does not mean "do not cache".**
+  `CacheableResult.required` is `["cacheScope","resultType","ttlMs"]` and
+  `ListToolsResult.required` is `["cacheScope","resultType","tools","ttlMs"]`. A `0` says the
+  result SHOULD be considered immediately stale and the client MAY re-fetch each time — a
+  staleness hint, not a prohibition. `DEFAULT_MCP_CACHE_TTL = 60_000` therefore stands and
+  §9.6 closes: `0` is schema-legal, but it does not carry the "do not cache" meaning the
+  alternative was proposed for, so the condition that ruling was held open against is spent.
+- **`tools/list` MUST carry both `ttlMs` and `cacheScope`.** The §6 acceptance rule that a
+  modern `tools/call` carries `resultType` and NO `ttlMs` is correct and unchanged —
+  `CallToolResult extends Result`, not `CacheableResult`. But no unit ledger ever stated the
+  `tools/list` obligation, and U1/U2 emit both fields there or the response is schema-invalid.
+- **`HeaderMismatchError` declares no `data` member — only `code`.** The contrast is
+  deliberate: `UnsupportedProtocolVersionError` in the same schema file _does_ declare
+  `data: { supported: string[]; requested: string }`, and the canonical `-32020` example
+  carries no `data` at all. Any reading of a `-32020` data shape is wrong; the `-32022` shape
+  is confirmed exactly as designed.
+
+`x-mcp-header` has no schema definition of its own — it occurs once, inside the description of
+`Tool.inputSchema`, and every constraint on it is prose (non-empty, RFC 9110 token syntax, no
+CR/LF, case-insensitively unique, primitive types with `number` excluded, statically reachable
+through `properties` chains). That bears on U7 alone, which stays unscheduled.
 
 Server face (`src/server/constants.ts`): `MCP_METHOD_HEADER = 'mcp-method'`,
 `MCP_NAME_HEADER = 'mcp-name'`; `MCP_PROTOCOL_VERSION_HEADER` becomes load-bearing. Browser
@@ -557,10 +672,12 @@ divergence appears; the HTTP session middleware pins the negotiated version at i
   - Status map (modern only): 202 notification; 400 for `-32020`/`-32021`/`-32022`/`-32602`;
     404 for `-32601`; 200 otherwise. Legacy requests keep today's uniform 200 in-band errors
     — nothing regresses.
-  - Headerless legacy POST ⇒ **no version is inferred** (§4.2, corrected): the legacy branch
-    is revision-invariant, a session's version comes from its handshake, and `initialize`
-    itself is legitimately headerless. Whether a post-initialize omission must be rejected
-    with 400 + `-32020` is §8.12's evidence, not a default.
+  - Headerless POST ⇒ **no version is inferred** (§4.2, corrected), and the three cases §8.12
+    settled are the whole rule: `initialize` is legitimately headerless and is accepted; a
+    post-`initialize` legacy request on a live session is accepted and answered under the
+    version that session negotiated; **every other headerless request is rejected with 400 +
+    `-32020`**, because nothing identifies its era and we are, in the spec's words, a server
+    that does not support pre-2025-06-18 clients.
   - Origin gate: same-origin/no-origin allowed by default; cross-origin requires explicit
     `origins` allowlist option; invalid ⇒ 403. Mechanism only — which origins is consumer
     policy. (Planner dissented; §9.2.)
@@ -612,43 +729,44 @@ reason, and re-ruled on 2026-07-31 once `@orkestrel/supervisor` became that cons
 carries each flip in full: old ruling, new ruling, reason, and the consumer that expired the
 old reason. A row without an **amended** mark is unchanged.
 
-| Feature                                                                           | Ruling                                                                 | Reason                                                                                                                                                                                                                                                                                                               |
-| --------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Per-request `_meta` (version/capabilities REQUIRED; clientInfo/serverInfo SHOULD) | Implement                                                              | Mandatory; the discriminator itself.                                                                                                                                                                                                                                                                                 |
-| `_meta.progressToken`                                                             | Implement as passthrough                                               | Must not be misread as a modern marker; we neither generate nor consume progress.                                                                                                                                                                                                                                    |
-| `_meta.logLevel`                                                                  | Exclude                                                                | Belongs to logging, deprecated in 2026-07-28. No consumer opts a request into server log emission.                                                                                                                                                                                                                   |
-| `_meta.subscriptionId`                                                            | **Implement — amended (§5.1)**                                         | Flips with `subscriptions/listen`: it is the stream's correlation key, so excluding it would leave every stream notification uncorrelatable. Consumer: `@orkestrel/supervisor`'s observation stream.                                                                                                                 |
-| W3C `traceparent`/`tracestate`/`baggage`                                          | Exclude                                                                | Tracing is application policy; the `request` event is the observation seam; consumers stamp their own.                                                                                                                                                                                                               |
-| `server/discover`                                                                 | Implement                                                              | Mandatory server RPC; surfaced as `client.discover()` (instructions otherwise unreachable).                                                                                                                                                                                                                          |
-| Method seam for revisions/extensions beyond the built-in set                      | **Implement — amended (§5.1)**                                         | §4.6's modern branch answers three hard-coded methods and `-32601` for everything else, so `subscriptions/listen` and every Tasks method would each need another `switch` arm in core. Consumer: `@orkestrel/supervisor` needs the first and may want the rest.                                                      |
-| `resultType` on every modern result                                               | Implement                                                              | Mandatory; one stamping site; client treats absent as complete.                                                                                                                                                                                                                                                      |
-| MRTR production (`inputRequests`/`requestState`)                                  | **Implement, `ElicitRequest` only — amended (§5.1)**                   | Consumer: `@orkestrel/supervisor`'s `reply` path needs operator input in band. Sampling and roots stay excluded (deprecated, no consumer). `requestState` is opaque and attacker-controlled from the server's view ⇒ MUST be integrity-protected.                                                                    |
-| `subscriptions/listen`                                                            | **Implement, modern-only — amended (§5.1)**                            | The producer that did not exist now does: `@orkestrel/supervisor`'s normalized observation stream. A held-open result gets its own return arm (`MCPStream`, §4.3) rather than being forced through one-request→one-response dispatch. Second-listen behavior is §8.10's evidence, not a settled criterion.           |
-| `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` headers                          | Implement (both HTTP faces + ingress validation)                       | REQUIRED; derivable from the in-hand message; closes gap §3.1. `Mcp-Name` is scoped to the named methods §1.4.6 lists — on our surface, `tools/call` alone (§4.8, corrected).                                                                                                                                        |
-| `Mcp-Param-*` + `x-mcp-header` client-side projection                             | **Declared conformance gap — not a non-goal** (§5.1.9; §8.2 may close) | §1.4.6 records a client-side MUST, so calling this an exclusion misstated it (pre-existing). We do not satisfy it: the projection needs the tool schema (client-only knowledge) inside the HTTP transport, an HTTP-shaped widening of the transport-agnostic port. U7 remains the isolated unit that would close it. |
-| `x-mcp-header` server-side annotation + invalid-definition filtering              | Exclude — vacuously satisfied                                          | The MUST to keep invalid annotated definitions out of `tools/list` binds a server that accepts the annotation. Installed `@orkestrel/tool` definitions carry no `x-mcp-header`, so none exists to be invalid. If A7 or a later contract admits the annotation, the filter ships with it.                             |
-| HTTP status mapping (202/400/403/404/405)                                         | Implement (modern-scoped)                                              | Legacy keeps today's uniform 200 in-band errors; modern gets the exact codes. 405 GET/DELETE is already true of a session-free mount — documented, not coded.                                                                                                                                                        |
-| Modern HTTP disconnect-cancellation                                               | **Implement — amended (§5.1)**                                         | 2026-07-28 removes client→server notifications over HTTP: closing the response stream IS the cancellation signal (`notifications/cancelled` survives on stdio only). Today `request.signal` only detaches an SSE session (`middlewares.ts:114-115`).                                                                 |
-| `X-Accel-Buffering: no` + SSE comment keep-alives                                 | Implement                                                              | SHOULD; trivial; comment-flush idiom already exists.                                                                                                                                                                                                                                                                 |
-| `-32020`                                                                          | Implement (HTTP face emits)                                            |                                                                                                                                                                                                                                                                                                                      |
-| `-32021`                                                                          | **Implement both directions — amended (§5.1.1)**                       | Was constant + client recognition only, because no implemented method required a client capability. `ElicitRequest` production creates one: a client that never declared elicitation, on an operation that needs it, gets `data.requiredCapabilities`.                                                               |
-| `-32022` + data                                                                   | Implement both directions                                              | Server emits `{ supported, requested }`; client retries once with new id.                                                                                                                                                                                                                                            |
-| Retired `-32002`/`-32042` MUST NOT emit                                           | Already true; add policy assertion                                     | Neither is emitted today.                                                                                                                                                                                                                                                                                            |
-| `CacheableResult` on `tools/list` + `server/discover`                             | Implement                                                              | The only two cacheable results this package produces. `cache` option; default scope `'private'`.                                                                                                                                                                                                                     |
-| Deterministic `tools/list` order                                                  | Contract + parity assertion, no code                                   | Registry insertion order is already deterministic and is the caller's intent.                                                                                                                                                                                                                                        |
-| `extensions` capability field                                                     | Exclude from the first slice (**amended scope**, §5.1)                 | Capabilities stay an open record, so a consumer can already declare an extension id without a library change. Reading the map becomes load-bearing only if A7 lands; nothing else may depend on it.                                                                                                                  |
-| Tasks extension (`io.modelcontextprotocol/tasks`)                                 | **Optional augmentation, never the substrate — amended (§5.1)**        | The durable handle is a durable id in an ordinary `tools/call` result, on every era, with no negotiation. `tasks/get`/`tasks/update`/`tasks/cancel` MAY be added later (A7); core `tasks/list` and blocking `tasks/result` are gone in 2026-07-28.                                                                   |
-| Durable task storage                                                              | **Injected contract, only with A7 — amended (§5.1)**                   | Task state outlives a request by definition, and this package owns no persistence. It would arrive injected, exactly as `ToolManagerInterface` does. Absent A7 there is no store and no storage dependency.                                                                                                          |
-| Resources / Prompts / Roots / Sampling / Logging                                  | Exclude                                                                | No registries/consumers; roots/sampling/logging deprecated in 2026-07-28. Local emitters remain observability, not an MCP logging capability. `@orkestrel/supervisor` explicitly takes **no resources in its first slice** — `inspect` carries the read.                                                             |
-| Elicitation                                                                       | Split (**amended**, §5.1)                                              | The legacy server-initiated `elicitation/create` request stays excluded (no consumer, and 2026-07-28 removes server-initiated requests entirely). Modern `ElicitRequest` production inside an MRTR result is implemented — see the MRTR row.                                                                         |
-| Icons (2025-11-25)                                                                | Exclude                                                                | Installed `@orkestrel/tool` tool definitions carry no icon field; an MCP-only wrapper has no originating consumer.                                                                                                                                                                                                   |
-| Protocol-native `tools/call` results (`structuredContent`)                        | **Implement — amended (§5.1)**                                         | `buildToolResult` collapses every value into one `JSON.stringify` text block (`helpers.ts:95-103`), so a durable handle reaches the client as a string a model must re-parse. Consumer: `@orkestrel/supervisor` returns a durable id from every command.                                                             |
-| `outputSchema` on tool descriptors                                                | Exclude (unchanged)                                                    | The installed `ToolResult` (`@orkestrel/tool`) is a success-discriminated union whose `value` stays `unknown`; the schema half belongs first to the tool contract that owns it. §8.8 confirms whether `structuredContent` may ship without it.                                                                       |
-| SSE polling / resumability                                                        | Legacy-only (existing session middleware), unchanged                   | Modern requests must not use it; the broader optional 2025-11 polling protocol has no consumer.                                                                                                                                                                                                                      |
-| Hostile-input limits + protocol-faithful fixtures                                 | **Implement — amended (§5.1)**                                         | `handle()` `JSON.parse`s an unbounded string and nothing caps `_meta` size, `requestState` size, or live subscriptions. A public, long-lived service host makes each of those a denial-of-service surface rather than a theoretical one.                                                                             |
-| Origin → 403                                                                      | Implement minimal gate (`origins` option, secure default)              | Spec MUST on the server component this package ships; policy (the list) stays with the consumer. Planner dissent §9.2.                                                                                                                                                                                               |
-| Batching removal                                                                  | Implement by deletion                                                  | Batch arm removed from `send`; 2025-03-26 dropped; MUST enforced in types.                                                                                                                                                                                                                                           |
-| `initialize`/`ping`/sessions/GET-stream                                           | Legacy-only (dual-era)                                                 | Present in legacy; `-32601`/405 in modern.                                                                                                                                                                                                                                                                           |
+| Feature                                                                             | Ruling                                                                 | Reason                                                                                                                                                                                                                                                                                                                                  |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Per-request `_meta` (version/capabilities REQUIRED; clientInfo/serverInfo SHOULD)   | Implement                                                              | Mandatory; the discriminator itself.                                                                                                                                                                                                                                                                                                    |
+| `_meta.progressToken`                                                               | Implement as passthrough                                               | Must not be misread as a modern marker; we neither generate nor consume progress.                                                                                                                                                                                                                                                       |
+| `_meta.logLevel`                                                                    | Exclude                                                                | Belongs to logging, deprecated in 2026-07-28. No consumer opts a request into server log emission.                                                                                                                                                                                                                                      |
+| `_meta.subscriptionId`                                                              | **Implement — amended (§5.1)**                                         | Flips with `subscriptions/listen`: it is the stream's correlation key, so excluding it would leave every stream notification uncorrelatable. Consumer: `@orkestrel/supervisor`'s observation stream.                                                                                                                                    |
+| W3C `traceparent`/`tracestate`/`baggage`                                            | Exclude                                                                | Tracing is application policy; the `request` event is the observation seam; consumers stamp their own.                                                                                                                                                                                                                                  |
+| `server/discover`                                                                   | Implement                                                              | Mandatory server RPC; surfaced as `client.discover()` (instructions otherwise unreachable).                                                                                                                                                                                                                                             |
+| Method seam for revisions/extensions beyond the built-in set                        | **Implement — amended (§5.1)**                                         | §4.6's modern branch answers three hard-coded methods and `-32601` for everything else, so `subscriptions/listen` and every Tasks method would each need another `switch` arm in core. Consumer: `@orkestrel/supervisor` needs the first and may want the rest.                                                                         |
+| `resultType` on every modern result                                                 | Implement                                                              | Mandatory; one stamping site; client treats absent as complete.                                                                                                                                                                                                                                                                         |
+| MRTR production (`inputRequests`/`requestState`)                                    | **Implement, `ElicitRequest` only — amended (§5.1)**                   | Consumer: `@orkestrel/supervisor`'s `reply` path needs operator input in band. Sampling and roots stay excluded (deprecated, no consumer). `requestState` is an opaque **string**, attacker-controlled from the server's view ⇒ MUST be integrity-protected (§5.1.1, corrected).                                                        |
+| `subscriptions/listen`                                                              | **Implement, modern-only — amended (§5.1)**                            | The producer that did not exist now does: `@orkestrel/supervisor`'s normalized observation stream. A held-open result gets its own return arm (`MCPStream`, §4.3) rather than being forced through one-request→one-response dispatch. MCP defines no subscription key, so supersession is not a mechanism to build (§5.1.2, corrected). |
+| `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` headers                            | Implement (both HTTP faces + ingress validation)                       | REQUIRED; derivable from the in-hand message; closes gap §3.1. `Mcp-Name` is scoped to the named methods §1.4.6 lists — on our surface, `tools/call` alone (§4.8, corrected).                                                                                                                                                           |
+| `Mcp-Param-*` + `x-mcp-header` client-side projection                               | **Declared conformance gap — not a non-goal** (§5.1.9; §8.2 may close) | §1.4.6 records a client-side MUST, so calling this an exclusion misstated it (pre-existing). We do not satisfy it: the projection needs the tool schema (client-only knowledge) inside the HTTP transport, an HTTP-shaped widening of the transport-agnostic port. U7 remains the isolated unit that would close it.                    |
+| `x-mcp-header` server-side annotation + invalid-definition filtering                | Exclude — vacuously satisfied                                          | The MUST to keep invalid annotated definitions out of `tools/list` binds a server that accepts the annotation. Installed `@orkestrel/tool` definitions carry no `x-mcp-header`, so none exists to be invalid. If A7 or a later contract admits the annotation, the filter ships with it.                                                |
+| HTTP status mapping (202/400/403/404/405)                                           | Implement (modern-scoped)                                              | Legacy keeps today's uniform 200 in-band errors; modern gets the exact codes. 405 GET/DELETE is already true of a session-free mount — documented, not coded.                                                                                                                                                                           |
+| Modern HTTP disconnect-cancellation                                                 | **Implement — amended (§5.1)**                                         | 2026-07-28 removes client→server notifications over HTTP: closing the response stream IS the cancellation signal (`notifications/cancelled` survives on stdio only). Today `request.signal` only detaches an SSE session (`middlewares.ts:114-115`).                                                                                    |
+| `X-Accel-Buffering: no` + SSE comment keep-alives                                   | Implement                                                              | SHOULD; trivial; comment-flush idiom already exists.                                                                                                                                                                                                                                                                                    |
+| `-32020`                                                                            | Implement (HTTP face emits)                                            |                                                                                                                                                                                                                                                                                                                                         |
+| `-32021`                                                                            | **Implement both directions — amended (§5.1.1)**                       | Was constant + client recognition only, because no implemented method required a client capability. `ElicitRequest` production creates one: a client that never declared elicitation, on an operation that needs it, gets `data.requiredCapabilities`.                                                                                  |
+| `-32022` + data                                                                     | Implement both directions                                              | Server emits `{ supported, requested }`; client retries once with new id.                                                                                                                                                                                                                                                               |
+| Retired `-32002`/`-32042` MUST NOT emit                                             | Already true; add policy assertion                                     | Neither is emitted today.                                                                                                                                                                                                                                                                                                               |
+| `CacheableResult` on `tools/list` + `server/discover`                               | Implement                                                              | The only two cacheable results this package produces. `cache` option; default scope `'private'`.                                                                                                                                                                                                                                        |
+| Deterministic `tools/list` order                                                    | Contract + parity assertion, no code                                   | Registry insertion order is already deterministic and is the caller's intent.                                                                                                                                                                                                                                                           |
+| `extensions` capability field                                                       | Exclude from the first slice (**amended scope**, §5.1)                 | Capabilities stay an open record, so a consumer can already declare an extension id without a library change. Reading the map becomes load-bearing only if A7 lands; nothing else may depend on it.                                                                                                                                     |
+| Tasks extension (`io.modelcontextprotocol/tasks`)                                   | **Optional augmentation, never the substrate — amended (§5.1)**        | The durable handle is a durable id in an ordinary `tools/call` result, on every era, with no negotiation. `tasks/get`/`tasks/update`/`tasks/cancel` MAY be added later (A7); core `tasks/list` and blocking `tasks/result` are gone in 2026-07-28.                                                                                      |
+| Durable task storage                                                                | **Injected contract, only with A7 — amended (§5.1)**                   | Task state outlives a request by definition, and this package owns no persistence. It would arrive injected, exactly as `ToolManagerInterface` does. Absent A7 there is no store and no storage dependency.                                                                                                                             |
+| Resources / Prompts / Roots / Sampling / Logging                                    | Exclude                                                                | No registries/consumers; roots/sampling/logging deprecated in 2026-07-28. Local emitters remain observability, not an MCP logging capability. `@orkestrel/supervisor` explicitly takes **no resources in its first slice** — `inspect` carries the read.                                                                                |
+| Elicitation                                                                         | Split (**amended**, §5.1)                                              | The legacy server-initiated `elicitation/create` request stays excluded (no consumer, and 2026-07-28 removes server-initiated requests entirely). Modern `ElicitRequest` production inside an MRTR result is implemented — see the MRTR row.                                                                                            |
+| Icons (2025-11-25)                                                                  | Exclude                                                                | Installed `@orkestrel/tool` tool definitions carry no icon field; an MCP-only wrapper has no originating consumer.                                                                                                                                                                                                                      |
+| Protocol-native `tools/call` results (`structuredContent`)                          | **Implement — amended (§5.1)**                                         | `buildToolResult` collapses every value into one `JSON.stringify` text block (`helpers.ts:95-103`), so a durable handle reaches the client as a string a model must re-parse. Consumer: `@orkestrel/supervisor` returns a durable id from every command.                                                                                |
+| `outputSchema` on tool descriptors                                                  | Exclude (unchanged)                                                    | The installed `ToolResult` (`@orkestrel/tool`) is a success-discriminated union whose `value` stays `unknown`; the schema half belongs first to the tool contract that owns it. §8.8 answered: no clause gates `structuredContent` on a declared `outputSchema`, so the exclusion holds without cost (§5.1.4).                          |
+| SSE polling / resumability                                                          | Legacy-only (existing session middleware), unchanged                   | Modern requests must not use it; the broader optional 2025-11 polling protocol has no consumer.                                                                                                                                                                                                                                         |
+| Hostile-input limits + protocol-faithful fixtures                                   | **Implement — amended (§5.1)**                                         | `handle()` `JSON.parse`s an unbounded string and nothing caps `_meta` size, `requestState` size, or live subscriptions. A public, long-lived service host makes each of those a denial-of-service surface rather than a theoretical one.                                                                                                |
+| Origin → 403                                                                        | Implement minimal gate (`origins` option, secure default)              | Spec MUST on the server component this package ships; policy (the list) stays with the consumer. Planner dissent §9.2.                                                                                                                                                                                                                  |
+| Tool-invocation rate limiting (2025-11-25 `server/tools` § Security Considerations) | **Declared conformance gap — not a non-goal** (§5.1.10)                | Surfaced by §8.5. The clause is a server MUST and we do not satisfy it: a rate limit is a decision about one caller's traffic against one deployment's capacity, which mechanism-not-policy puts with the consumer. No unit closes it inside this package; the guide names the clause and the consumer's obligation.                    |
+| Batching removal                                                                    | Implement by deletion                                                  | Batch arm removed from `send`; 2025-03-26 dropped; MUST enforced in types.                                                                                                                                                                                                                                                              |
+| `initialize`/`ping`/sessions/GET-stream                                             | Legacy-only (dual-era)                                                 | Present in legacy; `-32601`/405 in modern.                                                                                                                                                                                                                                                                                              |
 
 ### 5.1 Amendments, 2026-07-31 — the flipped exclusions and the gaps they exposed
 
@@ -658,9 +776,10 @@ now expired. **`@orkestrel/supervisor`** — one package (core + server) that ru
 durably, detached from the client that started them, with a human in the loop — is the
 consumer. A fifth row (structured tool output) was declined for a different reason, and only
 half of it flips. Three more gaps surfaced that no row had named at all. Each entry below
-gives the old ruling, the new one, the reason, and what consumes it. Entry 9 is the exception:
-it changes no decision and has no consumer — it relabels a pre-existing row whose ruling was
-never ours to make.
+gives the old ruling, the new one, the reason, and what consumes it. Entries 9 and 10 are the
+exceptions: neither changes a decision and neither has a consumer, because each relabels an
+obligation that was never ours to decline — 9 pre-existing, 10 surfaced by the 2026-07-31
+evidence pass.
 
 Two properties of that consumer do the work, and both come from its binding verdict rather
 than from any preference of this document. First, **the client disconnects on purpose**: a
@@ -697,6 +816,38 @@ input request can arrive minutes after the call that started the work already re
    HMAC-covered `ttl`, and a `[current, ...older]` rotation list). **No new code and no new
    dependency.** MCP ships the round-trip and the guide's MUST; the secret, the TTL, and the
    decision to sign are consumer policy.
+   **Wire shape corrected 2026-07-31 (§8.9 answered).** Three of this entry's shapes were
+   wrong and a fourth constraint was missing:
+   - **`inputRequests` is a map, not an array** — `InputRequests { [key: string]:
+InputRequest }`, keys server-assigned and unique per request. Every sentence in this
+     document that read it as a list is corrected here.
+   - **`requestState` is an optional `string`, not bytes** — "opaque **string**, echoed
+     byte-exact". Servers MUST treat it as attacker-controlled and MUST integrity-protect it
+     wherever it influences authorization, resource access, or business logic, and replay
+     defence SHOULD bind principal, TTL, and an originating-request identifier _inside_ the
+     protected payload. That last clause is the actual cargo the `signToken`/`verifyToken`
+     round-trip has to carry; signing an opaque blob without those three fields satisfies the
+     letter and not the clause.
+   - **The echo is top-level in `params`** — `CallToolRequestParams extends
+InputResponseRequestParams`, so `params.inputResponses` and `params.requestState` are
+     siblings of `name` and `arguments`, never nested inside `arguments`.
+   - **`InputRequiredResult` is permitted only on `prompts/get`, `resources/read`, and
+     `tools/call`**, and a server MUST include at least one of `inputRequests` or
+     `requestState` in every one it sends. The retry-under-a-new-id rule above is confirmed.
+     `-32021`'s data shape is confirmed exactly as proposed: `{ requiredCapabilities:
+ClientCapabilities }`, HTTP 400.
+
+   **The elicitation-mode constraint this entry lacked.** `elicitation` is declared as
+   `{ form?, url? }`, and an **empty capabilities object means form mode only**; a server
+   **MUST NOT** send a mode the client did not declare. `ElicitRequestParams` is itself a union
+   — form (`mode?: 'form'`) versus URL (`mode: 'url'`). A3 therefore produces form-mode
+   elicitation and checks the declared mode before sending, rather than assuming that any
+   declared `elicitation` capability accepts anything. Two related facts, both recorded as
+   found: `CreateMessageRequest` and `ListRootsRequest` are deprecated in 2026-07-28 but remain
+   legal members of the union (the spec's own example mixes elicitation with sampling), so
+   producing `ElicitRequest` only is a _production_ choice of ours and not a shape constraint;
+   and whether an elicitation-only server owes anything to a client that declared sampling or
+   roots is **not stated** — no clause imposes a duty toward a capability we never advertise.
 
 2. **`subscriptions/listen` and `_meta.subscriptionId` — Exclude ⇒ Implement, modern-only.**
    The old reason was the honest absence of a producer: `ToolManager` is event-free, so a
@@ -704,22 +855,43 @@ input request can arrive minutes after the call that started the work already re
    stream is the producer, and it is also the only path by which a detached run can surface
    `input_required` after its launching call returned. The stream carries the spec's shape
    verbatim: `notifications/subscriptions/acknowledged` first, every notification stamped with
-   `_meta['io.modelcontextprotocol/subscriptionId']`, graceful closure as an empty complete
-   result.
-   **Where the one-subscription-per-epoch invariant lives.** MCP supplies the mechanism; the
-   key's _meaning_ is the consumer's: `@orkestrel/supervisor` binds it to its epoch, which is
-   what makes "one subscription per epoch" true without MCP ever learning the word "epoch".
-   Mechanism here, policy there.
-   **The supersession rule is a proposal, not yet a criterion.** "At most one live stream per
-   key, and a superseding listen gracefully closes the stream it replaces" is the design
-   intent, and it is the reading this document prefers — but §1.4.5 verified only the happy
-   path, and §8.10 exists precisely because what a server may do when a second
-   `subscriptions/listen` arrives for a live key is unresolved. An acceptance criterion cannot
-   stand ahead of the evidence task that establishes it, so A4's criteria (§6.2) assert only
-   what §1.4.5 verifies; §8.10 either confirms this rule and promotes it to a criterion, or
-   replaces it, before A4 is dispatched. Two plausible answers it must choose between — close
-   the older stream, or reject the newer listen — differ in observable behavior, and guessing
-   which is spec-conformant would be exactly the self-attestation §8.6 warns about.
+   `_meta['io.modelcontextprotocol/subscriptionId']`, and a graceful close carrying that same
+   stamp (corrected below).
+   **Where the one-subscription-per-epoch invariant lives.** MCP supplies the stream and the
+   correlation id; the _meaning_ of a subscription is the consumer's:
+   `@orkestrel/supervisor` binds it to its epoch, which is what makes "one subscription per
+   epoch" true without MCP ever learning the word "epoch". Mechanism here, policy there.
+   **The supersession rule is WITHDRAWN, not deferred (§8.10 answered).** "At most one live
+   stream per key, and a superseding listen gracefully closes the stream it replaces" was this
+   document's preferred reading and was held back from A4's criteria pending evidence. The
+   evidence returned **not stated**, for a reason that dissolves the question rather than
+   leaving it open: **MCP has no concept of a subscription key at all.** A subscription's
+   identity is the JSON-RPC request id of its `subscriptions/listen` request and nothing else
+   (`RequestId = string | number`); the only multiplicity text in the specification is that a
+   client MAY have multiple active subscriptions concurrently, demultiplexed by that id. There
+   is no uniqueness rule, no supersession permission, and no rejection error code — the
+   reserved range holds only `-32020`, `-32021`, and `-32022`. The provisional rule presumed a
+   mechanism the protocol does not have, so there is nothing for a later task to confirm and
+   nothing to defer. It is withdrawn, and A4's criteria (§6.2) drop the criterion outright
+   rather than carrying it as pending.
+   This **strengthens** the mechanism/policy split ruled two paragraphs above rather than
+   weakening it. MCP supplies no supersession mechanism; building one would be inventing
+   protocol, which is the one thing a conformance-first library must not do. The
+   one-subscription-per-epoch invariant therefore belongs entirely to `@orkestrel/supervisor`,
+   which already owns epoch identity and enforces the invariant by simply declining to open a
+   second listen. Mechanism here, policy there — and in this case the mechanism is the absence
+   of one.
+   **Graceful closure is not an empty complete result (corrects §1.4.5 and this entry).**
+   `SubscriptionsListenResult._meta` is **required**, and
+   `_meta['io.modelcontextprotocol/subscriptionId']` is a required key inside it — corroborated
+   by `schema.json`'s `"required": ["_meta", "resultType"]`. The closing frame carries
+   `resultType` plus that `_meta`, so a test asserting an empty result would assert the wrong
+   shape. Server-initiated closure is a SHOULD, not a MUST. The acknowledgement is
+   `notifications/subscriptions/acknowledged` carrying `params.notifications` — the
+   `SubscriptionFilter` subset the server actually honours — and it MUST be the first message
+   **carrying the subscription id**. Ordering is defined per subscription id, not per channel,
+   so on stdio another subscription's messages MAY interleave ahead of it; asserting "first
+   message on the wire" would assert more than the spec says.
    **Modern-only, stated as a limit.** `subscriptions/listen` is a 2026-07-28 method, and the
    supervisor targets modern first. A legacy-era client still gets `start`, `inspect`, and
    `reply`; its observation path remains the existing session stream's
@@ -741,6 +913,29 @@ input request can arrive minutes after the call that started the work already re
    substitute a task id for the durable id, and no test may reach green only on the Tasks
    path. If A7 is never scheduled, the supervisor loses no capability. That is the test of
    this ruling, and it is the reason `extensions` stays out of the first slice.
+   **A7's trigger has fired, and A7 is re-ruled rather than quietly ignored (§8.11
+   answered).** The trigger written above — "a client that actually negotiates the extension
+   exists" — is satisfied: **MCP Inspector 2.0.0 advertises `io.modelcontextprotocol/tasks` by
+   default** (`defaultAdvertised: true`), published to npm as `latest` and confirmed in the
+   published bundle. Recording that and then acting as though it had not happened would be the
+   dishonest reading, so the orchestrator re-rules here. **A7 stays unscheduled on a corrected
+   trigger: a consumer that _needs_ it, not a client that _advertises_ it.** Three facts carry
+   the re-ruling. The extension's schema is still `draft`. Neither official SDK implements it —
+   the Python SDK says so in writing and the TypeScript SDK answers inbound `tasks/*` with
+   `-32601` — and Goose has zero occurrences of the id. And the sole negotiator is the
+   protocol's own inspector advertising by default, which demonstrates that the wire works, not
+   that anyone wants it. Advertisement is supply; a scheduling trigger has to be demand.
+   The re-ruling costs nothing, which is why it is available: the durable id in an ordinary
+   result is already the substrate, so every supervisor capability holds with Tasks
+   un-negotiated. The wire shapes are now verified and recorded for whenever A7 _is_ scheduled:
+   `CreateTaskResult = Result & Task`; `Task { taskId, status, statusMessage?, createdAt,
+lastUpdatedAt, ttlMs: number | null, pollIntervalMs? }`; `TaskStatus = 'working' |
+'input_required' | 'completed' | 'failed' | 'cancelled'`; `tasks/get` → `Result &
+DetailedTask`; `tasks/update { taskId, inputResponses }`; `tasks/cancel { taskId }`;
+   `resultType: 'task'` MUST be set on `CreateTaskResult` and MUST NOT appear on anything else;
+   only `tools/call` is task-eligible today. The removals this entry already assumed are
+   confirmed: core `tasks/list` and blocking `tasks/result` are both gone, and calling
+   `tasks/result` MUST yield `-32601`.
 
 4. **Protocol-native `tools/call` results — Exclude for now ⇒ Implement `structuredContent`.**
    `buildToolResult` puts every value through `JSON.stringify` into a single text block
@@ -751,8 +946,19 @@ input request can arrive minutes after the call that started the work already re
    a handle with a failure mode. Results carry `structuredContent` alongside the text block.
    The schema half (`outputSchema` on descriptors) does **not** flip: `ToolResult.value` is
    `unknown` in the installed `@orkestrel/tool`, and the contract that owns the value owns its
-   schema. §8.8 settles the exact text-mirror obligation and whether `structuredContent` is
-   legal without a declared `outputSchema` before this ships.
+   schema.
+   **Verified 2026-07-31 (§8.8 answered); the flip proceeds unchanged.** The serialized-JSON
+   text block is a **SHOULD**, framed as backwards compatibility, so carrying both is
+   conformant. `structuredContent?: unknown` sits on `CallToolResult` and `outputSchema?` on
+   `Tool`, and every `outputSchema` obligation is conditional on one being defined; no clause
+   gates `structuredContent` on a declared `outputSchema`. That permission is **inferred from
+   the absence of a gating clause** — no source states it affirmatively — which is enough to
+   proceed, because the schema marks the field optional and unconditioned and A2 ships nothing
+   that needs the stronger reading. `content` is required and `resultType` is
+   inherited-required from `Result`. **One new fact A2 must honour:**
+   `CallToolResultResponse.result` is the union `CallToolResult | InputRequiredResult`, so the
+   response slot A2 writes into is the one A3 also writes into; A2 must not narrow that union
+   out from under A3.
 
 5. **A method seam — newly surfaced.** §4.6's modern branch answers `server/discover`,
    `tools/list`, and `tools/call`, and returns `-32601` for everything else. That was right
@@ -813,33 +1019,66 @@ JSONRPCResponse | MCPStream | undefined>`. That signature is what makes flips 2 
    there is no definition that could be invalid. Nothing is hidden from a caller, which was
    the planner's original objection (§9.3) to implementing the filter half alone.
 
+10. **Tool-invocation rate limiting — declared conformance gap (surfaced 2026-07-31).** Not a
+    flip and not a decision: §8.5's measurement of the 2025-11-25 mandatory surface turned up a
+    MUST no row had ever named. `server/tools` § Security Considerations binds a server to
+    validate all tool inputs, implement proper access controls, **rate limit tool
+    invocations**, and sanitize tool outputs. Three of those four are already true of this
+    package or belong to the tool contract that owns the values. The rate limit is neither, and
+    will not become either: a limit is a judgement about how much traffic a particular caller
+    may spend against a particular deployment's capacity, and mechanism-not-policy puts both
+    numbers with the consumer. A framework that picked one would be picking product policy, and
+    a framework that picked an unlimited one would be pretending to satisfy the clause.
+    **So it is recorded as an unmet MUST rather than declined as a non-goal**, exactly as entry
+    9 records `Mcp-Param-*`. The difference between the two is worth stating: `Mcp-Param-*` is
+    closable inside this package and has a named closer (U7); this one is not, and its closer
+    is the deployment. U6's Declared conformance gaps section names the clause, says plainly
+    that a consumer exposing this server publicly must impose its own invocation limit at the
+    layer fronting it, and does not imply that a future unit will absorb the obligation.
+    **It does not reopen §4.2.** §9.1's ruling to support 2025-11-25 survives with the gap
+    declared — a declared gap is the honest form of an unmet MUST, and dropping the revision
+    would not make this library rate-limit anything.
+
 ---
 
 ## 6. Unit decomposition and routing ledger
 
 Strictly serialized writers, each from a clean committed baseline. Every unit owns its
-mirrored `tests/src/**` files. `guides/src/mcp.md` is off-limits to every unit but U6.
-Engines per the operating contract: Sol = objective implementation (via `codex` role,
-journaled exec); Opus = subjective/documentation-voice; Sonnet `builder` = fully specified
-mechanical; `verifier` = gates.
+mirrored `tests/src/**` files. Engines per the operating contract: Sol = objective
+implementation (via `codex` role, journaled exec); Opus = subjective/documentation-voice;
+Sonnet `builder` = fully specified mechanical; `verifier` = gates.
 
-| Unit | Content                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Owned files                                                                                                          | Engine                 | Depends on              |
-| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------- | ----------------------- |
-| U0   | Rename sweep, zero behavior change: `MCPToolResult`→`MCPCallResult`, `buildToolResult`→`buildCallResult`, `initializeResult`→`buildInitializeResult`, `jsonRPCResult`/`jsonRPCError`→`buildJSONRPCResult`/`buildJSONRPCError`, `MCPServerInfo`→deleted, `name`+`version`→`identity` (both options bags + server interface), `description`→`instructions`. **The batch-arm deletion is NOT in this unit — it shipped in 0.0.8** (`types.ts:312`, `factories.ts:121-139`)                                                                                         | core/server/browser sources + all touched tests                                                                      | `builder` (Sonnet)     | —                       |
-| U1   | Modern contract + pure leaves: §4.3 types (incl. `MCPDispatchOptions`/`MCPStream`/`MCPTextStream`/`MCPMethodHandler`), §4.4 constants, **extensions to the shipped `errors.ts`** (`MCPError`/`isMCPError` already exist, `errors.ts:18-51`), `isModernRequest` (key presence), `parseRequestContext` (soundness both directions), `inferEra`, `buildDiscoverResult`, `buildModernResult`                                                                                                                                                                        | `src/core/{types,constants,validators,parsers,inferers,errors,helpers,index}.ts` + tests                             | `implementer` (Sol)    | U0                      |
-| U2   | Dual-era server dispatch (§4.6)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `src/core/MCPServer.ts` + test                                                                                       | `implementer` (Sol)    | U1                      |
-| U3   | Dual-era client (§4.7): discover-first connect, legacy fallback with validated initialize result, `version` getter, `discover()`, `MCPError` surfacing, one-retry `-32022`, result-type safety                                                                                                                                                                                                                                                                                                                                                                  | `src/core/MCPClient.ts` + test                                                                                       | `implementer` (Sol)    | U1 (serialize after U2) |
-| U4   | Node HTTP conformance (§4.8): header validation, status map, Origin gate, session passthrough for modern POSTs, session version pinning, client-transport headers, `X-Accel-Buffering`                                                                                                                                                                                                                                                                                                                                                                          | `src/server/{handlers,helpers,inferers,constants,types,middlewares}.ts`, `transports/HTTPClientTransport.ts` + tests | `implementer` (Sol)    | U2, U3                  |
-| U5   | Browser face parity: the same header rule on the fetch transport (version + method always on modern; name only on `tools/call`); environment isolation proven                                                                                                                                                                                                                                                                                                                                                                                                   | `src/browser/{types,constants,helpers,factories}.ts`, `transports/HTTPClientTransport.ts` + tests                    | `implementer` (Sol)    | U3                      |
-| U6   | Guide + parity + **Declared non-goals** section (names every §5 exclusion and the Origin policy split) + a separate **Declared conformance gaps** section (`Mcp-Param-*` client projection: the §1.4.6 clause, the consumer-visible cost, and U7 as its closer — §5.1.9); Contract clauses for the wire-name rule, the discriminator (**key presence**, §4.1), the header scope (`Mcp-Name` on named methods only), the per-era status map, the three supported revisions, and the headerless-POST rule §8.12 settles; `## Methods` bijection covers `discover` | `guides/src/mcp.md`                                                                                                  | `implementer` (Opus 5) | U0–U5                   |
-| U7   | `Mcp-Param-*` (NOT scheduled; only if §8.2 evidence flips the exclusion): first widens `ClientTransportInterface.send`, deliberately last so nothing depends on it                                                                                                                                                                                                                                                                                                                                                                                              | —                                                                                                                    | —                      | U6                      |
+**Guide ownership, corrected 2026-07-31 (orchestrator sequencing ruling).** The ledger made
+`guides/src/mcp.md` off-limits to every unit but U6. Taken literally that leaves guide parity
+red from U0 until U6 — twelve units during which every rename and every new export is drift the
+parity test is entitled to fail on, and a gate nobody may legitimately ignore is a gate that
+teaches people to ignore it. **Each unit therefore updates the guide's mechanical symbol
+references for the symbols it changes, so parity stays green across the whole campaign, and U6
+keeps sole ownership of structure, voice, and the new sections** (Declared non-goals, Declared
+conformance gaps, the Contract clauses). The split is mechanical-versus-editorial, not
+file-versus-file: renaming `MCPToolResult` to `MCPCallResult` in a table cell is the rename
+itself finishing its job; deciding what the guide _says_ about results remains U6's. U0 has
+already shipped under this rule.
+
+| Unit | Content                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Owned files                                                                                                          | Engine                 | Depends on              |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------- | ----------------------- |
+| U0   | Rename sweep, zero behavior change: `MCPToolResult`→`MCPCallResult`, `buildToolResult`→`buildCallResult`, `initializeResult`→`buildInitializeResult`, `jsonRPCResult`/`jsonRPCError`→`buildJSONRPCResult`/`buildJSONRPCError`, `MCPServerInfo`→deleted, `name`+`version`→`identity` (both options bags + server interface), `description`→`instructions`. **The batch-arm deletion is NOT in this unit — it shipped in 0.0.8** (`types.ts:312`, `factories.ts:121-139`)                                                                                                                                                                                                                                                          | core/server/browser sources + all touched tests                                                                      | `builder` (Sonnet)     | —                       |
+| U1   | Modern contract + pure leaves: §4.3 types (incl. `MCPDispatchOptions`/`MCPStream`/`MCPTextStream`/`MCPMethodHandler`), §4.4 constants, **extensions to the shipped `errors.ts`** (`MCPError`/`isMCPError` already exist, `errors.ts:18-51`), `isModernRequest` (key presence), `parseRequestContext` (soundness both directions), `inferEra`, `buildDiscoverResult`, `buildModernResult`                                                                                                                                                                                                                                                                                                                                         | `src/core/{types,constants,validators,parsers,inferers,errors,helpers,index}.ts` + tests                             | `implementer` (Sol)    | U0                      |
+| U2   | Dual-era server dispatch (§4.6)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `src/core/MCPServer.ts` + test                                                                                       | `implementer` (Sol)    | U1                      |
+| U3   | Dual-era client (§4.7): discover-first connect, legacy fallback with validated initialize result, `version` getter, `discover()`, `MCPError` surfacing, one-retry `-32022`, result-type safety                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `src/core/MCPClient.ts` + test                                                                                       | `implementer` (Sol)    | U1 (serialize after U2) |
+| U4   | Node HTTP conformance (§4.8): header validation, status map, Origin gate, session passthrough for modern POSTs, session version pinning, client-transport headers, `X-Accel-Buffering`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `src/server/{handlers,helpers,inferers,constants,types,middlewares}.ts`, `transports/HTTPClientTransport.ts` + tests | `implementer` (Sol)    | U2, U3                  |
+| U5   | Browser face parity: the same header rule on the fetch transport (version + method always on modern; name only on `tools/call`); environment isolation proven                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `src/browser/{types,constants,helpers,factories}.ts`, `transports/HTTPClientTransport.ts` + tests                    | `implementer` (Sol)    | U3                      |
+| U6   | Guide + parity + **Declared non-goals** section (names every §5 exclusion and the Origin policy split) + a separate **Declared conformance gaps** section covering **both** gaps (`Mcp-Param-*` client projection: the §1.4.6 clause, the consumer-visible cost, U7 as its closer — §5.1.9; and tool-invocation rate limiting: the 2025-11-25 clause, the consumer's own obligation, no closer inside this package — §5.1.10); Contract clauses for the wire-name rule, the discriminator (**key presence**, §4.1), the header scope (`Mcp-Name` on named methods only), the per-era status map, the three supported revisions, and the settled three-case headerless-POST rule (§4.2); `## Methods` bijection covers `discover` | `guides/src/mcp.md` structure, voice, and new sections                                                               | `implementer` (Opus 5) | U0–U5                   |
+| U7   | `Mcp-Param-*` (NOT scheduled; only if §8.2 evidence flips the exclusion): first widens `ClientTransportInterface.send`, deliberately last so nothing depends on it                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | —                                                                                                                    | —                      | U6                      |
 
 Order: U0 → U1 → U2 → U3 → U4 → U5 → U6, with the §6.1 amendment units slotting in after U5
 and before the guide unit. Each nontrivial unit gets the standard audit chain
 (reviewer = Opus design fit; analyst = Sol correctness; checker = mechanical conformance;
 independent verifier runs the five gates, including the real-Chromium browser suite for U5).
 Key acceptance details preserved from the design pass: modern `tools/call` carries
-`resultType` but NO `ttlMs`; a modern request naming `'2024-11-05'` gets `-32022` with exact
+`resultType` but NO `ttlMs` — while a modern `tools/list` result carries **both** `ttlMs` and
+`cacheScope`, which the schema requires and no earlier ledger stated (§4.4, corrected); a
+modern request naming `'2024-11-05'` gets `-32022` with exact
 `supported`/`requested`; `_meta` with version but no capabilities ⇒ `-32602`; **a `_meta`
 version key holding a non-string value ⇒ `-32602`, never legacy dispatch** (§4.1); legacy
 responses byte-identical to pre-change golden strings; a modern POST through
@@ -851,16 +1090,18 @@ and `Mcp-Method` and NO `Mcp-Name`, and ingress accepts it** (§1.4.6).
 ### 6.1 Amendment units (§5.1)
 
 Additive. U0–U5 are unchanged, run first, and remain the prerequisite for everything here;
-U6 remains the sole owner of `guides/src/mcp.md` and now documents the A-unit surface and the
-amended non-goals alongside its original scope. Same rules as above: one writer at a time,
-clean committed baseline, disjoint owned files, mirrored `tests/src/**` per unit.
+U6 remains the sole owner of the guide's structure, voice, and new sections, and now documents
+the A-unit surface and the amended non-goals alongside its original scope. Each A unit updates
+the guide's mechanical symbol references for what it changes, under the same sequencing ruling
+as the U units (§6). Same rules as above: one writer at a time, clean committed baseline,
+disjoint owned files, mirrored `tests/src/**` per unit.
 
 | Unit | Content                                                                                                                                                                                                                                                                                                                                                                          | Owned files                                                                                                                | Engine                 | Depends on               |
 | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------ |
 | A1   | Method seam (§5.1.5) **and the revised signatures (§4.3)**: `MCPDispatchOptions`, `MCPStream`/`MCPTextStream`, `MCPMethodHandler`; `dispatch`/`handle` gain the optional options parameter and the stream return arm; `server/discover`, `tools/list`, `tools/call` registered through the same mechanism that dispatches them; unregistered ⇒ `-32601`; legacy branch untouched | `src/core/{types,MCPServer,helpers,index}.ts` + tests                                                                      | `implementer` (Opus 5) | U5                       |
 | A2   | Protocol-native results (§5.1.4): `structuredContent` alongside the text block on `tools/call`; `outputSchema` explicitly NOT added                                                                                                                                                                                                                                              | `src/core/{types,helpers}.ts` + tests                                                                                      | `implementer` (Sol)    | U5 (serialize after A1)  |
 | A3   | MRTR production (§5.1.1): `ElicitRequest` only; `InputRequiredResult` shape; `inputResponses` + byte-exact `requestState` on retry; signed-state round-trip through `@orkestrel/server`'s `signToken`/`verifyToken`; server-side `-32021`                                                                                                                                        | `src/core/{types,constants,parsers,validators,helpers,MCPServer}.ts` + tests                                               | `implementer` (Sol)    | A1, A2                   |
-| A4   | `subscriptions/listen` + `_meta.subscriptionId` (§5.1.2), returned as an `MCPStream`: acknowledged-first stream, per-notification stamping, empty complete result on close; modern-only. **Second-listen/supersession behavior is set by §8.10 before dispatch, not assumed**                                                                                                    | `src/core/{types,constants,helpers,MCPServer}.ts`, held-open stream seam in `src/server/{handlers,middlewares}.ts` + tests | `implementer` (Sol)    | A1                       |
+| A4   | `subscriptions/listen` + `_meta.subscriptionId` (§5.1.2), returned as an `MCPStream`: acknowledged-first stream, per-notification stamping, close frame carrying `resultType` plus the required `_meta` subscription id (§5.1.2, corrected); modern-only. **No supersession behavior: MCP defines no subscription key, so there is none to build (§5.1.2)**                      | `src/core/{types,constants,helpers,MCPServer}.ts`, held-open stream seam in `src/server/{handlers,middlewares}.ts` + tests | `implementer` (Sol)    | A1                       |
 | A5   | Disconnect-cancellation (§5.1.6): the request's abort signal reaches the dispatched handler through `MCPDispatchOptions.signal` (§4.3, landed in A1); closed HTTP response stream = cancellation; stdio keeps `notifications/cancelled`; no HTTP client→server notifications                                                                                                     | `src/core/{types,MCPServer}.ts`, `src/server/{types,handlers,middlewares}.ts`, `src/browser/{types,helpers}.ts` + tests    | `implementer` (Sol)    | A1, A4                   |
 | A6   | Hostile-input limits + protocol-faithful fixtures (§5.1.7): bounded message bytes, `_meta` size/key count, `requestState` size, content size, live subscriptions; configurable with secure defaults; fixture peers on the wire                                                                                                                                                   | `src/core/{types,constants,parsers}.ts`, `src/server/{types,constants,handlers}.ts`, `tests/fixtures/**` + tests           | `implementer` (Sol)    | A2, A3, A4, A5           |
 | A7   | Tasks extension (§5.1.3) — **NOT scheduled**; adopt only once a client that negotiates `io.modelcontextprotocol/tasks` exists: `tasks/get`/`tasks/update`/`tasks/cancel`, unsolicited `CreateTaskResult`, injected task store                                                                                                                                                    | —                                                                                                                          | —                      | A1; a negotiating client |
@@ -880,22 +1121,38 @@ capability.
   observable inside a registered handler (A5 proves it over a real transport).
 - **A2** — a `tools/call` result carries `structuredContent` AND the text block; a value-less
   result still produces a valid result; `tools/list` descriptors carry no `outputSchema`; the
-  modern result still carries `resultType` and no `ttlMs` (the §6 rule holds).
+  modern `tools/call` result still carries `resultType` and no `ttlMs` (the §6 rule holds),
+  while the modern `tools/list` result carries both `ttlMs` and `cacheScope` (§4.4); the
+  response type stays the union `CallToolResult | InputRequiredResult` so A3 can write into it
+  unchanged.
 - **A3** — an `input_required` result validates against the spec shape with exactly one
-  `ElicitRequest` and no `CreateMessageRequest`/`ListRootsRequest`; a retry echoing
-  `requestState` byte-exact is accepted under a NEW id; a mutated `requestState` fails
-  `verifyToken` and is rejected, not honored; a retry that omits `inputResponses` is rejected;
-  a client that declared no elicitation capability gets `-32021` with exact
-  `data.requiredCapabilities` and HTTP 400, never a fabricated result; our own `MCPClient`
-  still throws a named `MCPError` on a foreign `input_required` (§4.7).
-- **A4** — the first stream message is `notifications/subscriptions/acknowledged`; every
-  subsequent notification carries `_meta['io.modelcontextprotocol/subscriptionId']` equal to
-  the listen request's id; a graceful close ends the `MCPStream` by returning an empty complete
-  result; a legacy-era `subscriptions/listen` returns `-32601`. **Deliberately not asserted
-  here:** what happens when a second listen arrives for a live key. §1.4.5 verified the happy
-  path only, and §8.10 is the task that establishes the rule — its answer becomes A4's final
-  criterion and is written into this list before A4 is dispatched. Shipping A4 against an
-  assumed supersession rule would freeze a guess into a test.
+  `ElicitRequest` and no `CreateMessageRequest`/`ListRootsRequest`, and carries at least one of
+  `inputRequests` or `requestState`; `inputRequests` serializes as a **map** of
+  server-assigned keys, never an array (§5.1.1); `requestState` is a **string** and the retry
+  carries `inputResponses` and `requestState` **top-level in `params`**, siblings of `name` and
+  `arguments`; a retry echoing `requestState` byte-exact is accepted under a NEW id; a mutated
+  `requestState` fails `verifyToken` and is rejected, not honored; the signed payload binds
+  principal, TTL, and the originating-request identifier; a retry that omits `inputResponses`
+  is rejected; a client declaring `elicitation: {}` receives **form mode** and never URL mode,
+  and a client that declared no elicitation capability gets `-32021` with exact
+  `data.requiredCapabilities` and HTTP 400, never a fabricated result; `InputRequiredResult` is
+  produced only on `tools/call` (the sole one of its three legal methods this package
+  implements); our own `MCPClient` still throws a named `MCPError` on a foreign
+  `input_required` (§4.7).
+- **A4** — the first message **carrying a given subscription id** is
+  `notifications/subscriptions/acknowledged`, and its `params.notifications` names the
+  `SubscriptionFilter` subset the server honours; the assertion is per subscription id, not
+  "first message on the wire", because ordering is defined per id and another subscription's
+  messages may legally interleave ahead of it on stdio. Every subsequent notification carries
+  `_meta['io.modelcontextprotocol/subscriptionId']` equal to the listen request's JSON-RPC id.
+  A graceful close ends the `MCPStream` by returning a result carrying `resultType` **and the
+  required `_meta` with that subscription id** — not an empty result (§5.1.2, corrected). A
+  legacy-era `subscriptions/listen` returns `-32601`. **No supersession criterion, and none is
+  pending:** §8.10 established that MCP has no subscription key, no uniqueness rule, no
+  supersession permission, and no rejection code, so the provisional rule was withdrawn rather
+  than deferred (§5.1.2). A4 asserts nothing about a second listen because the protocol says
+  nothing about one; the one-subscription-per-epoch invariant is `@orkestrel/supervisor`'s and
+  is tested there.
 - **A5** — aborting the HTTP request aborts the `options.signal` the handler observes, proven
   by a real transport rather than a synthesized signal; a stdio `notifications/cancelled` still routes;
   no client→server notification is ever POSTed; a cancelled call reports requested
@@ -929,69 +1186,120 @@ capability.
 - `@orkestrel/server` (0.0.7) is already a declared peer dependency, so §5.1.1's
   `signToken`/`verifyToken` integrity mechanism adds no dependency to `package.json`.
 
-## 8. Open questions — evidence tasks for the implementation session
+## 8. Evidence tasks — findings and status
 
-1. **2025-03-26 batching normativity** (sharpens an already-made removal): confirm the exact
-   MUST/SHOULD wording for receiving batches in 2025-03-26 `basic/transports`. Removal stands
-   on the two-endpoint/OAuth lineage regardless.
-2. **`Mcp-Param-*` binding strength** (gates U7; sizes a declared conformance gap, §5.1.9):
-   does the clients-MUST-support clause bind all clients or only streamable-HTTP clients? Do
-   real 2026-07-28 servers require header-projected params rather than accepting body params?
-   If yes → adopt U7 and widen `send`; if no → the gap stays declared and inert. Either way
-   the guide names it as an unmet MUST, not as a non-goal — that part is not evidence-gated.
-3. **Session-middleware passthrough wording**: "modern-only servers ignore `Mcp-Session-Id`" —
-   confirm it binds dual-era servers with a mounted session layer (chosen reading:
-   passthrough + ignore) vs. a 400 reading.
-4. **`ttlMs: 0` legality**: is 0 schema-legal (meaning "do not cache")? Settles the
-   `DEFAULT_MCP_CACHE_TTL = 60_000` vs `0` default. Also confirm exact
-   `HeaderMismatchError.data` shape and `x-mcp-header` schema from
-   `schema/2026-07-28/schema.ts`.
-5. **2025-11-25 mandatory surface check** (guards the §4.2 ruling): re-verify that a
-   tools-only server advertising 2025-11-25 is bound to nothing beyond Origin→403, the
-   2020-12 dialect, and validation-as-execution-error. If a larger mandatory surface
-   surfaces, revisit §9.1.
-6. **No reference peer exists**: conformance will be self-attested against fixtures written
-   from the same spec text. Check for an official conformance suite or a published
-   2026-07-28 server at implementation start; otherwise cite the quoted spec clause in each
-   fixture test name (established fixture pattern: `tests/fixtures/browserServer.ts`).
-7. **Revision drift**: 2026-07-28 is the newest revision and the site's "current" label had
-   not yet flipped at research time. Re-verify the ledger at implementation start (§1.6
-   URLs). All modern behavior is reachable from `src/core/constants.ts` + the `#modern`
-   branch, so churn is bounded by construction.
+**Run 2026-07-31 against primary sources**: the specification text for the prose questions and
+the commit-pinned schema for the shape questions (`modelcontextprotocol@7376311`,
+`ext-tasks@2c1425d`, `typescript-sdk@cc4b416`, `python-sdk@a4f4ccd`, `inspector@fb1b0cb`).
+Eleven of the twelve are **answered** and carry their finding below; **§8.2 was not part of
+this pass and remains open**, and its unit (U7) stays gated on it. Where a finding is inferred
+or where the specification is silent, the entry says so in those words — an inference is not
+promoted to a quotation by being useful.
 
-Added by the 2026-07-31 amendment (§5.1). Each gates its unit; none reopens a §5.1 ruling.
-
-8. **Structured tool output obligations** (gates A2): does a result carrying
-   `structuredContent` also have to carry the serialized JSON as a text block, and at what
-   normative strength? Is `structuredContent` legal without a declared `outputSchema`? If a
-   schema is mandatory, A2 stops at the text block and the flip moves to the
-   `@orkestrel/tool` contract that owns `ToolResult.value`.
-9. **MRTR wire shape at depth** (gates A3): the exact `InputRequiredResult` /
-   `inputRequests` / `inputResponses` field names and nesting from
-   `schema/2026-07-28/schema.ts`, plus whether a server advertising only `ElicitRequest`
-   production owes anything to a client that declared sampling or roots. §1.4.4 is the
-   overview reading; A3 needs the schema.
-10. **Subscription lifecycle at depth** (gates A4 — and **owns** A4's supersession criterion,
-    §6.2): the acknowledged-notification shape, what a server may do when a second
-    `subscriptions/listen` arrives for a live key (close the older stream? reject the newer
-    listen? both permitted?), and whether graceful closure has any required payload beyond an
-    empty complete result. §1.4.5 covers the happy path only, so this task must return before
-    A4 is dispatched, not merely before it is audited; its answer is written into §6.2 as the
-    criterion §5.1.2's provisional rule is not yet entitled to be.
-11. **Tasks extension per-method shapes** (gates A7, already flagged unverified in §1.6): the
-    `tasks/get`/`tasks/update`/`tasks/cancel` wire shapes beyond the overview page, and
-    whether any client negotiates `io.modelcontextprotocol/tasks` at all. A negative answer
-    keeps A7 unscheduled, which costs nothing (§5.1.3).
-
-Added by the 2026-07-31 correction pass (§4.2).
-
-12. **Headerless post-initialize legacy POST** (gates U4): with 2025-03-26 removed, §1.2's
-    permission to read a headerless request as a version no longer applies to this server, and
-    §1.2 records no replacement obligation. Quote the 2025-06-18 and 2026-07-28 transport text
-    on a missing `MCP-Protocol-Version` for a _legacy_ request: reject with 400 + `-32020`, or
-    accept and proceed? The answer sets one line of §4.8's ingress rule. Until it returns, the
-    design defaults nothing (§4.2) — and defaulting to 2025-06-18, the previous text, is the
-    one answer already ruled out.
+1. **2025-03-26 batching normativity.** **Answered; confirmed, with a citation correction.**
+   The receiving MUST is real — "MCP implementations **MAY** support sending JSON-RPC batches,
+   but **MUST** support receiving JSON-RPC batches" — but it lives on `basic/index` § Batching,
+   not on `basic/transports`, which only constrains the client's POST body shape. The removal
+   reasoning in §4.2 is unaffected; the citation now points at the right page.
+2. **`Mcp-Param-*` binding strength** (gates U7; sizes the declared conformance gap, §5.1.9).
+   **STILL OPEN — the one task this pass did not run.** Does the clients-MUST-support clause
+   bind all clients or only streamable-HTTP clients? Do real 2026-07-28 servers require
+   header-projected params rather than accepting body params? If yes → adopt U7 and widen
+   `send`; if no → the gap stays declared and inert. Either way the guide names it as an unmet
+   MUST, not as a non-goal — that part was never evidence-gated. U7 may not be scheduled until
+   this returns.
+3. **Session-middleware passthrough wording.** **Answered; the chosen reading survives on
+   better grounds.** The "ignore `Mcp-Session-Id`" guidance is a **SHOULD** explicitly scoped
+   to "a server that supports only this revision", so it does not textually bind a dual-era
+   server; for a modern POST carrying `Mcp-Session-Id` on a dual-era server the specification
+   is **not stated**. Passthrough-and-ignore is nonetheless right, and this is a reasoned
+   choice over a silence rather than a quotation: 2026-07-28's Server Validation failure list
+   is enumerated and closed — missing required header, header/body mismatch, invalid characters
+   — an unexpected _extra_ header is not among them, and `Mcp-Session-Id` is not in the
+   required-header table. Rejecting on it would invent a failure condition the spec does not
+   define. §4.8's passthrough stands.
+4. **`ttlMs: 0` legality, `-32020` data, `x-mcp-header` schema.** **Answered; three
+   corrections, all folded into §4.4.** `ttlMs` is **required**, `@minimum 0`, and `0` means
+   "immediately stale", not "do not cache"; `ListToolsResult` requires both `ttlMs` and
+   `cacheScope`, an obligation no ledger carried; `HeaderMismatchError` declares **no** `data`
+   member at all, in deliberate contrast to `UnsupportedProtocolVersionError`'s
+   `{ supported, requested }`; and `x-mcp-header` has no schema definition, only prose
+   constraints. `DEFAULT_MCP_CACHE_TTL = 60_000` is frozen and §9.6 closes.
+5. **2025-11-25 mandatory surface check** (guarded the §4.2 ruling). **Answered; the
+   three-item reading is REFUTED and the surface is larger.** Origin→403 and JSON Schema
+   2020-12 (three MUSTs, not one) are confirmed; validation-as-execution-error is **struck** —
+   `server/tools` § Error Handling carries no server-binding keyword and its only keywords bind
+   the client. Additional MUSTs are listed in §4.2. §9.1's revisit condition fired and the
+   ruling to keep 2025-11-25 survives, with **one genuine exposure — "rate limit tool
+   invocations" — recorded as a declared conformance gap (§5.1.10)**, not as a silent omission.
+6. **Reference peer.** **Answered; THE ASSUMPTION IS OVERTURNED and the plan changes.** The
+   entry used to read "no reference peer exists; conformance will be self-attested against
+   fixtures written from the same spec text". That is false.
+   **`@modelcontextprotocol/conformance@0.2.0-alpha.10`** (MIT, Anthropic PBC) documents
+   `--spec-version 2026-07-28` and ships an `expected-failures.2026-07-28.yml` baseline.
+   Self-attestation was the fallback for having no external oracle, and an external oracle
+   exists — so **running the real suite against our server becomes part of this campaign's
+   verification, and our fixtures become supplementary rather than the sole evidence**. This is
+   the single largest quality improvement the evidence pass bought, because it replaces
+   agreement-with-ourselves with a check we did not write. Separately, and marked **inferred,
+   not verified**: no public 2026-07-28 reference _server_ appears reachable — the
+   organization's hosted endpoint answers but is 401-gated, and TypeScript SDK 1.30.0 still
+   declares `LATEST_PROTOCOL_VERSION = "2025-11-25"` with no occurrence of `2026-07-28` in the
+   package. The fixture-per-clause pattern (`tests/fixtures/browserServer.ts`) still applies to
+   everything the suite does not reach.
+7. **Revision drift.** **Answered; none. The ledger is stable.** 2026-07-28 is labelled
+   current and `/specification/latest` redirects to it; six revisions are listed;
+   `schema/2026-07-28` has exactly two commits, both dated 2026-07-28; `schema/draft` differs
+   from it by 38 lines of documentation-link path rewrites and **no type, field, or constraint
+   differences**; no errata. One correction to §1.1's framing rather than its content:
+   **2025-03-26 is still live on the site**, so its absence from our list is our decision and
+   not an upstream withdrawal (§4.2).
+8. **Structured tool output obligations** (gated A2). **Answered; A2 proceeds unchanged.** The
+   serialized-JSON text block is a **SHOULD**, framed as backwards compatibility; no clause
+   gates `structuredContent` on a declared `outputSchema` — recorded as **inferred from the
+   absence of a gating clause**, since no source states the permission affirmatively; `content`
+   is required and `resultType` inherited-required. New fact: `CallToolResultResponse.result`
+   is the union `CallToolResult | InputRequiredResult` (§5.1.4).
+9. **MRTR wire shape at depth** (gated A3). **Answered; three shape corrections and one new
+   constraint**, all folded into §5.1.1 and §6.2: `inputRequests` is a **map**, not an array;
+   `requestState` is a **string**, not bytes, integrity-protected with principal, TTL, and
+   originating-request identifier inside the protected payload; the echo is **top-level in
+   `params`**; and elicitation modes are capability-gated, with an empty capabilities object
+   meaning form mode only. `InputRequiredResult` is legal only on `prompts/get`,
+   `resources/read`, and `tools/call`, and MUST carry at least one of `inputRequests` or
+   `requestState`. The second half of the question — whether an elicitation-only server owes
+   anything to a client that declared sampling or roots — is **not stated**: no clause imposes
+   a duty toward a capability we never advertise.
+10. **Subscription lifecycle at depth** (gated A4). **Answered — and the blocking half came
+    back "not stated" in a way that WITHDRAWS the rule rather than deferring it.** MCP has no
+    concept of a subscription key: identity is the JSON-RPC request id of the
+    `subscriptions/listen` request, the only multiplicity text is "a client MAY have multiple
+    active subscriptions concurrently", and there is no uniqueness rule, no supersession
+    permission, and no rejection error code. §5.1.2's provisional supersession rule presumed a
+    mechanism the protocol does not have and is withdrawn; §6.2 removes the criterion rather
+    than carrying it as pending. Verified alongside it: the acknowledgement is
+    `notifications/subscriptions/acknowledged` with `params.notifications`, first **per
+    subscription id** (ordering is per id, not per channel); the correlation key is the listen
+    request's id; and graceful closure is **not** an empty complete result —
+    `SubscriptionsListenResult._meta` is required and carries the subscription id.
+11. **Tasks extension per-method shapes** (gates A7). **Answered; the expected answer was
+    FALSE.** A client that negotiates the extension **does** exist — MCP Inspector 2.0.0
+    advertises `io.modelcontextprotocol/tasks` by default, published to npm as `latest` — so
+    A7's stated trigger fired. It is re-ruled in §5.1.3 rather than ignored: A7 stays
+    unscheduled on the corrected trigger **a consumer that needs it**, because the schema is
+    still `draft`, both official SDKs refuse the methods, and an inspector advertising by
+    default demonstrates the wire rather than demand. The per-method wire shapes are verified
+    and recorded in §5.1.3 for whenever it is scheduled; `tasks/list` and blocking
+    `tasks/result` are confirmed removed.
+12. **Headerless post-initialize legacy POST** (gated U4). **Answered; SETTLED, and the
+    precautionary withdrawal is vindicated.** The defaulting SHOULD is scoped by "and has no
+    other way to identify the version - for example, by relying on the protocol version
+    negotiated during initialization", which names the negotiated version as its own example of
+    having another way; the adjacent `400` MUST fires on a bad header _value_, and on a
+    _missing_ header the legacy revisions are silent; 2026-07-28 requires a server that does
+    not serve pre-2025-06-18 clients to reject a headerless request per Server Validation.
+    §4.2 now carries the quotations and the three-case ingress rule, and §4.8 implements it.
+    Defaulting to 2025-06-18 stays ruled out — now on evidence rather than on caution.
 
 ## 9. Adversarial record (dissents preserved)
 
@@ -1001,7 +1309,17 @@ Added by the 2026-07-31 correction pass (§4.2).
    2025-06-18; building toward a superseded-in-place revision is speculation).
    **Ruling: support** — the tiny mandatory delta buys handshake compatibility with the
    dominant deployed client population; optional surfaces are not adopted. Evidence task
-   §8.5 guards the ruling.
+   §8.5 guards the ruling. **Amended 2026-07-31:** §8.5 returned and the delta is **not**
+   tiny — one of the three claimed items is refuted outright and the real surface adds tools
+   capability declaration, `inputSchema` validity, the full base-protocol and lifecycle MUSTs,
+   the `security_best_practices` MUSTs, and four `server/tools` security MUSTs (§4.2). The
+   revisit condition this entry wrote for itself therefore fired. **The ruling survives
+   unchanged**, because everything added is already satisfied or is generic behavior this
+   package implements regardless — except **"rate limit tool invocations"**, which is product
+   policy and is now a declared conformance gap (§5.1.10). The planner's dissent gains a fact
+   it did not have and still does not carry the decision: a larger mandatory surface that we
+   already meet is not a reason to abandon the handshake-era population, and the one clause we
+   do not meet is declared rather than hidden.
 2. **Origin validation** — analyst: implement (spec MUST; real trust boundary). Planner:
    exclude as consumer obligation (guide already documents CORS/auth as fronting middleware;
    product policy). **Ruling: implement the minimal gate** (mechanism: same-origin default +
@@ -1031,20 +1349,34 @@ Added by the 2026-07-31 correction pass (§4.2).
    adopted as consistent with the same `{verb}{Noun}` rule.
 6. **Cache TTL default** — analyst: `0` pending schema check; planner: `60_000`. **Ruling:
    `60_000` provisionally; §8.4 settles it.** Scope `'private'` default is agreed by both.
+   **Closed 2026-07-31:** §8.4 returned. `0` is schema-legal (`@minimum 0`), so the analyst's
+   proposal was not illegal — but it does not mean what it was proposed to mean. A `0` says the
+   result SHOULD be considered immediately stale and the client MAY re-fetch each time; it is a
+   staleness hint, never a "do not cache" instruction. The condition the provisional ruling was
+   held open against is spent, so **`60_000` is final** and `ttlMs` is confirmed required on
+   every result that carries it.
 
 ## 10. How to resume
 
 1. Read this document top to bottom; it inlines everything (the research distillate, the
-   verified inventory, both designs' substance, the reconciliation, and the 2026-07-31
-   amendment in §5.1/§6.1).
-2. Run the §8 evidence tasks first (one research dispatch; cheap) — §8.1–§8.7 and §8.12 gate
-   the U units, §8.8–§8.11 gate the A units. Two are hard gates rather than sharpeners: §8.12
-   sets U4's headerless rule, and §8.10 sets A4's supersession criterion (§6.2) — neither unit
-   may be dispatched on an assumed answer.
-3. Re-verify the §1.1 ledger against `/specification/latest` (§8.7).
-4. Execute U0 → U5, then the §6.1 amendment units A1 → A6, then U6, under the repository's
+   verified inventory, both designs' substance, the reconciliation, the 2026-07-31 amendment
+   in §5.1/§6.1, and the 2026-07-31 evidence pass folded into §4, §5.1, §6.2, and §8).
+2. **The §8 evidence pass is done** (2026-07-31): eleven of twelve tasks are answered and each
+   finding is already folded into the section it corrects, so no unit is waiting on evidence.
+   **§8.2 alone stays open** and gates U7, which is unscheduled anyway. The two former hard
+   gates are discharged in opposite ways: §8.12 settled U4's headerless rule into three cases
+   (§4.2), and §8.10 **withdrew** A4's supersession criterion rather than setting it, because
+   MCP defines no subscription key (§5.1.2, §6.2).
+3. **Run `@modelcontextprotocol/conformance` with `--spec-version 2026-07-28` as part of
+   verification** (§8.6). An external oracle exists; self-attestation against our own fixtures
+   is no longer the plan, and our fixtures are the supplement that covers what the suite does
+   not reach.
+4. Re-verify the §1.1 ledger against `/specification/latest` — stable as of 2026-07-31 (§8.7),
+   so this is a cheap re-confirmation rather than a research task.
+5. Execute U0 → U5, then the §6.1 amendment units A1 → A6, then U6, under the repository's
    operating contract (serialized writers from clean baselines, adversarial audits,
-   independent verifier gates, real-Chromium browser suite for U5). U7 and A7 stay
-   unscheduled unless their evidence flips them.
-5. Branch from `1209eb5` on `main`, fast-forward on completion, and publish before
+   independent verifier gates, real-Chromium browser suite for U5). Each unit carries its own
+   mechanical guide updates so parity stays green throughout (§6). U7 and A7 stay unscheduled:
+   U7 until §8.2 returns, A7 until a consumer needs it (§5.1.3, corrected trigger).
+6. Branch from `1209eb5` on `main`, fast-forward on completion, and publish before
    `@orkestrel/supervisor` pins the surface (§7).
