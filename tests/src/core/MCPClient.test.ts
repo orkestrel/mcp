@@ -4,10 +4,10 @@ import type {
 	JSONRPCMessage,
 	MCPServerInterface,
 } from '@src/core'
-import type { ToolManagerInterface } from '@orkestrel/agent'
+import type { ToolManagerInterface } from '@orkestrel/tool'
 import { describe, expect, it } from 'vitest'
 import { createMCPClient, createMCPServer, isMCPError, MCP_PROTOCOL_VERSION } from '@src/core'
-import { createTool, createToolManager } from '@orkestrel/agent'
+import { createTool, createToolManager } from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
 
 // MCPClient ↔ a REAL MCPServer over an in-process LOOPBACK transport (AGENTS §16 — a
@@ -237,19 +237,23 @@ describe('MCPClient — tools() (discovery + local-tool wrapping)', () => {
 		expect(value).toEqual({ echoed: 'pong' })
 	})
 
-	it('a wrapped remote-erroring tool, added to a ToolManager, is isolated into a result error', async () => {
+	it('a wrapped remote-erroring tool, added to a ToolManager, is isolated into a failure result', async () => {
 		const client = createMCPClient({ transport: createLoopback(serverWithTools()) })
 		await client.connect()
 		const remote = createToolManager()
 		remote.add(await client.tools())
 
 		// The remote `boom` throws server-side (`isError`); the wrapped local tool re-throws,
-		// and the local ToolManager isolates THAT into a result error — exactly like a local
+		// and the local ToolManager isolates THAT into a failure result — exactly like a local
 		// throw. The agent loop stays driveable.
 		const result = await remote.execute({ id: 'c1', name: 'boom', arguments: {} })
 
-		expect(result.value).toBeUndefined()
-		expect(result.error).toContain('tool exploded')
+		expect(result).toEqual({
+			id: 'c1',
+			name: 'boom',
+			success: false,
+			error: 'tool exploded',
+		})
 	})
 })
 

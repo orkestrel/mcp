@@ -38,10 +38,12 @@ absent optional field is simply absent.
 | ---------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `ToolDefinition`       | interface | `{ name, description?, parameters? }` — what a caller advertises: the selectable name and the open JSON Schema for its arguments. |
 | `ToolCall`             | interface | `{ id, name, arguments }` — one request to run a named tool, `id` correlating it with its later result.                           |
-| `ToolResult`           | interface | `{ id, name, value?, error? }` — the correlated outcome: `value` on success, `error` on failure, never both.                      |
+| `ToolSuccess`          | interface | `{ id, name, success: true, value }` — the correlated success branch, carrying whatever the handler returned.                     |
+| `ToolFailure`          | interface | `{ id, name, success: false, error }` — the correlated failure branch, carrying the registry's failure message.                   |
 | `ToolOptions`          | interface | `{ name, description?, summary?, parameters?, execute }` — the construction input for an executable tool.                         |
 | `ToolInterface`        | interface | A `ToolDefinition` plus an optional `summary` and the handler that runs it. See [`## Methods`](#methods).                         |
 | `ToolManagerInterface` | interface | The registry contract; its readonly `count` is the number of registered tools. See [`## Methods`](#methods).                      |
+| `ToolResult`           | type      | `ToolSuccess \| ToolFailure` — the discriminated correlated outcome; narrow on `success` to read `value` or `error`.              |
 
 ### Helpers
 
@@ -133,10 +135,9 @@ handler always receives the open `Readonly<Record<string, unknown>>` the caller 
 the fields it consumes — declaring `required` tells the caller what to send, not this runtime
 what to reject. Handlers may be synchronous or asynchronous; the registry awaits either.
 
-`summary` is the short form advertised in place of `description`. Write the full description for
-a human reading the source and the summary for a caller paying by the token: the long text stays
-on the registered tool, reachable through `tools.tool('add')?.description` whenever something
-wants the detail.
+When one was authored, `definitions()` projects the tool's `summary` as `description`, advertising
+it in place of the full description. The full text stays on the tool for direct lookup through
+`tools.tool('add')?.description`.
 
 ## The registry
 
@@ -185,12 +186,16 @@ const incoming: unknown = { id: 'call-1', name: 'add', arguments: { left: 2, rig
 
 if (isToolCall(incoming)) {
 	const result = await tools.execute(incoming)
-	result.value // 5 — or result.error, when the call failed
+	if (result.success) {
+		result.value // 5
+	} else {
+		result.error // the failure message
+	}
 }
 
 const batch = await tools.execute([
-	{ id: '1', name: 'add', arguments: { left: 2, right: 3 } }, // → { id: '1', name: 'add', value: 5 }
-	{ id: '2', name: 'ghost', arguments: {} }, // → { id: '2', name: 'ghost', error: 'tool not found: ghost' }
+	{ id: '1', name: 'add', arguments: { left: 2, right: 3 } }, // → { id: '1', name: 'add', success: true, value: 5 }
+	{ id: '2', name: 'ghost', arguments: {} }, // → { id: '2', name: 'ghost', success: false, error: 'tool not found: ghost' }
 ])
 ```
 
@@ -203,8 +208,11 @@ Execution always resolves. An unknown name becomes `tool not found: <name>`; a s
 and an asynchronous rejection are both contained; an `Error` contributes its `message` and any
 other thrown value is converted with `String`. Success and failure never mix in one result: a
 successful call carries `value` even when that value is `undefined`, `null`, `0`, `''`, or
-`false`, and a failed call carries `error` with no `value` key at all. Distinguish the two by
-which key is present, not by whether `value` is truthy.
+`false`, and a failed call carries `error`. Narrow on `success` to distinguish the two; a present
+success value is not necessarily meaningful or truthy.
+
+An in-process caller needing a typed error can call `tools.tool(name)`, then
+`tool.execute(args)` inside its own `try`/`catch`.
 
 A batch is dispatched concurrently and answered in input order, with each call isolated from its
 siblings — one failure never voids the batch, and duplicate ids stay distinct positional calls

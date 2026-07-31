@@ -1,5 +1,5 @@
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { ToolInterface } from '@orkestrel/agent'
+import type { ToolInterface } from '@orkestrel/tool'
 import type {
 	ClientTransportInterface,
 	JSONRPCMessage,
@@ -9,7 +9,7 @@ import type {
 	MCPClientOptions,
 } from './types.js'
 import { Emitter } from '@orkestrel/emitter'
-import { Tool } from '@orkestrel/agent'
+import { Tool } from '@orkestrel/tool'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
 import {
 	DEFAULT_MCP_CLIENT_NAME,
@@ -33,8 +33,8 @@ import { isJSONRPCResponse, isRequestId } from './validators.js'
  *   lists the remote tools and wraps each as a
  *   local {@link ToolInterface} whose `execute` calls back through `call`; `call` runs a
  *   remote `tools/call` and returns the tool's value (a remote `isError: true` throws
- *   locally, so an agent's {@link import('@orkestrel/agent').ToolManagerInterface}
- *   isolates it into a result `error` just like a local throw).
+ *   locally, so an agent's {@link import('@orkestrel/tool').ToolManagerInterface}
+ *   isolates it into a `success: false` result just like a local throw).
  * - **Request↔response correlation.** Each request is tagged with a monotonic numeric
  *   `id` ({@link #nextId}); a single transport `message` subscription resolves / rejects
  *   the matching {@link #pending} entry by `id`. A message that is NOT a response to a

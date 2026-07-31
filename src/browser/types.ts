@@ -1,5 +1,5 @@
 import type { MCPTransportInterface } from '@src/core'
-import type { ToolManagerInterface } from '@orkestrel/agent'
+import type { ToolManagerInterface } from '@orkestrel/tool'
 
 // The MCP browser-transport surface — the source of truth (AGENTS §2). Two CLIENT
 // transports for the Model Context Protocol, both driving a REMOTE server from a page

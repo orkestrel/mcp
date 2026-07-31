@@ -1,11 +1,11 @@
 # @orkestrel/mcp
 
 A typed [Model Context Protocol](https://modelcontextprotocol.io) client/server
-for the `@orkestrel` line, with pluggable HTTP, WebSocket, and stdio
-transports. `createMCPServer` wraps a live `ToolManagerInterface`
-(`@orkestrel/agent`) as an MCP server; `createMCPClient` drives a remote MCP
-server and surfaces its tools as local `ToolInterface`s an agent can call as
-if they were its own. The dispatch core is transport- and provider-agnostic
+for the `@orkestrel` line, bridging the `@orkestrel/tool` registry to MCP with
+pluggable HTTP, WebSocket, and stdio transports. `createMCPServer` exposes a
+live `ToolManagerInterface`; `createMCPClient` drives a remote MCP server and
+surfaces its tools as local `ToolInterface`s. No agent runtime is required.
+The dispatch core is transport- and provider-agnostic
 (`src/core` — JSON-RPC 2.0, no HTTP, no `as`); every transport (Streamable
 HTTP over `@orkestrel/router` / `@orkestrel/server`, WebSocket over
 `@orkestrel/websocket`, and stdio over `node:child_process`) lives one layer
@@ -31,10 +31,10 @@ Expose a tool registry over MCP, mounted on the HTTP spine:
 ```ts
 import { createMCPServer } from '@orkestrel/mcp'
 import { createMCPRoutes } from '@orkestrel/mcp/server'
-import { createToolManager } from '@orkestrel/agent'
+import { createTool, createToolManager } from '@orkestrel/tool'
 
 const tools = createToolManager()
-tools.add({ id: 'add', name: 'add', execute: (a) => Number(a.x) + Number(a.y) })
+tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
 
 const mcp = createMCPServer({ name: 'calculator', version: '1.0.0', tools })
 const routes = createMCPRoutes(mcp) // POST /mcp dispatches JSON-RPC (JSON or SSE per Accept)

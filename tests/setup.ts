@@ -11,7 +11,7 @@ import type {
 	MCPServerInterface,
 } from '@src/core'
 import { createMCPServer } from '@src/core'
-import { createTool, createToolManager } from '@orkestrel/agent'
+import { createTool, createToolManager } from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
 import { createSSEParser } from '@orkestrel/sse'
 

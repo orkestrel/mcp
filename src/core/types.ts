@@ -1,5 +1,5 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
-import type { ToolInterface, ToolManagerInterface } from '@orkestrel/agent'
+import type { ToolInterface, ToolManagerInterface } from '@orkestrel/tool'
 
 // JSON-RPC 2.0 wire types (https://www.jsonrpc.org/specification) — the envelope
 // the Model Context Protocol speaks. A request carries a `method` and optional
@@ -76,9 +76,9 @@ export interface MCPContent {
  *
  * @remarks
  * A success carries the tool's value serialized into one `text` content block; a
- * tool FAILURE (the `ToolResult.error` the registry isolated) carries the error
- * text in `content` AND sets `isError: true`, so the model sees the failure as a
- * tool result it can react to rather than a protocol error.
+ * tool FAILURE (the `success: false` branch the registry isolated) carries its
+ * `error` text in `content` AND sets `isError: true`, so the model sees the
+ * failure as a tool result it can react to rather than a protocol error.
  */
 export interface MCPToolResult {
 	readonly content: readonly MCPContent[]
@@ -141,7 +141,7 @@ export type MCPServerEventMap = {
  * (`serverInfo`). `tools` is the live registry the server dispatches `tools/list`
  * / `tools/call` over — its `definitions()` advertise the tools and its
  * `execute()` runs a call (the manager already isolates a tool throw into a
- * result `error`, so the server adds none). `description` is a human label for
+ * `success: false` result, so the server adds none). `description` is a human label for
  * the server (reserved for a future `instructions` capability — unused by the
  * current dispatch). `on` is the §8 reserved key: initial listeners for the
  * server's {@link MCPServerEventMap}, wired at construction.
@@ -389,8 +389,8 @@ export interface MCPClientOptions {
  *   the remote tools and wraps each as a local {@link ToolInterface} whose `execute`
  *   calls back through `call`; `call(name, args)` runs a remote `tools/call` and
  *   returns the tool's value (a remote tool FAILURE — `isError: true` — throws locally,
- *   so the agent's {@link ToolManagerInterface} isolates it into a result `error` just
- *   like a local throw).
+ *   so the agent's {@link ToolManagerInterface} isolates it into a `success: false`
+ *   result just like a local throw).
  * - **Request↔response correlation.** Every request is tagged with a monotonic numeric
  *   `id`; the client subscribes to the transport's `message` event and resolves /
  *   rejects the matching pending request by that `id`. A message that is NOT a response
@@ -473,8 +473,8 @@ export interface MCPClientInterface {
 	 * The inverse of the server's `buildToolResult`: a SUCCESS parses the concatenated
 	 * `text` as JSON (falling back to the raw string when it is not JSON); a remote tool
 	 * FAILURE (`isError: true`) THROWS an `Error` carrying the error text — so an agent's
-	 * {@link ToolManagerInterface} isolates the remote failure into a result `error`
-	 * exactly as it would a local tool throw.
+	 * {@link ToolManagerInterface} isolates the remote failure into a `success: false`
+	 * result exactly as it would a local tool throw.
 	 *
 	 * @param name - The remote tool's name
 	 * @param args - The arguments record forwarded as the call's `arguments`

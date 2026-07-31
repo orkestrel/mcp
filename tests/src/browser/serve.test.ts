@@ -1,7 +1,7 @@
 import type { ServeMCPScopeInterface } from '@src/browser'
-import type { ToolManagerInterface } from '@orkestrel/agent'
+import type { ToolManagerInterface } from '@orkestrel/tool'
 import { describe, expect, it, vi } from 'vitest'
-import { createTool, createToolManager } from '@orkestrel/agent'
+import { createTool, createToolManager } from '@orkestrel/tool'
 import { serveMCPScope } from '@src/browser'
 import { createJSONRPCRequest } from '../../setup.js'
 

@@ -3,7 +3,7 @@ import type { MiddlewareHandler } from '@orkestrel/server'
 import type { StartedServerInterface } from '../../../setupServer.js'
 import { describe, expect, it } from 'vitest'
 import { createMCPClient, createMCPServer, MCP_PROTOCOL_VERSION } from '@src/core'
-import { createTool, createToolManager } from '@orkestrel/agent'
+import { createTool, createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import {

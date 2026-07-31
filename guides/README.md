@@ -33,8 +33,8 @@ built from (no `as` anywhere on the JSON-RPC / HTTP boundary). It documents
 **that package's** surface, not anything sourced in this repo; it is kept
 here for the same reason.
 
-[`src/agent.md`](src/agent.md) is a byte-identical mirror of the guide for
-`@orkestrel/agent` — a runtime dependency, the `ToolManagerInterface` /
+[`src/tool.md`](src/tool.md) is a byte-identical mirror of the guide for
+`@orkestrel/tool` — a runtime dependency, the `ToolManagerInterface` /
 `ToolInterface` / `ToolResult` vocabulary `createMCPServer` exposes over MCP
 and `createMCPClient` wraps a remote server's tools back into. It documents
 **that package's** surface, not anything sourced in this repo; it is kept

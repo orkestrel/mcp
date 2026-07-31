@@ -1,4 +1,4 @@
-import type { ToolResult } from '@orkestrel/agent'
+import type { ToolResult } from '@orkestrel/tool'
 import type { MCPTransportInterface } from '@src/core'
 import {
 	bindClient,
@@ -14,7 +14,7 @@ import {
 	MCP_PROTOCOL_VERSION,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { createTool, createToolManager } from '@orkestrel/agent'
+import { createTool, createToolManager } from '@orkestrel/tool'
 import { createJSONRPCRequest } from '../../setup.js'
 
 // An in-memory MCPTransportInterface double (AGENTS §16 — a real duplex channel, no
@@ -134,13 +134,13 @@ describe('buildToolDescriptors', () => {
 
 describe('buildToolResult', () => {
 	it('serializes a value into one text content block', () => {
-		const result: ToolResult = { id: '1', name: 'sum', value: 7 }
+		const result: ToolResult = { id: '1', name: 'sum', success: true, value: 7 }
 
 		expect(buildToolResult(result)).toEqual({ content: [{ type: 'text', text: '7' }] })
 	})
 
 	it('serializes a structured value as JSON', () => {
-		const result: ToolResult = { id: '1', name: 'echo', value: { a: 1 } }
+		const result: ToolResult = { id: '1', name: 'echo', success: true, value: { a: 1 } }
 
 		expect(buildToolResult(result)).toEqual({
 			content: [{ type: 'text', text: JSON.stringify({ a: 1 }) }],
@@ -148,13 +148,18 @@ describe('buildToolResult', () => {
 	})
 
 	it('maps a value-less result to an EMPTY text block (a content block must carry a string text)', () => {
-		const result: ToolResult = { id: '1', name: 'noop' }
+		const result: ToolResult = { id: '1', name: 'noop', success: true, value: undefined }
 
 		expect(buildToolResult(result)).toEqual({ content: [{ type: 'text', text: '' }] })
 	})
 
 	it('maps an error result to an isError content block', () => {
-		const result: ToolResult = { id: '1', name: 'boom', error: 'kaboom' }
+		const result: ToolResult = {
+			id: '1',
+			name: 'boom',
+			success: false,
+			error: 'kaboom',
+		}
 
 		expect(buildToolResult(result)).toEqual({
 			content: [{ type: 'text', text: 'kaboom' }],

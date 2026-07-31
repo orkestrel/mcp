@@ -1,6 +1,6 @@
 import type { JSONRPCResponse } from '@src/core'
 import type { EmitterErrorHandler } from '@orkestrel/emitter'
-import type { ToolManagerInterface } from '@orkestrel/agent'
+import type { ToolManagerInterface } from '@orkestrel/tool'
 import {
 	createMCPServer,
 	JSONRPC_INVALID_PARAMS,
@@ -10,7 +10,7 @@ import {
 	MCP_PROTOCOL_VERSION,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { createTool, createToolManager } from '@orkestrel/agent'
+import { createTool, createToolManager } from '@orkestrel/tool'
 import {
 	createErrorRecorder,
 	createJSONRPCNotification,

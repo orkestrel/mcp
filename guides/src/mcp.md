@@ -3,7 +3,7 @@
 > The [Model Context Protocol](https://modelcontextprotocol.io) layer — a typed
 > JSON-RPC 2.0 client/server pair with pluggable HTTP, WebSocket, and stdio
 > transports. **Ingress:** `createMCPServer` wraps a live `ToolManagerInterface`
-> (`@orkestrel/agent`) as an MCP server any MCP client can drive. **Egress:**
+> (`@orkestrel/tool`) as an MCP server any MCP client can drive. **Egress:**
 > `createMCPClient` drives a _remote_ MCP server and surfaces its tools as local
 > `ToolInterface`s an agent can call as if they were its own. Four methods carry
 > both directions — `initialize` (version handshake + capability advertise),
@@ -11,7 +11,7 @@
 >
 > The split that keeps it lean: **the dispatch core is transport-agnostic and
 > provider-agnostic.** `MCPServer` and `MCPClient` live in `src/core` and import
-> only siblings (JSON-RPC types + `@orkestrel/agent`'s tool registry +
+> only siblings (JSON-RPC types + `@orkestrel/tool`'s tool registry +
 > `@orkestrel/emitter`'s observable surface + `@orkestrel/contract`'s guards) —
 > **no HTTP, no WebSocket, no stdio, no `as`** (all wire input is narrowed via
 > total guards). The server is pure logic with two entry points: `dispatch(request)`
@@ -58,10 +58,10 @@ Create a server over a live tool registry, then pump message strings through
 
 ```ts
 import { createMCPServer } from '@orkestrel/mcp'
-import { createToolManager } from '@orkestrel/agent'
+import { createTool, createToolManager } from '@orkestrel/tool'
 
 const tools = createToolManager()
-tools.add({ id: 'add', name: 'add', execute: (a) => Number(a.x) + Number(a.y) })
+tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
 
 const server = createMCPServer({ name: 'calculator', version: '1.0.0', tools })
 server.emitter.on('request', (method, id) => log(method, id))
@@ -81,9 +81,9 @@ const out = await server.handle(
 mapping. A request with NO `id` is a **notification** — handled (the
 `request` event still fires) but it yields NO response (`dispatch` resolves
 `undefined`, `handle` returns `undefined`), whatever its method. Tool errors
-are NOT protocol errors: the `ToolManager` (`@orkestrel/agent`) isolates a
-thrown tool into a result `error`, which `tools/call` maps to an
-`isError: true` tool result the model can react to — so the server wraps
+are NOT protocol errors: the `ToolManager` (`@orkestrel/tool`) isolates a
+thrown tool into a `success: false` result, which `tools/call` maps to an
+`isError: true` tool result carrying its `error` text — so the server wraps
 `execute` in NO try/catch.
 
 ### Bind an `MCPServer` / `MCPClient` to any duplex transport
@@ -103,7 +103,7 @@ import {
 	createMCPClient,
 	createMCPServer,
 } from '@orkestrel/mcp'
-import { createToolManager } from '@orkestrel/agent'
+import { createTool, createToolManager } from '@orkestrel/tool'
 
 // An in-memory duplex channel — a real MCPTransportInterface, the same shape a
 // Node stdio pair or a browser MessagePort would implement.
@@ -134,7 +134,7 @@ serverSide.connect(clientSide)
 clientSide.connect(serverSide)
 
 const tools = createToolManager()
-tools.add({ id: 'add', name: 'add', execute: (a) => Number(a.x) + Number(a.y) })
+tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
 const server = createMCPServer({ name: 'calculator', version: '1.0.0', tools })
 bindServer(server, serverSide)
 
@@ -199,7 +199,7 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 | `jsonRPCResult`        | function | Build a success `JSONRPCResponse` — the `id` echoed, the value as `result`.                                                                                |
 | `jsonRPCError`         | function | Build an error `JSONRPCResponse` — the `id`, a reserved `code` / `message`, and optional `data`.                                                           |
 | `buildToolDescriptors` | function | Map a `ToolManagerInterface`'s definitions to `tools/list` descriptors, renaming `parameters` → `inputSchema`.                                             |
-| `buildToolResult`      | function | Map a `ToolResult` (`@orkestrel/agent`) to an MCP tool-call result — the value (or error text + `isError: true`) as a text block.                          |
+| `buildToolResult`      | function | Map a `ToolResult` (`@orkestrel/tool`) to an MCP tool-call result — the value (or error text + `isError: true`) as a text block.                           |
 | `initializeResult`     | function | Build the `initialize` result — the negotiated `protocolVersion`, `capabilities`, and `serverInfo`.                                                        |
 | `bindServer`           | function | Pipe an `MCPTransportInterface` into an `MCPServerInterface` — inbound `handle`d, a defined reply `send`; returns an unbind (detaches without closing).    |
 | `bindClient`           | function | Pipe an `MCPTransportInterface` into an `MCPClientInterface` (built over `createDuplexClientTransport`) — completes the inbound wiring; returns an unbind. |
@@ -248,7 +248,7 @@ a body-size guard is front-middleware policy the consumer composes, same as auth
 ```ts
 import { createMCPServer } from '@orkestrel/mcp'
 import { createMCPRoutes } from '@orkestrel/mcp/server'
-import { createToolManager } from '@orkestrel/agent'
+import { createToolManager } from '@orkestrel/tool'
 
 const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
 const routes = createMCPRoutes(mcp) // POST /mcp dispatches JSON-RPC (JSON or SSE per Accept)
@@ -374,7 +374,7 @@ unauthenticated upgrade).
 ```ts
 import { createMCPClient, createMCPServer } from '@orkestrel/mcp'
 import { createWebSocketClientTransport, createWebSocketServer } from '@orkestrel/mcp/server'
-import { createToolManager } from '@orkestrel/agent'
+import { createToolManager } from '@orkestrel/tool'
 
 const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
 server.upgrade(createWebSocketServer(mcp)) // claims an MCP WebSocket upgrade to /mcp
@@ -440,7 +440,7 @@ live in the shared `helpers.ts`.
 ```ts
 import { createMCPClient, createMCPServer } from '@orkestrel/mcp'
 import { createStdioClientTransport, createStdioServer } from '@orkestrel/mcp/server'
-import { createToolManager } from '@orkestrel/agent'
+import { createToolManager } from '@orkestrel/tool'
 
 const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
 createStdioServer(mcp).start() // an MCP client now connects over this process's stdio
@@ -621,7 +621,7 @@ mapping.
 
 ```ts
 import { createMCPServer } from '@orkestrel/mcp'
-import { createToolManager } from '@orkestrel/agent'
+import { createToolManager } from '@orkestrel/tool'
 
 const server = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
 const response = await server.dispatch({ jsonrpc: '2.0', method: 'tools/list', id: 1 })
@@ -745,10 +745,11 @@ tools: {} }, serverInfo: { name, version } }`, the version NEGOTIATED
    narrowed via `@orkestrel/contract`'s guards (no `as`); a missing /
    non-string `name` → a `-32602` invalid-params error. Otherwise it runs
    `tools.execute({ id, name, arguments })` — and because the `ToolManager`
-   (`@orkestrel/agent`) ALREADY isolates a thrown tool (and an unknown name)
-   into a result `error`, the server adds NO try/catch: a result `error` maps
-   to `{ content: [{ type: 'text', text: <error> }], isError: true }`, a
-   result `value` to `{ content: [{ type: 'text', text: JSON.stringify(value) }] }`.
+   (`@orkestrel/tool`) ALREADY isolates a thrown tool (and an unknown name)
+   into a `success: false` result, the server adds NO try/catch: that branch's
+   `error` maps to `{ content: [{ type: 'text', text: <error> }], isError: true }`;
+   the `success: true` branch's `value` maps to
+   `{ content: [{ type: 'text', text: JSON.stringify(value) }] }`.
 6. **Unknown method → `-32601`.** An id-bearing request for any other method
    resolves a `JSONRPC_METHOD_NOT_FOUND` error whose message names the method.
 7. **`handle` maps the boundary failures.** A `JSON.parse` throw (malformed
@@ -766,7 +767,7 @@ tools: {} }, serverInfo: { name, version } }`, the version NEGOTIATED
    is sound with `isJSONRPCMessage` (a guard-valid input returned unchanged;
    every non-`undefined` output satisfies the guard).
 9. **The CORE is provider-agnostic, no transport.** `src/core` imports ONLY
-   `@orkestrel/emitter`, `@orkestrel/agent`, and `@orkestrel/contract` (plus,
+   `@orkestrel/emitter`, `@orkestrel/tool`, and `@orkestrel/contract` (plus,
    for the client's per-request deadline, `AbortSignal.timeout`) — never
    `@orkestrel/server`, `@orkestrel/router`, `@orkestrel/sse`, or
    `@orkestrel/websocket` — and carries no transport, no HTTP, and no model.
@@ -848,8 +849,8 @@ name, version } }`), then validates the result's `protocolVersion`. A
     clause 5's `buildToolResult` — THROWS an `Error` carrying the text when
     `isError === true`, else `JSON.parse`s the text (raw-string fallback;
     empty → `undefined`); so a remote tool failure throws locally and an
-    agent's `ToolManager` isolates it into a result `error` exactly like a
-    local throw. `disconnect()` rejects every pending request, clears
+    agent's `ToolManager` isolates it into a `success: false` result exactly
+    like a local throw. `disconnect()` rejects every pending request, clears
     `protocol`, closes the transport, and fires `disconnect` (idempotent).
 14. **Client correlation + deadline + notifications.** Each request is
     tagged with a monotonic numeric `id`; a SINGLE transport `message`
@@ -1064,20 +1065,21 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
 
 ### Expose a tool registry over MCP
 
-The headline use: turn a live `ToolManagerInterface` (`@orkestrel/agent`) into
+The headline use: turn a live `ToolManagerInterface` (`@orkestrel/tool`) into
 a server an MCP client drives over a transport.
 
 ```ts
 import { createMCPServer } from '@orkestrel/mcp'
-import { createToolManager } from '@orkestrel/agent'
+import { createTool, createToolManager } from '@orkestrel/tool'
 
 const tools = createToolManager()
-tools.add({
-	id: 'search',
-	name: 'search',
-	description: 'Search the docs',
-	execute: (a) => find(String(a.query)),
-})
+tools.add(
+	createTool({
+		name: 'search',
+		description: 'Search the docs',
+		execute: (a) => find(String(a.query)),
+	}),
+)
 
 const server = createMCPServer({ name: 'docs', version: '1.0.0', tools })
 
@@ -1110,7 +1112,7 @@ default.
 ```ts
 import { createMCPServer } from '@orkestrel/mcp'
 import { createMCPRoutes, createMCPSession } from '@orkestrel/mcp/server'
-import { createToolManager } from '@orkestrel/agent'
+import { createToolManager } from '@orkestrel/tool'
 
 const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
 router.use(createMCPSession({ ttl: 60_000 })) // stateful: mint + validate + resumable GET / DELETE
@@ -1163,11 +1165,12 @@ import {
 	jsonRPCResult,
 	MCPError,
 } from '@orkestrel/mcp'
-import { createToolManager } from '@orkestrel/agent'
+import { createToolManager } from '@orkestrel/tool'
 
 const tools = createToolManager()
 const descriptors = buildToolDescriptors(tools) // tools/list payload
-const result = buildToolResult({ value: 7 }) // { content: [{ type: 'text', text: '7' }] }
+const result = buildToolResult({ id: '1', name: 'example', success: true, value: 7 })
+// { content: [{ type: 'text', text: '7' }] }
 const init = initializeResult('docs', '1.0.0', '2025-06-18')
 
 const ok = jsonRPCResult(1, { tools: descriptors })
@@ -1235,7 +1238,7 @@ with no upfront shape flag:
 ```ts
 // worker's entry module:
 import { serveMCP } from '@orkestrel/mcp/browser'
-import { createTool, createToolManager } from '@orkestrel/agent'
+import { createTool, createToolManager } from '@orkestrel/tool'
 
 const tools = createToolManager()
 tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
@@ -1285,7 +1288,7 @@ genuinely round-trips with no worker harness:
 
 ```ts
 import { serveMCPScope } from '@orkestrel/mcp/browser'
-import { createTool, createToolManager } from '@orkestrel/agent'
+import { createTool, createToolManager } from '@orkestrel/tool'
 
 const listeners = new Set<(event: MessageEvent) => void>()
 const scope = {

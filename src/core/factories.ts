@@ -14,16 +14,16 @@ import { MCPServer } from './MCPServer.js'
 
 /**
  * Create a transport-agnostic Model Context Protocol server — exposes a live
- * {@link import('@orkestrel/agent').ToolManagerInterface} over JSON-RPC 2.0
+ * {@link import('@orkestrel/tool').ToolManagerInterface} over JSON-RPC 2.0
  * (`initialize` / `ping` / `tools/list` / `tools/call`).
  *
  * @remarks
  * Pump raw message strings through `handle` (parse → dispatch → serialize) from a
  * transport, or call the typed `dispatch` directly with an already-parsed request.
  * The server is provider-agnostic — JSON-RPC plus the tool registry, with no HTTP
- * and no model. The {@link import('@orkestrel/agent').ToolManagerInterface} already
- * isolates a thrown tool into a result error (surfaced as an MCP `isError: true`
- * tool result), so a misbehaving tool never crashes a dispatch. Subscribe to the
+ * and no model. The {@link import('@orkestrel/tool').ToolManagerInterface} already
+ * isolates a thrown tool into a `success: false` result (surfaced as an MCP
+ * `isError: true` tool result), so a misbehaving tool never crashes a dispatch. Subscribe to the
  * `request` event via `server.emitter.on('request', …)` for tracing.
  *
  * @param options - `name` / `version` (the server identity), `tools` (the live
@@ -54,7 +54,7 @@ export function createMCPServer(options: MCPServerOptions): MCPServerInterface {
  * Create a transport-agnostic Model Context Protocol CLIENT — connects to a REMOTE
  * MCP server over an injected {@link import('./types.js').ClientTransportInterface},
  * runs the `initialize` handshake, and exposes the server's tools as local
- * {@link import('@orkestrel/agent').ToolInterface}s an agent can run.
+ * {@link import('@orkestrel/tool').ToolInterface}s an agent can run.
  *
  * @remarks
  * The egress mirror of {@link createMCPServer}: where the server exposes a local tool
@@ -62,7 +62,7 @@ export function createMCPServer(options: MCPServerOptions): MCPServerInterface {
  * validates and exposes the negotiated protocol, `tools()` lists + wraps the remote
  * tools (each `execute` calls back over the wire),
  * and `call(name, args)` runs a remote `tools/call` (a remote tool failure throws
- * locally, so an agent's {@link import('@orkestrel/agent').ToolManagerInterface}
+ * locally, so an agent's {@link import('@orkestrel/tool').ToolManagerInterface}
  * isolates it). The transport is injected — a concrete one (the HTTP transport over
  * `fetch`) lives in `@src/server`; the client itself is provider-agnostic. Subscribe
  * to `connect` / `disconnect` / `notification` via `client.on(...)` (or

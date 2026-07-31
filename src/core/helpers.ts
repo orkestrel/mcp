@@ -1,4 +1,4 @@
-import type { ToolManagerInterface, ToolResult } from '@orkestrel/agent'
+import type { ToolManagerInterface, ToolResult } from '@orkestrel/tool'
 import type {
 	JSONRPCResponse,
 	MCPClientInterface,
@@ -54,7 +54,7 @@ export function jsonRPCError(
  * — renaming `parameters` to the wire's `inputSchema`.
  *
  * @remarks
- * Each {@link import('@orkestrel/agent').ToolDefinition} carries through its
+ * Each {@link import('@orkestrel/tool').ToolDefinition} carries through its
  * `name` and (when present) `description`; its open JSON-Schema `parameters`
  * becomes `inputSchema`, defaulting to an empty object schema (`{ type: 'object' }`)
  * when a tool declares none (MCP requires an `inputSchema`).
@@ -82,18 +82,18 @@ export function buildToolDescriptors(manager: ToolManagerInterface): readonly MC
  * value (or error) as a `text` content block.
  *
  * @remarks
- * The {@link ToolManagerInterface} already isolates a thrown tool into
- * `result.error` (so the server adds NO try/catch around `execute`): when `error`
- * is present, this builds an `isError: true` result carrying the error text, so the
+ * The {@link ToolManagerInterface} already isolates a thrown tool into a
+ * `success: false` result (so the server adds NO try/catch around `execute`):
+ * that branch builds an `isError: true` result carrying `result.error`, so the
  * model sees the failure as a tool result it can react to rather than a protocol
- * error; otherwise it serializes `result.value` (via `JSON.stringify`) into one
- * `text` block.
+ * error; the `success: true` branch serializes `result.value` (via
+ * `JSON.stringify`) into one `text` block.
  *
  * @param result - The tool's execution outcome
  * @returns The MCP tool-call result
  */
 export function buildToolResult(result: ToolResult): MCPToolResult {
-	if (result.error !== undefined) {
+	if (!result.success) {
 		return { content: [{ type: 'text', text: result.error }], isError: true }
 	}
 	// A content block must carry a string `text`; `JSON.stringify(undefined)` is the value

@@ -1,5 +1,5 @@
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { ToolManagerInterface } from '@orkestrel/agent'
+import type { ToolManagerInterface } from '@orkestrel/tool'
 import type {
 	JSONRPCRequest,
 	JSONRPCResponse,
@@ -39,8 +39,9 @@ import { parseJSONRPCMessage } from './parsers.js'
  *   the tools capability; `notifications/initialized` is a notification (no
  *   response); `ping` returns `{}`; `tools/list` lists the registry's tools (its
  *   `parameters` renamed to `inputSchema`); `tools/call` runs a tool by name (the
- *   {@link ToolManagerInterface} isolates a tool throw into the result `error`, which
- *   maps to an `isError: true` tool result — so the server adds NO try/catch). An
+ *   {@link ToolManagerInterface} isolates a tool throw into a `success: false`
+ *   result, which maps to an `isError: true` tool result — so the server adds NO
+ *   try/catch). An
  *   unknown method → `-32601`; a `tools/call` with a missing / non-string `name` →
  *   `-32602`.
  * - **Provider-agnostic.** Imports only core siblings — JSON-RPC + the tool registry,
@@ -133,7 +134,7 @@ export class MCPServer implements MCPServerInterface {
 
 	// Run a `tools/call`: narrow `params.name` (string) + `params.arguments` (record,
 	// default `{}`) with no `as`, execute the tool (the manager isolates a throw into
-	// `result.error`), and map the result to an MCP tool-call result.
+	// `success: false`), and map the result to an MCP tool-call result.
 	async #call(request: JSONRPCRequest, id: string | number | null): Promise<JSONRPCResponse> {
 		const params = request.params
 		const name = params?.['name']

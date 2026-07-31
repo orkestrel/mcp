@@ -26,7 +26,7 @@ import { acceptsEventStream } from './helpers.js'
  * ```ts
  * import { createMCPServer } from '@orkestrel/mcp'
  * import { createMCPPostHandler } from '@orkestrel/mcp/server'
- * import { createToolManager } from '@orkestrel/agent'
+ * import { createToolManager } from '@orkestrel/tool'
  *
  * const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
  * const handler = createMCPPostHandler(mcp, true)

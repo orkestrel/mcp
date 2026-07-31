@@ -1,7 +1,7 @@
 import type { MCPTransportInterface } from '@src/core'
 import { createDuplexClientTransport, createMCPServer } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { createTool, createToolManager } from '@orkestrel/agent'
+import { createTool, createToolManager } from '@orkestrel/tool'
 
 // A minimal in-memory MCPTransportInterface double (AGENTS §16 — real, not a mock):
 // `send` records every outbound string, `close` counts calls; `listen`/`closed` are
