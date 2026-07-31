@@ -1,10 +1,10 @@
 import type { ToolManagerInterface, ToolResult } from '@orkestrel/tool'
 import type {
 	JSONRPCResponse,
+	MCPCallResult,
 	MCPClientInterface,
 	MCPServerInterface,
 	MCPToolDescriptor,
-	MCPToolResult,
 	MCPTransportInterface,
 } from './types.js'
 import { MCP_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
@@ -22,7 +22,7 @@ import { parseJSONRPCMessage } from './parsers.js'
  * @param result - The method's return value
  * @returns The success response envelope
  */
-export function jsonRPCResult(id: string | number | null, result: unknown): JSONRPCResponse {
+export function buildJSONRPCResult(id: string | number | null, result: unknown): JSONRPCResponse {
 	return { jsonrpc: '2.0', id, result }
 }
 
@@ -36,7 +36,7 @@ export function jsonRPCResult(id: string | number | null, result: unknown): JSON
  * @param data - An OPTIONAL machine-readable payload (omitted from the envelope when absent)
  * @returns The error response envelope
  */
-export function jsonRPCError(
+export function buildJSONRPCError(
 	id: string | number | null,
 	code: number,
 	message: string,
@@ -78,7 +78,7 @@ export function buildToolDescriptors(manager: ToolManagerInterface): readonly MC
 }
 
 /**
- * Map an executed tool's {@link ToolResult} to an MCP {@link MCPToolResult} — the
+ * Map an executed tool's {@link ToolResult} to an MCP {@link MCPCallResult} — the
  * value (or error) as a `text` content block.
  *
  * @remarks
@@ -92,7 +92,7 @@ export function buildToolDescriptors(manager: ToolManagerInterface): readonly MC
  * @param result - The tool's execution outcome
  * @returns The MCP tool-call result
  */
-export function buildToolResult(result: ToolResult): MCPToolResult {
+export function buildCallResult(result: ToolResult): MCPCallResult {
 	if (!result.success) {
 		return { content: [{ type: 'text', text: result.error }], isError: true }
 	}
@@ -117,7 +117,7 @@ export function buildToolResult(result: ToolResult): MCPToolResult {
  * @param requested - The client's requested protocol version (negotiated when supported)
  * @returns The `initialize` result payload
  */
-export function initializeResult(
+export function buildInitializeResult(
 	name: string,
 	version: string,
 	requested?: string,

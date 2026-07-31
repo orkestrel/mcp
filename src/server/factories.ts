@@ -72,7 +72,7 @@ import { WebSocketServerTransport } from './transports/WebSocketServerTransport.
  * import { createMCPServer, createToolManager } from '@src/core'
  * import { createMCPRoutes } from '@src/server'
  *
- * const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
+ * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
  * const routes = createMCPRoutes(mcp) // POST /mcp dispatches JSON-RPC (JSON or SSE per Accept)
  * ```
  */
@@ -172,7 +172,7 @@ export function createHTTPClientTransport(
  * import { createMCPServer, createToolManager } from '@src/core'
  * import { createWebSocketServer } from '@src/server'
  *
- * const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
+ * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
  * server.upgrade(createWebSocketServer(mcp)) // an MCP client now connects over ws://…/mcp
  * ```
  */
@@ -306,7 +306,7 @@ export function createStdioClientTransport(
  * import { createMCPServer, createToolManager } from '@src/core'
  * import { createStdioServer } from '@src/server'
  *
- * const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
+ * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
  * createStdioServer(mcp).start() // an MCP client now connects over this process's stdio
  * ```
  */

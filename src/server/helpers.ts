@@ -12,7 +12,7 @@ import { createSSEParser } from '@orkestrel/sse'
 import {
 	isJSONRPCRequest,
 	JSONRPC_INVALID_REQUEST,
-	jsonRPCError,
+	buildJSONRPCError,
 	parseJSONRPCMessage,
 } from '@src/core'
 import { isString } from '@orkestrel/contract'
@@ -93,7 +93,7 @@ export function readLastEventId(request: Request): string | undefined {
  * JSON-RPC error body.
  *
  * @remarks
- * Returns `Response.json(jsonRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not found'),
+ * Returns `Response.json(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not found'),
  * { status: 404 })`, mirroring `createMCPRoutes`'s `400` transport-failure shape (a
  * JSON-RPC error BODY with a `null` id) but at the session-not-found status. Shared by
  * every {@link import('./middlewares.js').createMCPSession} validation site — the
@@ -104,7 +104,7 @@ export function readLastEventId(request: Request): string | undefined {
  * @returns The `404` JSON-RPC error `Response`
  */
 export function rejectUnknownSession(): Response {
-	return Response.json(jsonRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not found'), {
+	return Response.json(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not found'), {
 		status: 404,
 	})
 }

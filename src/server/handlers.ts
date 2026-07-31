@@ -3,7 +3,7 @@ import {
 	JSONRPC_INVALID_REQUEST,
 	JSONRPC_PARSE_ERROR,
 	SUPPORTED_PROTOCOL_VERSIONS,
-	jsonRPCError,
+	buildJSONRPCError,
 	parseJSONRPCMessage,
 } from '@src/core'
 import { openStream } from '@orkestrel/server'
@@ -28,7 +28,7 @@ import { acceptsEventStream } from './helpers.js'
  * import { createMCPPostHandler } from '@orkestrel/mcp/server'
  * import { createToolManager } from '@orkestrel/tool'
  *
- * const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
+ * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
  * const handler = createMCPPostHandler(mcp, true)
  * await handler(new Request('http://localhost/mcp', {
  * 	method: 'POST',
@@ -44,7 +44,7 @@ export function createMCPPostHandler(
 		const protocol = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
 		if (protocol !== null && !SUPPORTED_PROTOCOL_VERSIONS.includes(protocol)) {
 			return Response.json(
-				jsonRPCError(
+				buildJSONRPCError(
 					null,
 					JSONRPC_INVALID_REQUEST,
 					`Unsupported MCP protocol version '${protocol}'`,
@@ -56,7 +56,7 @@ export function createMCPPostHandler(
 		try {
 			text = await request.text()
 		} catch {
-			return Response.json(jsonRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'), {
+			return Response.json(buildJSONRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'), {
 				status: 400,
 			})
 		}
@@ -64,13 +64,13 @@ export function createMCPPostHandler(
 		try {
 			parsed = JSON.parse(text)
 		} catch {
-			return Response.json(jsonRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'), {
+			return Response.json(buildJSONRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'), {
 				status: 400,
 			})
 		}
 		const rpcRequest = parseJSONRPCMessage(parsed)
 		if (rpcRequest === undefined || !('method' in rpcRequest)) {
-			return Response.json(jsonRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request'), {
+			return Response.json(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request'), {
 				status: 400,
 			})
 		}

@@ -118,7 +118,7 @@ export function createHTTPClientTransport(
  * import { createMessagePortTransport } from '@orkestrel/mcp/browser'
  *
  * const { port1, port2 } = new MessageChannel()
- * bindServer(createMCPServer({ name: 's', version: '1.0.0', tools }), createMessagePortTransport({ port: port1 }))
+ * bindServer(createMCPServer({ identity: { name: 's', version: '1.0.0' }, tools }), createMessagePortTransport({ port: port1 }))
  * ```
  */
 export function createMessagePortTransport(
@@ -190,8 +190,10 @@ export function createScopeTransport(scope: ServeMCPScopeInterface): ScopeTransp
 export function serveMCPScope(scope: ServeMCPScopeInterface, options: ServeMCPOptions): () => void {
 	const server = createMCPServer({
 		tools: options.tools,
-		name: options.name ?? DEFAULT_MCP_SERVER_NAME,
-		version: options.version ?? DEFAULT_MCP_SERVER_VERSION,
+		identity: {
+			name: options.name ?? DEFAULT_MCP_SERVER_NAME,
+			version: options.version ?? DEFAULT_MCP_SERVER_VERSION,
+		},
 	})
 	const scopeTransport = createScopeTransport(scope)
 	const unbindScope = bindServer(server, scopeTransport)

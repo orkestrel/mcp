@@ -187,22 +187,22 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 
 ### Helpers
 
-| API                    | Kind     | Summary                                                                                                                                                    |
-| ---------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `isRequestId`          | function | Total guard: a JSON-RPC REQUEST `id` — a string / number / absent (`null` is valid only on a response).                                                    |
-| `isJSONRPCRequest`     | function | Total guard: a record with `jsonrpc: '2.0'` + a string `method`; an absent `id` ⇒ a notification.                                                          |
-| `isJSONRPCResponse`    | function | Total guard: `jsonrpc: '2.0'` + an `id` (string / number / `null`) + EXACTLY ONE of `result` / `error`.                                                    |
-| `isJSONRPCMessage`     | function | Total guard — the union of `isJSONRPCRequest` and `isJSONRPCResponse`.                                                                                     |
-| `isInitializeRequest`  | function | Total guard — a `JSONRPCRequest` whose `method` is `'initialize'`.                                                                                         |
-| `isMCPError`           | function | Total guard — `true` only for a real `MCPError`.                                                                                                           |
-| `parseJSONRPCMessage`  | function | Narrow an already-parsed value to a `JSONRPCMessage`, or `undefined` (total; sound with `isJSONRPCMessage`).                                               |
-| `jsonRPCResult`        | function | Build a success `JSONRPCResponse` — the `id` echoed, the value as `result`.                                                                                |
-| `jsonRPCError`         | function | Build an error `JSONRPCResponse` — the `id`, a reserved `code` / `message`, and optional `data`.                                                           |
-| `buildToolDescriptors` | function | Map a `ToolManagerInterface`'s definitions to `tools/list` descriptors, renaming `parameters` → `inputSchema`.                                             |
-| `buildToolResult`      | function | Map a `ToolResult` (`@orkestrel/tool`) to an MCP tool-call result — the value (or error text + `isError: true`) as a text block.                           |
-| `initializeResult`     | function | Build the `initialize` result — the negotiated `protocolVersion`, `capabilities`, and `serverInfo`.                                                        |
-| `bindServer`           | function | Pipe an `MCPTransportInterface` into an `MCPServerInterface` — inbound `handle`d, a defined reply `send`; returns an unbind (detaches without closing).    |
-| `bindClient`           | function | Pipe an `MCPTransportInterface` into an `MCPClientInterface` (built over `createDuplexClientTransport`) — completes the inbound wiring; returns an unbind. |
+| API                     | Kind     | Summary                                                                                                                                                    |
+| ----------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `isRequestId`           | function | Total guard: a JSON-RPC REQUEST `id` — a string / number / absent (`null` is valid only on a response).                                                    |
+| `isJSONRPCRequest`      | function | Total guard: a record with `jsonrpc: '2.0'` + a string `method`; an absent `id` ⇒ a notification.                                                          |
+| `isJSONRPCResponse`     | function | Total guard: `jsonrpc: '2.0'` + an `id` (string / number / `null`) + EXACTLY ONE of `result` / `error`.                                                    |
+| `isJSONRPCMessage`      | function | Total guard — the union of `isJSONRPCRequest` and `isJSONRPCResponse`.                                                                                     |
+| `isInitializeRequest`   | function | Total guard — a `JSONRPCRequest` whose `method` is `'initialize'`.                                                                                         |
+| `isMCPError`            | function | Total guard — `true` only for a real `MCPError`.                                                                                                           |
+| `parseJSONRPCMessage`   | function | Narrow an already-parsed value to a `JSONRPCMessage`, or `undefined` (total; sound with `isJSONRPCMessage`).                                               |
+| `buildJSONRPCResult`    | function | Build a success `JSONRPCResponse` — the `id` echoed, the value as `result`.                                                                                |
+| `buildJSONRPCError`     | function | Build an error `JSONRPCResponse` — the `id`, a reserved `code` / `message`, and optional `data`.                                                           |
+| `buildToolDescriptors`  | function | Map a `ToolManagerInterface`'s definitions to `tools/list` descriptors, renaming `parameters` → `inputSchema`.                                             |
+| `buildCallResult`       | function | Map a `ToolResult` (`@orkestrel/tool`) to an MCP tool-call result — the value (or error text + `isError: true`) as a text block.                           |
+| `buildInitializeResult` | function | Build the `initialize` result — the negotiated `protocolVersion`, `capabilities`, and `serverInfo`.                                                        |
+| `bindServer`            | function | Pipe an `MCPTransportInterface` into an `MCPServerInterface` — inbound `handle`d, a defined reply `send`; returns an unbind (detaches without closing).    |
+| `bindClient`            | function | Pipe an `MCPTransportInterface` into an `MCPClientInterface` (built over `createDuplexClientTransport`) — completes the inbound wiring; returns an unbind. |
 
 ### Types
 
@@ -213,9 +213,9 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 | `JSONRPCResponse`          | interface | `{ jsonrpc: '2.0'; id: string \| number \| null; result?: unknown; error?: JSONRPCErrorData }` — EITHER `result` OR `error`.                                                                                               |
 | `JSONRPCMessage`           | type      | `JSONRPCRequest \| JSONRPCResponse` — a message on the wire.                                                                                                                                                               |
 | `MCPContent`               | interface | `{ type: 'text'; text: string }` — one content block of a tool-call result.                                                                                                                                                |
-| `MCPToolResult`            | interface | `{ content: readonly MCPContent[]; isError?: boolean }` — the `tools/call` result (`isError` flags a tool failure).                                                                                                        |
+| `MCPCallResult`            | interface | `{ content: readonly MCPContent[]; isError?: boolean }` — the `tools/call` result (`isError` flags a tool failure).                                                                                                        |
 | `MCPToolDescriptor`        | interface | `{ name: string; description?: string; inputSchema: Record<string, unknown> }` — one `tools/list` entry.                                                                                                                   |
-| `MCPServerInfo`            | interface | `{ name: string; version: string }` — the identity echoed in the `initialize` result.                                                                                                                                      |
+| `MCPIdentity`              | interface | `{ name: string; version: string }` — the identity echoed in the `initialize` result.                                                                                                                                      |
 | `MCPServerEventMap`        | type      | `{ request: [method, id]; error: [unknown] }` — the observation surface (`error` is a transport fault a bound `bindServer` reply-`send` surfaced).                                                                         |
 | `MCPServerOptions`         | interface | `{ on?; error?; name: string; version: string; tools: ToolManagerInterface; description? }` — options for `createMCPServer`.                                                                                               |
 | `MCPServerInterface`       | interface | `emitter` / `name` / `version` data members + the `dispatch` / `handle` methods.                                                                                                                                           |
@@ -739,7 +739,7 @@ tools: {} }, serverInfo: { name, version } }`, the version NEGOTIATED
    support. `ping` → `{}`. `tools/list` → `{ tools }`, each tool a
    `MCPToolDescriptor` (its `parameters` renamed to `inputSchema`,
    defaulting to `{ type: 'object' }`). `tools/call` → the executed
-   tool's `MCPToolResult`.
+   tool's `MCPCallResult`.
 5. **Tool errors are tool results, not protocol errors.** `tools/call` reads
    `params.name` (a string) + `params.arguments` (a record, default `{}`),
    narrowed via `@orkestrel/contract`'s guards (no `as`); a missing /
@@ -846,7 +846,7 @@ name, version } }`), then validates the result's `protocolVersion`. A
     back to `parameters` (the inverse of clause 4's rename, no `as`),
     `execute` bound to `call(name, …)`. `call(name, args)` runs `tools/call`,
     concatenates the result's `text` content blocks, and — the inverse of
-    clause 5's `buildToolResult` — THROWS an `Error` carrying the text when
+    clause 5's `buildCallResult` — THROWS an `Error` carrying the text when
     `isError === true`, else `JSON.parse`s the text (raw-string fallback;
     empty → `undefined`); so a remote tool failure throws locally and an
     agent's `ToolManager` isolates it into a `success: false` result exactly
@@ -1155,26 +1155,26 @@ useful directly in a test or a custom transport.
 
 ```ts
 import {
+	buildCallResult,
+	buildInitializeResult,
+	buildJSONRPCError,
+	buildJSONRPCResult,
 	buildToolDescriptors,
-	buildToolResult,
-	initializeResult,
 	isJSONRPCMessage,
 	isJSONRPCResponse,
 	isMCPError,
-	jsonRPCError,
-	jsonRPCResult,
 	MCPError,
 } from '@orkestrel/mcp'
 import { createToolManager } from '@orkestrel/tool'
 
 const tools = createToolManager()
 const descriptors = buildToolDescriptors(tools) // tools/list payload
-const result = buildToolResult({ id: '1', name: 'example', success: true, value: 7 })
+const result = buildCallResult({ id: '1', name: 'example', success: true, value: 7 })
 // { content: [{ type: 'text', text: '7' }] }
-const init = initializeResult('docs', '1.0.0', '2025-06-18')
+const init = buildInitializeResult('docs', '1.0.0', '2025-06-18')
 
-const ok = jsonRPCResult(1, { tools: descriptors })
-const failed = jsonRPCError(1, -32601, 'Method not found')
+const ok = buildJSONRPCResult(1, { tools: descriptors })
+const failed = buildJSONRPCError(1, -32601, 'Method not found')
 isJSONRPCMessage(ok) // true
 isJSONRPCResponse(failed) // true
 

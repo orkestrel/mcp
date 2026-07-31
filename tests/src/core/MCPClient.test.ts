@@ -140,13 +140,19 @@ function toolRegistry(): ToolManagerInterface {
 }
 
 function serverWithTools(): MCPServerInterface {
-	return createMCPServer({ name: 'loopback', version: '1.2.3', tools: toolRegistry() })
+	return createMCPServer({
+		identity: { name: 'loopback', version: '1.2.3' },
+		tools: toolRegistry(),
+	})
 }
 
 describe('MCPClient — connect (the initialize handshake)', () => {
 	it('opens the transport, handshakes, and reports connected', async () => {
 		const loopback = createLoopback(serverWithTools())
-		const client = createMCPClient({ transport: loopback, name: 'tester', version: '9.9.9' })
+		const client = createMCPClient({
+			transport: loopback,
+			identity: { name: 'tester', version: '9.9.9' },
+		})
 
 		expect(client.connected).toBe(false)
 		await client.connect()

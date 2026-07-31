@@ -51,7 +51,7 @@ function mcpServer(): MCPServerInterface {
 			},
 		}),
 	)
-	return createMCPServer({ name: 'remote', version: '4.5.6', tools })
+	return createMCPServer({ identity: { name: 'remote', version: '4.5.6' }, tools })
 }
 
 // Stand up the shipped MCP HTTP transport over a real server, then build an MCPClient

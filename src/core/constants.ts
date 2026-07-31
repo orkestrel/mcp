@@ -1,6 +1,6 @@
 // MCP protocol revisions + the reserved JSON-RPC 2.0 error codes. The negotiated
 // protocol version is the current rev unless the client requests a supported
-// one (see `initializeResult` in ./helpers.js). Transport-level header names
+// one (see `buildInitializeResult` in ./helpers.js). Transport-level header names
 // (session / version headers) belong to the HTTP transport sub-chunk, NOT here.
 
 /** The MCP protocol revision this server implements (the default negotiated version). */

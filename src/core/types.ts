@@ -64,7 +64,7 @@ export type JSONRPCMessage = JSONRPCRequest | JSONRPCResponse
 // MCP protocol shapes — the result payloads the dispatch methods return, mapped
 // onto the JSON-RPC `result` member.
 
-/** One content item of an MCP {@link MCPToolResult} — a `text` block carrying the tool's output. */
+/** One content item of an MCP {@link MCPCallResult} — a `text` block carrying the tool's output. */
 export interface MCPContent {
 	readonly type: 'text'
 	readonly text: string
@@ -80,7 +80,7 @@ export interface MCPContent {
  * `error` text in `content` AND sets `isError: true`, so the model sees the
  * failure as a tool result it can react to rather than a protocol error.
  */
-export interface MCPToolResult {
+export interface MCPCallResult {
 	readonly content: readonly MCPContent[]
 	/** `true` when the tool failed — its error text is in `content`. */
 	readonly isError?: boolean
@@ -101,8 +101,8 @@ export interface MCPToolDescriptor {
 	readonly inputSchema: Readonly<Record<string, unknown>>
 }
 
-/** The server identity echoed in the MCP `initialize` result's `serverInfo`. */
-export interface MCPServerInfo {
+/** The identity (`name` / `version`) of an MCP server or client. */
+export interface MCPIdentity {
 	readonly name: string
 	readonly version: string
 }
@@ -132,30 +132,29 @@ export type MCPServerEventMap = {
 }
 
 /**
- * Options for `createMCPServer` — the server identity (`name` / `version`), the
- * live {@link ToolManagerInterface} it exposes, an optional `description`, and the
+ * Options for `createMCPServer` — the server {@link MCPIdentity}, the live
+ * {@link ToolManagerInterface} it exposes, optional `instructions`, and the
  * reserved `on` hooks (§8).
  *
  * @remarks
- * `name` / `version` identify the server in the `initialize` handshake
- * (`serverInfo`). `tools` is the live registry the server dispatches `tools/list`
- * / `tools/call` over — its `definitions()` advertise the tools and its
- * `execute()` runs a call (the manager already isolates a tool throw into a
- * `success: false` result, so the server adds none). `description` is a human label for
- * the server (reserved for a future `instructions` capability — unused by the
- * current dispatch). `on` is the §8 reserved key: initial listeners for the
- * server's {@link MCPServerEventMap}, wired at construction.
+ * `identity` identifies the server in the `initialize` handshake (`serverInfo`).
+ * `tools` is the live registry the server dispatches `tools/list` / `tools/call`
+ * over — its `definitions()` advertise the tools and its `execute()` runs a call
+ * (the manager already isolates a tool throw into a `success: false` result, so
+ * the server adds none). `instructions` is a human label for the server
+ * (reserved for a future capability — unused by the current dispatch). `on` is
+ * the §8 reserved key: initial listeners for the server's
+ * {@link MCPServerEventMap}, wired at construction.
  */
 export interface MCPServerOptions {
 	readonly on?: EmitterHooks<MCPServerEventMap>
 	/** The emitter's listener-error handler (AGENTS §13) — a listener throw routes here, not to a domain event. */
 	readonly error?: EmitterErrorHandler
-	readonly name: string
-	readonly version: string
+	readonly identity: MCPIdentity
 	/** The live tool registry the server exposes over `tools/list` / `tools/call`. */
 	readonly tools: ToolManagerInterface
 	/** A human label for the server (reserved for a future capability; unused by dispatch). */
-	readonly description?: string
+	readonly instructions?: string
 }
 
 /**
@@ -180,8 +179,7 @@ export interface MCPServerOptions {
  */
 export interface MCPServerInterface {
 	readonly emitter: EmitterInterface<MCPServerEventMap>
-	readonly name: string
-	readonly version: string
+	readonly identity: MCPIdentity
 	/**
 	 * Dispatch an already-parsed request — run its method and resolve the response,
 	 * or `undefined` for a notification (a request with no `id`).
@@ -347,15 +345,15 @@ export type MCPClientEventMap = {
 
 /**
  * Options for `createMCPClient` — the {@link ClientTransportInterface} to drive, the
- * client identity (`name` / `version`), the per-request `timeout`, and the reserved
+ * optional client {@link MCPIdentity}, the per-request `timeout`, and the reserved
  * `on` hooks (§8).
  *
  * @remarks
  * - `transport` — the carrier the client drives a remote MCP server over (REQUIRED;
  *   a concrete one from `src/server/mcp`, or an in-process loopback).
- * - `name` / `version` — identify the client in the `initialize` handshake
- *   (`clientInfo`); default to {@link import('./constants.js').DEFAULT_MCP_CLIENT_NAME}
- *   / {@link import('./constants.js').DEFAULT_MCP_CLIENT_VERSION}.
+ * - `identity` — identifies the client in the `initialize` handshake (`clientInfo`);
+ *   defaults to {@link import('./constants.js').DEFAULT_MCP_CLIENT_NAME} /
+ *   {@link import('./constants.js').DEFAULT_MCP_CLIENT_VERSION}.
  * - `timeout` — the per-request deadline in milliseconds: a `tools/list` / `tools/call`
  *   / `initialize` that the server does not answer within it REJECTS (the pending
  *   request is settled by an `AbortSignal.timeout(timeout)` deadline — never a raw
@@ -369,8 +367,7 @@ export interface MCPClientOptions {
 	/** The emitter's listener-error handler (AGENTS §13) — a listener throw routes here, not to a domain event. */
 	readonly error?: EmitterErrorHandler
 	readonly transport: ClientTransportInterface
-	readonly name?: string
-	readonly version?: string
+	readonly identity?: MCPIdentity
 	/** The per-request deadline in milliseconds (default {@link import('./constants.js').DEFAULT_MCP_REQUEST_TIMEOUT}). */
 	readonly timeout?: number
 }
@@ -470,7 +467,7 @@ export interface MCPClientInterface {
 	 * result's `text` content blocks, and either parses the JSON value or throws.
 	 *
 	 * @remarks
-	 * The inverse of the server's `buildToolResult`: a SUCCESS parses the concatenated
+	 * The inverse of the server's `buildCallResult`: a SUCCESS parses the concatenated
 	 * `text` as JSON (falling back to the raw string when it is not JSON); a remote tool
 	 * FAILURE (`isError: true`) THROWS an `Error` carrying the error text — so an agent's
 	 * {@link ToolManagerInterface} isolates the remote failure into a `success: false`

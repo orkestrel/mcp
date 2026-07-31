@@ -1,6 +1,6 @@
 import type { JSONRPCMessage } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { JSONRPC_INVALID_REQUEST, jsonRPCError, parseJSONRPCMessage } from '@src/core'
+import { JSONRPC_INVALID_REQUEST, buildJSONRPCError, parseJSONRPCMessage } from '@src/core'
 import {
 	acceptsEventStream,
 	decodeEvent,
@@ -124,7 +124,7 @@ describe('rejectUnknownSession — the 404 + JSON-RPC "Session not found" body',
 		const response = rejectUnknownSession()
 		expect(response.status).toBe(404)
 		expect(await response.json()).toEqual(
-			jsonRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not found'),
+			buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not found'),
 		)
 	})
 })

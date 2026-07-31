@@ -200,7 +200,7 @@ export function createCalculatorServer(): MCPServerInterface {
 			},
 		}),
 	)
-	return createMCPServer({ name: 'calculator', version: '1.0.0', tools })
+	return createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
 }
 
 // ── In-process loopback MCP client transport (env-agnostic scenario builder) ─

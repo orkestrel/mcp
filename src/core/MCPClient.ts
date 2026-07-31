@@ -51,7 +51,7 @@ import { isJSONRPCResponse, isRequestId } from './validators.js'
  *
  * @example
  * ```ts
- * const client = new MCPClient({ transport, name: 'agent', version: '1.0.0' })
+ * const client = new MCPClient({ transport, identity: { name: 'agent', version: '1.0.0' } })
  * await client.connect()
  * const tools = await client.tools()
  * agent.context.tools.add(tools) // the remote tools are now the agent's
@@ -86,8 +86,8 @@ export class MCPClient implements MCPClientInterface {
 			...(options.error !== undefined ? { error: options.error } : {}),
 		})
 		this.#transport = options.transport
-		this.#name = options.name ?? DEFAULT_MCP_CLIENT_NAME
-		this.#version = options.version ?? DEFAULT_MCP_CLIENT_VERSION
+		this.#name = options.identity?.name ?? DEFAULT_MCP_CLIENT_NAME
+		this.#version = options.identity?.version ?? DEFAULT_MCP_CLIENT_VERSION
 		this.#timeout = options.timeout ?? DEFAULT_MCP_REQUEST_TIMEOUT
 		// One message subscription for the client's whole life: a response settles its
 		// pending request by id; anything else is a server notification.
@@ -171,7 +171,7 @@ export class MCPClient implements MCPClientInterface {
 
 	async call(name: string, args: Readonly<Record<string, unknown>>): Promise<unknown> {
 		const result = await this.#request('tools/call', { name, arguments: args })
-		// The inverse of the server's `buildToolResult`: concat the result's text blocks,
+		// The inverse of the server's `buildCallResult`: concat the result's text blocks,
 		// then either throw (a remote `isError`) or parse the JSON value.
 		const text = this.#text(result)
 		if (isRecord(result) && result['isError'] === true) {

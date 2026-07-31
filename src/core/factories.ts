@@ -26,8 +26,8 @@ import { MCPServer } from './MCPServer.js'
  * `isError: true` tool result), so a misbehaving tool never crashes a dispatch. Subscribe to the
  * `request` event via `server.emitter.on('request', …)` for tracing.
  *
- * @param options - `name` / `version` (the server identity), `tools` (the live
- *   registry to expose), an optional `description`, and the reserved `on`
+ * @param options - `identity` (the server identity), `tools` (the live
+ *   registry to expose), optional `instructions`, and the reserved `on`
  *   {@link import('@orkestrel/emitter').EmitterHooks} (see {@link MCPServerOptions})
  * @returns A working {@link MCPServerInterface}
  *
@@ -38,7 +38,7 @@ import { MCPServer } from './MCPServer.js'
  * const tools = createToolManager()
  * tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
  *
- * const server = createMCPServer({ name: 'calculator', version: '1.0.0', tools })
+ * const server = createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
  * server.emitter.on('request', (method, id) => log(method, id))
  *
  * // A transport pumps message strings through `handle`:
@@ -68,8 +68,8 @@ export function createMCPServer(options: MCPServerOptions): MCPServerInterface {
  * to `connect` / `disconnect` / `notification` via `client.on(...)` (or
  * `client.emitter.on(...)`).
  *
- * @param options - `transport` (the carrier; REQUIRED), `name` / `version` (the client
- *   identity), `timeout` (the per-request deadline), and the reserved `on`
+ * @param options - `transport` (the carrier; REQUIRED), an optional `identity`
+ *   (the client identity), `timeout` (the per-request deadline), and the reserved `on`
  *   {@link import('@orkestrel/emitter').EmitterHooks} (see {@link MCPClientOptions})
  * @returns A working {@link MCPClientInterface}
  *

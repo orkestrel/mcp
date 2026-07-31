@@ -55,7 +55,7 @@ import { MCPSession } from './MCPSession.js'
  * import { createMCPServer, createToolManager } from '@src/core'
  * import { createMCPRoutes, createMCPSession } from '@src/server'
  *
- * const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
+ * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
  * router.use(createMCPSession({ ttl: 60_000 })) // stateful: mint + validate + resumable GET / DELETE
  * router.add(createMCPRoutes(mcp)) // the route stays session-agnostic
  * ```

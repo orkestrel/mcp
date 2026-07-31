@@ -59,8 +59,7 @@ function tools(): ToolManagerInterface {
 
 function server(error?: EmitterErrorHandler) {
 	return createMCPServer({
-		name: 'test-server',
-		version: '1.2.3',
+		identity: { name: 'test-server', version: '1.2.3' },
 		tools: tools(),
 		...(error === undefined ? {} : { error }),
 	})
@@ -83,8 +82,8 @@ describe('MCPServer — identity', () => {
 	it('exposes the name and version from options', () => {
 		const mcp = server()
 
-		expect(mcp.name).toBe('test-server')
-		expect(mcp.version).toBe('1.2.3')
+		expect(mcp.identity.name).toBe('test-server')
+		expect(mcp.identity.version).toBe('1.2.3')
 	})
 })
 
@@ -153,7 +152,10 @@ describe('MCPServer — tools/list', () => {
 	})
 
 	it('lists an empty tool set for an empty registry', async () => {
-		const mcp = createMCPServer({ name: 'empty', version: '0.0.0', tools: createToolManager() })
+		const mcp = createMCPServer({
+			identity: { name: 'empty', version: '0.0.0' },
+			tools: createToolManager(),
+		})
 		const response = await mcp.dispatch(createJSONRPCRequest({ method: 'tools/list' }))
 
 		expect(resultOf(response)['tools']).toEqual([])

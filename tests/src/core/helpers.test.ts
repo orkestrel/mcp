@@ -3,14 +3,14 @@ import type { MCPTransportInterface } from '@src/core'
 import {
 	bindClient,
 	bindServer,
+	buildCallResult,
+	buildInitializeResult,
+	buildJSONRPCError,
+	buildJSONRPCResult,
 	buildToolDescriptors,
-	buildToolResult,
 	createDuplexClientTransport,
 	createMCPClient,
 	createMCPServer,
-	initializeResult,
-	jsonRPCError,
-	jsonRPCResult,
 	MCP_PROTOCOL_VERSION,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
@@ -69,19 +69,23 @@ function createMemoryTransport(): MemoryTransportInterface {
 // turns a piece of MCP state into the JSON-RPC result payload (or envelope) the
 // server returns.
 
-describe('jsonRPCResult', () => {
+describe('buildJSONRPCResult', () => {
 	it('builds a success envelope echoing the id', () => {
-		expect(jsonRPCResult(1, { ok: true })).toEqual({ jsonrpc: '2.0', id: 1, result: { ok: true } })
+		expect(buildJSONRPCResult(1, { ok: true })).toEqual({
+			jsonrpc: '2.0',
+			id: 1,
+			result: { ok: true },
+		})
 	})
 
 	it('carries a null id (a parse / invalid-request error)', () => {
-		expect(jsonRPCResult(null, {})).toEqual({ jsonrpc: '2.0', id: null, result: {} })
+		expect(buildJSONRPCResult(null, {})).toEqual({ jsonrpc: '2.0', id: null, result: {} })
 	})
 })
 
-describe('jsonRPCError', () => {
+describe('buildJSONRPCError', () => {
 	it('builds an error envelope without data when none is given', () => {
-		expect(jsonRPCError(1, -32601, 'Method not found')).toEqual({
+		expect(buildJSONRPCError(1, -32601, 'Method not found')).toEqual({
 			jsonrpc: '2.0',
 			id: 1,
 			error: { code: -32601, message: 'Method not found' },
@@ -89,7 +93,7 @@ describe('jsonRPCError', () => {
 	})
 
 	it('includes data when supplied', () => {
-		expect(jsonRPCError(1, -32000, 'Server error', { detail: 'x' })).toEqual({
+		expect(buildJSONRPCError(1, -32000, 'Server error', { detail: 'x' })).toEqual({
 			jsonrpc: '2.0',
 			id: 1,
 			error: { code: -32000, message: 'Server error', data: { detail: 'x' } },
@@ -132,17 +136,17 @@ describe('buildToolDescriptors', () => {
 	})
 })
 
-describe('buildToolResult', () => {
+describe('buildCallResult', () => {
 	it('serializes a value into one text content block', () => {
 		const result: ToolResult = { id: '1', name: 'sum', success: true, value: 7 }
 
-		expect(buildToolResult(result)).toEqual({ content: [{ type: 'text', text: '7' }] })
+		expect(buildCallResult(result)).toEqual({ content: [{ type: 'text', text: '7' }] })
 	})
 
 	it('serializes a structured value as JSON', () => {
 		const result: ToolResult = { id: '1', name: 'echo', success: true, value: { a: 1 } }
 
-		expect(buildToolResult(result)).toEqual({
+		expect(buildCallResult(result)).toEqual({
 			content: [{ type: 'text', text: JSON.stringify({ a: 1 }) }],
 		})
 	})
@@ -150,7 +154,7 @@ describe('buildToolResult', () => {
 	it('maps a value-less result to an EMPTY text block (a content block must carry a string text)', () => {
 		const result: ToolResult = { id: '1', name: 'noop', success: true, value: undefined }
 
-		expect(buildToolResult(result)).toEqual({ content: [{ type: 'text', text: '' }] })
+		expect(buildCallResult(result)).toEqual({ content: [{ type: 'text', text: '' }] })
 	})
 
 	it('maps an error result to an isError content block', () => {
@@ -161,16 +165,16 @@ describe('buildToolResult', () => {
 			error: 'kaboom',
 		}
 
-		expect(buildToolResult(result)).toEqual({
+		expect(buildCallResult(result)).toEqual({
 			content: [{ type: 'text', text: 'kaboom' }],
 			isError: true,
 		})
 	})
 })
 
-describe('initializeResult', () => {
+describe('buildInitializeResult', () => {
 	it('uses the default protocol version when none requested', () => {
-		expect(initializeResult('s', '1.0.0')).toEqual({
+		expect(buildInitializeResult('s', '1.0.0')).toEqual({
 			protocolVersion: MCP_PROTOCOL_VERSION,
 			capabilities: { tools: {} },
 			serverInfo: { name: 's', version: '1.0.0' },
@@ -178,13 +182,13 @@ describe('initializeResult', () => {
 	})
 
 	it('falls back when the requested version requires unsupported batching', () => {
-		expect(initializeResult('s', '1.0.0', '2025-03-26')['protocolVersion']).toBe(
+		expect(buildInitializeResult('s', '1.0.0', '2025-03-26')['protocolVersion']).toBe(
 			MCP_PROTOCOL_VERSION,
 		)
 	})
 
 	it('falls back to the default for an unsupported requested version', () => {
-		expect(initializeResult('s', '1.0.0', '1999-01-01')['protocolVersion']).toBe(
+		expect(buildInitializeResult('s', '1.0.0', '1999-01-01')['protocolVersion']).toBe(
 			MCP_PROTOCOL_VERSION,
 		)
 	})
@@ -199,7 +203,7 @@ describe('bindServer', () => {
 	function server() {
 		const tools = createToolManager()
 		tools.add(createTool({ name: 'add', execute: (a) => Number(a['x']) + Number(a['y']) }))
-		return createMCPServer({ name: 'demo', version: '1.0.0', tools })
+		return createMCPServer({ identity: { name: 'demo', version: '1.0.0' }, tools })
 	}
 
 	it('dispatches an inbound request string and sends the reply string out', async () => {

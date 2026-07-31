@@ -40,19 +40,18 @@ function createMemoryTransport(): MCPTransportInterface & {
 describe('createMCPServer', () => {
 	it('returns a server exposing the configured identity', () => {
 		const server = createMCPServer({
-			name: 'demo',
-			version: '2.0.0',
+			identity: { name: 'demo', version: '2.0.0' },
 			tools: createToolManager(),
 		})
 
-		expect(server.name).toBe('demo')
-		expect(server.version).toBe('2.0.0')
+		expect(server.identity.name).toBe('demo')
+		expect(server.identity.version).toBe('2.0.0')
 	})
 
 	it('dispatches over the supplied tool registry', async () => {
 		const tools = createToolManager()
 		tools.add(createTool({ name: 'add', execute: (a) => Number(a['x']) + Number(a['y']) }))
-		const server = createMCPServer({ name: 'demo', version: '1.0.0', tools })
+		const server = createMCPServer({ identity: { name: 'demo', version: '1.0.0' }, tools })
 
 		const response = await server.dispatch({
 			jsonrpc: '2.0',
@@ -67,8 +66,7 @@ describe('createMCPServer', () => {
 	it('wires the on hooks (the §8 reserved key) to the emitter', async () => {
 		const seen: (readonly [string, string | number | null])[] = []
 		const server = createMCPServer({
-			name: 'demo',
-			version: '1.0.0',
+			identity: { name: 'demo', version: '1.0.0' },
 			tools: createToolManager(),
 			on: { request: (method, id) => seen.push([method, id]) },
 		})

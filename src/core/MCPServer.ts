@@ -3,6 +3,7 @@ import type { ToolManagerInterface } from '@orkestrel/tool'
 import type {
 	JSONRPCRequest,
 	JSONRPCResponse,
+	MCPIdentity,
 	MCPServerEventMap,
 	MCPServerInterface,
 	MCPServerOptions,
@@ -16,11 +17,11 @@ import {
 	JSONRPC_PARSE_ERROR,
 } from './constants.js'
 import {
+	buildCallResult,
+	buildInitializeResult,
+	buildJSONRPCError,
+	buildJSONRPCResult,
 	buildToolDescriptors,
-	buildToolResult,
-	initializeResult,
-	jsonRPCError,
-	jsonRPCResult,
 } from './helpers.js'
 import { parseJSONRPCMessage } from './parsers.js'
 
@@ -53,14 +54,13 @@ import { parseJSONRPCMessage } from './parsers.js'
  * ```ts
  * const tools = createToolManager()
  * tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
- * const server = new MCPServer({ name: 'demo', version: '1.0.0', tools })
+ * const server = new MCPServer({ identity: { name: 'demo', version: '1.0.0' }, tools })
  * await server.handle('{"jsonrpc":"2.0","method":"ping","id":1}') // '{"jsonrpc":"2.0","id":1,"result":{}}'
  * ```
  */
 export class MCPServer implements MCPServerInterface {
 	readonly #emitter: Emitter<MCPServerEventMap>
-	readonly #name: string
-	readonly #version: string
+	readonly #identity: MCPIdentity
 	readonly #tools: ToolManagerInterface
 
 	constructor(options: MCPServerOptions) {
@@ -68,8 +68,7 @@ export class MCPServer implements MCPServerInterface {
 			...(options.on !== undefined ? { on: options.on } : {}),
 			...(options.error !== undefined ? { error: options.error } : {}),
 		})
-		this.#name = options.name
-		this.#version = options.version
+		this.#identity = options.identity
 		this.#tools = options.tools
 	}
 
@@ -77,12 +76,8 @@ export class MCPServer implements MCPServerInterface {
 		return this.#emitter
 	}
 
-	get name(): string {
-		return this.#name
-	}
-
-	get version(): string {
-		return this.#version
+	get identity(): MCPIdentity {
+		return this.#identity
 	}
 
 	async dispatch(request: JSONRPCRequest): Promise<JSONRPCResponse | undefined> {
@@ -99,19 +94,27 @@ export class MCPServer implements MCPServerInterface {
 		switch (request.method) {
 			case 'initialize': {
 				const requested = request.params?.['protocolVersion']
-				return jsonRPCResult(
+				return buildJSONRPCResult(
 					id,
-					initializeResult(this.#name, this.#version, isString(requested) ? requested : undefined),
+					buildInitializeResult(
+						this.#identity.name,
+						this.#identity.version,
+						isString(requested) ? requested : undefined,
+					),
 				)
 			}
 			case 'ping':
-				return jsonRPCResult(id, {})
+				return buildJSONRPCResult(id, {})
 			case 'tools/list':
-				return jsonRPCResult(id, { tools: buildToolDescriptors(this.#tools) })
+				return buildJSONRPCResult(id, { tools: buildToolDescriptors(this.#tools) })
 			case 'tools/call':
 				return this.#call(request, id)
 			default:
-				return jsonRPCError(id, JSONRPC_METHOD_NOT_FOUND, `Method not found: ${request.method}`)
+				return buildJSONRPCError(
+					id,
+					JSONRPC_METHOD_NOT_FOUND,
+					`Method not found: ${request.method}`,
+				)
 		}
 	}
 
@@ -120,12 +123,12 @@ export class MCPServer implements MCPServerInterface {
 		try {
 			parsed = JSON.parse(message)
 		} catch {
-			return JSON.stringify(jsonRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'))
+			return JSON.stringify(buildJSONRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'))
 		}
 		const decoded = parseJSONRPCMessage(parsed)
 		// Only a REQUEST is dispatchable — a response (or any non-message) is invalid input.
 		if (decoded === undefined || !('method' in decoded)) {
-			return JSON.stringify(jsonRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request'))
+			return JSON.stringify(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request'))
 		}
 		const response = await this.dispatch(decoded)
 		return response === undefined ? undefined : JSON.stringify(response)
@@ -138,12 +141,16 @@ export class MCPServer implements MCPServerInterface {
 		const params = request.params
 		const name = params?.['name']
 		if (!isString(name)) {
-			return jsonRPCError(id, JSONRPC_INVALID_PARAMS, 'Invalid params: a string `name` is required')
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: a string `name` is required',
+			)
 		}
 		const rawArguments = params?.['arguments']
 		const args = isRecord(rawArguments) ? rawArguments : {}
 		const callId = request.id === undefined ? crypto.randomUUID() : String(request.id)
 		const result = await this.#tools.execute({ id: callId, name, arguments: args })
-		return jsonRPCResult(id, buildToolResult(result))
+		return buildJSONRPCResult(id, buildCallResult(result))
 	}
 }
