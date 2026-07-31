@@ -1,13 +1,19 @@
 # PROPOSAL — MCP 2026-07-28 adoption and multi-version support
 
-> Status: **adoption not implemented; §3 conformance fixes shipped.** Produced 2026-07-28
-> from live primary-source research and a full adversarial design pass (Opus 5 planner vs
-> GPT-5.6 Sol analyst on the same brief, reconciled by the orchestrator). The 2026-07-28
-> adoption itself is deferred to a dedicated session by the owner's decision. Baseline when
-> written: `b77ee07` (branch + main), version 0.0.6 unpublished. Replaces the previous
-> PROPOSAL.md (environment-agnostic faces), which shipped fully with 0.0.6 and remains in
-> git history at `a2f983b`. This document is self-contained; the session journals behind it
-> were ephemeral.
+> **Status:** the 2026-07-28 adoption is **not implemented**; the §3 conformance fixes are
+> shipped and published. `MCP_PROTOCOL_VERSION` is still `'2025-06-18'` and
+> `SUPPORTED_PROTOCOL_VERSIONS` is still `['2025-06-18']` (`src/core/constants.ts:7,19`), so
+> nothing in §4–§6 describes behavior that ships today.
+> **Evidence date:** 2026-07-31. **Baseline:** `1209eb5` on `main`; package.json **0.0.8,
+> published**.
+>
+> Produced 2026-07-28 from live primary-source research and a full adversarial design pass
+> (Opus 5 planner vs GPT-5.6 Sol analyst on the same brief, reconciled by the orchestrator).
+> The 2026-07-28 adoption itself was deferred to a dedicated session by the owner's decision.
+> Baseline when written: `b77ee07` (branch + main), version 0.0.6 unpublished. Replaces the
+> previous PROPOSAL.md (environment-agnostic faces), which shipped fully with 0.0.6 and
+> remains in git history at `a2f983b`. This document is self-contained; the session journals
+> behind it were ephemeral.
 >
 > **Update, later 2026-07-28 — current-version conformance fixes shipped.** §3 defects 1, 2,
 > 3, and 5 are fixed on this branch as 0.0.6 content, independently audited (Opus design-fit,
@@ -22,6 +28,23 @@
 > `MCP-Protocol-Version` header is live end to end with capture gated to supported versions
 > and cleared on transport `close()` (U4/U5 keep only `Mcp-Method`/`Mcp-Name` and the
 > status-map work).
+>
+> **Amendment, 2026-07-31 — a named consumer arrives.** That branch is merged and its content
+> is published (it landed before the 0.0.7 bump and ships in 0.0.8).
+> **`@orkestrel/supervisor`** — the durable, detached, human-in-the-loop workflow supervisor
+> proposed in the workflow repository's `PROPOSAL.md` — is now the **first named consumer** of
+> this adoption, and it consumes several mechanisms §5 excluded precisely for want of such a
+> consumer. Its own design questions were settled by a separate two-round adversarial pass
+> whose orchestrator verdict is binding here and is not re-litigated: MCP targets
+> **2026-07-28 (modern) first** for that projection; the durable handle is **a durable id in
+> an ordinary `tools/call` result**, on every era, with no capability negotiation; the Tasks
+> extension is **optional augmentation, never the substrate**; MRTR cannot push a later input
+> request into an already-completed call; the MCP server needs an independent service host;
+> and there are **no resources in the first slice**. The consequences are recorded in §5.1
+> (flipped exclusions and newly surfaced gaps), §6.1–§6.2 (the amendment units), §7 (version
+> context), and §8.8–§8.11 (new evidence tasks). §1's verified research, §3's defects, §4's
+> design spine — **including §4.2's supported-revision ruling, which is unchanged** — and §9's
+> adversarial record stand as written.
 
 ## Why this exists
 
@@ -372,9 +395,18 @@ modern branch:
 legacy branch: today's switch, byte-identical responses (no resultType, no cache fields)
 ```
 
+The modern method set is **extended, not replaced**, by the amendment: §5.1.5 turns the
+hard-coded arm list into a registrable seam, and §5.1.2 registers `subscriptions/listen`
+through it. The branch structure, the discriminator, and the legacy arm are unchanged.
+
 `-32021` is never emitted (no implemented method requires a client capability — nothing here
 elicits, samples, or reads roots); the constant and `MCPError` recognition still ship because
-the **client** must understand it from foreign servers. Core dispatch stays stateless for
+the **client** must understand it from foreign servers. **Amended (§5.1.1):** once a tool can
+produce an `ElicitRequest`, a modern request from a client that never declared elicitation,
+for an operation that cannot proceed without operator input, becomes exactly the `-32021`
+case — the server may only name request types the client declared (§1.4.4), so the honest
+answer is `MissingRequiredClientCapability` with `data.requiredCapabilities`, not a fabricated
+result. The server side of `-32021` therefore ships with A3. Core dispatch stays stateless for
 legacy too: the four legacy methods' shapes do not differ between 2025-06-18 and 2025-11-25
 on the tools-only surface, so no per-connection version context parameter is needed (the
 analyst's `MCPDispatchContext` is recorded as the fallback mechanism if a future legacy
@@ -397,9 +429,11 @@ divergence appears; the HTTP session middleware pins the negotiated version at i
   sends zero notifications, so "clients MUST NOT POST notifications over HTTP" holds by
   construction. `notifications/initialized` is legacy-only.
 - **Result-type safety**: absent `resultType` ⇒ complete; `'complete'` ⇒ complete; anything
-  else (`'input_required'`, `'task'`, unknown) ⇒ throw `MCPError` naming it. We do not
-  implement MRTR, and silently reading an `input_required` result as tool output would hand
-  a model fabricated results.
+  else (`'input_required'`, `'task'`, unknown) ⇒ throw `MCPError` naming it. This client
+  answers no MRTR request, and silently reading an `input_required` result as tool output
+  would hand a model fabricated results. **Unchanged by the amendment:** §5.1.1 adds MRTR
+  *production* on the server side only; our client still produces no `inputResponses`, so
+  throwing remains the only honest reading of an unanswered request.
 
 ### 4.8 Transport faces
 
@@ -444,35 +478,174 @@ divergence appears; the HTTP session middleware pins the negotiated version at i
 "Implement" = shipped and tested in the adoption campaign. "Exclude" = intentionally absent
 AND named in the guide's new **Declared non-goals** subsection — never silently dropped.
 
-| Feature                                                                           | Ruling                                                                 | Reason                                                                                                                                                                                                                                                  |
-| --------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Per-request `_meta` (version/capabilities REQUIRED; clientInfo/serverInfo SHOULD) | Implement                                                              | Mandatory; the discriminator itself.                                                                                                                                                                                                                    |
-| `_meta.progressToken`                                                             | Implement as passthrough                                               | Must not be misread as a modern marker; we neither generate nor consume progress.                                                                                                                                                                       |
-| `_meta.logLevel`, `_meta.subscriptionId`                                          | Exclude                                                                | Belong to logging (deprecated) and subscriptions (excluded).                                                                                                                                                                                            |
-| W3C `traceparent`/`tracestate`/`baggage`                                          | Exclude                                                                | Tracing is application policy; the `request` event is the observation seam; consumers stamp their own.                                                                                                                                                  |
-| `server/discover`                                                                 | Implement                                                              | Mandatory server RPC; surfaced as `client.discover()` (instructions otherwise unreachable).                                                                                                                                                             |
-| `resultType` on every modern result                                               | Implement                                                              | Mandatory; one stamping site; client treats absent as complete.                                                                                                                                                                                         |
-| MRTR production (`inputRequests`/`requestState`)                                  | Exclude; **detection implemented**                                     | Needs elicitation/sampling/roots — none exist, all deprecated or absent. Non-`'complete'` results throw a named `MCPError` instead of masquerading as tool output.                                                                                      |
-| `subscriptions/listen`                                                            | Exclude                                                                | No change-notification producer exists (`ToolManager` is event-free); held-open streams don't fit one-request→one-response dispatch. Zero consumers.                                                                                                    |
-| `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` headers                          | Implement (both HTTP faces + ingress validation)                       | REQUIRED; derivable from the in-hand message; closes gap §3.1.                                                                                                                                                                                          |
-| `Mcp-Param-*` + `x-mcp-header` + Base64 encoding                                  | **Exclude — knowingly declined; decision deferred to evidence** (§8.2) | Projection requires the tool schema (client-only knowledge) reaching the HTTP transport — an HTTP-shaped widening of the transport-agnostic port across seven implementations. Isolated as an optional final unit (U7) so it stays droppable/adoptable. |
-| HTTP status mapping (202/400/403/404/405)                                         | Implement (modern-scoped)                                              | Legacy keeps today's uniform 200 in-band errors; modern gets the exact codes. 405 GET/DELETE is already true of a session-free mount — documented, not coded.                                                                                           |
-| `X-Accel-Buffering: no` + SSE comment keep-alives                                 | Implement                                                              | SHOULD; trivial; comment-flush idiom already exists.                                                                                                                                                                                                    |
-| `-32020`                                                                          | Implement (HTTP face emits)                                            |                                                                                                                                                                                                                                                         |
-| `-32021`                                                                          | Constant + client recognition only                                     | Server never emits it — no implemented method requires a client capability.                                                                                                                                                                             |
-| `-32022` + data                                                                   | Implement both directions                                              | Server emits `{ supported, requested }`; client retries once with new id.                                                                                                                                                                               |
-| Retired `-32002`/`-32042` MUST NOT emit                                           | Already true; add policy assertion                                     | Neither is emitted today.                                                                                                                                                                                                                               |
-| `CacheableResult` on `tools/list` + `server/discover`                             | Implement                                                              | The only two cacheable results this package produces. `cache` option; default scope `'private'`.                                                                                                                                                        |
-| Deterministic `tools/list` order                                                  | Contract + parity assertion, no code                                   | Registry insertion order is already deterministic and is the caller's intent.                                                                                                                                                                           |
-| `extensions` capability field                                                     | Exclude                                                                | No extension implemented; capabilities stay an open record so consumers can still declare their own.                                                                                                                                                    |
-| Tasks extension                                                                   | Exclude                                                                | An extension with zero consumers; foreign `resultType: 'task'` caught by detection rule.                                                                                                                                                                |
-| Resources / Prompts / Roots / Sampling / Elicitation / Logging                    | Exclude                                                                | No registries/consumers; roots/sampling/logging deprecated in 2026-07-28. Local emitters remain observability, not an MCP logging capability.                                                                                                           |
-| Icons (2025-11-25)                                                                | Exclude                                                                | Installed `@orkestrel/tool` tool definitions carry no icon field; an MCP-only wrapper has no originating consumer.                                                                                                                                      |
-| Structured tool output (`outputSchema`/`structuredContent`)                       | Exclude for now                                                        | The installed `ToolResult` (`@orkestrel/tool`) is a success-discriminated union whose `value` stays `unknown`; adoption belongs first in the tool contract that owns it. Text content remains valid.                                                    |
-| SSE polling / resumability                                                        | Legacy-only (existing session middleware), unchanged                   | Modern requests must not use it; the broader optional 2025-11 polling protocol has no consumer.                                                                                                                                                         |
-| Origin → 403                                                                      | Implement minimal gate (`origins` option, secure default)              | Spec MUST on the server component this package ships; policy (the list) stays with the consumer. Planner dissent §9.2.                                                                                                                                  |
-| Batching removal                                                                  | Implement by deletion                                                  | Batch arm removed from `send`; 2025-03-26 dropped; MUST enforced in types.                                                                                                                                                                              |
-| `initialize`/`ping`/sessions/GET-stream                                           | Legacy-only (dual-era)                                                 | Present in legacy; `-32601`/405 in modern.                                                                                                                                                                                                              |
+Rows marked **amended** were ruled on 2026-07-28 with "no consumer exists" as their stated
+reason, and re-ruled on 2026-07-31 once `@orkestrel/supervisor` became that consumer. §5.1
+carries each flip in full: old ruling, new ruling, reason, and the consumer that expired the
+old reason. A row without an **amended** mark is unchanged.
+
+| Feature                                                                           | Ruling                                                                 | Reason                                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Per-request `_meta` (version/capabilities REQUIRED; clientInfo/serverInfo SHOULD) | Implement                                                              | Mandatory; the discriminator itself.                                                                                                                                                                                                                            |
+| `_meta.progressToken`                                                             | Implement as passthrough                                               | Must not be misread as a modern marker; we neither generate nor consume progress.                                                                                                                                                                               |
+| `_meta.logLevel`                                                                  | Exclude                                                                | Belongs to logging, deprecated in 2026-07-28. No consumer opts a request into server log emission.                                                                                                                                                              |
+| `_meta.subscriptionId`                                                            | **Implement — amended (§5.1)**                                         | Flips with `subscriptions/listen`: it is the stream's correlation key, so excluding it would leave every stream notification uncorrelatable. Consumer: `@orkestrel/supervisor`'s observation stream.                                                            |
+| W3C `traceparent`/`tracestate`/`baggage`                                          | Exclude                                                                | Tracing is application policy; the `request` event is the observation seam; consumers stamp their own.                                                                                                                                                          |
+| `server/discover`                                                                 | Implement                                                              | Mandatory server RPC; surfaced as `client.discover()` (instructions otherwise unreachable).                                                                                                                                                                     |
+| Method seam for revisions/extensions beyond the built-in set                      | **Implement — amended (§5.1)**                                         | §4.6's modern branch answers three hard-coded methods and `-32601` for everything else, so `subscriptions/listen` and every Tasks method would each need another `switch` arm in core. Consumer: `@orkestrel/supervisor` needs the first and may want the rest. |
+| `resultType` on every modern result                                               | Implement                                                              | Mandatory; one stamping site; client treats absent as complete.                                                                                                                                                                                                 |
+| MRTR production (`inputRequests`/`requestState`)                                  | **Implement, `ElicitRequest` only — amended (§5.1)**                   | Consumer: `@orkestrel/supervisor`'s `reply` path needs operator input in band. Sampling and roots stay excluded (deprecated, no consumer). `requestState` is opaque and attacker-controlled from the server's view ⇒ MUST be integrity-protected.               |
+| `subscriptions/listen`                                                            | **Implement, modern-only — amended (§5.1)**                            | The producer that did not exist now does: `@orkestrel/supervisor`'s normalized observation stream. Held-open streams get their own seam rather than being forced through one-request→one-response dispatch.                                                     |
+| `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` headers                          | Implement (both HTTP faces + ingress validation)                       | REQUIRED; derivable from the in-hand message; closes gap §3.1.                                                                                                                                                                                                  |
+| `Mcp-Param-*` + `x-mcp-header` + Base64 encoding                                  | **Exclude — knowingly declined; decision deferred to evidence** (§8.2) | Projection requires the tool schema (client-only knowledge) reaching the HTTP transport — an HTTP-shaped widening of the transport-agnostic port across seven implementations. Isolated as an optional final unit (U7) so it stays droppable/adoptable.         |
+| HTTP status mapping (202/400/403/404/405)                                         | Implement (modern-scoped)                                              | Legacy keeps today's uniform 200 in-band errors; modern gets the exact codes. 405 GET/DELETE is already true of a session-free mount — documented, not coded.                                                                                                   |
+| Modern HTTP disconnect-cancellation                                               | **Implement — amended (§5.1)**                                         | 2026-07-28 removes client→server notifications over HTTP: closing the response stream IS the cancellation signal (`notifications/cancelled` survives on stdio only). Today `request.signal` only detaches an SSE session (`middlewares.ts:114-115`).            |
+| `X-Accel-Buffering: no` + SSE comment keep-alives                                 | Implement                                                              | SHOULD; trivial; comment-flush idiom already exists.                                                                                                                                                                                                            |
+| `-32020`                                                                          | Implement (HTTP face emits)                                            |                                                                                                                                                                                                                                                                 |
+| `-32021`                                                                          | **Implement both directions — amended (§5.1.1)**                       | Was constant + client recognition only, because no implemented method required a client capability. `ElicitRequest` production creates one: a client that never declared elicitation, on an operation that needs it, gets `data.requiredCapabilities`.          |
+| `-32022` + data                                                                   | Implement both directions                                              | Server emits `{ supported, requested }`; client retries once with new id.                                                                                                                                                                                       |
+| Retired `-32002`/`-32042` MUST NOT emit                                           | Already true; add policy assertion                                     | Neither is emitted today.                                                                                                                                                                                                                                       |
+| `CacheableResult` on `tools/list` + `server/discover`                             | Implement                                                              | The only two cacheable results this package produces. `cache` option; default scope `'private'`.                                                                                                                                                                |
+| Deterministic `tools/list` order                                                  | Contract + parity assertion, no code                                   | Registry insertion order is already deterministic and is the caller's intent.                                                                                                                                                                                   |
+| `extensions` capability field                                                     | Exclude from the first slice (**amended scope**, §5.1)                 | Capabilities stay an open record, so a consumer can already declare an extension id without a library change. Reading the map becomes load-bearing only if A7 lands; nothing else may depend on it.                                                             |
+| Tasks extension (`io.modelcontextprotocol/tasks`)                                 | **Optional augmentation, never the substrate — amended (§5.1)**        | The durable handle is a durable id in an ordinary `tools/call` result, on every era, with no negotiation. `tasks/get`/`tasks/update`/`tasks/cancel` MAY be added later (A7); core `tasks/list` and blocking `tasks/result` are gone in 2026-07-28.              |
+| Durable task storage                                                              | **Injected contract, only with A7 — amended (§5.1)**                   | Task state outlives a request by definition, and this package owns no persistence. It would arrive injected, exactly as `ToolManagerInterface` does. Absent A7 there is no store and no storage dependency.                                                     |
+| Resources / Prompts / Roots / Sampling / Logging                                  | Exclude                                                                | No registries/consumers; roots/sampling/logging deprecated in 2026-07-28. Local emitters remain observability, not an MCP logging capability. `@orkestrel/supervisor` explicitly takes **no resources in its first slice** — `inspect` carries the read.        |
+| Elicitation                                                                       | Split (**amended**, §5.1)                                              | The legacy server-initiated `elicitation/create` request stays excluded (no consumer, and 2026-07-28 removes server-initiated requests entirely). Modern `ElicitRequest` production inside an MRTR result is implemented — see the MRTR row.                    |
+| Icons (2025-11-25)                                                                | Exclude                                                                | Installed `@orkestrel/tool` tool definitions carry no icon field; an MCP-only wrapper has no originating consumer.                                                                                                                                              |
+| Protocol-native `tools/call` results (`structuredContent`)                        | **Implement — amended (§5.1)**                                         | `buildToolResult` collapses every value into one `JSON.stringify` text block (`helpers.ts:95-103`), so a durable handle reaches the client as a string a model must re-parse. Consumer: `@orkestrel/supervisor` returns a durable id from every command.        |
+| `outputSchema` on tool descriptors                                                | Exclude (unchanged)                                                    | The installed `ToolResult` (`@orkestrel/tool`) is a success-discriminated union whose `value` stays `unknown`; the schema half belongs first to the tool contract that owns it. §8.8 confirms whether `structuredContent` may ship without it.                  |
+| SSE polling / resumability                                                        | Legacy-only (existing session middleware), unchanged                   | Modern requests must not use it; the broader optional 2025-11 polling protocol has no consumer.                                                                                                                                                                 |
+| Hostile-input limits + protocol-faithful fixtures                                 | **Implement — amended (§5.1)**                                         | `handle()` `JSON.parse`s an unbounded string and nothing caps `_meta` size, `requestState` size, or live subscriptions. A public, long-lived service host makes each of those a denial-of-service surface rather than a theoretical one.                        |
+| Origin → 403                                                                      | Implement minimal gate (`origins` option, secure default)              | Spec MUST on the server component this package ships; policy (the list) stays with the consumer. Planner dissent §9.2.                                                                                                                                          |
+| Batching removal                                                                  | Implement by deletion                                                  | Batch arm removed from `send`; 2025-03-26 dropped; MUST enforced in types.                                                                                                                                                                                      |
+| `initialize`/`ping`/sessions/GET-stream                                           | Legacy-only (dual-era)                                                 | Present in legacy; `-32601`/405 in modern.                                                                                                                                                                                                                      |
+
+### 5.1 Amendments, 2026-07-31 — the flipped exclusions and the gaps they exposed
+
+Four of the rows above were excluded with the same shape of reason: *the mechanism is real,
+the spec is understood, and nothing in the fleet would call it.* That reason was true and is
+now expired. **`@orkestrel/supervisor`** — one package (core + server) that runs workflows
+durably, detached from the client that started them, with a human in the loop — is the
+consumer. A fifth row (structured tool output) was declined for a different reason, and only
+half of it flips. Three more gaps surfaced that no row had named at all. Each entry below
+gives the old ruling, the new one, the reason, and what consumes it.
+
+Two properties of that consumer do the work, and both come from its binding verdict rather
+than from any preference of this document. First, **the client disconnects on purpose**: a
+`tools/call` returns a durable id promptly and the run continues in a service host that
+outlives the caller. Second, **the run asks for things later**: an operator approval or an
+input request can arrive minutes after the call that started the work already returned.
+
+1. **MRTR production — Exclude ⇒ Implement, `ElicitRequest` only.**
+   The old reason ("needs elicitation/sampling/roots — none exist") was accurate: MRTR is a
+   carrier, and we had nothing to carry. The supervisor's `reply` command is cargo. A
+   `supervisor` call that cannot proceed without operator input returns
+   `resultType: 'input_required'` with one `ElicitRequest`, and the client retries the
+   original request under a new id carrying `inputResponses` plus the byte-exact
+   `requestState`. **Sampling and roots stay excluded** — both deprecated in 2026-07-28, and
+   neither has a consumer; a server that advertises only `ElicitRequest` never has to reason
+   about a client that declared the other two.
+   **This is what finally makes `-32021` emittable.** A server may name only the request types
+   the client declared (§1.4.4). A client that never declared elicitation, calling an operation
+   that cannot proceed without operator input, is precisely
+   `MissingRequiredClientCapability` — so the server side of `-32021` ships with A3 and §4.6's
+   "never emitted" note is amended there. The alternative would be inventing an answer the
+   operator never gave, which is the one thing this whole flip exists to prevent.
+   **This is production only, and only for the call in hand.** Per the verdict, MRTR is
+   structurally incapable of pushing a *later* input request into an already-completed call,
+   so it covers exactly the in-band case; the detached case belongs to flip 2. §4.7's
+   client-side rule is unchanged: our `MCPClient` still throws a named `MCPError` on any
+   non-`'complete'` `resultType` from a foreign server, because it produces no
+   `inputResponses` and must never read an unanswered request as tool output.
+   **`requestState` MUST be integrity-protected.** The spec is explicit that it is opaque and
+   attacker-controlled from the server's view; the supervisor's echoed state names a run and a
+   pending decision, so an unverified echo is an authorization forgery. The mechanism already
+   exists and is already a declared peer dependency: `@orkestrel/server`'s `signToken` /
+   `verifyToken` mint and verify a stateless HMAC token (`crypto.subtle.sign('HMAC', …)`, an
+   HMAC-covered `ttl`, and a `[current, ...older]` rotation list). **No new code and no new
+   dependency.** MCP ships the round-trip and the guide's MUST; the secret, the TTL, and the
+   decision to sign are consumer policy.
+
+2. **`subscriptions/listen` and `_meta.subscriptionId` — Exclude ⇒ Implement, modern-only.**
+   The old reason was the honest absence of a producer: `ToolManager` is event-free, so a
+   held-open stream would have had nothing to say. The supervisor's normalized observation
+   stream is the producer, and it is also the only path by which a detached run can surface
+   `input_required` after its launching call returned. The stream carries the spec's shape
+   verbatim: `notifications/subscriptions/acknowledged` first, every notification stamped with
+   `_meta['io.modelcontextprotocol/subscriptionId']`, graceful closure as an empty complete
+   result.
+   **Where the one-subscription-per-epoch invariant lives.** MCP supplies the mechanism — at
+   most one live stream per subscription key, and superseding a key gracefully closes the
+   stream it replaces. The key's *meaning* is the consumer's: `@orkestrel/supervisor` binds it
+   to its epoch, which is what makes "one subscription per epoch" true without MCP ever
+   learning the word "epoch". Mechanism here, policy there.
+   **Modern-only, stated as a limit.** `subscriptions/listen` is a 2026-07-28 method, and the
+   supervisor targets modern first. A legacy-era client still gets `start`, `inspect`, and
+   `reply`; its observation path remains the existing session stream's
+   `notifications/message`, which is a strictly weaker unsubscribed channel. Under both eras
+   `inspect` is authoritative and notifications are hints — so nothing degrades into polling.
+
+3. **Tasks extension — Exclude ⇒ optional augmentation, never the substrate.**
+   The substrate is settled and is not Tasks: **a durable id in an ordinary `tools/call`
+   result**, on every era, with no capability negotiation. Everything the supervisor promises
+   — handle, reconnect, control, result — must work for a client that has never heard of the
+   extension. Two facts hold the ruling: the extension has no implementations to interoperate
+   with, and 2026-07-28 removed the blocking `tasks/result` that made a task id useful as a
+   *result* channel (core `tasks/list` is gone too; `ttl`/`pollInterval` became
+   `ttlMs`/`pollIntervalMs`). What remains is genuinely useful as decoration — `tasks/get`,
+   `tasks/update`, `tasks/cancel`, and an unsolicited `CreateTaskResult`
+   (`resultType: 'task'`) — so A7 may add it when a client that actually negotiates the
+   extension exists.
+   **Nothing may depend on Tasks being negotiated.** No command may require it, no result may
+   substitute a task id for the durable id, and no test may reach green only on the Tasks
+   path. If A7 is never scheduled, the supervisor loses no capability. That is the test of
+   this ruling, and it is the reason `extensions` stays out of the first slice.
+
+4. **Protocol-native `tools/call` results — Exclude for now ⇒ Implement `structuredContent`.**
+   `buildToolResult` puts every value through `JSON.stringify` into a single text block
+   (`src/core/helpers.ts:95-103`). For a tool returning prose that is exactly right. For a
+   supervisor returning `{ id, revision, status }` it means the one field the whole design
+   turns on — the durable handle — reaches the client as characters inside a string, to be
+   found again by parsing. A durable handle that a model has to re-parse out of a text blob is
+   a handle with a failure mode. Results carry `structuredContent` alongside the text block.
+   The schema half (`outputSchema` on descriptors) does **not** flip: `ToolResult.value` is
+   `unknown` in the installed `@orkestrel/tool`, and the contract that owns the value owns its
+   schema. §8.8 settles the exact text-mirror obligation and whether `structuredContent` is
+   legal without a declared `outputSchema` before this ships.
+
+5. **A method seam — newly surfaced.** §4.6's modern branch answers `server/discover`,
+   `tools/list`, and `tools/call`, and returns `-32601` for everything else. That was right
+   for a package whose whole surface was those three. Flip 2 adds a method now, flip 3 may add
+   three more, and the next revision will add its own, so the choice is a `switch` in core
+   that grows with every revision or one seam. The seam: a registrable method handler, with
+   the built-in methods registered through
+   the same mechanism they are dispatched by — no second dispatch path, no precedence puzzle,
+   and an unregistered method still `-32601`. This **extends** §4.6's method set; it does not
+   contradict the branch structure, the discriminator, or the era rules.
+
+6. **Modern HTTP disconnect-cancellation — newly surfaced.** 2026-07-28 removes client→server
+   notifications over HTTP: closing the response stream *is* the cancellation signal, and
+   `notifications/cancelled` survives on stdio only. Today `request.signal` reaches exactly one
+   place — detaching an SSE session stream (`src/server/middlewares.ts:114-115`) — and no
+   signal reaches a running `tools/call`. For a bounded tool that is harmless. For a
+   supervisor holding a subscription stream and an external process it is the difference
+   between a disconnect and a leak. The signal is plumbed to the handler; what a handler does
+   with it stays the consumer's (the verdict is emphatic that requested cancellation is not
+   observed termination).
+
+7. **Hostile-input limits and protocol-faithful fixtures — newly surfaced.** `handle()`
+   `JSON.parse`s an unbounded string, and nothing bounds `_meta` size or key count,
+   `requestState` size, content size, or the number of live subscriptions. A library embedded
+   in a caller's process could defer that; an independent, long-lived service host — which the
+   verdict says the supervisor requires, because a client-spawned stdio process cannot
+   honestly promise to outlive its client — cannot. Limits are configurable with secure
+   defaults and are exercised by fixture peers that speak the wire, per the repository's
+   no-mocks law and the established `tests/fixtures/browserServer.ts` pattern.
+
+8. **Durable task storage — conditional on A7.** If Tasks is ever adopted, task state outlives
+   the request that created it, and this package owns no persistence and must not acquire any.
+   A store arrives as an injected contract, exactly as `ToolManagerInterface` does today.
+   Absent A7 there is no store, no storage dependency, and no dormant interface.
 
 ---
 
@@ -495,7 +668,8 @@ mechanical; `verifier` = gates.
 | U6   | Guide + parity + **Declared non-goals** section (names every §5 exclusion incl. `Mcp-Param-*` with its rationale and Origin policy split); Contract clauses for the wire-name rule, the discriminator, the per-era status map, the three supported revisions; `## Methods` bijection covers `discover`                                                                                                                               | `guides/src/mcp.md`                                                                                                  | `implementer` (Opus 5) | U0–U5                   |
 | U7   | `Mcp-Param-*` (NOT scheduled; only if §8.2 evidence flips the exclusion): first widens `ClientTransportInterface.send`, deliberately last so nothing depends on it                                                                                                                                                                                                                                                                   | —                                                                                                                    | —                      | U6                      |
 
-Order: U0 → U1 → U2 → U3 → U4 → U5 → U6. Each nontrivial unit gets the standard audit chain
+Order: U0 → U1 → U2 → U3 → U4 → U5 → U6, with the §6.1 amendment units slotting in after U5
+and before the guide unit. Each nontrivial unit gets the standard audit chain
 (reviewer = Opus design fit; analyst = Sol correctness; checker = mechanical conformance;
 independent verifier runs the five gates, including the real-Chromium browser suite for U5).
 Key acceptance details preserved from the design pass: modern `tools/call` carries
@@ -506,17 +680,80 @@ the route (200) with `Mcp-Session-Id` ignored; `-32022` triggers exactly one ret
 id and no third attempt; a `resultType: 'input_required'` result throws an `MCPError` naming
 it.
 
+### 6.1 Amendment units (§5.1)
+
+Additive. U0–U5 are unchanged, run first, and remain the prerequisite for everything here;
+U6 remains the sole owner of `guides/src/mcp.md` and now documents the A-unit surface and the
+amended non-goals alongside its original scope. Same rules as above: one writer at a time,
+clean committed baseline, disjoint owned files, mirrored `tests/src/**` per unit.
+
+| Unit | Content                                                                                                                                                                                                                                   | Owned files                                                                                                                | Engine                 | Depends on               |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------ |
+| A1   | Method seam (§5.1.5): a registrable modern method handler; `server/discover`, `tools/list`, `tools/call` registered through the same mechanism that dispatches them; unregistered ⇒ `-32601`; legacy branch untouched                     | `src/core/{types,MCPServer,helpers,index}.ts` + tests                                                                      | `implementer` (Opus 5) | U5                       |
+| A2   | Protocol-native results (§5.1.4): `structuredContent` alongside the text block on `tools/call`; `outputSchema` explicitly NOT added                                                                                                       | `src/core/{types,helpers}.ts` + tests                                                                                      | `implementer` (Sol)    | U5 (serialize after A1)  |
+| A3   | MRTR production (§5.1.1): `ElicitRequest` only; `InputRequiredResult` shape; `inputResponses` + byte-exact `requestState` on retry; signed-state round-trip through `@orkestrel/server`'s `signToken`/`verifyToken`; server-side `-32021` | `src/core/{types,constants,parsers,validators,helpers,MCPServer}.ts` + tests                                               | `implementer` (Sol)    | A1, A2                   |
+| A4   | `subscriptions/listen` + `_meta.subscriptionId` (§5.1.2): acknowledged-first stream, per-notification stamping, one live stream per key, graceful closure of a superseded stream, empty complete result on close; modern-only             | `src/core/{types,constants,helpers,MCPServer}.ts`, held-open stream seam in `src/server/{handlers,middlewares}.ts` + tests | `implementer` (Sol)    | A1                       |
+| A5   | Disconnect-cancellation (§5.1.6): the request's abort signal reaches the dispatched handler; closed HTTP response stream = cancellation; stdio keeps `notifications/cancelled`; no HTTP client→server notifications                       | `src/core/{types,MCPServer}.ts`, `src/server/{types,handlers,middlewares}.ts`, `src/browser/{types,helpers}.ts` + tests    | `implementer` (Sol)    | A1, A4                   |
+| A6   | Hostile-input limits + protocol-faithful fixtures (§5.1.7): bounded message bytes, `_meta` size/key count, `requestState` size, content size, live subscriptions; configurable with secure defaults; fixture peers on the wire            | `src/core/{types,constants,parsers}.ts`, `src/server/{types,constants,handlers}.ts`, `tests/fixtures/**` + tests           | `implementer` (Sol)    | A2, A3, A4, A5           |
+| A7   | Tasks extension (§5.1.3) — **NOT scheduled**; adopt only once a client that negotiates `io.modelcontextprotocol/tasks` exists: `tasks/get`/`tasks/update`/`tasks/cancel`, unsolicited `CreateTaskResult`, injected task store             | —                                                                                                                          | —                      | A1; a negotiating client |
+
+Order: U0 → U1 → U2 → U3 → U4 → U5 → A1 → A2 → A3 → A4 → A5 → A6 → U6. A7 is unscheduled by
+construction, exactly like U7, and both remain droppable without loss of any promised
+capability.
+
+### 6.2 Amendment acceptance criteria
+
+- **A1** — a method registered after construction dispatches; an unregistered modern method
+  still returns `-32601`; the three built-in modern methods are registered through the seam
+  (grep proves no second dispatch path); every legacy response stays byte-identical to its
+  pre-change golden string.
+- **A2** — a `tools/call` result carries `structuredContent` AND the text block; a value-less
+  result still produces a valid result; `tools/list` descriptors carry no `outputSchema`; the
+  modern result still carries `resultType` and no `ttlMs` (the §6 rule holds).
+- **A3** — an `input_required` result validates against the spec shape with exactly one
+  `ElicitRequest` and no `CreateMessageRequest`/`ListRootsRequest`; a retry echoing
+  `requestState` byte-exact is accepted under a NEW id; a mutated `requestState` fails
+  `verifyToken` and is rejected, not honored; a retry that omits `inputResponses` is rejected;
+  a client that declared no elicitation capability gets `-32021` with exact
+  `data.requiredCapabilities` and HTTP 400, never a fabricated result; our own `MCPClient`
+  still throws a named `MCPError` on a foreign `input_required` (§4.7).
+- **A4** — the first stream message is `notifications/subscriptions/acknowledged`; every
+  subsequent notification carries `_meta['io.modelcontextprotocol/subscriptionId']` equal to
+  the listen request's id; a second listen on a live key gracefully closes the first with an
+  empty complete result and exactly one stream survives; a legacy-era `subscriptions/listen`
+  returns `-32601`.
+- **A5** — aborting the HTTP request aborts the signal the handler observes, proven by a real
+  transport rather than a synthesized signal; a stdio `notifications/cancelled` still routes;
+  no client→server notification is ever POSTed; a cancelled call reports requested
+  cancellation without asserting observed termination.
+- **A6** — a message over the byte cap is rejected with a protocol error and never parsed; an
+  oversized `_meta`, `requestState`, or content payload is rejected; the subscription cap is
+  enforced and its rejection is typed; every limit test drives a real fixture peer over a real
+  transport, with no mock, module replacement, or fake clock.
+- **A7** (if ever scheduled) — every supervisor capability still passes with the extension
+  un-negotiated; a durable id is present in every result whether or not a task id is; no test
+  reaches green only on the Tasks path.
+
 ---
 
 ## 7. Version/publish context
 
-- Baseline `b77ee07`; package.json 0.0.6 **unpublished** at proposal time. If 0.0.6 is still
-  unpublished when implementation lands, the adoption may ship as 0.0.6 content; otherwise
-  bump. The renames in U0 are breaking but the package is greenfield — no compatibility
-  aliases (repository law).
-- Downstream: no fleet package currently consumes the negotiation surface beyond
+- **Corrected 2026-07-31.** Baseline is `1209eb5` on `main`; package.json is **0.0.8 and
+  published**. The proposal-time note ("0.0.6 unpublished; the adoption may ship as 0.0.6
+  content") is spent: the branch merged, the §3 conformance fixes landed before the 0.0.7
+  bump and ship in 0.0.8, and the dependency set moved to `@orkestrel/tool`. **The adoption
+  therefore bumps** — it cannot ship as existing-version content.
+- The renames in U0 and the contract growth in §6.1 are breaking, but the package is
+  greenfield — no compatibility aliases (repository law).
+- Downstream: no published package consumes the negotiation surface beyond the
   `createMCPClient`/`createMCPServer` factories; the `identity` regrouping touches every
-  constructor call site in tests/fixtures/guide but no external package pins the old shape.
+  constructor call site in tests/fixtures/guide but nothing published pins the old shape.
+  **`@orkestrel/supervisor` does not exist yet** — it is proposed in the workflow
+  repository's `PROPOSAL.md` and will be the first consumer to pin the amended surface. That
+  ordering is deliberate: this adoption ships and is published before the supervisor depends
+  on it, so the supervisor never pins an unreleased shape.
+- `@orkestrel/server` (0.0.7) is already a declared peer dependency, so §5.1.1's
+  `signToken`/`verifyToken` integrity mechanism adds no dependency to `package.json`.
 
 ## 8. Open questions — evidence tasks for the implementation session
 
@@ -546,6 +783,27 @@ it.
    not yet flipped at research time. Re-verify the ledger at implementation start (§1.6
    URLs). All modern behavior is reachable from `src/core/constants.ts` + the `#modern`
    branch, so churn is bounded by construction.
+
+Added by the 2026-07-31 amendment (§5.1). Each gates its unit; none reopens a §5.1 ruling.
+
+8. **Structured tool output obligations** (gates A2): does a result carrying
+   `structuredContent` also have to carry the serialized JSON as a text block, and at what
+   normative strength? Is `structuredContent` legal without a declared `outputSchema`? If a
+   schema is mandatory, A2 stops at the text block and the flip moves to the
+   `@orkestrel/tool` contract that owns `ToolResult.value`.
+9. **MRTR wire shape at depth** (gates A3): the exact `InputRequiredResult` /
+   `inputRequests` / `inputResponses` field names and nesting from
+   `schema/2026-07-28/schema.ts`, plus whether a server advertising only `ElicitRequest`
+   production owes anything to a client that declared sampling or roots. §1.4.4 is the
+   overview reading; A3 needs the schema.
+10. **Subscription lifecycle at depth** (gates A4): the acknowledged-notification shape, what
+    a server may do when a second `subscriptions/listen` arrives for a live key, and whether
+    graceful closure has any required payload beyond an empty complete result. §1.4.5 covers
+    the happy path only.
+11. **Tasks extension per-method shapes** (gates A7, already flagged unverified in §1.6): the
+    `tasks/get`/`tasks/update`/`tasks/cancel` wire shapes beyond the overview page, and
+    whether any client negotiates `io.modelcontextprotocol/tasks` at all. A negative answer
+    keeps A7 unscheduled, which costs nothing (§5.1.3).
 
 ## 9. Adversarial record (dissents preserved)
 
@@ -580,11 +838,14 @@ it.
 ## 10. How to resume
 
 1. Read this document top to bottom; it inlines everything (the research distillate, the
-   verified inventory, both designs' substance, the reconciliation).
-2. Run the §8 evidence tasks first (one research dispatch; cheap).
+   verified inventory, both designs' substance, the reconciliation, and the 2026-07-31
+   amendment in §5.1/§6.1).
+2. Run the §8 evidence tasks first (one research dispatch; cheap) — §8.1–§8.7 gate the U
+   units, §8.8–§8.11 gate the A units.
 3. Re-verify the §1.1 ledger against `/specification/latest` (§8.7).
-4. Execute U0→U6 per §6 under the repository's operating contract (serialized writers from
-   clean baselines, adversarial audits, independent verifier gates, real-Chromium browser
-   suite for U5).
-5. Push `claude/orkestrel-orchestration-tp0ez7` + fast-forward `main`; flag the publish
-   decision per §7.
+4. Execute U0 → U5, then the §6.1 amendment units A1 → A6, then U6, under the repository's
+   operating contract (serialized writers from clean baselines, adversarial audits,
+   independent verifier gates, real-Chromium browser suite for U5). U7 and A7 stay
+   unscheduled unless their evidence flips them.
+5. Branch from `1209eb5` on `main`, fast-forward on completion, and publish before
+   `@orkestrel/supervisor` pins the surface (§7).
