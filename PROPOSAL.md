@@ -1088,6 +1088,27 @@ _optional_ keys to `MCPCallResult` and `MCPClientOptions` breaks no implementati
 truer to types-first than the original split: a contract member and the code that satisfies it
 belong in one unit, so every unit still reaches green on its own.
 
+**Second amendment, same dispatch — the dispatch seam is A1's alone.** The U1 row also listed
+`MCPDispatchOptions`, `MCPStream`, `MCPTextStream`, and `MCPMethodHandler`, which §6.1's A1 row
+_already_ claims together with the `dispatch`/`handle` signature change. The duplication is not
+harmless: widening `handle()` to return `MCPTextStream` breaks `bindServer`
+(`src/core/helpers.ts:183`), whose `transport.send` accepts a string, so declaring the seam
+without pumping the stream leaves a placeholder and pumping it makes U1 do A1's transport work.
+Verified as `TS2345`. **The four seam types and both signature changes belong to A1 only**; U1
+declares none of them, and `bindServer` is untouched until A1.
+
+A general lesson, recorded because it cost two dispatches: a types-only unit is sound only for
+declarations that are inert until another unit wires them. A declaration that changes an
+interface breaks its _implementers_; one that widens a return type breaks its _consumers_. Both
+are the same failure, and the unit ledger must keep a declaration with whichever unit owns the
+code that has to change with it.
+
+The one exception this unit carries: typing `SUPPORTED_PROTOCOL_VERSIONS` as
+`readonly MCPVersion[]` breaks `MCPClient.ts:132`, where `.includes(protocol)` takes a `string`
+(`TS2345`). U1 therefore also declares `isMCPVersion` in its own `validators.ts` and makes the
+single behaviour-preserving swap at that one call site — the sole edit it may make outside its
+owned files, and no other line of `MCPClient.ts` is in scope.
+
 Order: U0 → U1 → U2 → U3 → U4 → U5 → U6, with the §6.1 amendment units slotting in after U5
 and before the guide unit. Each nontrivial unit gets the standard audit chain
 (reviewer = Opus design fit; analyst = Sol correctness; checker = mechanical conformance;
