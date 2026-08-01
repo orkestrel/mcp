@@ -2,6 +2,7 @@ import type {
 	JSONRPCRequest,
 	JSONRPCResponse,
 	MCPDispatchOptions,
+	MCPInputContext,
 	MCPStream,
 	MCPSubscriptionOptions,
 	MCPTextStream,
@@ -16,11 +17,13 @@ import {
 	JSONRPC_INVALID_REQUEST,
 	JSONRPC_METHOD_NOT_FOUND,
 	JSONRPC_PARSE_ERROR,
+	isInputRequiredResult,
 	MCP_META_CAPABILITIES,
 	MCP_META_SERVER,
 	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
 	MCP_PROTOCOL_VERSION,
+	MCP_MISSING_CAPABILITY,
 	MCP_UNSUPPORTED_VERSION,
 	SUPPORTED_PROTOCOL_VERSIONS,
 } from '@src/core'
@@ -31,6 +34,7 @@ import {
 	createJSONRPCNotification,
 	createJSONRPCRequest,
 	recordEmitterEvents,
+	waitForDelay,
 } from '../../setup.js'
 
 // MCPServer is the transport-agnostic JSON-RPC 2.0 dispatch core that exposes a live
@@ -380,6 +384,379 @@ describe('MCPServer — dual-era dispatch', () => {
 
 		expect(response).toBeUndefined()
 		expect(events.request.calls).toEqual([['tools/list', null, 'modern']])
+	})
+})
+
+describe('MCPServer — multi-round-trip form elicitation', () => {
+	it('returns one keyed ElicitRequest and resumes under a new id from top-level echo fields', async () => {
+		const seen: MCPInputContext[] = []
+		const mcp = createMCPServer({
+			identity: { name: 'test-server', version: '1.2.3' },
+			tools: tools(),
+			input: {
+				secret: ['current-secret', 'older-secret'],
+				ttl: 1_000,
+				principal: () => 'operator-1',
+				elicit: (context) => {
+					seen.push(context)
+					return context.response === undefined
+						? {
+								request: {
+									message: 'Approve the reply?',
+									requestedSchema: {
+										type: 'object',
+										properties: { approved: { type: 'boolean' } },
+										required: ['approved'],
+									},
+								},
+								state: 'run-42',
+							}
+						: undefined
+				},
+			},
+		})
+		const first = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					id: 'origin-1',
+					method: 'tools/call',
+					params: {
+						name: 'echo',
+						arguments: { value: 7 },
+						_meta: {
+							[MCP_META_VERSION]: '2026-07-28',
+							[MCP_META_CAPABILITIES]: { elicitation: {} },
+						},
+					},
+				}),
+			),
+		)
+		if (!isInputRequiredResult(first?.result)) {
+			throw new Error('expected an input-required result')
+		}
+		const keys = Object.keys(first.result.inputRequests ?? {})
+		const key = keys[0]
+		const requestState = first.result.requestState
+		if (key === undefined || requestState === undefined) {
+			throw new Error('expected a server-assigned key and protected request state')
+		}
+
+		expect(keys).toHaveLength(1)
+		expect(Array.isArray(first.result.inputRequests)).toBe(false)
+		expect(first.result.inputRequests?.[key]).toEqual({
+			method: 'elicitation/create',
+			params: {
+				mode: 'form',
+				message: 'Approve the reply?',
+				requestedSchema: {
+					type: 'object',
+					properties: { approved: { type: 'boolean' } },
+					required: ['approved'],
+				},
+			},
+		})
+		expect(typeof requestState).toBe('string')
+
+		const retryParams = {
+			name: 'echo',
+			arguments: { value: 7 },
+			inputResponses: { [key]: { action: 'accept', content: { approved: true } } },
+			requestState,
+			_meta: {
+				[MCP_META_VERSION]: '2026-07-28',
+				[MCP_META_CAPABILITIES]: { elicitation: {} },
+			},
+		}
+		const retry = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({ id: 'retry-2', method: 'tools/call', params: retryParams }),
+			),
+		)
+
+		expect(retry?.result).toEqual({
+			content: [{ type: 'text', text: '{"value":7}' }],
+			structuredContent: { value: 7 },
+			resultType: 'complete',
+			_meta: { [MCP_META_SERVER]: { name: 'test-server', version: '1.2.3' } },
+		})
+		expect(retryParams.requestState).toBe(requestState)
+		expect(retryParams).toHaveProperty('inputResponses')
+		expect(retryParams.arguments).toEqual({ value: 7 })
+		expect(seen).toHaveLength(2)
+		expect(seen[1]?.response).toEqual({ action: 'accept', content: { approved: true } })
+		expect(seen[1]?.state).toBe('run-42')
+		expect(seen[1]?.arguments).toEqual({ value: 7 })
+	})
+
+	it('assigns a unique map key to every produced round', async () => {
+		const mcp = createMCPServer({
+			identity: { name: 'test-server', version: '1.2.3' },
+			tools: tools(),
+			input: {
+				secret: 'secret',
+				ttl: 1_000,
+				principal: () => 'operator-1',
+				elicit: () => ({
+					request: {
+						message: 'Approve?',
+						requestedSchema: { type: 'object', properties: {} },
+					},
+				}),
+			},
+		})
+		const responses = await Promise.all(
+			[1, 2].map((id) =>
+				mcp.dispatch(
+					createJSONRPCRequest({
+						id,
+						method: 'tools/call',
+						params: {
+							name: 'echo',
+							_meta: {
+								[MCP_META_VERSION]: '2026-07-28',
+								[MCP_META_CAPABILITIES]: { elicitation: {} },
+							},
+						},
+					}),
+				),
+			),
+		)
+		const keys = responses.flatMap((answer) => {
+			const response = responseOf(answer)
+			return isInputRequiredResult(response?.result)
+				? Object.keys(response.result.inputRequests ?? {})
+				: []
+		})
+
+		expect(keys).toHaveLength(2)
+		expect(new Set(keys).size).toBe(2)
+	})
+
+	it.each([
+		['absent', {}],
+		['URL-only', { elicitation: { url: {} } }],
+	])(
+		'returns -32021 with exact required capability data when form support is %s',
+		async (_, capabilities) => {
+			const mcp = createMCPServer({
+				identity: { name: 'test-server', version: '1.2.3' },
+				tools: tools(),
+				input: {
+					secret: 'secret',
+					ttl: 1_000,
+					principal: () => 'operator-1',
+					elicit: () => ({
+						request: {
+							message: 'Approve?',
+							requestedSchema: { type: 'object', properties: {} },
+						},
+					}),
+				},
+			})
+			const response = responseOf(
+				await mcp.dispatch(
+					createJSONRPCRequest({
+						method: 'tools/call',
+						params: {
+							name: 'echo',
+							_meta: {
+								[MCP_META_VERSION]: '2026-07-28',
+								[MCP_META_CAPABILITIES]: capabilities,
+							},
+						},
+					}),
+				),
+			)
+
+			expect(response?.error).toEqual({
+				code: MCP_MISSING_CAPABILITY,
+				message: 'Server requires the elicitation capability for this request',
+				data: { requiredCapabilities: { elicitation: {} } },
+			})
+		},
+	)
+
+	it('rejects mutated state, a reused id, and an omitted response without running the tool', async () => {
+		let executions = 0
+		const manager = createToolManager()
+		manager.add(
+			createTool({
+				name: 'count',
+				execute: () => {
+					executions += 1
+					return executions
+				},
+			}),
+		)
+		const mcp = createMCPServer({
+			identity: { name: 'test-server', version: '1.2.3' },
+			tools: manager,
+			input: {
+				secret: 'secret',
+				ttl: 1_000,
+				principal: () => 'operator-1',
+				elicit: (context) =>
+					context.response === undefined
+						? {
+								request: {
+									message: 'Approve?',
+									requestedSchema: { type: 'object', properties: {} },
+								},
+							}
+						: undefined,
+			},
+		})
+		const params = {
+			name: 'count',
+			_meta: {
+				[MCP_META_VERSION]: '2026-07-28',
+				[MCP_META_CAPABILITIES]: { elicitation: {} },
+			},
+		}
+		const first = responseOf(
+			await mcp.dispatch(createJSONRPCRequest({ id: 11, method: 'tools/call', params })),
+		)
+		if (!isInputRequiredResult(first?.result)) throw new Error('expected input_required')
+		const key = Object.keys(first.result.inputRequests ?? {})[0]
+		const token = first.result.requestState
+		if (key === undefined || token === undefined) throw new Error('missing input state')
+		const response = { [key]: { action: 'accept' } }
+		const mutated = `${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`
+
+		const mutatedAnswer = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					id: 12,
+					method: 'tools/call',
+					params: { ...params, inputResponses: response, requestState: mutated },
+				}),
+			),
+		)
+		const reusedAnswer = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					id: 11,
+					method: 'tools/call',
+					params: { ...params, inputResponses: response, requestState: token },
+				}),
+			),
+		)
+		const omittedAnswer = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					id: 13,
+					method: 'tools/call',
+					params: { ...params, requestState: token },
+				}),
+			),
+		)
+
+		expect(mutatedAnswer?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(reusedAnswer?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(omittedAnswer?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(executions).toBe(0)
+	})
+
+	it('binds principal and a real short TTL inside the protected payload', async () => {
+		let principal = 'operator-1'
+		const mcp = createMCPServer({
+			identity: { name: 'test-server', version: '1.2.3' },
+			tools: tools(),
+			input: {
+				secret: 'secret',
+				ttl: 15,
+				principal: () => principal,
+				elicit: (context) =>
+					context.response === undefined
+						? {
+								request: {
+									message: 'Approve?',
+									requestedSchema: { type: 'object', properties: {} },
+								},
+							}
+						: undefined,
+			},
+		})
+		const params = {
+			name: 'echo',
+			_meta: {
+				[MCP_META_VERSION]: '2026-07-28',
+				[MCP_META_CAPABILITIES]: { elicitation: {} },
+			},
+		}
+		const first = responseOf(
+			await mcp.dispatch(createJSONRPCRequest({ id: 20, method: 'tools/call', params })),
+		)
+		if (!isInputRequiredResult(first?.result)) throw new Error('expected input_required')
+		const key = Object.keys(first.result.inputRequests ?? {})[0]
+		const token = first.result.requestState
+		if (key === undefined || token === undefined) throw new Error('missing input state')
+		const responses = { [key]: { action: 'accept' } }
+
+		principal = 'operator-2'
+		const wrongPrincipal = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					id: 21,
+					method: 'tools/call',
+					params: { ...params, inputResponses: responses, requestState: token },
+				}),
+			),
+		)
+		principal = 'operator-1'
+		await waitForDelay(30)
+		const expired = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					id: 22,
+					method: 'tools/call',
+					params: { ...params, inputResponses: responses, requestState: token },
+				}),
+			),
+		)
+
+		expect(wrongPrincipal?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(expired?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+	})
+
+	it('confines production to modern tools/call and leaves the legacy call byte-identical', async () => {
+		let elicitations = 0
+		const mcp = createMCPServer({
+			identity: { name: 'test-server', version: '1.2.3' },
+			tools: tools(),
+			input: {
+				secret: 'secret',
+				ttl: 1_000,
+				principal: () => 'operator-1',
+				elicit: () => {
+					elicitations += 1
+					return {
+						request: {
+							message: 'Approve?',
+							requestedSchema: { type: 'object', properties: {} },
+						},
+					}
+				},
+			},
+		})
+
+		expect(responseOf(await mcp.dispatch(modernRequest('prompts/get')))?.error?.code).toBe(
+			JSONRPC_METHOD_NOT_FOUND,
+		)
+		expect(responseOf(await mcp.dispatch(modernRequest('resources/read')))?.error?.code).toBe(
+			JSONRPC_METHOD_NOT_FOUND,
+		)
+		expect(responseOf(await mcp.dispatch(modernRequest('tools/list')))?.result).toMatchObject({
+			resultType: 'complete',
+		})
+		expect(
+			await mcp.handle(
+				'{"jsonrpc":"2.0","method":"tools/call","id":4,"params":{"name":"sum","arguments":{"a":2,"b":5}}}',
+			),
+		).toBe(
+			'{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"7"}],"structuredContent":7}}',
+		)
+		expect(elicitations).toBe(0)
 	})
 })
 

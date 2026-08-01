@@ -1,4 +1,5 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
+import type { TokenSecret } from '@orkestrel/server'
 import type { ToolInterface, ToolManagerInterface } from '@orkestrel/tool'
 
 // JSON-RPC 2.0 wire types (https://www.jsonrpc.org/specification) — the envelope
@@ -98,6 +99,202 @@ export interface MCPCallResult {
 	readonly resultType?: 'complete'
 	/** Open modern protocol metadata, including reserved namespaced keys. */
 	readonly _meta?: Readonly<Record<string, unknown>>
+}
+
+/** The primitive value shapes accepted in an MCP form elicitation response. */
+export type ElicitValue = string | number | boolean | readonly string[]
+
+/** One titled value in a form elicitation's single- or multi-select schema. */
+export interface ElicitChoice {
+	readonly const: string
+	readonly title: string
+}
+
+/** One restricted primitive schema accepted by MCP form-mode elicitation. */
+export type ElicitPrimitiveSchema =
+	| {
+			readonly type: 'boolean'
+			readonly title?: string
+			readonly description?: string
+			readonly default?: boolean
+	  }
+	| {
+			readonly type: 'number' | 'integer'
+			readonly title?: string
+			readonly description?: string
+			readonly minimum?: number
+			readonly maximum?: number
+			readonly default?: number
+	  }
+	| {
+			readonly type: 'string'
+			readonly title?: string
+			readonly description?: string
+			readonly minLength?: number
+			readonly maxLength?: number
+			readonly format?: 'uri' | 'email' | 'date' | 'date-time'
+			readonly default?: string
+			readonly enum?: readonly string[]
+			readonly enumNames?: readonly string[]
+			readonly oneOf?: readonly ElicitChoice[]
+	  }
+	| {
+			readonly type: 'array'
+			readonly title?: string
+			readonly description?: string
+			readonly minItems?: number
+			readonly maxItems?: number
+			readonly default?: readonly string[]
+			readonly items:
+				| {
+						readonly type: 'string'
+						readonly enum: readonly string[]
+				  }
+				| {
+						readonly anyOf: readonly ElicitChoice[]
+				  }
+	  }
+
+/** The restricted top-level object schema carried by a form-mode elicitation request. */
+export interface ElicitRequestedSchema extends Readonly<Record<string, unknown>> {
+	readonly $schema?: string
+	readonly type: 'object'
+	readonly properties: Readonly<Record<string, ElicitPrimitiveSchema>>
+	readonly required?: readonly string[]
+}
+
+/** The parameters of a form-mode `elicitation/create` request. */
+export interface ElicitRequestFormParams {
+	readonly mode?: 'form'
+	readonly message: string
+	readonly requestedSchema: ElicitRequestedSchema
+}
+
+/** The parameters of a URL-mode `elicitation/create` request. */
+export interface ElicitRequestURLParams {
+	readonly mode: 'url'
+	readonly message: string
+	readonly url: string
+}
+
+/** The mode-discriminated parameters of an `elicitation/create` request. */
+export type ElicitRequestParams = ElicitRequestFormParams | ElicitRequestURLParams
+
+/** An embedded MCP request asking the client to elicit input from its operator. */
+export interface ElicitRequest {
+	readonly method: 'elicitation/create'
+	readonly params: ElicitRequestParams
+}
+
+/** The result supplied by a client for one embedded {@link ElicitRequest}. */
+export interface ElicitResult {
+	readonly action: 'accept' | 'decline' | 'cancel'
+	readonly content?: Readonly<Record<string, ElicitValue>>
+}
+
+/**
+ * One embedded multi-round-trip request.
+ *
+ * @remarks
+ * This package produces only {@link ElicitRequest}. The deprecated sampling and roots
+ * requests remain legal protocol union members and therefore retain their open parameter
+ * records here without gaining package-owned producers.
+ */
+export type InputRequest =
+	| ElicitRequest
+	| {
+			readonly method: 'sampling/createMessage'
+			readonly params: Readonly<Record<string, unknown>>
+	  }
+	| {
+			readonly method: 'roots/list'
+			readonly params?: Readonly<Record<string, unknown>>
+	  }
+
+/** A server-keyed map of embedded requests the client must fulfil. */
+export type InputRequests = Readonly<Record<string, InputRequest>>
+
+/** A map of client results keyed by the corresponding server-assigned input-request key. */
+export type InputResponses = Readonly<Record<string, unknown>>
+
+/**
+ * An incomplete modern result carrying input requests, protected request state, or both.
+ *
+ * @remarks
+ * The two-arm union enforces the protocol's at-least-one-of rule at the type boundary:
+ * every value has `inputRequests`, `requestState`, or both.
+ */
+export type InputRequiredResult =
+	| {
+			readonly resultType: 'input_required'
+			readonly inputRequests: InputRequests
+			readonly requestState?: string
+			readonly _meta?: Readonly<Record<string, unknown>>
+	  }
+	| {
+			readonly resultType: 'input_required'
+			readonly inputRequests?: InputRequests
+			readonly requestState: string
+			readonly _meta?: Readonly<Record<string, unknown>>
+	  }
+
+/** A successful JSON-RPC response to `tools/call`. */
+export interface CallToolResultResponse {
+	readonly jsonrpc: '2.0'
+	readonly id: string | number
+	readonly result: MCPCallResult | InputRequiredResult
+}
+
+/** The integrity-protected payload carried inside an opaque `requestState` token. */
+export interface MCPInputState {
+	readonly principal: string
+	readonly ttl: number
+	readonly origin: string | number
+	readonly key: string
+	readonly name: string
+	readonly state?: string
+}
+
+/** The call-in-hand context supplied to an {@link MCPInputHandler}. */
+export interface MCPInputContext {
+	readonly request: JSONRPCRequest
+	readonly name: string
+	readonly arguments: Readonly<Record<string, unknown>>
+	readonly response?: ElicitResult
+	readonly state?: string
+}
+
+/** One consumer-requested form elicitation, before MCP assigns its map key and signs state. */
+export interface MCPElicitation {
+	readonly request: ElicitRequestFormParams
+	readonly state?: string
+}
+
+/**
+ * Decide whether the current `tools/call` needs operator input.
+ *
+ * @param context - The original call plus a verified response/state on a retry
+ * @param options - The per-request execution options
+ * @returns A form elicitation to send, or `undefined` to continue into the tool registry
+ */
+export type MCPInputHandler = (
+	context: MCPInputContext,
+	options: MCPDispatchOptions,
+) => MCPElicitation | undefined | Promise<MCPElicitation | undefined>
+
+/** Derive the deployment-authenticated principal bound into signed request state. */
+export type MCPPrincipalHandler = (request: JSONRPCRequest) => string | Promise<string>
+
+/** Consumer policy for the server's multi-round-trip input mechanism. */
+export interface MCPInputOptions {
+	/** HMAC secret or `[current, ...older]` rotation list used by `signToken` / `verifyToken`. */
+	readonly secret: TokenSecret
+	/** Token lifetime in milliseconds; required so MCP never invents an expiry policy. */
+	readonly ttl: number
+	/** Resolve the authenticated principal for the call in hand. */
+	readonly principal: MCPPrincipalHandler
+	/** Decide whether the call needs a form elicitation, including on verified retries. */
+	readonly elicit: MCPInputHandler
 }
 
 /**
@@ -325,7 +522,10 @@ export type MCPServerEventMap = {
  * by `server/discover`. `cache` configures the modern cache stamps: `ttl` is the
  * freshness lifetime in milliseconds and `scope` defaults to `'private'`. `on`
  * is the §8 reserved key: initial listeners for the server's
- * {@link MCPServerEventMap}, wired at construction.
+ * {@link MCPServerEventMap}, wired at construction. `input` enables modern
+ * `tools/call` multi-round trips: the consumer decides when input is needed and
+ * supplies principal/signing/TTL policy, while MCP assigns the request key and
+ * owns the protected wire round trip.
  */
 export interface MCPServerOptions {
 	readonly on?: EmitterHooks<MCPServerEventMap>
@@ -341,6 +541,8 @@ export interface MCPServerOptions {
 		readonly ttl?: number
 		readonly scope?: 'public' | 'private'
 	}
+	/** Optional multi-round-trip input mechanism; all signing and expiry policy is consumer-supplied. */
+	readonly input?: MCPInputOptions
 	/** Optional event-driven producer for the modern `subscriptions/listen` method. */
 	readonly subscription?: MCPSubscriptionOptions
 }

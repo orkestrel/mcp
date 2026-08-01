@@ -276,11 +276,108 @@ const server = createMCPServer({
 server.methods.method('subscriptions/listen') // registered on the same modern seam
 ```
 
+### Produce a form elicitation for the call in hand
+
+Configure `input` only when a `tools/call` may need operator input. The
+consumer owns the decision, authenticated principal, HMAC secret/rotation,
+and TTL; MCP owns the protocol mechanism. It assigns an unpredictable map key,
+returns one form-mode `ElicitRequest`, signs the opaque `requestState`, and on
+retry verifies that state before giving the matching top-level
+`inputResponses` value back to the hook. Returning `undefined` from the hook
+continues into the ordinary live tool registry.
+
+```ts
+import {
+	isElicitPrimitiveSchema,
+	isElicitRequest,
+	isElicitRequestFormParams,
+	isElicitRequestURLParams,
+	isElicitResult,
+	isFormElicitationSupported,
+	isInputRequest,
+	isInputRequests,
+	isInputRequiredResult,
+	parseMCPInputState,
+	createMCPServer,
+} from '@orkestrel/mcp'
+import { signToken, verifyToken } from '@orkestrel/server'
+import { createTool, createToolManager } from '@orkestrel/tool'
+
+const tools = createToolManager()
+tools.add(createTool({ name: 'reply', execute: (arguments) => arguments }))
+
+const server = createMCPServer({
+	identity: { name: 'supervisor', version: '1.0.0' },
+	tools,
+	input: {
+		secret: ['current-secret', 'older-secret'],
+		ttl: 60_000,
+		principal: () => 'authenticated-user-42',
+		elicit: ({ response }) =>
+			response === undefined
+				? {
+						request: {
+							message: 'Approve this reply?',
+							requestedSchema: {
+								type: 'object',
+								properties: { approved: { type: 'boolean' } },
+								required: ['approved'],
+							},
+						},
+						state: 'run-42',
+					}
+				: undefined,
+	},
+})
+
+isFormElicitationSupported({ elicitation: {} }) // true: empty means form-only
+isFormElicitationSupported({ elicitation: { url: {} } }) // false
+isElicitPrimitiveSchema({ type: 'string', format: 'email' }) // true
+isElicitRequestFormParams({
+	message: 'Approve?',
+	requestedSchema: { type: 'object', properties: {} },
+}) // true
+isElicitRequestURLParams({ mode: 'url', message: 'Authenticate', url: 'https://example.test' })
+isElicitRequest({
+	method: 'elicitation/create',
+	params: { message: 'Approve?', requestedSchema: { type: 'object', properties: {} } },
+}) // true
+isInputRequest({ method: 'roots/list' }) // true: legal, deprecated, never produced here
+isInputRequests({ confirm: { method: 'roots/list' } }) // true: a keyed map, not an array
+isElicitResult({ action: 'accept', content: { approved: true } }) // true
+isInputRequiredResult({ resultType: 'input_required', requestState: 'opaque' }) // true
+
+// `MCPServer` calls these primitives directly. The parser runs only after HMAC verification.
+const token = await signToken(
+	JSON.stringify({
+		principal: 'authenticated-user-42',
+		ttl: 60_000,
+		origin: 1,
+		key: 'confirm',
+		name: 'reply',
+		state: 'run-42',
+	}),
+	{ secret: 'current-secret', ttl: 60_000 },
+)
+parseMCPInputState(await verifyToken(token, ['current-secret', 'older-secret']))
+
+server.methods.method('tools/call') // the MRTR-aware built-in remains on the one method seam
+```
+
+The retry uses a new JSON-RPC id and preserves the original `name` /
+`arguments`; `inputResponses` and the byte-exact `requestState` are top-level
+`params` siblings. A missing or URL-only elicitation declaration receives
+`-32021` with `{ requiredCapabilities: { elicitation: {} } }`. A malformed,
+mutated, expired, same-id, or cross-principal state receives `-32602`. The
+server produces `input_required` only from its built-in modern `tools/call`;
+the unimplemented legal carriers `prompts/get` and `resources/read` remain
+`-32601`, and the legacy branch is unchanged.
+
 ### Factories
 
 | API                           | Kind     | Summary                                                                                                                                                                                |
 | ----------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createMCPServer`             | function | Create an `MCPServerInterface` exposing tools plus an optional event-driven subscription source over JSON-RPC 2.0.                                                                     |
+| `createMCPServer`             | function | Create an `MCPServerInterface` exposing tools plus optional signed MRTR input and event-driven subscription mechanisms over JSON-RPC 2.0.                                              |
 | `createMCPClient`             | function | Create an `MCPClientInterface` that drives a REMOTE server over an injected transport and exposes its tools as local `ToolInterface`s.                                                 |
 | `createDuplexClientTransport` | function | Adapt an `MCPTransportInterface` into a `ClientTransportInterface` — the additive bridge letting `createMCPClient` run over the new environment-agnostic port; pair with `bindClient`. |
 
@@ -331,10 +428,20 @@ server.methods.method('subscriptions/listen') // registered on the same modern s
 | `isInitializeRequest`              | function | Total guard — a `JSONRPCRequest` whose `method` is `'initialize'`.                                                                                         |
 | `isMCPVersion`                     | function | Total guard — narrows a string to a supported `MCPVersion`.                                                                                                |
 | `isSubscriptionFilter`             | function | Total guard — validates the recognized fields of an open modern subscription filter.                                                                       |
+| `isFormElicitationSupported`       | function | Test whether client capabilities authorize form elicitation; an empty `elicitation` object means form-only.                                                |
+| `isElicitPrimitiveSchema`          | function | Total guard for one restricted primitive form-elicitation schema.                                                                                          |
+| `isElicitRequestFormParams`        | function | Total guard for restricted form-mode elicitation parameters.                                                                                               |
+| `isElicitRequestURLParams`         | function | Total guard for URL-mode elicitation parameters.                                                                                                           |
+| `isElicitRequest`                  | function | Total guard for an embedded `elicitation/create` request.                                                                                                  |
+| `isInputRequest`                   | function | Total guard for one legal elicitation, deprecated sampling, or deprecated roots input request.                                                             |
+| `isInputRequests`                  | function | Total guard for the server-keyed input-request map.                                                                                                        |
+| `isElicitResult`                   | function | Total guard for an elicitation action and its optional primitive form content.                                                                             |
+| `isInputRequiredResult`            | function | Total guard for `input_required`, including the runtime at-least-one-of rule.                                                                              |
 | `isModernRequest`                  | function | Total guard — modern iff `params._meta` carries the reserved protocol-version key.                                                                         |
 | `isMCPError`                       | function | Total guard — `true` only for a real `MCPError`.                                                                                                           |
 | `parseJSONRPCMessage`              | function | Narrow an already-parsed value to a `JSONRPCMessage`, or `undefined` (total; sound with `isJSONRPCMessage`).                                               |
 | `parseRequestContext`              | function | Coerce valid modern metadata to `MCPRequestContext`, or `undefined` for malformed required metadata.                                                       |
+| `parseMCPInputState`               | function | Parse an HMAC-verified request-state value into its principal/TTL/origin/key/tool/state bindings.                                                          |
 | `inferEra`                         | function | Map a supported revision to `modern` or `legacy`; unsupported revisions return `undefined`.                                                                |
 | `inferVersion`                     | function | Select the newest locally supported revision present in a peer's offer.                                                                                    |
 | `buildJSONRPCResult`               | function | Build a success `JSONRPCResponse` — the `id` echoed, the value as `result`.                                                                                |
@@ -366,6 +473,26 @@ server.methods.method('subscriptions/listen') // registered on the same modern s
 | `MCPEra`                              | type      | `'modern' \| 'legacy'` — the structural wire era.                                                                                                                                                                          |
 | `MCPContent`                          | interface | `{ type: 'text'; text: string }` — one content block of a tool-call result.                                                                                                                                                |
 | `MCPCallResult`                       | interface | `{ content; structuredContent?; isError?; resultType?; _meta? }` — a `tools/call` result with optional structured output and modern stamps.                                                                                |
+| `ElicitValue`                         | type      | Primitive form-response value: string, number, boolean, or a readonly string list.                                                                                                                                         |
+| `ElicitChoice`                        | interface | `{ const; title }` — one titled value in a form single- or multi-select schema.                                                                                                                                            |
+| `ElicitPrimitiveSchema`               | type      | Restricted boolean, numeric, string, single-select, or multi-select form schema.                                                                                                                                           |
+| `ElicitRequestedSchema`               | interface | Restricted top-level object schema for form elicitation.                                                                                                                                                                   |
+| `ElicitRequestFormParams`             | interface | `{ mode?: 'form'; message; requestedSchema }` — form-mode elicitation parameters.                                                                                                                                          |
+| `ElicitRequestURLParams`              | interface | `{ mode: 'url'; message; url }` — URL-mode elicitation parameters retained by the protocol shape but not produced here.                                                                                                    |
+| `ElicitRequestParams`                 | type      | `ElicitRequestFormParams \| ElicitRequestURLParams`.                                                                                                                                                                       |
+| `ElicitRequest`                       | interface | `{ method: 'elicitation/create'; params: ElicitRequestParams }` — one embedded elicitation request.                                                                                                                        |
+| `ElicitResult`                        | interface | `{ action: 'accept' \| 'decline' \| 'cancel'; content? }` — the client response to elicitation.                                                                                                                            |
+| `InputRequest`                        | type      | Legal embedded request union; MCP produces only `ElicitRequest`, while deprecated sampling/roots shapes remain legal.                                                                                                      |
+| `InputRequests`                       | type      | Readonly server-keyed map of `InputRequest` values.                                                                                                                                                                        |
+| `InputResponses`                      | type      | Readonly client-response map keyed by the corresponding server key.                                                                                                                                                        |
+| `InputRequiredResult`                 | type      | Two-arm `input_required` union enforcing at least one of `inputRequests` / `requestState`.                                                                                                                                 |
+| `CallToolResultResponse`              | interface | Successful `tools/call` response whose `result` remains `MCPCallResult \| InputRequiredResult`.                                                                                                                            |
+| `MCPInputState`                       | interface | HMAC-protected principal, TTL, originating id, server key, tool name, and optional consumer state.                                                                                                                         |
+| `MCPInputContext`                     | interface | Call-in-hand context given to the input hook, including a verified elicitation response/state on retry.                                                                                                                    |
+| `MCPElicitation`                      | interface | Consumer-requested form params plus optional opaque consumer state, before MCP assigns a key and signs it.                                                                                                                 |
+| `MCPInputHandler`                     | type      | `(context, options) => MCPElicitation \| undefined` (or a promise) — request operator input or continue to tool execution.                                                                                                 |
+| `MCPPrincipalHandler`                 | type      | `(request) => string` (or a promise) — derives the authenticated principal bound into protected state.                                                                                                                     |
+| `MCPInputOptions`                     | interface | `{ secret; ttl; principal; elicit }` — consumer policy for signed MRTR production and verification.                                                                                                                        |
 | `MCPListResult`                       | interface | `{ tools; resultType?; ttlMs?; cacheScope?; _meta? }` — a legacy or modern `tools/list` result.                                                                                                                            |
 | `MCPToolDescriptor`                   | interface | `{ name: string; description?: string; inputSchema: Record<string, unknown> }` — one `tools/list` entry.                                                                                                                   |
 | `MCPIdentity`                         | interface | `{ name: string; version: string }` — the identity echoed in the `initialize` result.                                                                                                                                      |
@@ -382,7 +509,7 @@ server.methods.method('subscriptions/listen') // registered on the same modern s
 | `MCPMethodHandler`                    | type      | `(request, options) => Promise<JSONRPCResponse \| MCPStream \| undefined>` — one modern method, registered on the seam that dispatches it.                                                                                 |
 | `MCPMethodManagerInterface`           | interface | The modern method registry — the `add` / `method` methods, carrying both the built-in methods and any method a consumer adds.                                                                                              |
 | `MCPServerEventMap`                   | type      | `{ request: [method, id, era]; error: [unknown] }` — the observation surface (`era` is selected structurally per request; `error` is a bound-transport fault).                                                             |
-| `MCPServerOptions`                    | interface | `{ on?; error?; identity; tools; instructions?; cache?; subscription? }` — options for `createMCPServer`.                                                                                                                  |
+| `MCPServerOptions`                    | interface | `{ on?; error?; identity; tools; instructions?; cache?; input?; subscription? }` — options for `createMCPServer`.                                                                                                          |
 | `MCPServerInterface`                  | interface | `emitter` / `identity` / `methods` data members + the `dispatch` / `handle` methods.                                                                                                                                       |
 | `MCPTransportInterface`               | interface | `{ send(message: string): void \| Promise<void>; listen(handler): void; closed(handler): void; close(): void \| Promise<void> }` — the environment-agnostic duplex message-channel port `bindServer` / `bindClient` drive. |
 | `ClientTransportEventMap`             | type      | `{ message: [JSONRPCMessage]; close: []; error: [unknown] }` — the transport events.                                                                                                                                       |

@@ -4,6 +4,7 @@ import {
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
 	MCP_META_VERSION,
+	parseMCPInputState,
 	parseJSONRPCMessage,
 	parseRequestContext,
 } from '@src/core'
@@ -165,5 +166,43 @@ describe('parseRequestContext', () => {
 		revoke()
 
 		expect(parseRequestContext(proxy)).toBeUndefined()
+	})
+})
+
+describe('parseMCPInputState', () => {
+	it('parses every replay-binding field and optional consumer state', () => {
+		expect(
+			parseMCPInputState(
+				JSON.stringify({
+					principal: 'operator-1',
+					ttl: 1_000,
+					origin: 7,
+					key: 'confirm',
+					name: 'reply',
+					state: 'run-42',
+				}),
+			),
+		).toEqual({
+			principal: 'operator-1',
+			ttl: 1_000,
+			origin: 7,
+			key: 'confirm',
+			name: 'reply',
+			state: 'run-42',
+		})
+	})
+
+	it('rejects malformed JSON and every missing or mistyped binding', () => {
+		const invalid: readonly unknown[] = [
+			'not-json',
+			JSON.stringify({ ttl: 1, origin: 1, key: 'k', name: 'reply' }),
+			JSON.stringify({ principal: 'p', ttl: '1', origin: 1, key: 'k', name: 'reply' }),
+			JSON.stringify({ principal: 'p', ttl: 1, origin: null, key: 'k', name: 'reply' }),
+			JSON.stringify({ principal: 'p', ttl: 1, origin: 1, key: 2, name: 'reply' }),
+			JSON.stringify({ principal: 'p', ttl: 1, origin: 1, key: 'k', name: 'reply', state: {} }),
+			null,
+		]
+
+		expect(invalid.map((value) => parseMCPInputState(value))).toEqual(invalid.map(() => undefined))
 	})
 })

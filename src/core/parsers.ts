@@ -1,5 +1,5 @@
-import type { JSONRPCMessage, MCPRequestContext } from './types.js'
-import { isRecord, isString } from '@orkestrel/contract'
+import type { JSONRPCMessage, MCPInputState, MCPRequestContext } from './types.js'
+import { isNumber, isRecord, isString, isUndefined } from '@orkestrel/contract'
 import { MCP_META_CAPABILITIES, MCP_META_CLIENT, MCP_META_VERSION } from './constants.js'
 import { isJSONRPCMessage, isModernRequest } from './validators.js'
 
@@ -60,6 +60,53 @@ export function parseRequestContext(value: unknown): MCPRequestContext | undefin
 			version,
 			capabilities,
 			identity: { name, version: clientVersion },
+		}
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * Parse the verified value embedded in an opaque signed `requestState` token.
+ *
+ * @remarks
+ * This parser does not verify the HMAC; {@link import('@orkestrel/server').verifyToken}
+ * performs that boundary first and returns the JSON string parsed here. The protected
+ * payload binds the authenticated principal, token lifetime, originating request id,
+ * server-assigned input key, tool name, and optional consumer state. Total over malformed
+ * or hostile input.
+ *
+ * @param value - The HMAC-verified token value to parse
+ * @returns The protected input state, or `undefined` when malformed
+ *
+ * @example
+ * ```ts
+ * parseMCPInputState('{"principal":"user-1","ttl":1000,"origin":1,"key":"k","name":"reply"}')
+ * // { principal: 'user-1', ttl: 1000, origin: 1, key: 'k', name: 'reply' }
+ * ```
+ */
+export function parseMCPInputState(value: unknown): MCPInputState | undefined {
+	try {
+		if (!isString(value)) return undefined
+		const parsed: unknown = JSON.parse(value)
+		if (!isRecord(parsed)) return undefined
+		const principal = parsed['principal']
+		const ttl = parsed['ttl']
+		const origin = parsed['origin']
+		const key = parsed['key']
+		const name = parsed['name']
+		const state = parsed['state']
+		if (!isString(principal) || !isNumber(ttl) || !Number.isFinite(ttl)) return undefined
+		if (!isString(origin) && !isNumber(origin)) return undefined
+		if (!isString(key) || !isString(name)) return undefined
+		if (!isUndefined(state) && !isString(state)) return undefined
+		return {
+			principal,
+			ttl,
+			origin,
+			key,
+			name,
+			...(isString(state) ? { state } : {}),
 		}
 	} catch {
 		return undefined

@@ -2,6 +2,7 @@ import type { EmitterInterface } from '@orkestrel/emitter'
 import type {
 	JSONRPCRequest,
 	JSONRPCResponse,
+	MCPElicitation,
 	MCPCallResult,
 	MCPDispatchOptions,
 	MCPIdentity,
@@ -15,12 +16,15 @@ import type {
 } from './types.js'
 import { Emitter } from '@orkestrel/emitter'
 import { isRecord, isString } from '@orkestrel/contract'
+import { signToken, verifyToken } from '@orkestrel/server'
 import {
 	DEFAULT_MCP_CACHE_TTL,
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_INVALID_REQUEST,
 	JSONRPC_METHOD_NOT_FOUND,
 	JSONRPC_PARSE_ERROR,
+	MCP_META_SERVER,
+	MCP_MISSING_CAPABILITY,
 	MCP_UNSUPPORTED_VERSION,
 	SUPPORTED_PROTOCOL_VERSIONS,
 } from './constants.js'
@@ -41,8 +45,14 @@ import {
 } from './helpers.js'
 import { inferEra } from './inferers.js'
 import { MCPMethodManager } from './MCPMethodManager.js'
-import { parseJSONRPCMessage, parseRequestContext } from './parsers.js'
-import { isModernRequest, isSubscriptionFilter } from './validators.js'
+import { parseJSONRPCMessage, parseMCPInputState, parseRequestContext } from './parsers.js'
+import {
+	isElicitRequestFormParams,
+	isElicitResult,
+	isFormElicitationSupported,
+	isModernRequest,
+	isSubscriptionFilter,
+} from './validators.js'
 
 /**
  * A transport-agnostic Model Context Protocol server — dispatches JSON-RPC 2.0
@@ -184,7 +194,7 @@ export class MCPServer implements MCPServerInterface {
 	#register(): void {
 		this.#methods.add('server/discover', (request) => this.#discover(request))
 		this.#methods.add('tools/list', (request) => this.#list(request))
-		this.#methods.add('tools/call', (request) => this.#call(request))
+		this.#methods.add('tools/call', (request, options) => this.#call(request, options))
 		this.#methods.add('subscriptions/listen', (request, options) =>
 			this.#subscribe(request, options),
 		)
@@ -239,12 +249,151 @@ export class MCPServer implements MCPServerInterface {
 
 	// The built-in modern `tools/call` handler — stamped, and NOT cacheable, so it
 	// carries no cache fields.
-	async #call(request: JSONRPCRequest): Promise<JSONRPCResponse> {
+	async #call(request: JSONRPCRequest, options: MCPDispatchOptions = {}): Promise<JSONRPCResponse> {
 		const id = request.id ?? null
+		const input = await this.#input(request, options)
+		if (input !== undefined) return input
 		const result = await this.#runTool(request, id)
 		return 'jsonrpc' in result
 			? result
 			: buildJSONRPCResult(id, buildModernResult(result, this.#options.identity))
+	}
+
+	// The built-in modern `tools/call` input mechanism. It is deliberately reachable
+	// only from `#call`: the other modern handlers cannot produce `input_required`.
+	async #input(
+		request: JSONRPCRequest,
+		options: MCPDispatchOptions,
+	): Promise<JSONRPCResponse | undefined> {
+		const configured = this.#options.input
+		if (configured === undefined) return undefined
+		const id = request.id
+		if (id === undefined) return undefined
+		const params = request.params
+		const name = params?.['name']
+		if (!isString(name)) return undefined
+		const rawArguments = params?.['arguments']
+		const args = isRecord(rawArguments) ? rawArguments : {}
+		const requestState = params?.['requestState']
+		const inputResponses = params?.['inputResponses']
+		if (requestState === undefined && inputResponses === undefined) {
+			const elicitation = await configured.elicit({ request, name, arguments: args }, options)
+			if (elicitation === undefined) return undefined
+			const principal = await configured.principal(request)
+			return this.#required(request, name, elicitation, principal)
+		}
+		if (!isString(requestState) || !isRecord(inputResponses)) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: `inputResponses` and `requestState` are required together',
+			)
+		}
+		const verified = await verifyToken(requestState, configured.secret)
+		const state = parseMCPInputState(verified)
+		const principal = await configured.principal(request)
+		if (
+			state === undefined ||
+			state.principal !== principal ||
+			state.ttl !== configured.ttl ||
+			state.origin === id ||
+			state.name !== name ||
+			!Object.hasOwn(inputResponses, state.key)
+		) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: request state could not be verified for this retry',
+			)
+		}
+		const response = inputResponses[state.key]
+		if (!isElicitResult(response)) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: the elicitation response is missing or malformed',
+			)
+		}
+		const elicitation = await configured.elicit(
+			{
+				request,
+				name,
+				arguments: args,
+				response,
+				...(state.state !== undefined ? { state: state.state } : {}),
+			},
+			options,
+		)
+		return elicitation === undefined
+			? undefined
+			: this.#required(request, name, elicitation, principal)
+	}
+
+	// Build one form-mode round and seal the call-in-hand state. The random map key is
+	// minted here, never accepted from the consumer, and is carried inside the HMAC payload.
+	async #required(
+		request: JSONRPCRequest,
+		name: string,
+		elicitation: MCPElicitation,
+		principal: string,
+	): Promise<JSONRPCResponse> {
+		const id = request.id
+		if (id === undefined) {
+			return buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request')
+		}
+		const context = parseRequestContext(request)
+		if (context === undefined || !isFormElicitationSupported(context.capabilities)) {
+			return buildJSONRPCError(
+				id,
+				MCP_MISSING_CAPABILITY,
+				'Server requires the elicitation capability for this request',
+				{ requiredCapabilities: { elicitation: {} } },
+			)
+		}
+		if (
+			!isElicitRequestFormParams(elicitation.request) ||
+			principal.length === 0 ||
+			!Number.isFinite(this.#options.input?.ttl) ||
+			(this.#options.input?.ttl ?? 0) <= 0
+		) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: elicitation policy returned an invalid form or signing context',
+			)
+		}
+		const configured = this.#options.input
+		if (configured === undefined) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: input is not configured',
+			)
+		}
+		const key = crypto.randomUUID()
+		const protectedState = JSON.stringify({
+			principal,
+			ttl: configured.ttl,
+			origin: id,
+			key,
+			name,
+			...(elicitation.state !== undefined ? { state: elicitation.state } : {}),
+		})
+		const requestState = await signToken(protectedState, {
+			secret: configured.secret,
+			ttl: configured.ttl,
+		})
+		return buildJSONRPCResult(id, {
+			resultType: 'input_required',
+			inputRequests: {
+				[key]: {
+					method: 'elicitation/create',
+					params: { ...elicitation.request, mode: 'form' },
+				},
+			},
+			requestState,
+			_meta: { [MCP_META_SERVER]: this.#options.identity },
+		})
 	}
 
 	// The built-in modern `subscriptions/listen` handler validates the client's filter,

@@ -1,5 +1,11 @@
 import {
+	isElicitRequest,
+	isElicitPrimitiveSchema,
+	isElicitResult,
+	isFormElicitationSupported,
 	isInitializeRequest,
+	isInputRequests,
+	isInputRequiredResult,
 	isJSONRPCMessage,
 	isJSONRPCRequest,
 	isJSONRPCResponse,
@@ -86,6 +92,126 @@ describe('isSubscriptionFilter', () => {
 		const { proxy, revoke } = Proxy.revocable({}, {})
 		revoke()
 		expect(isSubscriptionFilter(proxy)).toBe(false)
+	})
+})
+
+describe('multi-round-trip validators', () => {
+	it('recognizes implicit and explicit form capabilities but not URL-only support', () => {
+		expect(isFormElicitationSupported({ elicitation: {} })).toBe(true)
+		expect(isFormElicitationSupported({ elicitation: { form: {} } })).toBe(true)
+		expect(isFormElicitationSupported({ elicitation: { form: {}, url: {} } })).toBe(true)
+		expect(isFormElicitationSupported({ elicitation: { url: {} } })).toBe(false)
+		expect(isFormElicitationSupported({ elicitation: { extension: {} } })).toBe(false)
+		expect(isFormElicitationSupported({})).toBe(false)
+	})
+
+	it('validates every restricted primitive elicitation schema family', () => {
+		for (const schema of [
+			{ type: 'boolean', default: true },
+			{ type: 'number', minimum: 0, maximum: 5, default: 2 },
+			{ type: 'integer', minimum: 1 },
+			{ type: 'string', format: 'email', minLength: 3 },
+			{ type: 'string', oneOf: [{ const: 'yes', title: 'Yes' }] },
+			{ type: 'array', items: { type: 'string', enum: ['one'] }, default: ['one'] },
+			{ type: 'array', items: { anyOf: [{ const: 'one', title: 'One' }] } },
+		]) {
+			expect(isElicitPrimitiveSchema(schema)).toBe(true)
+		}
+		expect(isElicitPrimitiveSchema({ type: 'object' })).toBe(false)
+		expect(isElicitPrimitiveSchema({ type: 'string', format: 'phone' })).toBe(false)
+		expect(isElicitPrimitiveSchema({ type: 'array', items: { type: 'string' } })).toBe(false)
+		expect(isElicitPrimitiveSchema({ type: 'array', items: { anyOf: [{ const: 1 }] } })).toBe(false)
+	})
+
+	it('validates both elicitation modes while retaining deprecated legal input union members', () => {
+		expect(
+			isElicitRequest({
+				method: 'elicitation/create',
+				params: {
+					message: 'Approve?',
+					requestedSchema: {
+						type: 'object',
+						properties: { approved: { type: 'boolean' } },
+						required: ['approved'],
+					},
+				},
+			}),
+		).toBe(true)
+		expect(
+			isElicitRequest({
+				method: 'elicitation/create',
+				params: {
+					message: 'Approve?',
+					requestedSchema: {
+						type: 'object',
+						properties: { approved: { type: 'object' } },
+					},
+				},
+			}),
+		).toBe(false)
+		expect(
+			isElicitRequest({
+				method: 'elicitation/create',
+				params: { mode: 'url', message: 'Authenticate', url: 'https://example.test' },
+			}),
+		).toBe(true)
+		expect(
+			isInputRequests({
+				sample: { method: 'sampling/createMessage', params: {} },
+				roots: { method: 'roots/list' },
+			}),
+		).toBe(true)
+	})
+
+	it('accepts only keyed request maps and enforces input-required at-least-one-of', () => {
+		const requests = {
+			confirm: {
+				method: 'elicitation/create',
+				params: {
+					mode: 'form',
+					message: 'Approve?',
+					requestedSchema: { type: 'object', properties: {} },
+				},
+			},
+		}
+
+		expect(isInputRequests(requests)).toBe(true)
+		expect(isInputRequests([requests.confirm])).toBe(false)
+		expect(isInputRequiredResult({ resultType: 'input_required', inputRequests: requests })).toBe(
+			true,
+		)
+		expect(
+			isInputRequiredResult({
+				resultType: 'input_required',
+				inputRequests: requests,
+				requestState: 'opaque',
+			}),
+		).toBe(true)
+		expect(isInputRequiredResult({ resultType: 'input_required', requestState: 'opaque' })).toBe(
+			true,
+		)
+		expect(isInputRequiredResult({ resultType: 'input_required' })).toBe(false)
+		expect(
+			isInputRequiredResult({ resultType: 'input_required', inputRequests: [requests.confirm] }),
+		).toBe(false)
+	})
+
+	it('validates elicitation result values and remains total over hostile input', () => {
+		expect(
+			isElicitResult({
+				action: 'accept',
+				content: { approved: true, count: 2, tags: ['one', 'two'] },
+			}),
+		).toBe(true)
+		expect(isElicitResult({ action: 'decline' })).toBe(true)
+		expect(isElicitResult({ action: 'accept', content: { nested: {} } })).toBe(false)
+		expect(isElicitResult({ action: 'unknown' })).toBe(false)
+
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(isFormElicitationSupported(proxy)).toBe(false)
+		expect(isInputRequests(proxy)).toBe(false)
+		expect(isInputRequiredResult(proxy)).toBe(false)
 	})
 })
 
