@@ -6,6 +6,7 @@ import type {
 	MCPCallResult,
 	MCPDispatchOptions,
 	MCPIdentity,
+	MCPLimitOptions,
 	MCPMethodManagerInterface,
 	MCPServerEventMap,
 	MCPServerInterface,
@@ -15,14 +16,16 @@ import type {
 	SubscriptionFilter,
 } from './types.js'
 import { Emitter } from '@orkestrel/emitter'
-import { isRecord, isString } from '@orkestrel/contract'
+import { attempt, isRecord, isString, sanitizeBudget } from '@orkestrel/contract'
 import { signToken, verifyToken } from '@orkestrel/server'
 import {
 	DEFAULT_MCP_CACHE_TTL,
+	DEFAULT_MCP_LIMITS,
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_INVALID_REQUEST,
 	JSONRPC_METHOD_NOT_FOUND,
 	JSONRPC_PARSE_ERROR,
+	JSONRPC_SERVER_ERROR,
 	MCP_META_SERVER,
 	MCP_MISSING_CAPABILITY,
 	MCP_UNSUPPORTED_VERSION,
@@ -49,6 +52,8 @@ import { parseJSONRPCMessage, parseMCPInputState, parseRequestContext } from './
 import {
 	isElicitRequestFormParams,
 	isElicitResult,
+	isBoundedJSON,
+	isBoundedString,
 	isFormElicitationSupported,
 	isModernRequest,
 	isSubscriptionFilter,
@@ -92,6 +97,8 @@ export class MCPServer implements MCPServerInterface {
 	readonly #emitter: Emitter<MCPServerEventMap>
 	readonly #options: MCPServerOptions
 	readonly #methods: MCPMethodManager
+	readonly #limits: Required<MCPLimitOptions>
+	#subscriptions = 0
 
 	constructor(options: MCPServerOptions) {
 		this.#emitter = new Emitter<MCPServerEventMap>({
@@ -99,6 +106,15 @@ export class MCPServer implements MCPServerInterface {
 			...(options.error !== undefined ? { error: options.error } : {}),
 		})
 		this.#options = options
+		this.#limits = {
+			message: sanitizeBudget(options.limit?.message, DEFAULT_MCP_LIMITS.message),
+			metadata: sanitizeBudget(options.limit?.metadata, DEFAULT_MCP_LIMITS.metadata),
+			keys: sanitizeBudget(options.limit?.keys, DEFAULT_MCP_LIMITS.keys),
+			state: sanitizeBudget(options.limit?.state, DEFAULT_MCP_LIMITS.state),
+			content: sanitizeBudget(options.limit?.content, DEFAULT_MCP_LIMITS.content),
+			subscriptions: sanitizeBudget(options.limit?.subscriptions, DEFAULT_MCP_LIMITS.subscriptions),
+			depth: sanitizeBudget(options.limit?.depth, DEFAULT_MCP_LIMITS.depth),
+		}
 		this.#methods = new MCPMethodManager()
 		this.#register()
 	}
@@ -131,6 +147,21 @@ export class MCPServer implements MCPServerInterface {
 		if (request.id === undefined) {
 			return undefined
 		}
+		const metadata = request.params?.['_meta']
+		if (
+			metadata !== undefined &&
+			!isBoundedJSON(metadata, {
+				bytes: this.#limits.metadata,
+				keys: this.#limits.keys,
+				depth: this.#limits.depth,
+			})
+		) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: `_meta` exceeds the configured limit or contains an unsafe value',
+			)
+		}
 		return modern ? this.#modern(request, id, options) : this.#legacy(request, id)
 	}
 
@@ -138,6 +169,9 @@ export class MCPServer implements MCPServerInterface {
 		message: string,
 		options?: MCPDispatchOptions,
 	): Promise<string | MCPTextStream | undefined> {
+		if (!isBoundedString(message, this.#limits.message)) {
+			return JSON.stringify(buildJSONRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'))
+		}
 		let parsed: unknown
 		try {
 			parsed = JSON.parse(message)
@@ -282,7 +316,7 @@ export class MCPServer implements MCPServerInterface {
 			const principal = await configured.principal(request)
 			return this.#required(request, name, elicitation, principal)
 		}
-		if (!isString(requestState) || !isRecord(inputResponses)) {
+		if (!isBoundedString(requestState, this.#limits.state) || !isRecord(inputResponses)) {
 			return buildJSONRPCError(
 				id,
 				JSONRPC_INVALID_PARAMS,
@@ -371,18 +405,37 @@ export class MCPServer implements MCPServerInterface {
 			)
 		}
 		const key = crypto.randomUUID()
-		const protectedState = JSON.stringify({
+		const protectedState = {
 			principal,
 			ttl: configured.ttl,
 			origin: id,
 			key,
 			name,
 			...(elicitation.state !== undefined ? { state: elicitation.state } : {}),
-		})
-		const requestState = await signToken(protectedState, {
+		}
+		if (
+			!isBoundedJSON(protectedState, {
+				bytes: this.#limits.state,
+				depth: this.#limits.depth,
+			})
+		) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: request state exceeds the configured limit',
+			)
+		}
+		const requestState = await signToken(JSON.stringify(protectedState), {
 			secret: configured.secret,
 			ttl: configured.ttl,
 		})
+		if (!isBoundedString(requestState, this.#limits.state)) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: request state exceeds the configured limit',
+			)
+		}
 		return buildJSONRPCResult(id, {
 			resultType: 'input_required',
 			inputRequests: {
@@ -422,18 +475,30 @@ export class MCPServer implements MCPServerInterface {
 		id: string | number,
 		options: MCPDispatchOptions,
 	): MCPStream {
-		const configured = this.#options.subscription
-		const notifications = buildSubscriptionFilter(requested, configured?.notifications ?? {})
-		yield buildSubscriptionAcknowledgement(notifications, id)
-		if (configured !== undefined) {
-			const source = await configured.listen(notifications, options)
-			for await (const notification of source) {
-				if (matchesSubscriptionNotification(notification, notifications)) {
-					yield stampSubscriptionNotification(notification, id)
+		if (this.#subscriptions >= this.#limits.subscriptions) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_SERVER_ERROR,
+				'Server limit reached: too many live subscriptions',
+			)
+		}
+		this.#subscriptions += 1
+		try {
+			const configured = this.#options.subscription
+			const notifications = buildSubscriptionFilter(requested, configured?.notifications ?? {})
+			yield buildSubscriptionAcknowledgement(notifications, id)
+			if (configured !== undefined) {
+				const source = await configured.listen(notifications, options)
+				for await (const notification of source) {
+					if (matchesSubscriptionNotification(notification, notifications)) {
+						yield stampSubscriptionNotification(notification, id)
+					}
 				}
 			}
+			return buildSubscriptionResult(id, this.#options.identity)
+		} finally {
+			this.#subscriptions -= 1
 		}
-		return buildSubscriptionResult(id, this.#options.identity)
 	}
 
 	// Run a `tools/call`: narrow `params.name` (string) + `params.arguments` (record,
@@ -457,6 +522,30 @@ export class MCPServer implements MCPServerInterface {
 		const args = isRecord(rawArguments) ? rawArguments : {}
 		const callId = request.id === undefined ? crypto.randomUUID() : String(request.id)
 		const result = await this.#options.tools.execute({ id: callId, name, arguments: args })
-		return buildCallResult(result)
+		if (!result.success && !isBoundedString(result.error, this.#limits.content)) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_SERVER_ERROR,
+				'Server limit exceeded: tool content is too large',
+			)
+		}
+		if (
+			result.success &&
+			result.value !== undefined &&
+			!isBoundedJSON(result.value, {
+				bytes: this.#limits.content,
+				depth: this.#limits.depth,
+			})
+		) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_SERVER_ERROR,
+				'Server limit exceeded: tool content is too large or unsafe',
+			)
+		}
+		const built = attempt(() => buildCallResult(result))
+		return built.success
+			? built.value
+			: buildJSONRPCError(id, JSONRPC_SERVER_ERROR, 'Server could not serialize tool content')
 	}
 }

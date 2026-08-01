@@ -508,6 +508,34 @@ export type MCPServerEventMap = {
 	readonly error: readonly [error: unknown]
 }
 
+/** Configurable hostile-input and live-resource bounds for an MCP server. */
+export interface MCPLimitOptions {
+	/** Maximum UTF-8 bytes accepted by the raw string boundary. */
+	readonly message?: number
+	/** Maximum serialized UTF-8 bytes accepted in one `_meta` value. */
+	readonly metadata?: number
+	/** Maximum total enumerable keys accepted across one `_meta` value. */
+	readonly keys?: number
+	/** Maximum UTF-8 bytes accepted in one protected `requestState`. */
+	readonly state?: number
+	/** Maximum serialized UTF-8 bytes accepted from one produced tool content value. */
+	readonly content?: number
+	/** Maximum simultaneously live built-in subscription streams. */
+	readonly subscriptions?: number
+	/** Maximum nesting depth accepted by bounded JSON values. */
+	readonly depth?: number
+}
+
+/** Limits applied by {@link isBoundedJSON} to one JSON value. */
+export interface MCPJSONLimitOptions {
+	/** Maximum serialized UTF-8 bytes. */
+	readonly bytes: number
+	/** Maximum total enumerable keys; omitted when bytes alone bound breadth. */
+	readonly keys?: number
+	/** Maximum array/object nesting depth. */
+	readonly depth: number
+}
+
 /**
  * Options for `createMCPServer` — the server {@link MCPIdentity}, the live
  * {@link ToolManagerInterface} it exposes, optional `instructions`, and the
@@ -525,7 +553,8 @@ export type MCPServerEventMap = {
  * {@link MCPServerEventMap}, wired at construction. `input` enables modern
  * `tools/call` multi-round trips: the consumer decides when input is needed and
  * supplies principal/signing/TTL policy, while MCP assigns the request key and
- * owns the protected wire round trip.
+ * owns the protected wire round trip. `limit` configures the server's hostile-input
+ * and live-subscription bounds; every omitted leaf uses {@link DEFAULT_MCP_LIMITS}.
  */
 export interface MCPServerOptions {
 	readonly on?: EmitterHooks<MCPServerEventMap>
@@ -545,6 +574,8 @@ export interface MCPServerOptions {
 	readonly input?: MCPInputOptions
 	/** Optional event-driven producer for the modern `subscriptions/listen` method. */
 	readonly subscription?: MCPSubscriptionOptions
+	/** Hostile-input and live-resource bounds; omitted leaves use secure defaults. */
+	readonly limit?: MCPLimitOptions
 }
 
 /**

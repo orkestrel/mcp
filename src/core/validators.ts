@@ -1,3 +1,4 @@
+import type { JSONValue } from '@orkestrel/contract'
 import type {
 	ElicitRequest,
 	ElicitRequestFormParams,
@@ -10,17 +11,182 @@ import type {
 	JSONRPCMessage,
 	JSONRPCRequest,
 	JSONRPCResponse,
+	MCPJSONLimitOptions,
 	MCPVersion,
 	SubscriptionFilter,
 } from './types.js'
-import { arrayOf, isBoolean, isNumber, isRecord, isString, isUndefined } from '@orkestrel/contract'
+import {
+	arrayOf,
+	attempt,
+	enumerableKeys,
+	isBoolean,
+	isNumber,
+	isRecord,
+	isString,
+	isUndefined,
+	sanitizeBudget,
+} from '@orkestrel/contract'
 import { MCP_META_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
 
 // AGENTS §14: every guard here is a TOTAL function over the already-`JSON.parse`d
 // value — adversarial input returns `false`, never throws. The raw-string
 // `JSON.parse` (which CAN throw) happens in `MCPServer.handle` inside a try/catch;
-// these guards only ever see a parsed `unknown`. Each is a flat structural test on
-// `isRecord` + field checks (no user callbacks), so totality is immediate.
+// these guards only ever see a parsed `unknown`. Recursive structure is walked
+// iteratively with explicit ancestor/depth bounds, and callback-capable boundaries use
+// `attempt`, so totality is preserved without relying on the JavaScript call stack.
+
+/**
+ * Determine whether a value is a string within a UTF-8 byte bound.
+ *
+ * @param value - The unknown value to inspect
+ * @param bytes - The maximum accepted encoded bytes
+ * @returns `true` only for a string whose UTF-8 representation fits the bound
+ *
+ * @example
+ * ```ts
+ * isBoundedString('€', 3) // true
+ * isBoundedString('€', 2) // false
+ * ```
+ */
+export function isBoundedString(value: unknown, bytes: number): value is string {
+	if (!isString(value) || !Number.isFinite(bytes) || !Number.isInteger(bytes) || bytes < 0) {
+		return false
+	}
+	let measured = 0
+	for (let index = 0; index < value.length; index += 1) {
+		const code = value.charCodeAt(index)
+		if (code <= 0x7f) measured += 1
+		else if (code <= 0x7ff) measured += 2
+		else if (code >= 0xd800 && code <= 0xdbff) {
+			const next = value.charCodeAt(index + 1)
+			if (next >= 0xdc00 && next <= 0xdfff) {
+				measured += 4
+				index += 1
+			} else measured += 3
+		} else measured += 3
+		if (measured > bytes) return false
+	}
+	return true
+}
+
+/**
+ * Determine whether a value is bounded, cycle-free JSON with safe property names.
+ *
+ * @remarks
+ * Traversal is iterative, ancestor-aware, and contained by {@link attempt}; deep input,
+ * cycles, accessors, hostile proxies, `Map`/`Set`, and the prototype-pollution keys
+ * `__proto__`, `constructor`, and `prototype` return `false` rather than throwing.
+ * The byte count matches `JSON.stringify` without first allocating the serialization.
+ *
+ * @param value - The unknown value to inspect
+ * @param limits - Serialized byte, optional key, and nesting-depth bounds
+ * @returns `true` only for safe JSON satisfying every bound
+ *
+ * @example
+ * ```ts
+ * isBoundedJSON({ ok: true }, { bytes: 16, keys: 1, depth: 1 }) // true
+ * ```
+ */
+export function isBoundedJSON<T>(value: T, limits: MCPJSONLimitOptions): value is T & JSONValue {
+	const outcome = attempt(() => {
+		const limit = sanitizeBudget(limits.bytes, 0)
+		const depth = sanitizeBudget(limits.depth, 0)
+		const breadth = limits.keys === undefined ? undefined : sanitizeBudget(limits.keys, 0)
+		let bytes = 0
+		let keys = 0
+		const ancestors = new WeakSet<object>()
+		const pending: { value: unknown; depth: number; closing: boolean }[] = [
+			{ value, depth: 0, closing: false },
+		]
+		while (pending.length > 0) {
+			const frame = pending.pop()
+			if (frame === undefined) return false
+			const entry = frame.value
+			if (frame.closing) {
+				if (typeof entry !== 'object' || entry === null) return false
+				ancestors.delete(entry)
+				continue
+			}
+			if (frame.depth > depth) return false
+			if (entry === null) bytes += 4
+			else if (isBoolean(entry)) bytes += entry ? 4 : 5
+			// A non-finite number is still serializable: `JSON.stringify` writes `NaN` and
+			// ±`Infinity` as `null`, so they cost four bytes rather than being rejected. Only
+			// `undefined` is genuinely absent from JSON, and it stays rejected below.
+			else if (isNumber(entry)) bytes += Number.isFinite(entry) ? String(entry).length : 4
+			else if (isString(entry)) {
+				bytes += 2
+				if (bytes > limit) return false
+				for (let index = 0; index < entry.length; index += 1) {
+					const code = entry.charCodeAt(index)
+					if (
+						code === 0x22 ||
+						code === 0x5c ||
+						code === 0x08 ||
+						code === 0x09 ||
+						code === 0x0a ||
+						code === 0x0c ||
+						code === 0x0d
+					) {
+						bytes += 2
+					} else if (code <= 0x1f) bytes += 6
+					else if (code <= 0x7f) bytes += 1
+					else if (code <= 0x7ff) bytes += 2
+					else if (code >= 0xd800 && code <= 0xdbff) {
+						const next = entry.charCodeAt(index + 1)
+						if (next >= 0xdc00 && next <= 0xdfff) {
+							bytes += 4
+							index += 1
+						} else bytes += 6
+					} else if (code >= 0xdc00 && code <= 0xdfff) bytes += 6
+					else bytes += 3
+					if (bytes > limit) return false
+				}
+				continue
+			} else if (typeof entry === 'object') {
+				if (ancestors.has(entry)) return false
+				const names = enumerableKeys(entry)
+				if (names === undefined) return false
+				for (const name of names) {
+					if (name === '__proto__' || name === 'constructor' || name === 'prototype') {
+						return false
+					}
+				}
+				if (Array.isArray(entry)) {
+					bytes += 2 + Math.max(0, entry.length - 1)
+					if (bytes > limit || names.length !== entry.length) return false
+					ancestors.add(entry)
+					pending.push({ value: entry, depth: frame.depth, closing: true })
+					for (let index = entry.length - 1; index >= 0; index -= 1) {
+						const descriptor = Object.getOwnPropertyDescriptor(entry, String(index))
+						if (descriptor === undefined || !Object.hasOwn(descriptor, 'value')) return false
+						pending.push({ value: descriptor.value, depth: frame.depth + 1, closing: false })
+					}
+					continue
+				}
+				if (!isRecord(entry)) return false
+				keys += names.length
+				if (breadth !== undefined && keys > breadth) return false
+				bytes += 2 + Math.max(0, names.length - 1) + names.length
+				if (bytes > limit) return false
+				ancestors.add(entry)
+				pending.push({ value: entry, depth: frame.depth, closing: true })
+				for (let index = names.length - 1; index >= 0; index -= 1) {
+					const name = names[index]
+					if (name === undefined) return false
+					const descriptor = Object.getOwnPropertyDescriptor(entry, name)
+					if (descriptor === undefined || !Object.hasOwn(descriptor, 'value')) return false
+					pending.push({ value: descriptor.value, depth: frame.depth + 1, closing: false })
+					pending.push({ value: name, depth: frame.depth, closing: false })
+				}
+				continue
+			} else return false
+			if (bytes > limit) return false
+		}
+		return bytes <= limit
+	})
+	return outcome.success && outcome.value
+}
 
 /**
  * Determine whether a value is a valid JSON-RPC REQUEST `id` — a string, a number,

@@ -13,10 +13,12 @@ import {
 	buildJSONRPCResult,
 	createMCPServer,
 	DEFAULT_MCP_CACHE_TTL,
+	DEFAULT_MCP_LIMITS,
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_INVALID_REQUEST,
 	JSONRPC_METHOD_NOT_FOUND,
 	JSONRPC_PARSE_ERROR,
+	JSONRPC_SERVER_ERROR,
 	isInputRequiredResult,
 	MCP_META_CAPABILITIES,
 	MCP_META_SERVER,
@@ -29,6 +31,7 @@ import {
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
+import { createHostilePeer } from '../../fixtures/hostilePeer.js'
 import {
 	createErrorRecorder,
 	createJSONRPCNotification,
@@ -174,6 +177,276 @@ function resultOf(response: JSONRPCResponse | undefined): Record<string, unknown
 	for (const [key, value] of Object.entries(result)) record[key] = value
 	return record
 }
+
+describe('MCPServer — hostile-input and live-resource limits over the wire', () => {
+	it('publishes frozen secure defaults sized for ordinary MCP traffic', () => {
+		expect(DEFAULT_MCP_LIMITS).toEqual({
+			message: 1_048_576,
+			metadata: 16_384,
+			keys: 64,
+			state: 16_384,
+			content: 4_194_304,
+			subscriptions: 128,
+			depth: 32,
+		})
+		expect(Object.isFrozen(DEFAULT_MCP_LIMITS)).toBe(true)
+	})
+
+	it('rejects an oversized valid wire message as -32700 before parsing it', async () => {
+		const mcp = createMCPServer({
+			identity: { name: 'bounded', version: '1.0.0' },
+			tools: tools(),
+			limit: { message: 32 },
+		})
+		const peer = createHostilePeer(mcp)
+
+		await peer.send('{"jsonrpc":"2.0","method":"ping","id":1}')
+
+		expect(peer.response()?.error?.code).toBe(JSONRPC_PARSE_ERROR)
+		peer.close()
+	})
+
+	it('accepts absent metadata and rejects its byte and key bounds as -32602', async () => {
+		const absentServer = createMCPServer({
+			identity: { name: 'bounded', version: '1.0.0' },
+			tools: tools(),
+			limit: { metadata: 0 },
+		})
+		const absent = responseOf(await absentServer.dispatch(createJSONRPCRequest({ method: 'ping' })))
+		expect(absent?.result).toEqual({})
+
+		const sizeServer = createMCPServer({
+			identity: { name: 'bounded', version: '1.0.0' },
+			tools: tools(),
+			limit: { metadata: 180 },
+		})
+		const sizePeer = createHostilePeer(sizeServer)
+		await sizePeer.send(
+			JSON.stringify(
+				createJSONRPCRequest({
+					method: 'tools/list',
+					params: {
+						_meta: {
+							...MODERN_METADATA,
+							padding: 'x'.repeat(200),
+						},
+					},
+				}),
+			),
+		)
+		expect(sizePeer.response()?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		sizePeer.close()
+
+		const keyServer = createMCPServer({
+			identity: { name: 'bounded', version: '1.0.0' },
+			tools: tools(),
+			limit: { metadata: 1_024, keys: 2 },
+		})
+		const keyPeer = createHostilePeer(keyServer)
+		await keyPeer.send(
+			JSON.stringify(
+				createJSONRPCRequest({
+					method: 'tools/list',
+					params: { _meta: { ...MODERN_METADATA, extension: true } },
+				}),
+			),
+		)
+		expect(keyPeer.response()?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		keyPeer.close()
+	})
+
+	it('rejects prototype-pollution metadata sent by a real peer', async () => {
+		const mcp = createMCPServer({
+			identity: { name: 'bounded', version: '1.0.0' },
+			tools: tools(),
+		})
+		const peer = createHostilePeer(mcp)
+		await peer.send(
+			'{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"__proto__":true}}}',
+		)
+
+		expect(peer.response()?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		peer.close()
+	})
+
+	it('accepts absent requestState and bounds it before verification and after signing', async () => {
+		const absent = createMCPServer({
+			identity: { name: 'bounded', version: '1.0.0' },
+			tools: tools(),
+			limit: { state: 0 },
+			input: {
+				secret: 'fixture-secret',
+				ttl: 60_000,
+				principal: () => 'user-1',
+				elicit: () => undefined,
+			},
+		})
+		const absentResponse = responseOf(
+			await absent.dispatch(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					params: { name: 'echo', _meta: MODERN_METADATA },
+				}),
+			),
+		)
+		expect(resultOf(absentResponse)['resultType']).toBe('complete')
+
+		const incoming = createMCPServer({
+			identity: { name: 'bounded', version: '1.0.0' },
+			tools: tools(),
+			limit: { state: 64 },
+			input: {
+				secret: 'fixture-secret',
+				ttl: 60_000,
+				principal: () => 'user-1',
+				elicit: () => undefined,
+			},
+		})
+		const incomingPeer = createHostilePeer(incoming)
+		await incomingPeer.send(
+			JSON.stringify(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					params: {
+						name: 'echo',
+						inputResponses: {},
+						requestState: 'x'.repeat(65),
+						_meta: MODERN_METADATA,
+					},
+				}),
+			),
+		)
+		expect(incomingPeer.response()?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		incomingPeer.close()
+
+		const outgoing = createMCPServer({
+			identity: { name: 'bounded', version: '1.0.0' },
+			tools: tools(),
+			limit: { state: 256 },
+			input: {
+				secret: 'fixture-secret',
+				ttl: 60_000,
+				principal: () => 'user-1',
+				elicit: () => ({
+					request: {
+						message: 'Approve?',
+						requestedSchema: { type: 'object', properties: {} },
+					},
+					state: 'x'.repeat(512),
+				}),
+			},
+		})
+		const outgoingPeer = createHostilePeer(outgoing)
+		await outgoingPeer.send(
+			JSON.stringify(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					params: {
+						name: 'echo',
+						arguments: {},
+						_meta: {
+							[MCP_META_VERSION]: '2026-07-28',
+							[MCP_META_CAPABILITIES]: { elicitation: {} },
+						},
+					},
+				}),
+			),
+		)
+		expect(outgoingPeer.response()?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		outgoingPeer.close()
+
+		const signed = createMCPServer({
+			identity: { name: 'bounded', version: '1.0.0' },
+			tools: tools(),
+			limit: { state: 150 },
+			input: {
+				secret: 'fixture-secret',
+				ttl: 60_000,
+				principal: () => 'user-1',
+				elicit: () => ({
+					request: {
+						message: 'Approve?',
+						requestedSchema: { type: 'object', properties: {} },
+					},
+				}),
+			},
+		})
+		const signedPeer = createHostilePeer(signed)
+		await signedPeer.send(
+			JSON.stringify(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					params: {
+						name: 'echo',
+						_meta: {
+							[MCP_META_VERSION]: '2026-07-28',
+							[MCP_META_CAPABILITIES]: { elicitation: {} },
+						},
+					},
+				}),
+			),
+		)
+		expect(signedPeer.response()?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		signedPeer.close()
+	})
+
+	it('turns oversized tool content into a -32000 protocol response', async () => {
+		const manager = createToolManager()
+		manager.add(createTool({ name: 'large', execute: () => 'x'.repeat(32) }))
+		const mcp = createMCPServer({
+			identity: { name: 'bounded', version: '1.0.0' },
+			tools: manager,
+			limit: { content: 16 },
+		})
+		const peer = createHostilePeer(mcp)
+
+		await peer.send(
+			JSON.stringify(createJSONRPCRequest({ method: 'tools/call', params: { name: 'large' } })),
+		)
+
+		expect(peer.response()?.error?.code).toBe(JSONRPC_SERVER_ERROR)
+		peer.close()
+	})
+
+	it('admits only the configured number of live subscription streams and releases on close', async () => {
+		const source = new TransformStream<JSONRPCRequest, JSONRPCRequest>()
+		const writer = source.writable.getWriter()
+		const mcp = createMCPServer({
+			identity: { name: 'bounded', version: '1.0.0' },
+			tools: tools(),
+			limit: { subscriptions: 1 },
+			subscription: {
+				notifications: { toolsListChanged: true },
+				listen: () => source.readable,
+			},
+		})
+		const peer = createHostilePeer(mcp)
+		const params = {
+			notifications: { toolsListChanged: true },
+			_meta: MODERN_METADATA,
+		}
+
+		await peer.send(
+			JSON.stringify(createJSONRPCRequest({ method: 'subscriptions/listen', id: 'first', params })),
+		)
+		await peer.send(
+			JSON.stringify(
+				createJSONRPCRequest({ method: 'subscriptions/listen', id: 'second', params }),
+			),
+		)
+
+		expect(peer.response()?.error?.code).toBe(JSONRPC_SERVER_ERROR)
+		expect(peer.responses().some((message) => 'method' in message)).toBe(true)
+		await writer.close()
+		await waitForDelay()
+		peer.clear()
+		await peer.send(
+			JSON.stringify(createJSONRPCRequest({ method: 'subscriptions/listen', id: 'third', params })),
+		)
+		expect(peer.responses().some((message) => 'method' in message)).toBe(true)
+		peer.close()
+	})
+})
 
 describe('MCPServer — identity', () => {
 	it('exposes the name and version from options', () => {
@@ -341,6 +614,7 @@ describe('MCPServer — dual-era dispatch', () => {
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
 			tools: manager,
+			limit: { content: 0 },
 		})
 		const response = responseOf(
 			await mcp.dispatch(

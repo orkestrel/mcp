@@ -1,4 +1,6 @@
 import {
+	isBoundedJSON,
+	isBoundedString,
 	isElicitRequest,
 	isElicitPrimitiveSchema,
 	isElicitResult,
@@ -23,6 +25,80 @@ import { describe, expect, it } from 'vitest'
 // `unknown`; adversarial input returns `false`, never throws). A request without an
 // `id` is a valid notification shape; a response carries an `id` (string / number /
 // null) and EXACTLY ONE of result / error.
+
+describe('bounded hostile values', () => {
+	it('counts UTF-8 string bytes at the exact boundary', () => {
+		expect(isBoundedString('€', 3)).toBe(true)
+		expect(isBoundedString('€', 2)).toBe(false)
+		expect(isBoundedString('😀', 4)).toBe(true)
+		expect(isBoundedString('😀', 3)).toBe(false)
+		expect(isBoundedString('\ud800', 3)).toBe(true)
+	})
+
+	it('bounds serialized JSON bytes, object keys, and depth', () => {
+		const value = { ok: true }
+		const bytes = JSON.stringify(value).length
+		// `undefined` is the one value `JSON.stringify` cannot write, so it is rejected;
+		// a non-finite number IS written, as `null`, so it costs four bytes and passes.
+		// A tool returning NaN reached the wire as `null` before the bounds existed and
+		// must keep doing so.
+		expect(isBoundedJSON(undefined, { bytes: 0, depth: 0 })).toBe(false)
+		expect(isBoundedJSON(Number.NaN, { bytes: 4, depth: 0 })).toBe(true)
+		expect(isBoundedJSON(Number.POSITIVE_INFINITY, { bytes: 4, depth: 0 })).toBe(true)
+		expect(isBoundedJSON(Number.NaN, { bytes: 3, depth: 0 })).toBe(false)
+		expect(isBoundedJSON(value, { bytes, keys: 1, depth: 1 })).toBe(true)
+		expect(isBoundedJSON(value, { bytes: bytes - 1, keys: 1, depth: 1 })).toBe(false)
+		expect(isBoundedJSON('a\nb', { bytes: 6, depth: 0 })).toBe(true)
+		expect(isBoundedJSON('a\nb', { bytes: 5, depth: 0 })).toBe(false)
+		expect(isBoundedJSON('\ud800', { bytes: 8, depth: 0 })).toBe(true)
+		expect(isBoundedJSON({ outer: { inner: true } }, { bytes: 64, keys: 1, depth: 2 })).toBe(false)
+
+		let deep: unknown = null
+		for (let depth = 0; depth < 33; depth += 1) deep = [deep]
+		expect(isBoundedJSON(deep, { bytes: 128, depth: 32 })).toBe(false)
+		expect(isBoundedJSON({}, { bytes: Number.NaN, depth: Number.NaN })).toBe(false)
+	})
+
+	it('returns false for cycles and every prototype-pollution key', () => {
+		const cycle: Record<string, unknown> = {}
+		cycle['self'] = cycle
+		const proto: unknown = JSON.parse('{"__proto__":true}')
+		for (const value of [cycle, proto, { constructor: true }, { nested: { prototype: true } }]) {
+			expect(isBoundedJSON(value, { bytes: 128, keys: 8, depth: 8 })).toBe(false)
+		}
+	})
+
+	it('rejects Map and Set regardless of insertion order', () => {
+		for (const value of [
+			new Map([
+				['a', 1],
+				['b', 2],
+			]),
+			new Map([
+				['b', 2],
+				['a', 1],
+			]),
+			new Set(['a', 'b']),
+			new Set(['b', 'a']),
+		]) {
+			expect(isBoundedJSON(value, { bytes: 128, depth: 8 })).toBe(false)
+		}
+	})
+
+	it('contains accessors and hostile proxies without throwing', () => {
+		const accessor = Object.defineProperty({}, 'value', {
+			enumerable: true,
+			get() {
+				throw new Error('must not escape')
+			},
+		})
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+
+		expect(isBoundedJSON(accessor, { bytes: 128, depth: 8 })).toBe(false)
+		expect(isBoundedJSON(proxy, { bytes: 128, depth: 8 })).toBe(false)
+	})
+})
 
 describe('isRequestId', () => {
 	it('accepts a string id', () => {

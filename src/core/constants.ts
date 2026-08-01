@@ -68,6 +68,28 @@ export const MCP_UNSUPPORTED_VERSION = -32022
  */
 export const DEFAULT_MCP_CACHE_TTL = 60_000
 
+/**
+ * Secure server bounds used when the matching `limit` option leaf is absent or malformed.
+ *
+ * @remarks
+ * One MiB admits ordinary JSON-RPC requests and substantial tool arguments; 16 KiB admits
+ * extension-rich modern metadata and signed multi-round state; four MiB admits substantial
+ * JSON tool output without allowing an unconfigured service to serialize arbitrary process
+ * memory; 64 metadata keys admits the reserved keys plus many extensions; 128 concurrent
+ * streams admits a busy service while bounding retained producers; depth 32 admits ordinary
+ * JSON documents while rejecting stack-hostile nesting. Frozen so callers cannot alter the
+ * defaults observed by later servers.
+ */
+export const DEFAULT_MCP_LIMITS = Object.freeze({
+	message: 1_048_576,
+	metadata: 16_384,
+	keys: 64,
+	state: 16_384,
+	content: 4_194_304,
+	subscriptions: 128,
+	depth: 32,
+})
+
 /** JSON-RPC 2.0 reserved error: invalid JSON was received (the message did not parse). */
 export const JSONRPC_PARSE_ERROR = -32700
 

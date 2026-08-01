@@ -83,7 +83,9 @@ const out = await server.handle(
 
 `dispatch` is the typed core; `handle` wraps it with the `JSON.parse` ↔
 `JSON.stringify` string boundary and the parse / invalid-request error
-mapping. A request with NO `id` is a **notification** — handled (the
+mapping. The configured message-byte limit is checked before `JSON.parse`, so
+an oversized valid document receives `-32700` without first allocating its parsed
+graph. A request with NO `id` is a **notification** — handled (the
 `request` event still fires) but it yields NO response (`dispatch` resolves
 `undefined`, `handle` returns `undefined`), whatever its method. Tool errors
 are NOT protocol errors: the `ToolManager` (`@orkestrel/tool`) isolates a
@@ -364,6 +366,52 @@ parseMCPInputState(await verifyToken(token, ['current-secret', 'older-secret']))
 server.methods.method('tools/call') // the MRTR-aware built-in remains on the one method seam
 ```
 
+### Bound hostile input and live resources
+
+Every server uses the frozen `DEFAULT_MCP_LIMITS`: one MiB for a raw message,
+16 KiB and 64 total object keys for `_meta`, 16 KiB for `requestState`, four MiB
+for produced tool content, 128 live built-in subscriptions, and depth 32 for
+bounded JSON. Those defaults are sized respectively for substantial ordinary
+JSON-RPC arguments, extension-rich request context, a signed state carrying a
+short deployment value, substantial JSON tool output, a busy
+long-lived host, and ordinary documents well beyond typical application nesting.
+
+A deployment changes only the policy values it needs through the single `limit`
+group. Every malformed numeric leaf (`NaN`, infinity, a negative, or a fraction)
+falls back to its secure default. Message overflow maps to `-32700`; invalid or
+oversized `_meta` and `requestState` map to `-32602`; oversized produced content
+and exhausted subscription capacity map to `-32000`. None uses MCP's reserved
+`-32020` / `-32021` / `-32022` range.
+
+```ts
+import { createMCPServer, DEFAULT_MCP_LIMITS, isBoundedJSON, isBoundedString } from '@orkestrel/mcp'
+import { createToolManager } from '@orkestrel/tool'
+
+const server = createMCPServer({
+	identity: { name: 'bounded', version: '1.0.0' },
+	tools: createToolManager(),
+	limit: {
+		message: 512 * 1024,
+		metadata: 8 * 1024,
+		keys: 32,
+		state: 8 * 1024,
+		content: 2 * 1024 * 1024,
+		subscriptions: 64,
+		depth: 24,
+	},
+})
+
+DEFAULT_MCP_LIMITS.message // 1_048_576
+isBoundedString('€', 2) // false
+isBoundedJSON({ ok: true }, { bytes: 16, keys: 1, depth: 1 }) // true
+await server.handle('{"jsonrpc":"2.0","method":"ping","id":1}')
+```
+
+`isBoundedJSON` walks iteratively and tracks active ancestors. Cycles, values
+deeper than the configured depth, accessors/hostile proxies, `Map`/`Set`, and
+the prototype-pollution keys `__proto__`, `constructor`, and `prototype` all
+return `false`; no adversarial shape throws from the guard.
+
 The retry uses a new JSON-RPC id and preserves the original `name` /
 `arguments`; `inputResponses` and the byte-exact `requestState` are top-level
 `params` siblings. A missing or URL-only elicitation declaration receives
@@ -392,36 +440,39 @@ the unimplemented legal carriers `prompts/get` and `resources/read` remain
 
 ### Constants
 
-| Constant                      | Kind  | Value                                                                                |
-| ----------------------------- | ----- | ------------------------------------------------------------------------------------ |
-| `MCP_PROTOCOL_VERSION`        | const | `'2025-11-25'` — the newest legacy initialize revision.                              |
-| `MCP_LEGACY_VERSION`          | const | `'2025-06-18'` — the legacy fallback anchor.                                         |
-| `MCP_MODERN_VERSION`          | const | `'2026-07-28'` — the modern discovery revision.                                      |
-| `SUPPORTED_PROTOCOL_VERSIONS` | const | Frozen preference order: `2026-07-28`, `2025-11-25`, `2025-06-18`.                   |
-| `MCP_META_VERSION`            | const | `'io.modelcontextprotocol/protocolVersion'` — reserved request-version metadata key. |
-| `MCP_META_CAPABILITIES`       | const | `'io.modelcontextprotocol/clientCapabilities'` — reserved capability metadata key.   |
-| `MCP_META_CLIENT`             | const | `'io.modelcontextprotocol/clientInfo'` — reserved client-identity metadata key.      |
-| `MCP_META_SERVER`             | const | `'io.modelcontextprotocol/serverInfo'` — reserved server-identity metadata key.      |
-| `MCP_META_SUBSCRIPTION`       | const | `'io.modelcontextprotocol/subscriptionId'` — reserved subscription-id metadata key.  |
-| `MCP_HEADER_MISMATCH`         | const | `-32020` — required HTTP metadata does not match the request body.                   |
-| `MCP_MISSING_CAPABILITY`      | const | `-32021` — an operation needs an undeclared client capability.                       |
-| `MCP_UNSUPPORTED_VERSION`     | const | `-32022` — the request names an unsupported protocol revision.                       |
-| `DEFAULT_MCP_CACHE_TTL`       | const | `60000` — default modern cache freshness lifetime in milliseconds.                   |
-| `JSONRPC_PARSE_ERROR`         | const | `-32700` — invalid JSON was received (the message did not parse).                    |
-| `JSONRPC_INVALID_REQUEST`     | const | `-32600` — the payload was not a valid Request object.                               |
-| `JSONRPC_METHOD_NOT_FOUND`    | const | `-32601` — the requested method does not exist.                                      |
-| `JSONRPC_INVALID_PARAMS`      | const | `-32602` — the method's parameters were invalid.                                     |
-| `JSONRPC_SERVER_ERROR`        | const | `-32000` — an implementation-defined server error.                                   |
-| `DEFAULT_MCP_CLIENT_NAME`     | const | `'taverna'` — the default client name reported in the `initialize` handshake.        |
-| `DEFAULT_MCP_CLIENT_VERSION`  | const | `'1.0.0'` — the default client version reported in the `initialize` handshake.       |
-| `DEFAULT_MCP_REQUEST_TIMEOUT` | const | `30000` — the default per-request deadline (ms) an `MCPClient` applies.              |
-| `DEFAULT_MCP_PROBE_TIMEOUT`   | const | `50` — the maximum configured discovery-probe deadline in milliseconds.              |
+| Constant                      | Kind  | Value                                                                                         |
+| ----------------------------- | ----- | --------------------------------------------------------------------------------------------- |
+| `MCP_PROTOCOL_VERSION`        | const | `'2025-11-25'` — the newest legacy initialize revision.                                       |
+| `MCP_LEGACY_VERSION`          | const | `'2025-06-18'` — the legacy fallback anchor.                                                  |
+| `MCP_MODERN_VERSION`          | const | `'2026-07-28'` — the modern discovery revision.                                               |
+| `SUPPORTED_PROTOCOL_VERSIONS` | const | Frozen preference order: `2026-07-28`, `2025-11-25`, `2025-06-18`.                            |
+| `MCP_META_VERSION`            | const | `'io.modelcontextprotocol/protocolVersion'` — reserved request-version metadata key.          |
+| `MCP_META_CAPABILITIES`       | const | `'io.modelcontextprotocol/clientCapabilities'` — reserved capability metadata key.            |
+| `MCP_META_CLIENT`             | const | `'io.modelcontextprotocol/clientInfo'` — reserved client-identity metadata key.               |
+| `MCP_META_SERVER`             | const | `'io.modelcontextprotocol/serverInfo'` — reserved server-identity metadata key.               |
+| `MCP_META_SUBSCRIPTION`       | const | `'io.modelcontextprotocol/subscriptionId'` — reserved subscription-id metadata key.           |
+| `MCP_HEADER_MISMATCH`         | const | `-32020` — required HTTP metadata does not match the request body.                            |
+| `MCP_MISSING_CAPABILITY`      | const | `-32021` — an operation needs an undeclared client capability.                                |
+| `MCP_UNSUPPORTED_VERSION`     | const | `-32022` — the request names an unsupported protocol revision.                                |
+| `DEFAULT_MCP_CACHE_TTL`       | const | `60000` — default modern cache freshness lifetime in milliseconds.                            |
+| `DEFAULT_MCP_LIMITS`          | const | Frozen secure defaults for message, metadata, keys, state, content, subscriptions, and depth. |
+| `JSONRPC_PARSE_ERROR`         | const | `-32700` — invalid JSON was received (the message did not parse).                             |
+| `JSONRPC_INVALID_REQUEST`     | const | `-32600` — the payload was not a valid Request object.                                        |
+| `JSONRPC_METHOD_NOT_FOUND`    | const | `-32601` — the requested method does not exist.                                               |
+| `JSONRPC_INVALID_PARAMS`      | const | `-32602` — the method's parameters were invalid.                                              |
+| `JSONRPC_SERVER_ERROR`        | const | `-32000` — an implementation-defined server error.                                            |
+| `DEFAULT_MCP_CLIENT_NAME`     | const | `'taverna'` — the default client name reported in the `initialize` handshake.                 |
+| `DEFAULT_MCP_CLIENT_VERSION`  | const | `'1.0.0'` — the default client version reported in the `initialize` handshake.                |
+| `DEFAULT_MCP_REQUEST_TIMEOUT` | const | `30000` — the default per-request deadline (ms) an `MCPClient` applies.                       |
+| `DEFAULT_MCP_PROBE_TIMEOUT`   | const | `50` — the maximum configured discovery-probe deadline in milliseconds.                       |
 
 ### Helpers
 
 | API                                | Kind     | Summary                                                                                                                                                    |
 | ---------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `isRequestId`                      | function | Total guard: a JSON-RPC REQUEST `id` — a string / number / absent (`null` is valid only on a response).                                                    |
+| `isBoundedString`                  | function | Total guard for a string within a UTF-8 byte bound.                                                                                                        |
+| `isBoundedJSON`                    | function | Total iterative guard for JSON within byte/key/depth bounds, rejecting cycles, unsafe keys, and non-JSON containers.                                       |
 | `isJSONRPCRequest`                 | function | Total guard: a record with `jsonrpc: '2.0'` + a string `method`; an absent `id` ⇒ a notification.                                                          |
 | `isJSONRPCResponse`                | function | Total guard: `jsonrpc: '2.0'` + an `id` (string / number / `null`) + EXACTLY ONE of `result` / `error`.                                                    |
 | `isJSONRPCMessage`                 | function | Total guard — the union of `isJSONRPCRequest` and `isJSONRPCResponse`.                                                                                     |
@@ -509,7 +560,9 @@ the unimplemented legal carriers `prompts/get` and `resources/read` remain
 | `MCPMethodHandler`                    | type      | `(request, options) => Promise<JSONRPCResponse \| MCPStream \| undefined>` — one modern method, registered on the seam that dispatches it.                                                                                 |
 | `MCPMethodManagerInterface`           | interface | The modern method registry — the `add` / `method` methods, carrying both the built-in methods and any method a consumer adds.                                                                                              |
 | `MCPServerEventMap`                   | type      | `{ request: [method, id, era]; error: [unknown] }` — the observation surface (`era` is selected structurally per request; `error` is a bound-transport fault).                                                             |
-| `MCPServerOptions`                    | interface | `{ on?; error?; identity; tools; instructions?; cache?; input?; subscription? }` — options for `createMCPServer`.                                                                                                          |
+| `MCPLimitOptions`                     | interface | `{ message?; metadata?; keys?; state?; content?; subscriptions?; depth? }` — configurable server bounds; malformed/absent leaves use secure defaults.                                                                      |
+| `MCPJSONLimitOptions`                 | interface | `{ bytes; keys?; depth }` — byte/key/depth bounds consumed by `isBoundedJSON`.                                                                                                                                             |
+| `MCPServerOptions`                    | interface | `{ on?; error?; identity; tools; instructions?; cache?; input?; subscription?; limit? }` — options for `createMCPServer`.                                                                                                  |
 | `MCPServerInterface`                  | interface | `emitter` / `identity` / `methods` data members + the `dispatch` / `handle` methods.                                                                                                                                       |
 | `MCPTransportInterface`               | interface | `{ send(message: string): void \| Promise<void>; listen(handler): void; closed(handler): void; close(): void \| Promise<void> }` — the environment-agnostic duplex message-channel port `bindServer` / `bindClient` drive. |
 | `ClientTransportEventMap`             | type      | `{ message: [JSONRPCMessage]; close: []; error: [unknown] }` — the transport events.                                                                                                                                       |
@@ -537,7 +590,9 @@ mounts a transport-agnostic `MCPServerInterface` on the `@orkestrel/router` /
 rate-limiting IN FRONT as ordinary middleware and supply the shared origin policy
 through the `origin` option. Request-body size limits
 are likewise deliberately NOT enforced by `createMCPRoutes` / `createMCPSession` —
-a body-size guard is front-middleware policy the consumer composes, same as auth.
+a compressed/body-size guard is front-middleware policy the consumer composes, same as auth.
+The core `limit.message` bound applies specifically where a transport supplies a raw string to
+`MCPServer.handle`; the HTTP route owns and parses its Fetch `Request` body before typed dispatch.
 
 ```ts
 import { createMCPServer } from '@orkestrel/mcp'
@@ -956,10 +1011,10 @@ response, a held-open `MCPStream`, or `undefined` for a notification);
 parse / invalid-request error mapping. Both take an optional
 `MCPDispatchOptions` bag, so every existing caller compiles unchanged.
 
-| Method     | Returns                                              | Behavior                                                                                                                                                                                            |
-| ---------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dispatch` | `Promise<JSONRPCResponse \| MCPStream \| undefined>` | Select the structural era, emit `request(method, id, era)`, then run the legacy switch or resolve the modern method from `methods`; resolve its answer, or `undefined` for any notification.        |
-| `handle`   | `Promise<string \| MCPTextStream \| undefined>`      | `JSON.parse` → narrow to a request → `dispatch` → serialize. A parse failure → a `-32700` string; a non-request → a `-32600` string; a notification → `undefined`; a held-open answer → its mirror. |
+| Method     | Returns                                              | Behavior                                                                                                                                                                                           |
+| ---------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dispatch` | `Promise<JSONRPCResponse \| MCPStream \| undefined>` | Select the structural era, emit `request(method, id, era)`, then run the legacy switch or resolve the modern method from `methods`; resolve its answer, or `undefined` for any notification.       |
+| `handle`   | `Promise<string \| MCPTextStream \| undefined>`      | Pre-parse UTF-8 byte bound → `JSON.parse` → narrow → `dispatch` → serialize. Overflow/parse failure → `-32700`; non-request → `-32600`; notification → `undefined`; held-open answer → its mirror. |
 
 ```ts
 import { createMCPServer } from '@orkestrel/mcp'
@@ -1171,14 +1226,23 @@ JSON.stringify(value) }], structuredContent: value }`, carrying the value unchan
    an earlier one. The legacy method remains absent and answers `-32601`.
 7. **`handle` maps the boundary failures.** A `JSON.parse` throw (malformed
    JSON) → a serialized `-32700` (Parse error) response with a `null` id; a
+   message above `limit.message` reaches that same response BEFORE `JSON.parse`;
+   `_meta` is then bounded by serialized bytes, total object keys, and depth
+   before modern context parsing; `requestState` is bounded before HMAC verification
+   and before/after signing; produced tool content is bounded before serialization; and
+   built-in subscription admission is capped until each stream's `finally` releases it.
+   Metadata/state failures use `-32602`; content/capacity failures use `-32000`. A
    parsed value that is not a valid REQUEST (a response, or any non-message)
    → a serialized `-32600` (Invalid Request) response with a `null` id. The
    raw-string parse is the ONLY `try`/`catch`; the guards (`parseJSONRPCMessage`
    over `isJSONRPCMessage`) are total and never throw.
-8. **Total wire guards.** `isJSONRPCRequest` / `isJSONRPCResponse` /
+8. **Total wire guards.** `isBoundedString` / `isBoundedJSON` /
+   `isJSONRPCRequest` / `isJSONRPCResponse` /
    `isJSONRPCMessage` / `isInitializeRequest` / `isSubscriptionFilter` are total functions over an
    already-parsed `unknown` — adversarial input returns `false`, never
-   throws. A request accepts an absent `id` (a notification) but rejects a
+   throws. `isBoundedJSON` is iterative and rejects excessive depth, cycles,
+   accessors/hostile proxies, `Map`/`Set`, and prototype-pollution keys. A request
+   accepts an absent `id` (a notification) but rejects a
    `null` id (valid only on a response); a response requires an `id` (string /
    number / `null`) and exactly one of `result` / `error`. `parseJSONRPCMessage`
    is sound with `isJSONRPCMessage` (a guard-valid input returned unchanged;
