@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite'
 import dts from 'vite-plugin-dts'
 import {
-	ENVIRONMENT_CSS,
 	environmentBoundary,
 	outputBoundary,
 	srcCore,
@@ -10,7 +9,6 @@ import {
 
 export default defineConfig(
 	srcCore({
-		css: ENVIRONMENT_CSS,
 		publicDir: false,
 		plugins: [
 			outputBoundary('dist/src/core'),

@@ -162,7 +162,7 @@ export const ENVIRONMENT_CSS = Object.freeze({
 						'value' in rule && rule.value !== null && 'loc' in rule.value
 							? sources[rule.value.loc.source_index]
 							: undefined
-					if (rule.type !== 'import') return
+					if (rule.type !== 'import' || rule.value === null) return
 					const error = stylesheetAssetError(source, rule.value.url)
 					if (error !== undefined) {
 						throw new Error(`[orkestrel-environment-boundary] ${error}`)
@@ -597,7 +597,11 @@ export function outputBoundary(output: string): Plugin {
 					'[orkestrel-output-boundary] Public directories are disabled; every output must come from the audited graph',
 				)
 			}
-			if (output.endsWith('/browser') && config.build.assetsInlineLimit !== 0) {
+			if (
+				output.endsWith('/browser') &&
+				config.build.lib === false &&
+				config.build.assetsInlineLimit !== 0
+			) {
 				throw new Error(
 					'[orkestrel-output-boundary] Browser assets must remain external for output auditing',
 				)
@@ -775,7 +779,7 @@ export function environmentBoundary(
 							? packageRootForResolved(physicalResolution)
 							: undefined
 					if (mappedPackageRoot === undefined) {
-						this.error(
+						return this.error(
 							'Dependency package imports must resolve inside an exact physical package root',
 						)
 					}
@@ -794,7 +798,7 @@ export function environmentBoundary(
 				const packageRoot =
 					packageName === undefined ? undefined : packageRootOf(packageName, physicalResolution)
 				if (packageRoot === undefined || !containedPath(packageRoot, physicalResolution)) {
-					this.error('Resolved dependencies must remain inside their physical package root')
+					return this.error('Resolved dependencies must remain inside their physical package root')
 				}
 				trustedPackageRoots.add(packageRoot)
 			}
@@ -825,7 +829,7 @@ export function environmentBoundary(
 			}
 			const code = readBoundedFile(physicalImporter, ENVIRONMENT_MODULE_BYTES)
 			if (code === undefined) {
-				this.error('Dependency module source must be a bounded regular file')
+				return this.error('Dependency module source must be a bounded regular file')
 			}
 			for (const source of await environmentAssetSources(code, id)) {
 				const normalizedSource = source.replaceAll('\\', '/')
@@ -920,7 +924,7 @@ export function environmentBoundary(
 				if (isCSSRequest(id)) {
 					const config = resolvedConfig
 					if (config === undefined) {
-						this.error('Environment boundary requires resolved Vite configuration')
+						return this.error('Environment boundary requires resolved Vite configuration')
 					}
 					const stylesheet = await preprocessCSS(code, id, config)
 					for (const dependency of stylesheet.deps ?? []) {
@@ -966,7 +970,9 @@ export function environmentBoundary(
 									? undefined
 									: packageRootOf(packageName, physicalSource)
 							if (packageRoot === undefined || !containedPath(packageRoot, physicalSource)) {
-								this.error('Resolved dependencies must remain inside their physical package root')
+								return this.error(
+									'Resolved dependencies must remain inside their physical package root',
+								)
 							}
 							trustedPackageRoots.add(packageRoot)
 						}
@@ -974,7 +980,7 @@ export function environmentBoundary(
 					}
 					const resolvedSource = workspacePath(physicalSource)
 					if (resolvedSource === undefined) {
-						this.error('Environment modules cannot import files outside the workspace')
+						return this.error('Environment modules cannot import files outside the workspace')
 					}
 					const assetError = environmentPathError(owner, resolvedSource)
 					if (assetError !== undefined) this.error(assetError)
@@ -1014,7 +1020,6 @@ export const srcBrowser = (config?: UserConfig): UserConfig =>
 				publicDir: false,
 				plugins: [outputBoundary('dist/src/browser'), environmentBoundary('src/browser')],
 				build: {
-					assetsInlineLimit: 0,
 					lib: {
 						entry: resolveWorkspacePath('src/browser/index.ts'),
 						formats: ['es'],
@@ -1060,7 +1065,6 @@ export const srcServer = (config?: UserConfig): UserConfig =>
 	srcCore(
 		mergeConfig(
 			{
-				css: ENVIRONMENT_CSS,
 				publicDir: false,
 				plugins: [outputBoundary('dist/src/server'), environmentBoundary('src/server')],
 				build: {
