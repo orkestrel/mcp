@@ -95,8 +95,8 @@ describe('acceptsEventStream — does the client opt into SSE?', () => {
 	})
 })
 
-describe('allowsOrigin — explicit validation with upstream delegation', () => {
-	it('allows an absent Origin but requires every present origin to be allowlisted', () => {
+describe('allowsOrigin — loopback default, explicit validation, and upstream delegation', () => {
+	it('allows an absent Origin but requires every non-loopback origin to be allowlisted', () => {
 		expect(allowsOrigin(new Request('https://server.example/mcp'))).toBe(true)
 		const request = new Request('https://server.example/mcp', {
 			headers: { origin: 'https://client.example' },
@@ -105,12 +105,32 @@ describe('allowsOrigin — explicit validation with upstream delegation', () => 
 		expect(allowsOrigin(request, { origins: ['https://client.example'] })).toBe(true)
 	})
 
+	it('allows canonical loopback literals on any port and parsed scheme without an allowlist', () => {
+		const origins = [
+			'http://127.0.0.1:37757',
+			'ftp://127.255.255.254:37757',
+			'http://localhost:37757',
+			'https://[::1]:37757',
+		]
+		for (const origin of origins) {
+			const request = new Request('https://server.example/mcp', { headers: { origin } })
+			expect(allowsOrigin(request)).toBe(true)
+		}
+	})
+
 	it('does not trust a present origin merely because it matches the request URL', () => {
 		const request = new Request('https://server.example/mcp', {
 			headers: { origin: 'https://server.example' },
 		})
 		expect(allowsOrigin(request)).toBe(false)
 		expect(allowsOrigin(request, { origins: ['https://server.example'] })).toBe(true)
+	})
+
+	it('does not mistake a hostname beginning with 127 for an IPv4 loopback literal', () => {
+		const request = new Request('https://server.example/mcp', {
+			headers: { origin: 'http://127.evil.example.test:37757' },
+		})
+		expect(allowsOrigin(request)).toBe(false)
 	})
 
 	it('allows a present unlisted origin when validation is delegated upstream', () => {
@@ -135,6 +155,13 @@ describe('allowsOrigin — explicit validation with upstream delegation', () => 
 					headers: { origin: 'https://client.example/path' },
 				}),
 				{ origins: ['https://client.example'] },
+			),
+		).toBe(false)
+		expect(
+			allowsOrigin(
+				new Request('https://server.example/mcp', {
+					headers: { origin: 'http://127.1:37757' },
+				}),
 			),
 		).toBe(false)
 	})

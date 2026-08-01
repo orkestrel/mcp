@@ -41,8 +41,9 @@ import type { MCPSession } from './MCPSession.js'
  * @remarks
  * - `enabled` — whether this package validates `Origin`; defaults to `true`. Set `false` only
  *   when an upstream layer performs the validation for the deployment.
- * - `origins` — the exact serialized origins accepted when an `Origin` header is present.
- *   Omission accepts requests without `Origin` and rejects every request carrying one.
+ * - `origins` — the exact serialized non-loopback origins accepted when an `Origin` header is
+ *   present. Omission still accepts requests without `Origin` and canonical loopback-literal
+ *   origins (`localhost`, `[::1]`, and `127.0.0.0/8`).
  */
 export interface MCPOriginOptions {
 	readonly enabled?: boolean
@@ -81,9 +82,10 @@ export interface MCPKeepaliveOptions {
  *   framing the Streamable-HTTP spec lets the client negotiate.
  * - `origin` — the shared origin-validation options passed to both the route and session
  *   enforcement sites. Validation is enabled by default: requests without `Origin` pass,
- *   while every present `Origin` must occur exactly in `origin.origins`. Set
- *   `origin.enabled` to `false` only when validation is delegated upstream; `origins` is
- *   ignored in that mode. Both enforcement sites must receive the same value.
+ *   canonical loopback-literal origins pass, and every other present `Origin` must occur
+ *   exactly in `origin.origins`. Set `origin.enabled` to `false` only when validation is
+ *   delegated upstream; `origins` is ignored in that mode. Both enforcement sites must receive
+ *   the same value.
  * - `keepalive` — the SSE liveness options for held-open responses. `interval` defaults to
  *   {@link import('./constants.js').DEFAULT_MCP_KEEPALIVE_INTERVAL}. Keepalives never apply
  *   to unary responses.
@@ -119,10 +121,10 @@ export interface HTTPTransportOptions {
  *   deterministic clock a TTL test advances explicitly instead of racing a real idle window
  *   against wall-clock (AGENTS §16). Production never sets it.
  * - `origin` — the same shared origin-validation options supplied to `createMCPRoutes`.
- *   Validation is enabled by default and rejects a present origin outside its exact list before
- *   any session is minted. Set `origin.enabled` to `false` only when validation is delegated
- *   upstream; `origins` is ignored in that mode. Both enforcement sites must receive the same
- *   value.
+ *   Validation is enabled by default, accepts canonical loopback-literal origins, and rejects
+ *   every other present origin outside its exact list before any session is minted. Set
+ *   `origin.enabled` to `false` only when validation is delegated upstream; `origins` is ignored
+ *   in that mode. Both enforcement sites must receive the same value.
  * - `keepalive` — the SSE liveness options for the held-open resumable response. `interval`
  *   defaults to {@link import('./constants.js').DEFAULT_MCP_KEEPALIVE_INTERVAL}.
  */

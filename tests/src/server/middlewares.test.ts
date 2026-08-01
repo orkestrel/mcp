@@ -381,6 +381,16 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		expect(response.headers.get(MCP_SESSION_HEADER)).not.toBeNull()
 	})
 
+	it('accepts a loopback Origin by default and mints a session', async () => {
+		const handle = await startSession()
+		const response = await postJSON(handle.base, createJSONRPCRequest(), {
+			headers: { origin: handle.base },
+		})
+
+		expect(response.status).toBe(200)
+		expect(response.headers.get(MCP_SESSION_HEADER)).not.toBeNull()
+	})
+
 	it('rejects a DNS-rebinding shape before minting a session', async () => {
 		const handle = await startSession()
 		const body = JSON.stringify(createJSONRPCRequest())

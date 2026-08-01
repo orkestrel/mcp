@@ -533,7 +533,7 @@ describe('createMCPPostHandler', () => {
 		expect((await legacy.json()).error.code).toBe(-32601)
 	})
 
-	it('allows no Origin and rejects every present origin outside the allowlist', async () => {
+	it('allows no Origin and rejects every non-loopback origin outside the allowlist', async () => {
 		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const allowed = createMCPPostHandler(createCalculatorServer(), {
 			streaming: false,

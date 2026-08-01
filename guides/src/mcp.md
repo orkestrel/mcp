@@ -52,8 +52,9 @@
 > **Every transport is mechanism, not policy.** Auth, invocation rate limiting, and
 > body-size guards compose IN FRONT as ordinary `@orkestrel/server` middleware.
 > HTTP ingress supplies only the protocol-required origin gate, on by default: a
-> request without `Origin` passes, every present origin must occur in the shared
-> `origin.origins` list, and a deployment that validates upstream delegates with
+> request without `Origin` passes; a canonical `localhost`, `[::1]`, or `127.0.0.0/8`
+> literal origin passes; every other present origin must occur in the shared
+> `origin.origins` list; and a deployment that validates upstream delegates with
 > `origin.enabled: false`. What this package deliberately does not build is listed
 > under [Declared non-goals](#declared-non-goals); the obligations it does not meet
 > are under [Declared conformance gaps](#declared-conformance-gaps).
@@ -724,9 +725,10 @@ legacy verb, and adds the resumable `GET` SSE stream — all native to this pack
 A modern-shaped POST passes straight through without session lookup and ignores
 any `mcp-session-id`; the layer otherwise pins the negotiated legacy revision and
 supplies it on a headerless live-session request. The same default-on origin validation
-applies to session verbs: a present origin requires an exact entry in the shared
-`origin.origins` list. A deployment that validates upstream sets `origin.enabled` to `false`
-on the one options value passed to both layers. No shared session primitive is composed; the store, mint, and stream are
+applies to session verbs: a canonical loopback-literal origin passes, while every other
+present origin requires an exact entry in the shared `origin.origins` list. A deployment
+that validates upstream sets `origin.enabled` to `false` on the one options value passed to
+both layers. No shared session primitive is composed; the store, mint, and stream are
 implemented here. Because the body can only be read ONCE, the middleware
 buffers `request.text()` and FORWARDS a freshly built `Request` carrying that
 text to `next(...)` so the downstream route can re-read it. Omit the
@@ -787,7 +789,7 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | ------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `acceptsEventStream`     | function | Whether the request's `Accept` header contains `text/event-stream`.                                                                                                                                                 |
 | `createReadableStream`   | function | Build a `ReadableStream` from its `pull` and `cancel` behaviours, supplied as arguments rather than an inline source object.                                                                                        |
-| `allowsOrigin`           | function | Allow an absent Origin; require every present serialized Origin in the explicit list unless validation is delegated upstream.                                                                                       |
+| `allowsOrigin`           | function | Allow an absent or canonical loopback-literal Origin; require every other present serialized Origin in the explicit list unless validation is delegated upstream.                                                   |
 | `matchesModernHeaders`   | function | Validate the modern protocol/method headers and the tools/call-only name header against the body.                                                                                                                   |
 | `inferLegacyVersion`     | function | Pin a supported requested legacy revision, otherwise select the newest supported legacy revision.                                                                                                                   |
 | `inferStatus`            | function | Map a dispatch outcome to its era-aware HTTP status while preserving legacy in-band `200` errors.                                                                                                                   |
@@ -805,7 +807,7 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 
 | Type                         | Kind      | Shape                                                                                                                                                                                                                                    |
 | ---------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MCPOriginOptions`           | interface | `{ enabled?: boolean; origins?: readonly string[] }` — shared default-on origin validation; `enabled: false` delegates upstream and ignores `origins`.                                                                                   |
+| `MCPOriginOptions`           | interface | `{ enabled?: boolean; origins?: readonly string[] }` — shared default-on validation with a loopback-literal default; `enabled: false` delegates upstream and ignores `origins`.                                                          |
 | `MCPKeepaliveOptions`        | interface | `{ interval?: number }` — the held-open SSE comment interval, defaulting to `DEFAULT_MCP_KEEPALIVE_INTERVAL`.                                                                                                                            |
 | `HTTPTransportOptions`       | interface | `{ path?; streaming?; origin?; keepalive? }` — mount path, unary SSE choice, shared origin options, and held-open keepalive options for `createMCPRoutes`.                                                                               |
 | `HTTPClientTransportOptions` | interface | `{ url: string; headers?: Record<string, string>; fetch?: typeof fetch; timeout?: number }` — the remote endpoint, extra headers, an injectable `fetch`, and an optional `AbortSignal.timeout` deadline for `createHTTPClientTransport`. |
@@ -974,8 +976,9 @@ the Node face's transports — same API shape, a different host underneath
 — deliberately, so a consumer swaps `@orkestrel/mcp/server` for
 `@orkestrel/mcp/browser` with no call-site change.
 
-A browser deployment must list the page origin in the shared `origin.origins` value passed
-to both server enforcement sites, or delegate validation with `origin.enabled: false`; see
+A browser deployment served from a non-loopback origin must list the page origin in the shared
+`origin.origins` value passed to both server enforcement sites, or delegate validation with
+`origin.enabled: false`; a page served from a canonical loopback literal needs neither. See
 [Mount the HTTP transport with sessions](#mount-the-http-transport-with-sessions).
 
 `createMessagePortTransport` is the genuinely NEW capability: MCP over
@@ -1499,12 +1502,15 @@ const posted = new Request('http://localhost/mcp', {
 	},
 })
 
-// The gate matches the allowlist only, never the request's own URL, whose origin
-// derives from the caller-controlled Host header.
+// The gate reads Origin only: canonical loopback literals pass by default; every other
+// present origin needs the allowlist. It never reads the request URL or Host header.
 const policy = { origins: ['https://app.example'] }
 allowsOrigin(request, policy) // true — no Origin header, so there is nothing to match
 allowsOrigin(posted, policy) // true — the exact serialized origin is listed
-allowsOrigin(posted) // false — with no allowlist a present origin is never trusted
+allowsOrigin(posted) // false — non-loopback and not allowlisted
+allowsOrigin(
+	new Request('https://server.example/mcp', { headers: { origin: 'http://127.0.0.1:37757' } }),
+) // true — a canonical loopback literal is trusted without configuration
 allowsOrigin(posted, { enabled: false }) // true — an upstream layer owns the check
 
 const call = {
@@ -1676,11 +1682,15 @@ different boundary from an HTTP body.
 
 **The origin split is the shape of that rule.** The 2025-11-25 origin clause binds the
 server component this package ships, so the **mechanism** ships here and is on by
-default: a request without `Origin` is allowed, and a request carrying one is allowed
-only when its exact serialized origin occurs in the list. The **policy** — which
-origins a deployment trusts — is the consumer's, supplied once as `origin.origins` and
-consumed by both enforcement sites (the POST handler and the session middleware). A
-deployment that already validates origin upstream says so explicitly with
+default: a request without `Origin` is allowed; a canonical origin whose host is the
+`localhost` or `[::1]` literal, or in the IPv4 `127.0.0.0/8` literal range, is allowed
+without configuration; and every other present origin is allowed only when its exact
+serialized origin occurs in the list. This decision reads the `Origin` value alone — never
+the request URL, `Host`, or another request header — so an attacker origin such as
+`http://evil.example.com` cannot become trusted when DNS resolves that hostname to loopback.
+The remaining **policy** — which non-loopback origins a deployment trusts — is the consumer's,
+supplied once as `origin.origins` and consumed by both enforcement sites (the POST handler and
+the session middleware). A deployment that already validates origin upstream says so explicitly with
 `origin: { enabled: false }` rather than by passing an empty list, because delegation
 is a different decision from an empty allowlist and deserves its own word.
 
@@ -1691,6 +1701,21 @@ obligation or a protocol capability it does not satisfy. Declining is not availa
 those, so they are stated here rather than left for a consumer to discover on the wire.
 Each entry names the clause, what it costs, and who could close it — including where
 the honest answer is that nothing inside this package will.
+
+**Non-text tool-result content blocks are not representable.** MCP `tools/call` results
+may carry image, audio, embedded-resource, or mixed content, but `buildCallResult` always
+emits exactly one `text` block. The installed `@orkestrel/tool` contract exposes
+`ToolResult.value` as `unknown`, so this package has no discriminant by which it could know
+that a value represents one of those content blocks. **What it costs:** a tool result that
+should carry non-text content is exposed as text instead, and clients cannot receive its image,
+audio, embedded resource, or mixed block structure. **Closer:** the tool contract that owns
+the value must first represent its content semantics; this package must not guess them from an
+`unknown` value.
+
+**Tool-call progress notifications are not implemented.** A `tools/call` runs to its result
+without emitting progress notifications, even when the request carries a progress token.
+**What it costs:** a client cannot observe incremental progress from a long-running tool call;
+it receives only the final result. **Closer:** none scheduled.
 
 **`Mcp-Param-*` / `x-mcp-header` client projection — not satisfied.** An HTTP client
 MUST project tool arguments annotated with `x-mcp-header` in a tool's `inputSchema`
@@ -1896,10 +1921,12 @@ in request`, no `as`) — is HTTP **400** with a JSON-RPC error BODY (id
     only for `tools/call`. A mismatch is **400** + `-32020` with no `data`.
     Headerless `initialize` is accepted; a live-session legacy request uses its
     pinned negotiated revision; every other headerless request is **400** +
-    `-32020`. A request without `Origin` is allowed; every present serialized
-    origin requires an exact consumer-supplied `origin.origins` entry or receives
-    **403**. `origin.enabled: false` explicitly delegates validation to an upstream
-    layer. When `streaming` is enabled (default `true`) and the client
+    `-32020`. A request without `Origin` is allowed; a canonical `localhost`, `[::1]`,
+    or `127.0.0.0/8` literal origin is allowed by default; every other present
+    serialized origin requires an exact consumer-supplied `origin.origins` entry or
+    receives **403**. The predicate reads only `Origin`, never the request URL, `Host`,
+    or another request header. `origin.enabled: false` explicitly delegates validation
+    to an upstream layer. When `streaming` is enabled (default `true`) and the client
     `Accept`s `text/event-stream` (`acceptsEventStream`), the 200 reply is one
     SSE `data:` event over `@orkestrel/server`'s `openStream` seam, then the
     stream ends, carrying `X-Accel-Buffering: no`; else a plain JSON body. A

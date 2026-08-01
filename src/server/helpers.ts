@@ -76,10 +76,11 @@ export function acceptsEventStream(request: Request): boolean {
  * Whether an HTTP request satisfies the endpoint's origin gate.
  *
  * @remarks
- * Validation is enabled by default. A request without `Origin` is allowed; a request carrying
- * one is allowed only when its exact serialized origin occurs in the caller-supplied list.
- * Invalid and opaque (`null`) origins are denied. `enabled: false` delegates validation to an
- * upstream layer and allows the request through this gate.
+ * Validation is enabled by default. A request without `Origin` is allowed. A canonical origin
+ * whose host is the `localhost` or `[::1]` literal, or belongs to the `127.0.0.0/8` literal
+ * range, is allowed without configuration; every other present origin must occur exactly in
+ * the caller-supplied list. Invalid and opaque (`null`) origins are denied. `enabled: false`
+ * delegates validation to an upstream layer and allows the request through this gate.
  *
  * @param request - The fetch-standard request to validate
  * @param options - Shared origin validation and delegation options
@@ -96,6 +97,13 @@ export function allowsOrigin(request: Request, options?: MCPOriginOptions): bool
 		return false
 	}
 	if (parsed.origin !== origin) return false
+	if (
+		parsed.hostname === 'localhost' ||
+		parsed.hostname === '[::1]' ||
+		/^127(?:\.\d{1,3}){3}$/.test(parsed.hostname)
+	) {
+		return true
+	}
 	return options?.origins?.includes(parsed.origin) ?? false
 }
 
