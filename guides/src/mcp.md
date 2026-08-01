@@ -6,9 +6,10 @@
 > (`@orkestrel/tool`) as an MCP server any MCP client can drive. **Egress:**
 > `createMCPClient` drives a _remote_ MCP server and surfaces its tools as local
 > `ToolInterface`s an agent can call as if they were its own. The server dispatches
-> each request by structural wire era: modern requests expose `server/discover`,
-> `tools/list`, and `tools/call`; legacy requests retain `initialize`, `ping`,
-> `tools/list`, and `tools/call`.
+> each request by structural wire era: modern requests are answered from a
+> registrable method seam carrying the built-in `server/discover`, `tools/list`,
+> `tools/call`, and `subscriptions/listen`; legacy requests retain a fixed `initialize`, `ping`,
+> `tools/list`, and `tools/call` switch.
 >
 > The split that keeps it lean: **the dispatch core is transport-agnostic and
 > provider-agnostic.** `MCPServer` and `MCPClient` live in `src/core` and import
@@ -158,21 +159,139 @@ either binder is caught and surfaced (never an unhandled rejection): a
 server-side one on `server.emitter`'s `error` event, a client-side one on
 `client.transport.emitter`'s `error` event.
 
+### Register a modern method on the seam
+
+The modern branch answers from ONE registry, `server.methods`. The four
+built-in methods are registered on it at construction, so a method added
+later is not a special case — it is the fifth registration, dispatched by
+the same lookup, and a name with no handler still answers `-32601`:
+
+```ts
+import { buildJSONRPCResult, createMCPServer } from '@orkestrel/mcp'
+import { createToolManager } from '@orkestrel/tool'
+
+const server = createMCPServer({
+	identity: { name: 'calculator', version: '1.0.0' },
+	tools: createToolManager(),
+})
+
+server.methods.method('tools/list') // the built-in handler — already on the seam
+server.methods.method('demo/probe') // undefined → the modern branch answers -32601
+
+server.methods.add('demo/probe', async (request) =>
+	buildJSONRPCResult(request.id ?? null, { probed: true }),
+)
+// the SAME method now answers; `add` under an existing name replaces it, which is
+// how a consumer overrides a built-in — no precedence rule to remember.
+```
+
+A handler receives the request plus an `MCPDispatchOptions` bag whose
+`signal` aborts when the caller's request ends (a closed HTTP response
+stream, a stdio cancel). Both `dispatch` and `handle` take that bag as an
+OPTIONAL second argument, so a caller that cannot abort simply never
+supplies one and a handler always receives an object:
+
+```ts
+server.methods.add('demo/slow', async (request, options) => {
+	options.signal?.addEventListener('abort', () => release())
+	return buildJSONRPCResult(request.id ?? null, {})
+})
+
+const controller = new AbortController()
+await server.dispatch({ jsonrpc: '2.0', method: 'demo/slow', id: 1 }, { signal: controller.signal })
+```
+
+A handler that must HOLD the request open returns an `MCPStream` instead of
+a response: each `yield` is a notification, and the generator's `return`
+value is the terminating response — closure is a result, not an
+out-of-band event, so consuming a stream ends exactly where consuming a
+unary response ends. `dispatch` surfaces that as a second return arm and
+`handle` mirrors it as an `MCPTextStream` (the same sequence, already
+serialized), which `bindServer` pumps onto the transport:
+
+```ts
+import { sendStream, serializeStream } from '@orkestrel/mcp'
+
+server.methods.add('demo/watch', async (request) => watch(request))
+
+const answer = await server.dispatch({ jsonrpc: '2.0', method: 'demo/watch', id: 2 })
+if (answer !== undefined && Symbol.asyncIterator in answer) {
+	// the ONE narrowing point — a typed stream, serializable and pumpable:
+	await sendStream(serializeStream(answer), transport)
+}
+```
+
+The legacy branch is untouched by any of this: its method set is frozen by
+a shipped revision, so it keeps its own fixed switch and its byte-identical
+unstamped responses.
+
+### Configure modern subscriptions
+
+`subscription.notifications` declares what the server can actually honour;
+`subscription.listen` opens the event-driven source for the intersected filter.
+The built-in owns wire acknowledgement, filtering, id stamping, and graceful
+closure. A producer only yields project notifications and ends its iterable when
+the source closes; while idle it parks on its own events and may observe the
+supplied abort signal.
+
+```ts
+import {
+	type JSONRPCRequest,
+	buildSubscriptionAcknowledgement,
+	buildSubscriptionFilter,
+	buildSubscriptionResult,
+	createMCPServer,
+	isSubscriptionFilter,
+	matchesSubscriptionNotification,
+	stampSubscriptionNotification,
+} from '@orkestrel/mcp'
+import { createToolManager } from '@orkestrel/tool'
+
+const identity = { name: 'docs', version: '1.0.0' }
+const supported = { toolsListChanged: true, resourceSubscriptions: ['resource://guide'] }
+const input: unknown = { toolsListChanged: true, promptsListChanged: true }
+if (!isSubscriptionFilter(input)) throw new Error('invalid filter')
+const honoured = buildSubscriptionFilter(input, supported)
+const event: JSONRPCRequest = { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }
+matchesSubscriptionNotification(event, honoured) // true
+stampSubscriptionNotification(event, 'listen-1') // every delivery carries the reserved id
+buildSubscriptionAcknowledgement(honoured, 'listen-1') // the first id-carrying message
+buildSubscriptionResult('listen-1', identity) // the final complete response
+
+async function* changes() {
+	yield event
+}
+
+const server = createMCPServer({
+	identity,
+	tools: createToolManager(),
+	subscription: {
+		notifications: supported,
+		listen: (_notifications, options) => {
+			options.signal?.throwIfAborted()
+			return changes()
+		},
+	},
+})
+server.methods.method('subscriptions/listen') // registered on the same modern seam
+```
+
 ### Factories
 
 | API                           | Kind     | Summary                                                                                                                                                                                |
 | ----------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createMCPServer`             | function | Create an `MCPServerInterface` exposing a live `ToolManagerInterface` over JSON-RPC 2.0 (`initialize` / `ping` / `tools/list` / `tools/call`).                                         |
+| `createMCPServer`             | function | Create an `MCPServerInterface` exposing tools plus an optional event-driven subscription source over JSON-RPC 2.0.                                                                     |
 | `createMCPClient`             | function | Create an `MCPClientInterface` that drives a REMOTE server over an injected transport and exposes its tools as local `ToolInterface`s.                                                 |
 | `createDuplexClientTransport` | function | Adapt an `MCPTransportInterface` into a `ClientTransportInterface` — the additive bridge letting `createMCPClient` run over the new environment-agnostic port; pair with `bindClient`. |
 
 ### Entities
 
-| API         | Kind  | Summary                                                                                                                                 |
-| ----------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `MCPServer` | class | The transport-agnostic JSON-RPC dispatch core over a `ToolManagerInterface` — `dispatch` (typed) + `handle` (string).                   |
-| `MCPClient` | class | The transport-agnostic dual-era JSON-RPC client over a `ClientTransportInterface` — negotiate once, then `discover` / `tools` / `call`. |
-| `MCPError`  | class | A remote JSON-RPC error preserving its numeric `code` and optional `error.data` as `context`.                                           |
+| API                | Kind  | Summary                                                                                                                                 |
+| ------------------ | ----- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `MCPServer`        | class | The transport-agnostic JSON-RPC dispatch core over a `ToolManagerInterface` — `dispatch` (typed) + `handle` (string).                   |
+| `MCPMethodManager` | class | The modern method registry `MCPServer` registers its built-ins on and resolves every modern method from — `add` + `method`.             |
+| `MCPClient`        | class | The transport-agnostic dual-era JSON-RPC client over a `ClientTransportInterface` — negotiate once, then `discover` / `tools` / `call`. |
+| `MCPError`         | class | A remote JSON-RPC error preserving its numeric `code` and optional `error.data` as `context`.                                           |
 
 ### Constants
 
@@ -186,6 +305,7 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 | `MCP_META_CAPABILITIES`       | const | `'io.modelcontextprotocol/clientCapabilities'` — reserved capability metadata key.   |
 | `MCP_META_CLIENT`             | const | `'io.modelcontextprotocol/clientInfo'` — reserved client-identity metadata key.      |
 | `MCP_META_SERVER`             | const | `'io.modelcontextprotocol/serverInfo'` — reserved server-identity metadata key.      |
+| `MCP_META_SUBSCRIPTION`       | const | `'io.modelcontextprotocol/subscriptionId'` — reserved subscription-id metadata key.  |
 | `MCP_HEADER_MISMATCH`         | const | `-32020` — required HTTP metadata does not match the request body.                   |
 | `MCP_MISSING_CAPABILITY`      | const | `-32021` — an operation needs an undeclared client capability.                       |
 | `MCP_UNSUPPORTED_VERSION`     | const | `-32022` — the request names an unsupported protocol revision.                       |
@@ -202,60 +322,79 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 
 ### Helpers
 
-| API                     | Kind     | Summary                                                                                                                                                    |
-| ----------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `isRequestId`           | function | Total guard: a JSON-RPC REQUEST `id` — a string / number / absent (`null` is valid only on a response).                                                    |
-| `isJSONRPCRequest`      | function | Total guard: a record with `jsonrpc: '2.0'` + a string `method`; an absent `id` ⇒ a notification.                                                          |
-| `isJSONRPCResponse`     | function | Total guard: `jsonrpc: '2.0'` + an `id` (string / number / `null`) + EXACTLY ONE of `result` / `error`.                                                    |
-| `isJSONRPCMessage`      | function | Total guard — the union of `isJSONRPCRequest` and `isJSONRPCResponse`.                                                                                     |
-| `isInitializeRequest`   | function | Total guard — a `JSONRPCRequest` whose `method` is `'initialize'`.                                                                                         |
-| `isMCPVersion`          | function | Total guard — narrows a string to a supported `MCPVersion`.                                                                                                |
-| `isModernRequest`       | function | Total guard — modern iff `params._meta` carries the reserved protocol-version key.                                                                         |
-| `isMCPError`            | function | Total guard — `true` only for a real `MCPError`.                                                                                                           |
-| `parseJSONRPCMessage`   | function | Narrow an already-parsed value to a `JSONRPCMessage`, or `undefined` (total; sound with `isJSONRPCMessage`).                                               |
-| `parseRequestContext`   | function | Coerce valid modern metadata to `MCPRequestContext`, or `undefined` for malformed required metadata.                                                       |
-| `inferEra`              | function | Map a supported revision to `modern` or `legacy`; unsupported revisions return `undefined`.                                                                |
-| `inferVersion`          | function | Select the newest locally supported revision present in a peer's offer.                                                                                    |
-| `buildJSONRPCResult`    | function | Build a success `JSONRPCResponse` — the `id` echoed, the value as `result`.                                                                                |
-| `buildJSONRPCError`     | function | Build an error `JSONRPCResponse` — the `id`, a reserved `code` / `message`, and optional `data`.                                                           |
-| `buildToolDescriptors`  | function | Map a `ToolManagerInterface`'s definitions to `tools/list` descriptors, renaming `parameters` → `inputSchema`.                                             |
-| `buildCallResult`       | function | Map a `ToolResult` (`@orkestrel/tool`) to an MCP tool-call result — the value (or error text + `isError: true`) as a text block.                           |
-| `buildDiscoverResult`   | function | Build the required modern `server/discover` result with supported revisions and cache stamps.                                                              |
-| `buildModernResult`     | function | Stamp a modern result with `resultType`, server metadata, and cache fields only when a TTL is supplied.                                                    |
-| `buildInitializeResult` | function | Build the `initialize` result — the negotiated `protocolVersion`, `capabilities`, and `serverInfo`.                                                        |
-| `bindServer`            | function | Pipe an `MCPTransportInterface` into an `MCPServerInterface` — inbound `handle`d, a defined reply `send`; returns an unbind (detaches without closing).    |
-| `bindClient`            | function | Pipe an `MCPTransportInterface` into an `MCPClientInterface` (built over `createDuplexClientTransport`) — completes the inbound wiring; returns an unbind. |
+| API                                | Kind     | Summary                                                                                                                                                    |
+| ---------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `isRequestId`                      | function | Total guard: a JSON-RPC REQUEST `id` — a string / number / absent (`null` is valid only on a response).                                                    |
+| `isJSONRPCRequest`                 | function | Total guard: a record with `jsonrpc: '2.0'` + a string `method`; an absent `id` ⇒ a notification.                                                          |
+| `isJSONRPCResponse`                | function | Total guard: `jsonrpc: '2.0'` + an `id` (string / number / `null`) + EXACTLY ONE of `result` / `error`.                                                    |
+| `isJSONRPCMessage`                 | function | Total guard — the union of `isJSONRPCRequest` and `isJSONRPCResponse`.                                                                                     |
+| `isInitializeRequest`              | function | Total guard — a `JSONRPCRequest` whose `method` is `'initialize'`.                                                                                         |
+| `isMCPVersion`                     | function | Total guard — narrows a string to a supported `MCPVersion`.                                                                                                |
+| `isSubscriptionFilter`             | function | Total guard — validates the recognized fields of an open modern subscription filter.                                                                       |
+| `isModernRequest`                  | function | Total guard — modern iff `params._meta` carries the reserved protocol-version key.                                                                         |
+| `isMCPError`                       | function | Total guard — `true` only for a real `MCPError`.                                                                                                           |
+| `parseJSONRPCMessage`              | function | Narrow an already-parsed value to a `JSONRPCMessage`, or `undefined` (total; sound with `isJSONRPCMessage`).                                               |
+| `parseRequestContext`              | function | Coerce valid modern metadata to `MCPRequestContext`, or `undefined` for malformed required metadata.                                                       |
+| `inferEra`                         | function | Map a supported revision to `modern` or `legacy`; unsupported revisions return `undefined`.                                                                |
+| `inferVersion`                     | function | Select the newest locally supported revision present in a peer's offer.                                                                                    |
+| `buildJSONRPCResult`               | function | Build a success `JSONRPCResponse` — the `id` echoed, the value as `result`.                                                                                |
+| `buildJSONRPCError`                | function | Build an error `JSONRPCResponse` — the `id`, a reserved `code` / `message`, and optional `data`.                                                           |
+| `buildToolDescriptors`             | function | Map a `ToolManagerInterface`'s definitions to `tools/list` descriptors, renaming `parameters` → `inputSchema`.                                             |
+| `buildCallResult`                  | function | Map a `ToolResult` (`@orkestrel/tool`) to an MCP tool-call result — the value (or error text + `isError: true`) as a text block.                           |
+| `buildDiscoverResult`              | function | Build the required modern `server/discover` result with supported revisions and cache stamps.                                                              |
+| `buildModernResult`                | function | Stamp a modern result with `resultType`, server metadata, and cache fields only when a TTL is supplied.                                                    |
+| `buildSubscriptionFilter`          | function | Intersect requested notification families and resource URIs with the server's declared support.                                                            |
+| `matchesSubscriptionNotification`  | function | Test whether a produced notification belongs to an acknowledged subscription filter.                                                                       |
+| `stampSubscriptionNotification`    | function | Stamp a delivered notification with its reserved subscription id while preserving other params and metadata.                                               |
+| `buildSubscriptionAcknowledgement` | function | Build the first id-carrying acknowledgement with the exact honoured notification subset.                                                                   |
+| `buildSubscriptionResult`          | function | Build the graceful complete result carrying the request id as subscription identity.                                                                       |
+| `buildInitializeResult`            | function | Build the `initialize` result — the negotiated `protocolVersion`, `capabilities`, and `serverInfo`.                                                        |
+| `serializeStream`                  | function | Serialize a held-open `MCPStream` into its `MCPTextStream` mirror — each notification, then the terminating response as the RETURN value.                  |
+| `sendStream`                       | function | Pump an `MCPTextStream` onto an `MCPTransportInterface` — every notification in order, then the terminating response last.                                 |
+| `bindServer`                       | function | Pipe an `MCPTransportInterface` into an `MCPServerInterface` — inbound `handle`d, a defined reply `send` (a held-open one pumped); returns an unbind.      |
+| `bindClient`                       | function | Pipe an `MCPTransportInterface` into an `MCPClientInterface` (built over `createDuplexClientTransport`) — completes the inbound wiring; returns an unbind. |
 
 ### Types
 
-| Type                       | Kind      | Shape                                                                                                                                                                                                                      |
-| -------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `JSONRPCRequest`           | interface | `{ jsonrpc: '2.0'; method: string; id?: string \| number; params?: Record<string, unknown> }` — an absent `id` marks a notification.                                                                                       |
-| `JSONRPCErrorData`         | interface | `{ code: number; message: string; data?: unknown }` — the `error` member of a failed response.                                                                                                                             |
-| `JSONRPCResponse`          | interface | `{ jsonrpc: '2.0'; id: string \| number \| null; result?: unknown; error?: JSONRPCErrorData }` — EITHER `result` OR `error`.                                                                                               |
-| `JSONRPCMessage`           | type      | `JSONRPCRequest \| JSONRPCResponse` — a message on the wire.                                                                                                                                                               |
-| `MCPVersion`               | type      | `'2026-07-28' \| '2025-11-25' \| '2025-06-18'` — a supported protocol revision.                                                                                                                                            |
-| `MCPEra`                   | type      | `'modern' \| 'legacy'` — the structural wire era.                                                                                                                                                                          |
-| `MCPContent`               | interface | `{ type: 'text'; text: string }` — one content block of a tool-call result.                                                                                                                                                |
-| `MCPCallResult`            | interface | `{ content; isError?; resultType?; _meta? }` — a `tools/call` result with optional modern stamps.                                                                                                                          |
-| `MCPListResult`            | interface | `{ tools; resultType?; ttlMs?; cacheScope?; _meta? }` — a legacy or modern `tools/list` result.                                                                                                                            |
-| `MCPToolDescriptor`        | interface | `{ name: string; description?: string; inputSchema: Record<string, unknown> }` — one `tools/list` entry.                                                                                                                   |
-| `MCPIdentity`              | interface | `{ name: string; version: string }` — the identity echoed in the `initialize` result.                                                                                                                                      |
-| `MCPRequestContext`        | interface | `{ version: string; capabilities: Record<string, unknown>; identity?: MCPIdentity }` — validated modern request metadata.                                                                                                  |
-| `MCPDiscoverResult`        | interface | Required modern discovery fields: supported revisions, capabilities, complete-result and cache stamps, optional instructions and metadata.                                                                                 |
-| `MCPServerEventMap`        | type      | `{ request: [method, id, era]; error: [unknown] }` — the observation surface (`era` is selected structurally per request; `error` is a bound-transport fault).                                                             |
-| `MCPServerOptions`         | interface | `{ on?; error?; identity; tools; instructions?; cache? }` — options for `createMCPServer`.                                                                                                                                 |
-| `MCPServerInterface`       | interface | `emitter` / `name` / `version` data members + the `dispatch` / `handle` methods.                                                                                                                                           |
-| `MCPTransportInterface`    | interface | `{ send(message: string): void \| Promise<void>; listen(handler): void; closed(handler): void; close(): void \| Promise<void> }` — the environment-agnostic duplex message-channel port `bindServer` / `bindClient` drive. |
-| `ClientTransportEventMap`  | type      | `{ message: [JSONRPCMessage]; close: []; error: [unknown] }` — the transport events.                                                                                                                                       |
-| `ClientTransportInterface` | interface | `emitter` / `session` data members + the `start` / `send` / `close` methods — the client's transport-agnostic carrier.                                                                                                     |
-| `MCPClientEventMap`        | type      | `{ connect: []; disconnect: []; notification: [JSONRPCMessage]; error: [unknown] }`.                                                                                                                                       |
-| `MCPClientOptions`         | interface | `{ on?; error?; transport; identity?; capabilities?; version?; timeout? }` — options for `createMCPClient`.                                                                                                                |
-| `MCPClientInterface`       | interface | `emitter` / `connected` / `version` / `transport` data members + the `on` / `connect` / `discover` / `disconnect` / `tools` / `call` methods.                                                                              |
+| Type                                  | Kind      | Shape                                                                                                                                                                                                                      |
+| ------------------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JSONRPCRequest`                      | interface | `{ jsonrpc: '2.0'; method: string; id?: string \| number; params?: Record<string, unknown> }` — an absent `id` marks a notification.                                                                                       |
+| `JSONRPCErrorData`                    | interface | `{ code: number; message: string; data?: unknown }` — the `error` member of a failed response.                                                                                                                             |
+| `JSONRPCResponse`                     | interface | `{ jsonrpc: '2.0'; id: string \| number \| null; result?: unknown; error?: JSONRPCErrorData }` — EITHER `result` OR `error`.                                                                                               |
+| `JSONRPCMessage`                      | type      | `JSONRPCRequest \| JSONRPCResponse` — a message on the wire.                                                                                                                                                               |
+| `MCPVersion`                          | type      | `'2026-07-28' \| '2025-11-25' \| '2025-06-18'` — a supported protocol revision.                                                                                                                                            |
+| `MCPEra`                              | type      | `'modern' \| 'legacy'` — the structural wire era.                                                                                                                                                                          |
+| `MCPContent`                          | interface | `{ type: 'text'; text: string }` — one content block of a tool-call result.                                                                                                                                                |
+| `MCPCallResult`                       | interface | `{ content; isError?; resultType?; _meta? }` — a `tools/call` result with optional modern stamps.                                                                                                                          |
+| `MCPListResult`                       | interface | `{ tools; resultType?; ttlMs?; cacheScope?; _meta? }` — a legacy or modern `tools/list` result.                                                                                                                            |
+| `MCPToolDescriptor`                   | interface | `{ name: string; description?: string; inputSchema: Record<string, unknown> }` — one `tools/list` entry.                                                                                                                   |
+| `MCPIdentity`                         | interface | `{ name: string; version: string }` — the identity echoed in the `initialize` result.                                                                                                                                      |
+| `MCPRequestContext`                   | interface | `{ version: string; capabilities: Record<string, unknown>; identity?: MCPIdentity }` — validated modern request metadata.                                                                                                  |
+| `MCPDiscoverResult`                   | interface | Required modern discovery fields: supported revisions, capabilities, complete-result and cache stamps, optional instructions and metadata.                                                                                 |
+| `SubscriptionFilter`                  | interface | Optional tool, prompt, resource-list, and resource-URI notification families for `subscriptions/listen`.                                                                                                                   |
+| `SubscriptionsListenResultMetaObject` | interface | Required graceful-close metadata carrying the reserved subscription id.                                                                                                                                                    |
+| `SubscriptionsListenResult`           | interface | `{ resultType: 'complete'; _meta: SubscriptionsListenResultMetaObject }` — a graceful subscription closure.                                                                                                                |
+| `MCPDispatchOptions`                  | interface | `{ signal?: AbortSignal }` — the per-request execution options every dispatched handler receives; the signal aborts when the caller's request ends.                                                                        |
+| `MCPSubscriptionHandler`              | type      | `(notifications, options) => AsyncIterable<JSONRPCRequest>` (or a promise of one) — an event-driven notification producer.                                                                                                 |
+| `MCPSubscriptionOptions`              | interface | `{ notifications; listen }` — the supported filter and producer for the built-in subscription method.                                                                                                                      |
+| `MCPStream`                           | type      | `AsyncGenerator<JSONRPCRequest, JSONRPCResponse>` — a held-open result: each `yield` is a notification, the `return` value is the terminating response.                                                                    |
+| `MCPTextStream`                       | type      | `AsyncGenerator<string, string>` — the string-boundary mirror of `MCPStream`, the same sequence already serialized.                                                                                                        |
+| `MCPMethodHandler`                    | type      | `(request, options) => Promise<JSONRPCResponse \| MCPStream \| undefined>` — one modern method, registered on the seam that dispatches it.                                                                                 |
+| `MCPMethodManagerInterface`           | interface | The modern method registry — the `add` / `method` methods, carrying both the built-in methods and any method a consumer adds.                                                                                              |
+| `MCPServerEventMap`                   | type      | `{ request: [method, id, era]; error: [unknown] }` — the observation surface (`era` is selected structurally per request; `error` is a bound-transport fault).                                                             |
+| `MCPServerOptions`                    | interface | `{ on?; error?; identity; tools; instructions?; cache?; subscription? }` — options for `createMCPServer`.                                                                                                                  |
+| `MCPServerInterface`                  | interface | `emitter` / `identity` / `methods` data members + the `dispatch` / `handle` methods.                                                                                                                                       |
+| `MCPTransportInterface`               | interface | `{ send(message: string): void \| Promise<void>; listen(handler): void; closed(handler): void; close(): void \| Promise<void> }` — the environment-agnostic duplex message-channel port `bindServer` / `bindClient` drive. |
+| `ClientTransportEventMap`             | type      | `{ message: [JSONRPCMessage]; close: []; error: [unknown] }` — the transport events.                                                                                                                                       |
+| `ClientTransportInterface`            | interface | `emitter` / `session` data members + the `start` / `send` / `close` methods — the client's transport-agnostic carrier.                                                                                                     |
+| `MCPClientEventMap`                   | type      | `{ connect: []; disconnect: []; notification: [JSONRPCMessage]; error: [unknown] }`.                                                                                                                                       |
+| `MCPClientOptions`                    | interface | `{ on?; error?; transport; identity?; capabilities?; version?; timeout? }` — options for `createMCPClient`.                                                                                                                |
+| `MCPClientInterface`                  | interface | `emitter` / `connected` / `version` / `transport` data members + the `on` / `connect` / `discover` / `disconnect` / `tools` / `call` methods.                                                                              |
 
-The `emitter`, `name`, and `version` members of `MCPServerInterface` are
+The `emitter`, `identity`, and `methods` members of `MCPServerInterface` are
 `readonly` data members (Surface rows, above) — its call-signature methods
-are documented under [Methods](#methods). Likewise the `emitter` /
+are documented under [Methods](#methods), and the registry `methods` exposes
+has its own method table there. Likewise the `emitter` /
 `connected` / `version` / `transport` members of `MCPClientInterface` and
 the `emitter` / `session` members of `ClientTransportInterface` are data
 members; their methods are under [Methods](#methods). The `id` member of
@@ -288,9 +427,13 @@ that is not a JSON-RPC request, is an HTTP `400` carrying a JSON-RPC error
 body (`-32700` / `-32600`, id `null`). Legacy dispatch results retain uniform
 HTTP `200` with in-band errors. Modern responses use `202` for notifications,
 `400` for `-32020` / `-32021` / `-32022` / `-32602`, `404` for `-32601`, and
-`200` otherwise. A client that `Accept`s `text/event-stream` gets the reply
-framed as one `@orkestrel/server` `openStream` SSE `data:` event, then the
-stream ends with `X-Accel-Buffering: no`; otherwise a plain JSON body.
+`200` otherwise. A unary reply is framed as one `@orkestrel/server` `openStream`
+SSE `data:` event when streaming is enabled and the client accepts event-stream,
+then the stream ends with `X-Accel-Buffering: no`; otherwise it is a plain JSON
+body. A held-open `MCPStream` always occupies that same SSE seam: every yielded
+notification is written in order, the generator's returned response is written
+last, and only then does the HTTP stream end. Waiting is on the producer's async
+iterator, never polling.
 
 A modern POST requires `MCP-Protocol-Version` equal to its reserved `_meta`
 version and `Mcp-Method` equal to its body method. `Mcp-Name` is required only
@@ -652,7 +795,8 @@ inside a hostable scope and wire its message events to it.
 The public methods of the layer's behavioral interfaces — every call-signature
 member listed (their `readonly` data members stay Surface rows). Each
 implementing class exposes EXACTLY its interface's methods: `MCPServer` ↔
-`MCPServerInterface`, `MCPClient` ↔ `MCPClientInterface`, the SEVEN transports
+`MCPServerInterface`, `MCPMethodManager` ↔ `MCPMethodManagerInterface`,
+`MCPClient` ↔ `MCPClientInterface`, the SEVEN transports
 `HTTPClientTransport` / `WebSocketServerTransport` / `WebSocketClientTransport`
 / `StdioClientTransport` / `StdioServerTransport` (`src/server`) PLUS the
 browser face's own `HTTPClientTransport` / `WebSocketClientTransport`
@@ -665,22 +809,56 @@ behavioral interface), and the session entity `MCPSession` ↔
 #### `MCPServerInterface`
 
 `dispatch` is the typed JSON-RPC core (runs a parsed request, resolves the
-response or `undefined` for a notification); `handle` is the string boundary
-that wraps it with parse / serialize and the parse / invalid-request error
-mapping.
+response, a held-open `MCPStream`, or `undefined` for a notification);
+`handle` is the string boundary that wraps it with parse / serialize and the
+parse / invalid-request error mapping. Both take an optional
+`MCPDispatchOptions` bag, so every existing caller compiles unchanged.
 
-| Method     | Returns                                 | Behavior                                                                                                                                                                  |
-| ---------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dispatch` | `Promise<JSONRPCResponse \| undefined>` | Select the structural era, emit `request(method, id, era)`, then run the modern or legacy method branch; resolve the response, or `undefined` for any notification.       |
-| `handle`   | `Promise<string \| undefined>`          | `JSON.parse` → narrow to a request → `dispatch` → `JSON.stringify`. A parse failure → a `-32700` string; a non-request → a `-32600` string; a notification → `undefined`. |
+| Method     | Returns                                              | Behavior                                                                                                                                                                                            |
+| ---------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dispatch` | `Promise<JSONRPCResponse \| MCPStream \| undefined>` | Select the structural era, emit `request(method, id, era)`, then run the legacy switch or resolve the modern method from `methods`; resolve its answer, or `undefined` for any notification.        |
+| `handle`   | `Promise<string \| MCPTextStream \| undefined>`      | `JSON.parse` → narrow to a request → `dispatch` → serialize. A parse failure → a `-32700` string; a non-request → a `-32600` string; a notification → `undefined`; a held-open answer → its mirror. |
 
 ```ts
 import { createMCPServer } from '@orkestrel/mcp'
 import { createToolManager } from '@orkestrel/tool'
 
-const server = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
+const server = createMCPServer({
+	identity: { name: 'docs', version: '1.0.0' },
+	tools: createToolManager(),
+})
 const response = await server.dispatch({ jsonrpc: '2.0', method: 'tools/list', id: 1 })
-const reply = await server.handle('{"jsonrpc":"2.0","method":"ping","id":2}')
+const reply = await server.handle('{"jsonrpc":"2.0","method":"ping","id":2}', {
+	signal: controller.signal,
+})
+```
+
+#### `MCPMethodManagerInterface`
+
+The modern method seam `server.methods` exposes — `add` registers (or
+replaces) one method, `method` resolves one. The server registers
+`server/discover`, `tools/list`, `tools/call`, and `subscriptions/listen` here at construction and
+resolves EVERY modern method from here, so there is no second dispatch path
+and no precedence puzzle.
+
+| Method   | Returns                         | Behavior                                                                                                                            |
+| -------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `add`    | `void`                          | Register one modern method under a JSON-RPC method name, REPLACING any handler already registered under it.                         |
+| `method` | `MCPMethodHandler \| undefined` | Resolve the handler registered for a method name; `undefined` for an unregistered one, which the modern branch turns into `-32601`. |
+
+```ts
+import { buildJSONRPCResult, createMCPServer } from '@orkestrel/mcp'
+import { createToolManager } from '@orkestrel/tool'
+
+const server = createMCPServer({
+	identity: { name: 'docs', version: '1.0.0' },
+	tools: createToolManager(),
+})
+server.methods.add('demo/probe', async (request) =>
+	buildJSONRPCResult(request.id ?? null, { probed: true }),
+)
+server.methods.method('demo/probe') // the handler just registered
+server.methods.method('demo/absent') // undefined → -32601
 ```
 
 #### `MCPClientInterface`
@@ -780,12 +958,15 @@ transport` tables) is a real export of the mcp layer (`src/core` or
 '2.0', id, … }` with EXACTLY ONE of `result` / `error`; the `id` echoes the
    request's id (or `null` only on a `handle` parse / invalid-request error).
    `handle` serializes that envelope with `JSON.stringify` and returns the
-   string.
+   string. A HELD-OPEN answer is the other arm of the same return: `dispatch`
+   resolves an `MCPStream` and `handle` its serialized `MCPTextStream` mirror,
+   narrowed apart at ONE point (`Symbol.asyncIterator in result`). The stream's
+   `return` value is the terminating response and obeys this same envelope.
 3. **Notifications yield no response.** A request with NO `id` is a
    notification: `dispatch` emits `request` (with a `null` id and the structural era) and then
    resolves `undefined` WHATEVER the method (`ping`, `notifications/initialized`,
-   an unknown method — all silent); `handle` returns `undefined`. The method
-   switch only ever runs for an id-bearing request.
+   an unknown method — all silent); `handle` returns `undefined`. Neither era
+   branch ever runs for a request without an `id`.
 4. **The four methods.** `initialize` → `{ protocolVersion, capabilities: {
 tools: {} }, serverInfo: { name, version } }`, the version NEGOTIATED
    (echo the client's `params.protocolVersion` when it is one of
@@ -807,8 +988,23 @@ tools: {} }, serverInfo: { name, version } }`, the version NEGOTIATED
    `error` maps to `{ content: [{ type: 'text', text: <error> }], isError: true }`;
    the `success: true` branch's `value` maps to
    `{ content: [{ type: 'text', text: JSON.stringify(value) }] }`.
-6. **Unknown method → `-32601`.** An id-bearing request for any other method
-   resolves a `JSONRPC_METHOD_NOT_FOUND` error whose message names the method.
+6. **One modern seam, subscriptions included, and `-32601` for anything off it.**
+   `server/discover`, `tools/list`, `tools/call`, and `subscriptions/listen` are registered on `server.methods` at
+   construction and EVERY modern method is resolved from there — `add` under an
+   existing name replaces it, so a consumer's override wins by ordinary
+   registration rather than by a precedence rule, and there is no second
+   dispatch path. An id-bearing request whose method resolves to `undefined`
+   (modern) or falls off the fixed legacy switch resolves a
+   `JSONRPC_METHOD_NOT_FOUND` error whose message names the method. The modern
+   metadata checks (`-32602`, `-32022`) run BEFORE the seam is consulted, and
+   the legacy branch never consults it at all. A modern `subscriptions/listen`
+   requires `params.notifications`; the server acknowledges the exact intersection
+   with its configured support, and that acknowledgement is the first message
+   carrying this request's reserved subscription id. Every delivered notification
+   carries the same stamp. Ending the event-driven producer closes gracefully with
+   `{ resultType: 'complete', _meta: { 'io.modelcontextprotocol/subscriptionId': id,
+… } }`. The request id is only stream identity: a later request does not supersede
+   an earlier one. The legacy method remains absent and answers `-32601`.
 7. **`handle` maps the boundary failures.** A `JSON.parse` throw (malformed
    JSON) → a serialized `-32700` (Parse error) response with a `null` id; a
    parsed value that is not a valid REQUEST (a response, or any non-message)
@@ -816,7 +1012,7 @@ tools: {} }, serverInfo: { name, version } }`, the version NEGOTIATED
    raw-string parse is the ONLY `try`/`catch`; the guards (`parseJSONRPCMessage`
    over `isJSONRPCMessage`) are total and never throw.
 8. **Total wire guards.** `isJSONRPCRequest` / `isJSONRPCResponse` /
-   `isJSONRPCMessage` / `isInitializeRequest` are total functions over an
+   `isJSONRPCMessage` / `isInitializeRequest` / `isSubscriptionFilter` are total functions over an
    already-parsed `unknown` — adversarial input returns `false`, never
    throws. A request accepts an absent `id` (a notification) but rejects a
    `null` id (valid only on a response); a response requires an `id` (string /
@@ -885,7 +1081,10 @@ in request`, no `as`) — is HTTP **400** with a JSON-RPC error BODY (id
     layer. When `streaming` is enabled (default `true`) and the client
     `Accept`s `text/event-stream` (`acceptsEventStream`), the 200 reply is one
     SSE `data:` event over `@orkestrel/server`'s `openStream` seam, then the
-    stream ends, carrying `X-Accel-Buffering: no`; else a plain JSON body.
+    stream ends, carrying `X-Accel-Buffering: no`; else a plain JSON body. A
+    held-open dispatch result always uses that SSE seam: yields are written in
+    order, the generator's returned response is written last, and the response
+    ends after it. The pump awaits the async iterator and never polls.
     `createMCPRoutes` mints / reads NO
     session id. It is MECHANISM, not policy: auth / rate-limiting / sessions
     compose IN FRONT as ordinary middleware; origin policy is only the

@@ -3,10 +3,15 @@ import type {
 	JSONRPCRequest,
 	JSONRPCResponse,
 	MCPCallResult,
+	MCPDispatchOptions,
 	MCPIdentity,
+	MCPMethodManagerInterface,
 	MCPServerEventMap,
 	MCPServerInterface,
 	MCPServerOptions,
+	MCPStream,
+	MCPTextStream,
+	SubscriptionFilter,
 } from './types.js'
 import { Emitter } from '@orkestrel/emitter'
 import { isRecord, isString } from '@orkestrel/contract'
@@ -26,11 +31,18 @@ import {
 	buildJSONRPCError,
 	buildJSONRPCResult,
 	buildModernResult,
+	buildSubscriptionAcknowledgement,
+	buildSubscriptionFilter,
+	buildSubscriptionResult,
 	buildToolDescriptors,
+	matchesSubscriptionNotification,
+	serializeStream,
+	stampSubscriptionNotification,
 } from './helpers.js'
 import { inferEra } from './inferers.js'
+import { MCPMethodManager } from './MCPMethodManager.js'
 import { parseJSONRPCMessage, parseRequestContext } from './parsers.js'
-import { isModernRequest } from './validators.js'
+import { isModernRequest, isSubscriptionFilter } from './validators.js'
 
 /**
  * A transport-agnostic Model Context Protocol server — dispatches JSON-RPC 2.0
@@ -44,10 +56,14 @@ import { isModernRequest } from './validators.js'
  *   a request (a non-request → a `-32600` response), dispatches, and serializes the
  *   response back to a string (`undefined` for a notification).
  * - **Dual-era dispatch.** A request carrying the reserved modern version key uses
- *   modern metadata validation and the `server/discover` / `tools/list` /
- *   `tools/call` method set. Every other request uses the legacy `initialize` /
- *   `ping` / `tools/list` / `tools/call` switch. The wire era is selected per
- *   request and never stored.
+ *   modern metadata validation and the registered method seam. Every other request
+ *   uses the legacy `initialize` / `ping` / `tools/list` / `tools/call` switch. The
+ *   wire era is selected per request and never stored.
+ * - **One modern seam.** `server/discover`, `tools/list`, `tools/call`, and
+ *   `subscriptions/listen` are
+ *   registered on `methods` at construction and resolved from it on every dispatch —
+ *   the same path a later method or a consumer's own takes, with an unregistered
+ *   method still answering `-32601`.
  * - **Provider-agnostic.** Imports only core siblings — JSON-RPC + the tool registry,
  *   no HTTP, no model. Wire fields are narrowed via the contracts guards (no `as`).
  * - **Observable (§13).** The owned `emitter` fires `request` at the top of every
@@ -65,6 +81,7 @@ import { isModernRequest } from './validators.js'
 export class MCPServer implements MCPServerInterface {
 	readonly #emitter: Emitter<MCPServerEventMap>
 	readonly #options: MCPServerOptions
+	readonly #methods: MCPMethodManager
 
 	constructor(options: MCPServerOptions) {
 		this.#emitter = new Emitter<MCPServerEventMap>({
@@ -72,6 +89,8 @@ export class MCPServer implements MCPServerInterface {
 			...(options.error !== undefined ? { error: options.error } : {}),
 		})
 		this.#options = options
+		this.#methods = new MCPMethodManager()
+		this.#register()
 	}
 
 	get emitter(): EmitterInterface<MCPServerEventMap> {
@@ -82,7 +101,14 @@ export class MCPServer implements MCPServerInterface {
 		return this.#options.identity
 	}
 
-	async dispatch(request: JSONRPCRequest): Promise<JSONRPCResponse | undefined> {
+	get methods(): MCPMethodManagerInterface {
+		return this.#methods
+	}
+
+	async dispatch(
+		request: JSONRPCRequest,
+		options: MCPDispatchOptions = {},
+	): Promise<JSONRPCResponse | MCPStream | undefined> {
 		const id = request.id ?? null
 		const modern = isModernRequest(request)
 		const era = modern ? 'modern' : 'legacy'
@@ -90,15 +116,18 @@ export class MCPServer implements MCPServerInterface {
 		// JSON-RPC: a request with NO `id` is a NOTIFICATION — it is handled (the
 		// `request` event already fired) but NEVER produces a response, whatever its
 		// method (`notifications/initialized`, a fire-and-forget `ping`, an unknown
-		// method — all silent). So short-circuit here, and the switch below only ever
-		// runs for an id-bearing request that expects a reply.
+		// method — all silent). So short-circuit here, and the branches below only ever
+		// run for an id-bearing request that expects a reply.
 		if (request.id === undefined) {
 			return undefined
 		}
-		return modern ? this.#modern(request, id) : this.#legacy(request, id)
+		return modern ? this.#modern(request, id, options) : this.#legacy(request, id)
 	}
 
-	async handle(message: string): Promise<string | undefined> {
+	async handle(
+		message: string,
+		options?: MCPDispatchOptions,
+	): Promise<string | MCPTextStream | undefined> {
 		let parsed: unknown
 		try {
 			parsed = JSON.parse(message)
@@ -110,8 +139,11 @@ export class MCPServer implements MCPServerInterface {
 		if (decoded === undefined || !('method' in decoded)) {
 			return JSON.stringify(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request'))
 		}
-		const response = await this.dispatch(decoded)
-		return response === undefined ? undefined : JSON.stringify(response)
+		const answer = await this.dispatch(decoded, options)
+		if (answer === undefined) return undefined
+		// The ONE narrowing point (§4.3): a held-open answer becomes the string mirror of
+		// itself, so the string boundary stays a mirror of the typed core.
+		return Symbol.asyncIterator in answer ? serializeStream(answer) : JSON.stringify(answer)
 	}
 
 	async #legacy(request: JSONRPCRequest, id: string | number | null): Promise<JSONRPCResponse> {
@@ -134,7 +166,7 @@ export class MCPServer implements MCPServerInterface {
 					tools: buildToolDescriptors(this.#options.tools),
 				})
 			case 'tools/call': {
-				const result = await this.#call(request, id)
+				const result = await this.#runTool(request, id)
 				return 'jsonrpc' in result ? result : buildJSONRPCResult(id, result)
 			}
 			default:
@@ -146,7 +178,23 @@ export class MCPServer implements MCPServerInterface {
 		}
 	}
 
-	async #modern(request: JSONRPCRequest, id: string | number | null): Promise<JSONRPCResponse> {
+	// Register the built-in modern methods on the seam `#modern` resolves from — the
+	// point of the seam is that these four are not special: they are the first four
+	// registrations, and a later one (or a consumer's) replaces or joins them in place.
+	#register(): void {
+		this.#methods.add('server/discover', (request) => this.#discover(request))
+		this.#methods.add('tools/list', (request) => this.#list(request))
+		this.#methods.add('tools/call', (request) => this.#call(request))
+		this.#methods.add('subscriptions/listen', (request, options) =>
+			this.#subscribe(request, options),
+		)
+	}
+
+	async #modern(
+		request: JSONRPCRequest,
+		id: string | number | null,
+		options: MCPDispatchOptions,
+	): Promise<JSONRPCResponse | MCPStream | undefined> {
 		const context = parseRequestContext(request)
 		if (context === undefined) {
 			return buildJSONRPCError(
@@ -163,38 +211,87 @@ export class MCPServer implements MCPServerInterface {
 				{ supported: SUPPORTED_PROTOCOL_VERSIONS, requested: context.version },
 			)
 		}
-		switch (request.method) {
-			case 'server/discover':
-				return buildJSONRPCResult(id, buildDiscoverResult(this.#options))
-			case 'tools/list':
-				return buildJSONRPCResult(
-					id,
-					buildModernResult(
-						{ tools: buildToolDescriptors(this.#options.tools) },
-						this.#options.identity,
-						this.#options.cache?.ttl ?? DEFAULT_MCP_CACHE_TTL,
-						this.#options.cache?.scope,
-					),
-				)
-			case 'tools/call': {
-				const result = await this.#call(request, id)
-				return 'jsonrpc' in result
-					? result
-					: buildJSONRPCResult(id, buildModernResult(result, this.#options.identity))
-			}
-			default:
-				return buildJSONRPCError(
-					id,
-					JSONRPC_METHOD_NOT_FOUND,
-					`Method not found: ${request.method}`,
-				)
+		const handler = this.#methods.method(request.method)
+		if (handler === undefined) {
+			return buildJSONRPCError(id, JSONRPC_METHOD_NOT_FOUND, `Method not found: ${request.method}`)
 		}
+		return handler(request, options)
+	}
+
+	// The built-in `server/discover` handler.
+	async #discover(request: JSONRPCRequest): Promise<JSONRPCResponse> {
+		return buildJSONRPCResult(request.id ?? null, buildDiscoverResult(this.#options))
+	}
+
+	// The built-in modern `tools/list` handler — a cacheable result, so it carries both
+	// schema-coupled cache stamps.
+	async #list(request: JSONRPCRequest): Promise<JSONRPCResponse> {
+		return buildJSONRPCResult(
+			request.id ?? null,
+			buildModernResult(
+				{ tools: buildToolDescriptors(this.#options.tools) },
+				this.#options.identity,
+				this.#options.cache?.ttl ?? DEFAULT_MCP_CACHE_TTL,
+				this.#options.cache?.scope,
+			),
+		)
+	}
+
+	// The built-in modern `tools/call` handler — stamped, and NOT cacheable, so it
+	// carries no cache fields.
+	async #call(request: JSONRPCRequest): Promise<JSONRPCResponse> {
+		const id = request.id ?? null
+		const result = await this.#runTool(request, id)
+		return 'jsonrpc' in result
+			? result
+			: buildJSONRPCResult(id, buildModernResult(result, this.#options.identity))
+	}
+
+	// The built-in modern `subscriptions/listen` handler validates the client's filter,
+	// then returns the event-driven generator that owns acknowledgement and closure order.
+	async #subscribe(
+		request: JSONRPCRequest,
+		options: MCPDispatchOptions,
+	): Promise<JSONRPCResponse | MCPStream> {
+		const id = request.id
+		if (id === undefined) {
+			return buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request')
+		}
+		const requested = request.params?.['notifications']
+		if (!isSubscriptionFilter(requested)) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: a valid `notifications` filter is required',
+			)
+		}
+		return this.#subscription(requested, id, options)
+	}
+
+	async *#subscription(
+		requested: SubscriptionFilter,
+		id: string | number,
+		options: MCPDispatchOptions,
+	): MCPStream {
+		const configured = this.#options.subscription
+		const notifications = buildSubscriptionFilter(requested, configured?.notifications ?? {})
+		yield buildSubscriptionAcknowledgement(notifications, id)
+		if (configured !== undefined) {
+			const source = await configured.listen(notifications, options)
+			for await (const notification of source) {
+				if (matchesSubscriptionNotification(notification, notifications)) {
+					yield stampSubscriptionNotification(notification, id)
+				}
+			}
+		}
+		return buildSubscriptionResult(id, this.#options.identity)
 	}
 
 	// Run a `tools/call`: narrow `params.name` (string) + `params.arguments` (record,
 	// default `{}`) with no `as`, execute the tool (the manager isolates a throw into
-	// `success: false`), and map the result to an MCP tool-call result.
-	async #call(
+	// `success: false`), and map the result to an MCP tool-call result. Shared by both
+	// eras — only the result STAMPING differs between them.
+	async #runTool(
 		request: JSONRPCRequest,
 		id: string | number | null,
 	): Promise<MCPCallResult | JSONRPCResponse> {

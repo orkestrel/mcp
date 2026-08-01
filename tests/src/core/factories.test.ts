@@ -53,14 +53,18 @@ describe('createMCPServer', () => {
 		tools.add(createTool({ name: 'add', execute: (a) => Number(a['x']) + Number(a['y']) }))
 		const server = createMCPServer({ identity: { name: 'demo', version: '1.0.0' }, tools })
 
-		const response = await server.dispatch({
+		const answer = await server.dispatch({
 			jsonrpc: '2.0',
 			method: 'tools/call',
 			id: 1,
 			params: { name: 'add', arguments: { x: 4, y: 6 } },
 		})
+		// A legacy `tools/call` is unary — narrow off the held-open arm before asserting.
+		if (answer === undefined || Symbol.asyncIterator in answer) {
+			throw new Error('expected a unary response, got a held-open stream')
+		}
 
-		expect(response?.result).toEqual({ content: [{ type: 'text', text: '10' }] })
+		expect(answer.result).toEqual({ content: [{ type: 'text', text: '10' }] })
 	})
 
 	it('wires the on hooks (the §8 reserved key) to the emitter', async () => {

@@ -133,6 +133,25 @@ export function createMCPPostHandler(
 			}
 		}
 		const response = await mcp.dispatch(rpcRequest)
+		if (response !== undefined && Symbol.asyncIterator in response) {
+			const stream = openStream()
+			stream.response.headers.set(SSE_BUFFERING_HEADER, SSE_BUFFERING_DISABLED)
+			queueMicrotask(async () => {
+				try {
+					let next = await response.next()
+					while (!next.done) {
+						stream.write({ data: JSON.stringify(next.value) })
+						next = await response.next()
+					}
+					stream.write({ data: JSON.stringify(next.value) })
+				} catch {
+					// A producer failure ends this response; the transport cannot replace a partial stream.
+				} finally {
+					stream.end()
+				}
+			})
+			return stream.response
+		}
 		const status = inferStatus(response, era)
 		if (response === undefined) return new Response(null, { status })
 		if (status === 200 && streaming && acceptsEventStream(request)) {

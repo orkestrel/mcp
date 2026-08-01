@@ -1,7 +1,15 @@
-import type { JSONRPCResponse } from '@src/core'
+import type {
+	JSONRPCRequest,
+	JSONRPCResponse,
+	MCPDispatchOptions,
+	MCPStream,
+	MCPSubscriptionOptions,
+	MCPTextStream,
+} from '@src/core'
 import type { EmitterErrorHandler } from '@orkestrel/emitter'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 import {
+	buildJSONRPCResult,
 	createMCPServer,
 	DEFAULT_MCP_CACHE_TTL,
 	JSONRPC_INVALID_PARAMS,
@@ -10,6 +18,7 @@ import {
 	JSONRPC_PARSE_ERROR,
 	MCP_META_CAPABILITIES,
 	MCP_META_SERVER,
+	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
 	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
@@ -31,13 +40,76 @@ import {
 // (value round-trip, the isError tool mapping, missing-name → -32602), notifications
 // (no id → no response; notifications/initialized), unknown method → -32601, handle's
 // malformed-JSON → -32700 and non-request → -32600, plus the §13 request event +
-// observer-throw safety.
+// observer-throw safety — and the modern METHOD SEAM: the four built-ins registered on
+// the same registry every dispatch resolves from, per-request options reaching a handler,
+// and the held-open stream arm crossing both the typed and the string boundary.
 
 const MCP_EVENTS = ['request'] as const
 const MODERN_METADATA: Readonly<Record<string, unknown>> = Object.freeze({
 	[MCP_META_VERSION]: '2026-07-28',
 	[MCP_META_CAPABILITIES]: Object.freeze({}),
 })
+
+// A modern request: the reserved metadata key is what selects the modern era, so every
+// seam scenario carries it.
+function modernRequest(method: string, id: string | number = 1): JSONRPCRequest {
+	return createJSONRPCRequest({ method, id, params: { _meta: MODERN_METADATA } })
+}
+
+// A REAL held-open modern method (AGENTS §16 — a genuine async generator, not a fake):
+// two progress notifications, then the terminating response as the generator's `return`.
+async function* progress(request: JSONRPCRequest): MCPStream {
+	yield { jsonrpc: '2.0', method: 'notifications/progress', params: { step: 1 } }
+	yield { jsonrpc: '2.0', method: 'notifications/progress', params: { step: 2 } }
+	return buildJSONRPCResult(request.id ?? null, { done: true })
+}
+
+// The registered handler for it — an `MCPMethodHandler` whose answer is the stream arm.
+async function holdOpen(request: JSONRPCRequest): Promise<MCPStream> {
+	return progress(request)
+}
+
+// Drain a typed held-open answer into its yielded notifications and its terminating
+// response — kept APART, because the terminating value is a `return`, not a `yield`, and
+// that distinction is the contract under test.
+async function drainStream(
+	stream: MCPStream,
+): Promise<readonly [readonly JSONRPCRequest[], JSONRPCResponse]> {
+	const messages: JSONRPCRequest[] = []
+	let next = await stream.next()
+	while (!next.done) {
+		messages.push(next.value)
+		next = await stream.next()
+	}
+	return [messages, next.value]
+}
+
+// The string-boundary mirror of `drainStream`.
+async function drainText(stream: MCPTextStream): Promise<readonly [readonly string[], string]> {
+	const messages: string[] = []
+	let next = await stream.next()
+	while (!next.done) {
+		messages.push(next.value)
+		next = await stream.next()
+	}
+	return [messages, next.value]
+}
+
+// Narrow a dispatch answer to its HELD-OPEN arm — the mirror of `responseOf`.
+function streamOf(answer: JSONRPCResponse | MCPStream | undefined): MCPStream {
+	if (answer === undefined || !(Symbol.asyncIterator in answer)) {
+		throw new Error('expected a held-open stream, got a unary answer')
+	}
+	return answer
+}
+
+// Narrow a `handle` answer to its held-open arm (a string is the unary arm).
+function textOf(answer: string | MCPTextStream | undefined): MCPTextStream {
+	if (answer === undefined || typeof answer === 'string') {
+		throw new Error('expected a serialized held-open stream, got a unary answer')
+	}
+	return answer
+}
 
 // A real ToolManager seeded with deterministic stub tools: `echo` returns its args
 // verbatim, `sum` adds two numbers (with a declared inputSchema), and `boom` throws
@@ -67,12 +139,23 @@ function tools(): ToolManagerInterface {
 	return manager
 }
 
-function server(error?: EmitterErrorHandler) {
+function server(error?: EmitterErrorHandler, subscription?: MCPSubscriptionOptions) {
 	return createMCPServer({
 		identity: { name: 'test-server', version: '1.2.3' },
 		tools: tools(),
 		...(error === undefined ? {} : { error }),
+		...(subscription === undefined ? {} : { subscription }),
 	})
+}
+
+// Narrow a dispatch answer to its UNARY arm. `dispatch` now answers either a response or
+// a held-open MCPStream; every method exercised below is unary, so a stream here is a
+// defect and fails loudly rather than passing silently.
+function responseOf(answer: JSONRPCResponse | MCPStream | undefined): JSONRPCResponse | undefined {
+	if (answer !== undefined && Symbol.asyncIterator in answer) {
+		throw new Error('expected a unary response, got a held-open stream')
+	}
+	return answer
 }
 
 // Narrow a dispatch response to its `result` as a record (the MCP result payloads are
@@ -118,11 +201,13 @@ describe('MCPServer — dual-era dispatch', () => {
 	})
 
 	it('rejects malformed modern metadata with -32602', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({
-				method: 'tools/list',
-				params: { _meta: { [MCP_META_VERSION]: '2026-07-28' } },
-			}),
+		const response = responseOf(
+			await server().dispatch(
+				createJSONRPCRequest({
+					method: 'tools/list',
+					params: { _meta: { [MCP_META_VERSION]: '2026-07-28' } },
+				}),
+			),
 		)
 
 		expect(response?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
@@ -131,16 +216,18 @@ describe('MCPServer — dual-era dispatch', () => {
 	it('treats a present non-string version as modern and rejects it with -32602', async () => {
 		const mcp = server()
 		const events = recordEmitterEvents(mcp.emitter, MCP_EVENTS)
-		const response = await mcp.dispatch(
-			createJSONRPCRequest({
-				method: 'tools/list',
-				params: {
-					_meta: {
-						[MCP_META_VERSION]: 7,
-						[MCP_META_CAPABILITIES]: {},
+		const response = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					method: 'tools/list',
+					params: {
+						_meta: {
+							[MCP_META_VERSION]: 7,
+							[MCP_META_CAPABILITIES]: {},
+						},
 					},
-				},
-			}),
+				}),
+			),
 		)
 
 		expect(response?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
@@ -148,16 +235,18 @@ describe('MCPServer — dual-era dispatch', () => {
 	})
 
 	it('rejects an unsupported modern version with -32022 and exact retry data', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({
-				method: 'tools/list',
-				params: {
-					_meta: {
-						[MCP_META_VERSION]: '2099-01-01',
-						[MCP_META_CAPABILITIES]: {},
+		const response = responseOf(
+			await server().dispatch(
+				createJSONRPCRequest({
+					method: 'tools/list',
+					params: {
+						_meta: {
+							[MCP_META_VERSION]: '2099-01-01',
+							[MCP_META_CAPABILITIES]: {},
+						},
 					},
-				},
-			}),
+				}),
+			),
 		)
 
 		expect(response?.error?.code).toBe(MCP_UNSUPPORTED_VERSION)
@@ -175,11 +264,13 @@ describe('MCPServer — dual-era dispatch', () => {
 			instructions: 'Use the available tools.',
 			cache: { ttl: 123, scope: 'public' },
 		})
-		const response = await mcp.dispatch(
-			createJSONRPCRequest({
-				method: 'server/discover',
-				params: { _meta: MODERN_METADATA },
-			}),
+		const response = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					method: 'server/discover',
+					params: { _meta: MODERN_METADATA },
+				}),
+			),
 		)
 
 		expect(response?.result).toEqual({
@@ -194,11 +285,13 @@ describe('MCPServer — dual-era dispatch', () => {
 	})
 
 	it('returns a stamped cacheable modern tools/list result', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({
-				method: 'tools/list',
-				params: { _meta: MODERN_METADATA },
-			}),
+		const response = responseOf(
+			await server().dispatch(
+				createJSONRPCRequest({
+					method: 'tools/list',
+					params: { _meta: MODERN_METADATA },
+				}),
+			),
 		)
 		const result = resultOf(response)
 
@@ -212,15 +305,17 @@ describe('MCPServer — dual-era dispatch', () => {
 	})
 
 	it('returns a stamped non-cacheable modern tools/call result', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({
-				method: 'tools/call',
-				params: {
-					name: 'sum',
-					arguments: { a: 2, b: 5 },
-					_meta: MODERN_METADATA,
-				},
-			}),
+		const response = responseOf(
+			await server().dispatch(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					params: {
+						name: 'sum',
+						arguments: { a: 2, b: 5 },
+						_meta: MODERN_METADATA,
+					},
+				}),
+			),
 		)
 		const result = resultOf(response)
 
@@ -236,8 +331,10 @@ describe('MCPServer — dual-era dispatch', () => {
 	it.each(['initialize', 'ping', 'does/not/exist'])(
 		'returns -32601 for modern method %s',
 		async (method) => {
-			const response = await server().dispatch(
-				createJSONRPCRequest({ method, params: { _meta: MODERN_METADATA } }),
+			const response = responseOf(
+				await server().dispatch(
+					createJSONRPCRequest({ method, params: { _meta: MODERN_METADATA } }),
+				),
 			)
 
 			expect(response?.error?.code).toBe(JSONRPC_METHOD_NOT_FOUND)
@@ -247,20 +344,315 @@ describe('MCPServer — dual-era dispatch', () => {
 	it('returns no response for a modern notification after emitting its era', async () => {
 		const mcp = server()
 		const events = recordEmitterEvents(mcp.emitter, MCP_EVENTS)
-		const response = await mcp.dispatch({
-			jsonrpc: '2.0',
-			method: 'tools/list',
-			params: { _meta: MODERN_METADATA },
-		})
+		const response = responseOf(
+			await mcp.dispatch({
+				jsonrpc: '2.0',
+				method: 'tools/list',
+				params: { _meta: MODERN_METADATA },
+			}),
+		)
 
 		expect(response).toBeUndefined()
 		expect(events.request.calls).toEqual([['tools/list', null, 'modern']])
 	})
 })
 
+describe('MCPServer — the modern method seam', () => {
+	it('registers the four built-in modern methods on the registry it dispatches from', () => {
+		const mcp = server()
+
+		expect(mcp.methods.method('server/discover')).toBeTypeOf('function')
+		expect(mcp.methods.method('tools/list')).toBeTypeOf('function')
+		expect(mcp.methods.method('tools/call')).toBeTypeOf('function')
+		expect(mcp.methods.method('subscriptions/listen')).toBeTypeOf('function')
+	})
+
+	// THE LOAD-BEARING PROOF that -32601 is decided by the registry and not by a
+	// hard-coded arm list: the SAME method flips from unknown to answered purely by
+	// registering it, with no other change.
+	it('turns a -32601 method into an answered one by registering it', async () => {
+		const mcp = server()
+		const before = responseOf(await mcp.dispatch(modernRequest('demo/probe')))
+		mcp.methods.add('demo/probe', async (request) =>
+			buildJSONRPCResult(request.id ?? null, { probed: true }),
+		)
+		const after = responseOf(await mcp.dispatch(modernRequest('demo/probe')))
+
+		expect(before?.error?.code).toBe(JSONRPC_METHOD_NOT_FOUND)
+		expect(before?.error?.message).toContain('demo/probe')
+		expect(after?.result).toEqual({ probed: true })
+	})
+
+	// THE LOAD-BEARING PROOF that the built-ins are dispatched THROUGH the seam rather
+	// than ahead of it: replacing one changes what dispatch answers. A surviving
+	// hard-coded arm would win and this would still return the real tool list.
+	it('replaces a built-in modern method when one is registered over it', async () => {
+		const mcp = server()
+		mcp.methods.add('tools/list', async (request) =>
+			buildJSONRPCResult(request.id ?? null, { tools: [] }),
+		)
+		const response = responseOf(await mcp.dispatch(modernRequest('tools/list')))
+
+		expect(response?.result).toEqual({ tools: [] })
+	})
+
+	it('leaves the legacy branch byte-identical when a modern method is replaced', async () => {
+		const mcp = server()
+		mcp.methods.add('tools/list', async (request) =>
+			buildJSONRPCResult(request.id ?? null, { tools: [] }),
+		)
+
+		// The legacy switch is untouched by the seam — the same registry, the same string.
+		expect(await mcp.handle('{"jsonrpc":"2.0","method":"tools/list","id":3}')).toBe(
+			'{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}},{"name":"sum","inputSchema":{"type":"object","properties":{"a":{"type":"number"},"b":{"type":"number"}}},"description":"Add two numbers"},{"name":"boom","inputSchema":{"type":"object"}}]}}',
+		)
+	})
+
+	it('never reaches a registered method when the modern metadata is unsupported', async () => {
+		const mcp = server()
+		const seen: JSONRPCRequest[] = []
+		mcp.methods.add('demo/probe', async (request) => {
+			seen.push(request)
+			return buildJSONRPCResult(request.id ?? null, {})
+		})
+		const response = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					method: 'demo/probe',
+					params: {
+						_meta: { [MCP_META_VERSION]: '2099-01-01', [MCP_META_CAPABILITIES]: {} },
+					},
+				}),
+			),
+		)
+
+		expect(response?.error?.code).toBe(MCP_UNSUPPORTED_VERSION)
+		expect(seen).toEqual([])
+	})
+
+	it('never reaches a registered method for a legacy request of the same name', async () => {
+		const mcp = server()
+		const seen: JSONRPCRequest[] = []
+		mcp.methods.add('demo/probe', async (request) => {
+			seen.push(request)
+			return buildJSONRPCResult(request.id ?? null, {})
+		})
+		const response = responseOf(
+			await mcp.dispatch(createJSONRPCRequest({ method: 'demo/probe', id: 4 })),
+		)
+
+		expect(response?.error?.code).toBe(JSONRPC_METHOD_NOT_FOUND)
+		expect(seen).toEqual([])
+	})
+
+	it('hands every handler a dispatch options bag, empty when the caller supplied none', async () => {
+		const mcp = server()
+		const seen: MCPDispatchOptions[] = []
+		mcp.methods.add('demo/probe', async (request, options) => {
+			seen.push(options)
+			return buildJSONRPCResult(request.id ?? null, {})
+		})
+		await mcp.dispatch(modernRequest('demo/probe'))
+
+		expect(seen).toEqual([{}])
+		expect(seen[0]?.signal).toBeUndefined()
+	})
+
+	it('passes the caller’s abort signal through dispatch to the handler', async () => {
+		const mcp = server()
+		const controller = new AbortController()
+		const seen: MCPDispatchOptions[] = []
+		mcp.methods.add('demo/probe', async (request, options) => {
+			seen.push(options)
+			return buildJSONRPCResult(request.id ?? null, {})
+		})
+		await mcp.dispatch(modernRequest('demo/probe'), { signal: controller.signal })
+		controller.abort()
+
+		expect(seen[0]?.signal).toBe(controller.signal)
+		expect(seen[0]?.signal?.aborted).toBe(true)
+	})
+
+	it('passes the caller’s abort signal through handle to the handler', async () => {
+		const mcp = server()
+		const controller = new AbortController()
+		const seen: MCPDispatchOptions[] = []
+		mcp.methods.add('demo/probe', async (request, options) => {
+			seen.push(options)
+			return buildJSONRPCResult(request.id ?? null, {})
+		})
+		await mcp.handle(JSON.stringify(modernRequest('demo/probe')), { signal: controller.signal })
+
+		expect(seen[0]?.signal).toBe(controller.signal)
+	})
+
+	it('returns a handler’s held-open stream from dispatch, terminating with its response', async () => {
+		const mcp = server()
+		mcp.methods.add('demo/stream', holdOpen)
+		const [messages, response] = await drainStream(
+			streamOf(await mcp.dispatch(modernRequest('demo/stream', 11))),
+		)
+
+		expect(messages).toEqual([
+			{ jsonrpc: '2.0', method: 'notifications/progress', params: { step: 1 } },
+			{ jsonrpc: '2.0', method: 'notifications/progress', params: { step: 2 } },
+		])
+		// Each yielded message is a NOTIFICATION — a request with no id.
+		expect(messages.every((message) => message.id === undefined)).toBe(true)
+		expect(response).toEqual({ jsonrpc: '2.0', id: 11, result: { done: true } })
+	})
+
+	it('mirrors a held-open answer as a serialized stream through handle', async () => {
+		const mcp = server()
+		mcp.methods.add('demo/stream', holdOpen)
+		const [messages, response] = await drainText(
+			textOf(await mcp.handle(JSON.stringify(modernRequest('demo/stream', 12)))),
+		)
+
+		expect(messages).toEqual([
+			'{"jsonrpc":"2.0","method":"notifications/progress","params":{"step":1}}',
+			'{"jsonrpc":"2.0","method":"notifications/progress","params":{"step":2}}',
+		])
+		expect(response).toBe('{"jsonrpc":"2.0","id":12,"result":{"done":true}}')
+	})
+
+	it('answers nothing for a held-open method dispatched as a notification', async () => {
+		const mcp = server()
+		mcp.methods.add('demo/stream', holdOpen)
+
+		expect(
+			await mcp.dispatch(createJSONRPCNotification('demo/stream', { _meta: MODERN_METADATA })),
+		).toBeUndefined()
+	})
+
+	it('answers undefined when a registered handler answers undefined', async () => {
+		const mcp = server()
+		mcp.methods.add('demo/silent', async () => undefined)
+
+		expect(await mcp.dispatch(modernRequest('demo/silent'))).toBeUndefined()
+		expect(await mcp.handle(JSON.stringify(modernRequest('demo/silent')))).toBeUndefined()
+	})
+})
+
+describe('MCPServer — modern subscriptions/listen', () => {
+	it('acknowledges the honoured subset, stamps every delivery, and closes with the same id', async () => {
+		const controller = new AbortController()
+		const notifications: unknown[] = []
+		const options: MCPDispatchOptions[] = []
+		const source = new TransformStream<JSONRPCRequest, JSONRPCRequest>()
+		const writer = source.writable.getWriter()
+		const mcp = server(undefined, {
+			notifications: {
+				toolsListChanged: true,
+				resourcesListChanged: true,
+				resourceSubscriptions: ['resource://kept'],
+			},
+			listen(filter, dispatch) {
+				notifications.push(filter)
+				options.push(dispatch)
+				return source.readable
+			},
+		})
+		const stream = streamOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					method: 'subscriptions/listen',
+					id: 'listen-7',
+					params: {
+						notifications: {
+							toolsListChanged: true,
+							promptsListChanged: true,
+							resourceSubscriptions: ['resource://ignored', 'resource://kept'],
+						},
+						_meta: MODERN_METADATA,
+					},
+				}),
+				{ signal: controller.signal },
+			),
+		)
+		const acknowledgement = await stream.next()
+		if (acknowledgement.done) throw new Error('expected a subscription acknowledgement')
+		expect(notifications).toEqual([])
+		const drained = drainStream(stream)
+		await writer.write({ jsonrpc: '2.0', method: 'notifications/prompts/list_changed' })
+		await writer.write({
+			jsonrpc: '2.0',
+			method: 'notifications/tools/list_changed',
+			params: { _meta: { producer: true } },
+		})
+		await writer.write({
+			jsonrpc: '2.0',
+			method: 'notifications/resources/updated',
+			params: { uri: 'resource://ignored' },
+		})
+		await writer.write({
+			jsonrpc: '2.0',
+			method: 'notifications/resources/updated',
+			params: { uri: 'resource://kept', _meta: { [MCP_META_SUBSCRIPTION]: 'wrong' } },
+		})
+		await writer.close()
+		const [messages, response] = await drained
+
+		expect(acknowledgement.value).toEqual({
+			jsonrpc: '2.0',
+			method: 'notifications/subscriptions/acknowledged',
+			params: {
+				notifications: {
+					toolsListChanged: true,
+					resourceSubscriptions: ['resource://kept'],
+				},
+				_meta: { [MCP_META_SUBSCRIPTION]: 'listen-7' },
+			},
+		})
+		expect(messages).toEqual([
+			{
+				jsonrpc: '2.0',
+				method: 'notifications/tools/list_changed',
+				params: {
+					_meta: { producer: true, [MCP_META_SUBSCRIPTION]: 'listen-7' },
+				},
+			},
+			{
+				jsonrpc: '2.0',
+				method: 'notifications/resources/updated',
+				params: {
+					uri: 'resource://kept',
+					_meta: { [MCP_META_SUBSCRIPTION]: 'listen-7' },
+				},
+			},
+		])
+		expect(notifications).toEqual([
+			{ toolsListChanged: true, resourceSubscriptions: ['resource://kept'] },
+		])
+		expect(options[0]?.signal).toBe(controller.signal)
+		expect(response).toEqual({
+			jsonrpc: '2.0',
+			id: 'listen-7',
+			result: {
+				resultType: 'complete',
+				_meta: {
+					[MCP_META_SUBSCRIPTION]: 'listen-7',
+					[MCP_META_SERVER]: { name: 'test-server', version: '1.2.3' },
+				},
+			},
+		})
+	})
+
+	it('rejects a missing notification filter and keeps the legacy method frozen', async () => {
+		const mcp = server()
+		const invalid = responseOf(await mcp.dispatch(modernRequest('subscriptions/listen')))
+		const legacy = responseOf(
+			await mcp.dispatch(createJSONRPCRequest({ method: 'subscriptions/listen', id: 7 })),
+		)
+
+		expect(invalid?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(legacy?.error?.code).toBe(JSONRPC_METHOD_NOT_FOUND)
+	})
+})
+
 describe('MCPServer — initialize', () => {
 	it('returns the default protocol version, the tools capability, and serverInfo', async () => {
-		const response = await server().dispatch(createJSONRPCRequest())
+		const response = responseOf(await server().dispatch(createJSONRPCRequest()))
 		const result = resultOf(response)
 
 		expect(response?.id).toBe(1)
@@ -270,24 +662,24 @@ describe('MCPServer — initialize', () => {
 	})
 
 	it('falls back when the requested protocol version requires unsupported batching', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({ params: { protocolVersion: '2025-03-26' } }),
+		const response = responseOf(
+			await server().dispatch(createJSONRPCRequest({ params: { protocolVersion: '2025-03-26' } })),
 		)
 
 		expect(resultOf(response)['protocolVersion']).toBe(MCP_PROTOCOL_VERSION)
 	})
 
 	it('falls back to the default for an unsupported requested version', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({ params: { protocolVersion: '1999-01-01' } }),
+		const response = responseOf(
+			await server().dispatch(createJSONRPCRequest({ params: { protocolVersion: '1999-01-01' } })),
 		)
 
 		expect(resultOf(response)['protocolVersion']).toBe(MCP_PROTOCOL_VERSION)
 	})
 
 	it('ignores a non-string requested version (falls back to the default)', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({ params: { protocolVersion: 42 } }),
+		const response = responseOf(
+			await server().dispatch(createJSONRPCRequest({ params: { protocolVersion: 42 } })),
 		)
 
 		expect(resultOf(response)['protocolVersion']).toBe(MCP_PROTOCOL_VERSION)
@@ -296,7 +688,9 @@ describe('MCPServer — initialize', () => {
 
 describe('MCPServer — ping', () => {
 	it('returns an empty result', async () => {
-		const response = await server().dispatch(createJSONRPCRequest({ method: 'ping', id: 7 }))
+		const response = responseOf(
+			await server().dispatch(createJSONRPCRequest({ method: 'ping', id: 7 })),
+		)
 
 		expect(response?.id).toBe(7)
 		expect(response?.result).toEqual({})
@@ -305,7 +699,9 @@ describe('MCPServer — ping', () => {
 
 describe('MCPServer — tools/list', () => {
 	it('lists the registered tools with inputSchema mapped from parameters', async () => {
-		const response = await server().dispatch(createJSONRPCRequest({ method: 'tools/list', id: 2 }))
+		const response = responseOf(
+			await server().dispatch(createJSONRPCRequest({ method: 'tools/list', id: 2 })),
+		)
 		const list = resultOf(response)['tools']
 
 		expect(list).toEqual([
@@ -327,7 +723,7 @@ describe('MCPServer — tools/list', () => {
 			identity: { name: 'empty', version: '0.0.0' },
 			tools: createToolManager(),
 		})
-		const response = await mcp.dispatch(createJSONRPCRequest({ method: 'tools/list' }))
+		const response = responseOf(await mcp.dispatch(createJSONRPCRequest({ method: 'tools/list' })))
 
 		expect(resultOf(response)['tools']).toEqual([])
 	})
@@ -335,12 +731,14 @@ describe('MCPServer — tools/list', () => {
 
 describe('MCPServer — tools/call', () => {
 	it('executes a tool and round-trips its value through a text content block', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({
-				method: 'tools/call',
-				id: 3,
-				params: { name: 'sum', arguments: { a: 2, b: 5 } },
-			}),
+		const response = responseOf(
+			await server().dispatch(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					id: 3,
+					params: { name: 'sum', arguments: { a: 2, b: 5 } },
+				}),
+			),
 		)
 		const result = resultOf(response)
 
@@ -349,12 +747,14 @@ describe('MCPServer — tools/call', () => {
 	})
 
 	it('round-trips a structured value (the echo tool) as serialized JSON', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({
-				method: 'tools/call',
-				id: 3,
-				params: { name: 'echo', arguments: { hello: 'world', n: 1 } },
-			}),
+		const response = responseOf(
+			await server().dispatch(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					id: 3,
+					params: { name: 'echo', arguments: { hello: 'world', n: 1 } },
+				}),
+			),
 		)
 
 		expect(resultOf(response)['content']).toEqual([
@@ -363,20 +763,24 @@ describe('MCPServer — tools/call', () => {
 	})
 
 	it('defaults arguments to an empty record when omitted', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({ method: 'tools/call', id: 3, params: { name: 'echo' } }),
+		const response = responseOf(
+			await server().dispatch(
+				createJSONRPCRequest({ method: 'tools/call', id: 3, params: { name: 'echo' } }),
+			),
 		)
 
 		expect(resultOf(response)['content']).toEqual([{ type: 'text', text: '{}' }])
 	})
 
 	it('maps an erroring tool to an isError result carrying the error text', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({
-				method: 'tools/call',
-				id: 4,
-				params: { name: 'boom', arguments: {} },
-			}),
+		const response = responseOf(
+			await server().dispatch(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					id: 4,
+					params: { name: 'boom', arguments: {} },
+				}),
+			),
 		)
 		const result = resultOf(response)
 
@@ -385,12 +789,14 @@ describe('MCPServer — tools/call', () => {
 	})
 
 	it('maps an unknown tool name to an isError result (the manager not-found error)', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({
-				method: 'tools/call',
-				id: 4,
-				params: { name: 'missing', arguments: {} },
-			}),
+		const response = responseOf(
+			await server().dispatch(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					id: 4,
+					params: { name: 'missing', arguments: {} },
+				}),
+			),
 		)
 		const result = resultOf(response)
 
@@ -399,8 +805,8 @@ describe('MCPServer — tools/call', () => {
 	})
 
 	it('rejects a missing tool name with -32602 invalid params', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({ method: 'tools/call', id: 5, params: {} }),
+		const response = responseOf(
+			await server().dispatch(createJSONRPCRequest({ method: 'tools/call', id: 5, params: {} })),
 		)
 
 		expect(response?.result).toBeUndefined()
@@ -408,8 +814,10 @@ describe('MCPServer — tools/call', () => {
 	})
 
 	it('rejects a non-string tool name with -32602 invalid params', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({ method: 'tools/call', id: 5, params: { name: 42 } }),
+		const response = responseOf(
+			await server().dispatch(
+				createJSONRPCRequest({ method: 'tools/call', id: 5, params: { name: 42 } }),
+			),
 		)
 
 		expect(response?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
@@ -418,20 +826,22 @@ describe('MCPServer — tools/call', () => {
 
 describe('MCPServer — notifications & unknown methods', () => {
 	it('returns no response for a request without an id (a notification)', async () => {
-		const response = await server().dispatch(createJSONRPCNotification('ping'))
+		const response = responseOf(await server().dispatch(createJSONRPCNotification('ping')))
 
 		expect(response).toBeUndefined()
 	})
 
 	it('returns no response for notifications/initialized', async () => {
-		const response = await server().dispatch(createJSONRPCNotification('notifications/initialized'))
+		const response = responseOf(
+			await server().dispatch(createJSONRPCNotification('notifications/initialized')),
+		)
 
 		expect(response).toBeUndefined()
 	})
 
 	it('returns -32601 for an unknown method', async () => {
-		const response = await server().dispatch(
-			createJSONRPCRequest({ method: 'does/not/exist', id: 9 }),
+		const response = responseOf(
+			await server().dispatch(createJSONRPCRequest({ method: 'does/not/exist', id: 9 })),
 		)
 
 		expect(response?.id).toBe(9)
@@ -440,7 +850,9 @@ describe('MCPServer — notifications & unknown methods', () => {
 	})
 
 	it('returns no response for an unknown-method notification (no id)', async () => {
-		const response = await server().dispatch(createJSONRPCNotification('does/not/exist'))
+		const response = responseOf(
+			await server().dispatch(createJSONRPCNotification('does/not/exist')),
+		)
 
 		expect(response).toBeUndefined()
 	})
@@ -541,7 +953,7 @@ describe('MCPServer — request event (§13)', () => {
 		})
 
 		// THE LOAD-BEARING ASSERTION: the dispatch still produces its response.
-		const response = await mcp.dispatch(createJSONRPCRequest({ method: 'ping' }))
+		const response = responseOf(await mcp.dispatch(createJSONRPCRequest({ method: 'ping' })))
 
 		expect(response?.result).toEqual({})
 		// The error handler received (error, event) — note the arg order.
@@ -559,7 +971,7 @@ describe('MCPServer — request event (§13)', () => {
 		})
 
 		// The dispatch STILL produces a response — neither throw escaped.
-		const response = await mcp.dispatch(createJSONRPCRequest({ method: 'ping' }))
+		const response = responseOf(await mcp.dispatch(createJSONRPCRequest({ method: 'ping' })))
 
 		expect(response?.result).toEqual({})
 		// Fired exactly once (its own throw was swallowed, not re-entered — no recursion).

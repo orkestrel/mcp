@@ -1,5 +1,6 @@
 import type { ToolManagerInterface, ToolResult } from '@orkestrel/tool'
 import type {
+	JSONRPCRequest,
 	JSONRPCResponse,
 	MCPCallResult,
 	MCPClientInterface,
@@ -7,14 +8,20 @@ import type {
 	MCPIdentity,
 	MCPServerInterface,
 	MCPServerOptions,
+	MCPStream,
+	MCPTextStream,
 	MCPToolDescriptor,
 	MCPTransportInterface,
+	SubscriptionFilter,
+	SubscriptionsListenResult,
+	SubscriptionsListenResultMetaObject,
 } from './types.js'
 import { isRecord } from '@orkestrel/contract'
 import {
 	DEFAULT_MCP_CACHE_TTL,
 	MCP_LEGACY_VERSION,
 	MCP_META_SERVER,
+	MCP_META_SUBSCRIPTION,
 	SUPPORTED_PROTOCOL_VERSIONS,
 } from './constants.js'
 import { inferEra } from './inferers.js'
@@ -173,6 +180,124 @@ export function buildModernResult<T extends object>(
 }
 
 /**
+ * Intersect a requested subscription filter with the notification families a server supports.
+ *
+ * @param requested - The notification families requested by the client
+ * @param supported - The notification families the server can actually produce
+ * @returns The exact subset the server will honour
+ */
+export function buildSubscriptionFilter(
+	requested: SubscriptionFilter,
+	supported: SubscriptionFilter,
+): SubscriptionFilter {
+	const toolsListChanged =
+		requested.toolsListChanged === true && supported.toolsListChanged === true
+	const promptsListChanged =
+		requested.promptsListChanged === true && supported.promptsListChanged === true
+	const resourcesListChanged =
+		requested.resourcesListChanged === true && supported.resourcesListChanged === true
+	const supportedResources = new Set(supported.resourceSubscriptions ?? [])
+	const resourceSubscriptions = requested.resourceSubscriptions?.filter((uri) =>
+		supportedResources.has(uri),
+	)
+	return {
+		...(toolsListChanged ? { toolsListChanged: true } : {}),
+		...(promptsListChanged ? { promptsListChanged: true } : {}),
+		...(resourcesListChanged ? { resourcesListChanged: true } : {}),
+		...(resourceSubscriptions !== undefined && resourceSubscriptions.length > 0
+			? { resourceSubscriptions }
+			: {}),
+	}
+}
+
+/**
+ * Determine whether a produced notification belongs to an honoured subscription filter.
+ *
+ * @param notification - The server notification offered by the configured producer
+ * @param filter - The filter acknowledged to the client
+ * @returns `true` when the notification belongs on this subscription stream
+ */
+export function matchesSubscriptionNotification(
+	notification: JSONRPCRequest,
+	filter: SubscriptionFilter,
+): boolean {
+	if (notification.method === 'notifications/tools/list_changed') {
+		return filter.toolsListChanged === true
+	}
+	if (notification.method === 'notifications/prompts/list_changed') {
+		return filter.promptsListChanged === true
+	}
+	if (notification.method === 'notifications/resources/list_changed') {
+		return filter.resourcesListChanged === true
+	}
+	if (notification.method !== 'notifications/resources/updated') return false
+	const uri = notification.params?.['uri']
+	return typeof uri === 'string' && filter.resourceSubscriptions?.includes(uri) === true
+}
+
+/**
+ * Stamp a subscription notification with the request id reserved for its held-open stream.
+ *
+ * @param notification - The notification to copy and stamp
+ * @param id - The `subscriptions/listen` request id
+ * @returns The stamped notification, preserving its other params and metadata
+ */
+export function stampSubscriptionNotification(
+	notification: JSONRPCRequest,
+	id: string | number,
+): JSONRPCRequest {
+	const metadata = notification.params?.['_meta']
+	return {
+		jsonrpc: notification.jsonrpc,
+		method: notification.method,
+		params: {
+			...notification.params,
+			_meta: {
+				...(isRecord(metadata) ? metadata : {}),
+				[MCP_META_SUBSCRIPTION]: id,
+			},
+		},
+	}
+}
+
+/**
+ * Build the first notification carrying a subscription id for a listen request.
+ *
+ * @param notifications - The exact notification filter the server will honour
+ * @param id - The `subscriptions/listen` request id
+ * @returns The stamped subscription acknowledgement notification
+ */
+export function buildSubscriptionAcknowledgement(
+	notifications: SubscriptionFilter,
+	id: string | number,
+): JSONRPCRequest {
+	return stampSubscriptionNotification(
+		{
+			jsonrpc: '2.0',
+			method: 'notifications/subscriptions/acknowledged',
+			params: { notifications },
+		},
+		id,
+	)
+}
+
+/**
+ * Build the terminating response for a subscription source that closes gracefully.
+ *
+ * @param id - The `subscriptions/listen` request id
+ * @param identity - The server identity included by the modern result stamping site
+ * @returns The complete modern result carrying the required subscription id metadata
+ */
+export function buildSubscriptionResult(
+	id: string | number,
+	identity: MCPIdentity,
+): JSONRPCResponse {
+	const metadata: SubscriptionsListenResultMetaObject = { [MCP_META_SUBSCRIPTION]: id }
+	const result: SubscriptionsListenResult = buildModernResult({ _meta: metadata }, identity)
+	return buildJSONRPCResult(id, result)
+}
+
+/**
  * Build the mandatory modern `server/discover` result.
  *
  * @param options - The server identity, instructions, and cache configuration
@@ -224,6 +349,74 @@ export function buildInitializeResult(
 	}
 }
 
+// Held-open stream leaves — the two pure transformations that carry an
+// {@link MCPStream} across the string boundary and onto a transport. Both consume the
+// generator MANUALLY rather than with `for await`, because `for await` discards the
+// `return` value and the terminating response IS that value.
+
+/**
+ * Serialize a typed {@link MCPStream} into its string mirror — each yielded
+ * notification and the terminating response, already `JSON.stringify`d.
+ *
+ * @remarks
+ * The string-boundary half of the held-open arm: `handle` returns this so a transport
+ * writes each message with no second parse, exactly as it writes a unary reply string.
+ * The terminating response arrives as the returned generator's OWN `return` value, so a
+ * consumer distinguishes "one more notification" from "this is the answer" without a
+ * sentinel.
+ *
+ * @param stream - The typed held-open result to serialize
+ * @returns The same sequence with every message serialized to a string
+ *
+ * @example
+ * ```ts
+ * const text = serializeStream(stream)
+ * for (let next = await text.next(); ; next = await text.next()) {
+ * 	if (next.done === true) return next.value // the terminating response, serialized
+ * 	log(next.value) // one serialized notification
+ * }
+ * ```
+ */
+export async function* serializeStream(stream: MCPStream): MCPTextStream {
+	let next = await stream.next()
+	while (!next.done) {
+		yield JSON.stringify(next.value)
+		next = await stream.next()
+	}
+	return JSON.stringify(next.value)
+}
+
+/**
+ * Pump an {@link MCPTextStream} onto a transport — every notification in order, then the
+ * terminating response.
+ *
+ * @remarks
+ * The generator's `return` value is a message like any other on the wire: it is sent
+ * LAST and closes the exchange. Sends are awaited one at a time so the transport
+ * receives the sequence in the order the method produced it.
+ *
+ * @param stream - The serialized held-open result to write out
+ * @param transport - The duplex channel to write each message to
+ * @returns Resolves once the terminating response has been sent
+ *
+ * @example
+ * ```ts
+ * const answer = await server.handle(message)
+ * if (typeof answer !== 'string') await sendStream(answer, transport)
+ * ```
+ */
+export async function sendStream(
+	stream: MCPTextStream,
+	transport: MCPTransportInterface,
+): Promise<void> {
+	let next = await stream.next()
+	while (!next.done) {
+		await transport.send(next.value)
+		next = await stream.next()
+	}
+	await transport.send(next.value)
+}
+
 // The environment-agnostic PORT binders — the keystone that lets an
 // {@link MCPServerInterface} / {@link MCPClientInterface} run over ANY
 // {@link MCPTransportInterface} (a Node stdio pair, a browser MessagePort, a Web
@@ -239,7 +432,11 @@ export function buildInitializeResult(
  * @remarks
  * `server.handle` already turns a malformed message into a serialized `-32700` /
  * `-32600` reply and a notification into `undefined` (no reply), so this binder adds
- * no parsing of its own. A `transport.send` throw or rejection is caught and routed
+ * no parsing of its own. A HELD-OPEN reply arrives as an
+ * {@link import('./types.js').MCPTextStream} instead of a string: this is the one place
+ * that pumps it, writing each notification in order and then the generator's returned
+ * terminating response ({@link sendStream}). A `transport.send` throw or rejection —
+ * mid-stream included — is caught and routed
  * to `server.emitter`'s `error` event (never rethrown, never an unhandled rejection);
  * a listener on that event that itself throws is swallowed (the end of the line —
  * the caller's own bug, never this binder's). The returned unbind DETACHES this
@@ -271,8 +468,10 @@ export function bindServer(
 	transport.listen(async (message) => {
 		if (!active) return
 		try {
-			const response = await server.handle(message)
-			if (response !== undefined) await transport.send(response)
+			const answer = await server.handle(message)
+			if (answer === undefined) return
+			if (typeof answer === 'string') await transport.send(answer)
+			else await sendStream(answer, transport)
 		} catch (error) {
 			try {
 				server.emitter.emit('error', error)

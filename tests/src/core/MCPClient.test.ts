@@ -77,12 +77,13 @@ function createLoopback(
 		async send(message: JSONRPCMessage) {
 			if (!('method' in message)) return
 			requests.push(message)
-			const response = await server.dispatch(message)
+			const answer = await server.dispatch(message)
+			// This scripted peer drives only unary methods, so a held-open stream never
+			// arrives here; narrow it off rather than pretending it is a message.
+			if (answer === undefined || Symbol.asyncIterator in answer) return
 			// `gate(method)` true → withhold the response (the request stays pending), to
 			// drive the timeout / disconnect tests; otherwise emit it for id correlation.
-			if (response !== undefined && (gate === undefined || !gate(message.method))) {
-				emitter.emit('message', response)
-			}
+			if (gate === undefined || !gate(message.method)) emitter.emit('message', answer)
 		},
 		async close() {
 			closed += 1

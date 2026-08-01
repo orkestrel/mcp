@@ -47,6 +47,9 @@ export const MCP_META_CLIENT = 'io.modelcontextprotocol/clientInfo'
 /** Reserved modern `_meta` key carrying the server identity on results. */
 export const MCP_META_SERVER = 'io.modelcontextprotocol/serverInfo'
 
+/** Reserved modern `_meta` key carrying a `subscriptions/listen` request id. */
+export const MCP_META_SUBSCRIPTION = 'io.modelcontextprotocol/subscriptionId'
+
 /** MCP reserved error: required HTTP metadata does not match the request body. */
 export const MCP_HEADER_MISMATCH = -32020
 

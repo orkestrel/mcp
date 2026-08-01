@@ -161,6 +161,128 @@ export interface MCPDiscoverResult {
 	readonly _meta?: Readonly<Record<string, unknown>>
 }
 
+/** The notification families a client may opt in to on a `subscriptions/listen` stream. */
+export interface SubscriptionFilter {
+	/** Receive `notifications/tools/list_changed` when the server produces it. */
+	readonly toolsListChanged?: boolean
+	/** Receive `notifications/prompts/list_changed` when the server produces it. */
+	readonly promptsListChanged?: boolean
+	/** Receive `notifications/resources/list_changed` when the server produces it. */
+	readonly resourcesListChanged?: boolean
+	/** Receive `notifications/resources/updated` for these resource URIs. */
+	readonly resourceSubscriptions?: readonly string[]
+}
+
+/** The required metadata on a graceful `subscriptions/listen` result. */
+export interface SubscriptionsListenResultMetaObject extends Readonly<Record<string, unknown>> {
+	/** The JSON-RPC id of the `subscriptions/listen` request whose stream is closing. */
+	readonly 'io.modelcontextprotocol/subscriptionId': string | number
+}
+
+/** The terminating result returned when a `subscriptions/listen` stream closes gracefully. */
+export interface SubscriptionsListenResult {
+	readonly resultType: 'complete'
+	readonly _meta: SubscriptionsListenResultMetaObject
+}
+
+// THE MODERN METHOD SEAM — the per-request execution options a handler receives,
+// the held-open result arms, and the registrable method contract the modern
+// dispatch branch runs every method through. The legacy branch keeps its own
+// fixed switch: its method set is frozen by a shipped revision and never grows.
+
+/** Per-request execution options every dispatched handler receives. */
+export interface MCPDispatchOptions {
+	/** Aborts when the caller's request ends — a closed HTTP response stream, a stdio cancel. */
+	readonly signal?: AbortSignal
+}
+
+/**
+ * Produce notifications for one honoured `subscriptions/listen` filter.
+ *
+ * @remarks
+ * The producer parks on its own event source while idle and ends its iterable to close the
+ * subscription gracefully. `options.signal` is the per-request cancellation signal; a
+ * producer that needs cancellation observes it directly rather than polling.
+ *
+ * @param notifications - The requested filter intersected with the server's supported filter
+ * @param options - The per-request execution options
+ * @returns An event-driven source of server notifications
+ */
+export type MCPSubscriptionHandler = (
+	notifications: SubscriptionFilter,
+	options: MCPDispatchOptions,
+) => AsyncIterable<JSONRPCRequest> | Promise<AsyncIterable<JSONRPCRequest>>
+
+/** Configuration for the server's built-in `subscriptions/listen` method. */
+export interface MCPSubscriptionOptions {
+	/** The notification filter this server can actually honour. */
+	readonly notifications: SubscriptionFilter
+	/** Open the producer for one honoured filter. */
+	readonly listen: MCPSubscriptionHandler
+}
+
+/**
+ * A held-open modern result: each `yield` is a notification (a {@link JSONRPCRequest}
+ * with no `id`); the `return` value is the terminating response.
+ *
+ * @remarks
+ * Held-open closure is a RESULT in the modern revision, not an out-of-band event, so it
+ * arrives where a result arrives — the generator's `return`. Consuming a stream and
+ * consuming a unary response therefore end the same way, and a transport narrows the two
+ * apart at ONE point (`Symbol.asyncIterator in result`), at the place that already pumps
+ * messages onto the wire.
+ */
+export type MCPStream = AsyncGenerator<JSONRPCRequest, JSONRPCResponse>
+
+/** The string-boundary mirror of {@link MCPStream} — the same sequence, already serialized. */
+export type MCPTextStream = AsyncGenerator<string, string>
+
+/**
+ * One modern method, registered on the seam that dispatches it.
+ *
+ * @remarks
+ * `undefined` answers nothing (the notification arm); an {@link MCPStream} holds the
+ * request open. `options.signal` aborts when the caller's request ends — what a handler
+ * does with it is the handler's decision, never this package's.
+ *
+ * @param request - The parsed modern request being dispatched
+ * @param options - The per-request execution options (see {@link MCPDispatchOptions})
+ * @returns The terminating response, a held-open {@link MCPStream}, or `undefined` for no answer
+ */
+export type MCPMethodHandler = (
+	request: JSONRPCRequest,
+	options: MCPDispatchOptions,
+) => Promise<JSONRPCResponse | MCPStream | undefined>
+
+/**
+ * The modern method registry an {@link MCPServerInterface} dispatches through — the ONE
+ * seam carrying both the built-in methods and any method a consumer adds.
+ *
+ * @remarks
+ * `server/discover`, `tools/list`, `tools/call`, and `subscriptions/listen` are registered here at construction,
+ * so they travel the SAME path as every later method: there is no second dispatch route
+ * and no precedence puzzle. `add` under an existing name REPLACES that method — a
+ * consumer overriding a built-in is an ordinary registration, not a special case. A name
+ * with no handler is not an error state to model: {@link method} answers `undefined` and
+ * the dispatch branch turns that into `-32601`.
+ */
+export interface MCPMethodManagerInterface {
+	/**
+	 * Register one modern method — replacing any handler already under that name.
+	 *
+	 * @param name - The JSON-RPC method name to answer (e.g. `'tools/call'`)
+	 * @param handler - The handler dispatched for that method
+	 */
+	add(name: string, handler: MCPMethodHandler): void
+	/**
+	 * Find the handler registered for one method name.
+	 *
+	 * @param name - The JSON-RPC method name to resolve
+	 * @returns The registered handler, or `undefined` when the method is unregistered
+	 */
+	method(name: string): MCPMethodHandler | undefined
+}
+
 /**
  * The push observation surface (§13) of an {@link MCPServerInterface} — the
  * dispatch moments a fire-and-forget observer (logging, tracing) subscribes to
@@ -215,22 +337,30 @@ export interface MCPServerOptions {
 		readonly ttl?: number
 		readonly scope?: 'public' | 'private'
 	}
+	/** Optional event-driven producer for the modern `subscriptions/listen` method. */
+	readonly subscription?: MCPSubscriptionOptions
 }
 
 /**
  * A transport-agnostic Model Context Protocol server — dispatches JSON-RPC 2.0
- * requests (`initialize` / `ping` / `tools/list` / `tools/call`) over a live
+ * requests (the fixed legacy methods plus the modern subscription method) over a live
  * {@link ToolManagerInterface}, with NO transport coupling (a transport layer
  * pumps strings through `handle`).
  *
  * @remarks
  * - **Two entry points.** `dispatch(request)` is the TYPED core: it takes an
  *   already-parsed {@link JSONRPCRequest}, runs the method, and resolves a
- *   {@link JSONRPCResponse} — or `undefined` for a NOTIFICATION (a request with no
- *   `id`). `handle(message)` is the STRING boundary: it `JSON.parse`s the raw
- *   message, narrows it to a request, dispatches, and serializes the response back
- *   to a string — turning a parse failure into a `-32700` response and a non-request
- *   into a `-32600` response, and returning `undefined` for a notification.
+ *   {@link JSONRPCResponse} — or an {@link MCPStream} for a held-open modern method, or
+ *   `undefined` for a NOTIFICATION (a request with no `id`). `handle(message)` is the
+ *   STRING boundary: it `JSON.parse`s the raw message, narrows it to a request,
+ *   dispatches, and serializes the answer back to a string (or an {@link MCPTextStream},
+ *   the same sequence already serialized) — turning a parse failure into a `-32700`
+ *   response and a non-request into a `-32600` response, and returning `undefined` for a
+ *   notification.
+ * - **One method seam.** Every modern method — the built-in `server/discover` /
+ *   `tools/list` / `tools/call` / `subscriptions/listen` included — is registered on `methods` and dispatched
+ *   from it, so a method added later travels the identical path and an unregistered one
+ *   still answers `-32601`.
  * - **Provider-agnostic.** Imports only core siblings; it speaks JSON-RPC + the
  *   tool registry, with no HTTP, no model, and no backend coupling.
  * - **Observable (§13).** The owned `emitter` ({@link MCPServerEventMap}) fires
@@ -240,26 +370,40 @@ export interface MCPServerOptions {
 export interface MCPServerInterface {
 	readonly emitter: EmitterInterface<MCPServerEventMap>
 	readonly identity: MCPIdentity
+	/** The modern method registry this server dispatches through (built-ins included). */
+	readonly methods: MCPMethodManagerInterface
 	/**
-	 * Dispatch an already-parsed request — run its method and resolve the response,
-	 * or `undefined` for a notification (a request with no `id`).
+	 * Dispatch an already-parsed request — run its method and resolve the answer, or
+	 * `undefined` for a notification (a request with no `id`).
+	 *
+	 * @remarks
+	 * A held-open modern method answers with an {@link MCPStream} instead of a response:
+	 * narrow the two apart with `Symbol.asyncIterator in result`. `options` is optional,
+	 * so a caller that cannot abort simply never supplies one.
 	 *
 	 * @param request - The parsed JSON-RPC request to dispatch
-	 * @returns The response, or `undefined` when the request was a notification
+	 * @param options - Per-request execution options (see {@link MCPDispatchOptions})
+	 * @returns The response, a held-open {@link MCPStream}, or `undefined` for a notification
 	 */
-	dispatch(request: JSONRPCRequest): Promise<JSONRPCResponse | undefined>
+	dispatch(
+		request: JSONRPCRequest,
+		options?: MCPDispatchOptions,
+	): Promise<JSONRPCResponse | MCPStream | undefined>
 	/**
-	 * Handle a raw message string — parse it, dispatch, and serialize the response.
+	 * Handle a raw message string — parse it, dispatch, and serialize the answer.
 	 *
 	 * @remarks
 	 * A `JSON.parse` failure resolves a serialized `-32700` (Parse error) response;
 	 * a parsed value that is not a valid request resolves a serialized `-32600`
-	 * (Invalid Request) response; a notification resolves `undefined` (no response).
+	 * (Invalid Request) response; a notification resolves `undefined` (no response). A
+	 * held-open method resolves an {@link MCPTextStream} — the typed stream's mirror,
+	 * already serialized — so a transport writes each message with no second parse.
 	 *
 	 * @param message - The raw JSON-RPC message string
-	 * @returns The serialized response string, or `undefined` for a notification
+	 * @param options - Per-request execution options (see {@link MCPDispatchOptions})
+	 * @returns The serialized response string, an {@link MCPTextStream}, or `undefined` for a notification
 	 */
-	handle(message: string): Promise<string | undefined>
+	handle(message: string, options?: MCPDispatchOptions): Promise<string | MCPTextStream | undefined>
 }
 
 // MCP TRANSPORT PORT — the environment-agnostic duplex message channel an

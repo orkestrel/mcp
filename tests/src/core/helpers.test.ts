@@ -1,5 +1,5 @@
 import type { ToolResult } from '@orkestrel/tool'
-import type { MCPTransportInterface } from '@src/core'
+import type { JSONRPCRequest, JSONRPCResponse, MCPStream, MCPTransportInterface } from '@src/core'
 import {
 	bindClient,
 	bindServer,
@@ -9,12 +9,22 @@ import {
 	buildJSONRPCError,
 	buildJSONRPCResult,
 	buildModernResult,
+	buildSubscriptionAcknowledgement,
+	buildSubscriptionFilter,
+	buildSubscriptionResult,
 	buildToolDescriptors,
 	createDuplexClientTransport,
 	createMCPClient,
 	createMCPServer,
 	DEFAULT_MCP_CACHE_TTL,
+	MCP_META_CAPABILITIES,
 	MCP_META_SERVER,
+	MCP_META_SUBSCRIPTION,
+	MCP_META_VERSION,
+	matchesSubscriptionNotification,
+	sendStream,
+	serializeStream,
+	stampSubscriptionNotification,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -66,6 +76,36 @@ function createMemoryTransport(): MemoryTransportInterface {
 		},
 	}
 	return transport
+}
+
+// Held-open fixtures (AGENTS §16.1 — an INERT data-driven stub, not a reimplementation
+// of anything the package owns): `replay` is a real MCPStream over supplied messages,
+// so each stream test names only the sequence its scenario needs.
+const PROGRESS: JSONRPCRequest = Object.freeze({
+	jsonrpc: '2.0',
+	method: 'notifications/progress',
+})
+const TERMINAL: JSONRPCResponse = Object.freeze({ jsonrpc: '2.0', id: 1, result: { done: true } })
+
+async function* replay(messages: readonly JSONRPCRequest[], response: JSONRPCResponse): MCPStream {
+	for (const message of messages) yield message
+	return response
+}
+
+// The registered handler form of it — a held-open modern method for the seam tests.
+async function held(): Promise<MCPStream> {
+	return replay([PROGRESS, PROGRESS], TERMINAL)
+}
+
+// A modern request — the reserved metadata key is what selects the modern era.
+function modernRequest(method: string): JSONRPCRequest {
+	return createJSONRPCRequest({
+		method,
+		id: 1,
+		params: {
+			_meta: { [MCP_META_VERSION]: '2026-07-28', [MCP_META_CAPABILITIES]: {} },
+		},
+	})
 }
 
 // The pure dispatch builders (AGENTS §5 — exported, independently testable). Each
@@ -211,6 +251,102 @@ describe('buildModernResult', () => {
 			ttlMs: 10,
 			cacheScope: 'private',
 			_meta: { extension: true, [MCP_META_SERVER]: identity },
+		})
+	})
+})
+
+describe('subscription helpers', () => {
+	it('intersects requested notification families with exact server support', () => {
+		expect(
+			buildSubscriptionFilter(
+				{
+					toolsListChanged: true,
+					promptsListChanged: true,
+					resourcesListChanged: false,
+					resourceSubscriptions: ['resource://two', 'resource://one'],
+				},
+				{
+					toolsListChanged: true,
+					resourcesListChanged: true,
+					resourceSubscriptions: ['resource://one'],
+				},
+			),
+		).toEqual({ toolsListChanged: true, resourceSubscriptions: ['resource://one'] })
+	})
+
+	it('matches only acknowledged notification families and resource URIs', () => {
+		const filter = { toolsListChanged: true, resourceSubscriptions: ['resource://one'] }
+
+		expect(
+			matchesSubscriptionNotification(
+				{ jsonrpc: '2.0', method: 'notifications/tools/list_changed' },
+				filter,
+			),
+		).toBe(true)
+		expect(
+			matchesSubscriptionNotification(
+				{ jsonrpc: '2.0', method: 'notifications/prompts/list_changed' },
+				filter,
+			),
+		).toBe(false)
+		expect(
+			matchesSubscriptionNotification(
+				{
+					jsonrpc: '2.0',
+					method: 'notifications/resources/updated',
+					params: { uri: 'resource://one' },
+				},
+				filter,
+			),
+		).toBe(true)
+		expect(
+			matchesSubscriptionNotification(
+				{
+					jsonrpc: '2.0',
+					method: 'notifications/resources/updated',
+					params: { uri: 'resource://two' },
+				},
+				filter,
+			),
+		).toBe(false)
+	})
+
+	it('stamps notifications while preserving metadata and overriding an offered stream id', () => {
+		expect(
+			stampSubscriptionNotification(
+				{
+					jsonrpc: '2.0',
+					method: 'notifications/tools/list_changed',
+					id: 999,
+					params: { _meta: { extension: true, [MCP_META_SUBSCRIPTION]: 'wrong' } },
+				},
+				'listen-1',
+			),
+		).toEqual({
+			jsonrpc: '2.0',
+			method: 'notifications/tools/list_changed',
+			params: { _meta: { extension: true, [MCP_META_SUBSCRIPTION]: 'listen-1' } },
+		})
+	})
+
+	it('builds the exact acknowledgement and graceful closing result', () => {
+		const identity = { name: 'server', version: '1.0.0' }
+
+		expect(buildSubscriptionAcknowledgement({ toolsListChanged: true }, 7)).toEqual({
+			jsonrpc: '2.0',
+			method: 'notifications/subscriptions/acknowledged',
+			params: {
+				notifications: { toolsListChanged: true },
+				_meta: { [MCP_META_SUBSCRIPTION]: 7 },
+			},
+		})
+		expect(buildSubscriptionResult(7, identity)).toEqual({
+			jsonrpc: '2.0',
+			id: 7,
+			result: {
+				resultType: 'complete',
+				_meta: { [MCP_META_SUBSCRIPTION]: 7, [MCP_META_SERVER]: identity },
+			},
 		})
 	})
 })
@@ -380,6 +516,91 @@ describe('bindServer', () => {
 		await waitForDelay()
 
 		expect(transport.sent).toEqual([JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} })])
+	})
+
+	it('pumps a held-open reply onto the transport, notifications first and the response last', async () => {
+		const mcp = server()
+		mcp.methods.add('demo/stream', held)
+		const transport = createMemoryTransport()
+		bindServer(mcp, transport)
+
+		transport.deliver(JSON.stringify(modernRequest('demo/stream')))
+		await waitForDelay()
+
+		expect(transport.sent).toEqual([
+			JSON.stringify(PROGRESS),
+			JSON.stringify(PROGRESS),
+			JSON.stringify(TERMINAL),
+		])
+	})
+
+	it('routes a mid-stream send failure to server.emitter error, never as an unhandled rejection', async () => {
+		const mcp = server()
+		mcp.methods.add('demo/stream', held)
+		const transport = createMemoryTransport()
+		transport.failSend = new Error('stream send boom')
+		const seen: unknown[] = []
+		mcp.emitter.on('error', (error) => seen.push(error))
+		bindServer(mcp, transport)
+
+		transport.deliver(JSON.stringify(modernRequest('demo/stream')))
+		await waitForDelay()
+		await Promise.resolve()
+
+		expect(seen).toEqual([transport.failSend])
+		expect(transport.sent).toEqual([])
+	})
+})
+
+// serializeStream / sendStream — the two held-open leaves `handle` and `bindServer`
+// compose. Both consume the generator MANUALLY, because the terminating response is the
+// `return` value and `for await` discards it; these tests pin exactly that distinction.
+describe('serializeStream', () => {
+	it('yields each notification serialized and RETURNS the serialized response', async () => {
+		const text = serializeStream(replay([PROGRESS], TERMINAL))
+		const first = await text.next()
+		const last = await text.next()
+
+		expect(first).toEqual({ done: false, value: JSON.stringify(PROGRESS) })
+		// `done: true` — the response arrives as the RETURN, never as one more yield.
+		expect(last).toEqual({ done: true, value: JSON.stringify(TERMINAL) })
+	})
+
+	it('returns the serialized response alone for a stream that yields nothing', async () => {
+		const text = serializeStream(replay([], TERMINAL))
+
+		expect(await text.next()).toEqual({ done: true, value: JSON.stringify(TERMINAL) })
+	})
+})
+
+describe('sendStream', () => {
+	it('writes every message in order and the terminating response last', async () => {
+		const transport = createMemoryTransport()
+
+		await sendStream(serializeStream(replay([PROGRESS, PROGRESS], TERMINAL)), transport)
+
+		expect(transport.sent).toEqual([
+			JSON.stringify(PROGRESS),
+			JSON.stringify(PROGRESS),
+			JSON.stringify(TERMINAL),
+		])
+	})
+
+	it('writes only the terminating response for a stream that yields nothing', async () => {
+		const transport = createMemoryTransport()
+
+		await sendStream(serializeStream(replay([], TERMINAL)), transport)
+
+		expect(transport.sent).toEqual([JSON.stringify(TERMINAL)])
+	})
+
+	it('rejects with the transport failure rather than swallowing it', async () => {
+		const transport = createMemoryTransport()
+		transport.failSend = new Error('send boom')
+
+		await expect(sendStream(serializeStream(replay([PROGRESS], TERMINAL)), transport)).rejects.toBe(
+			transport.failSend,
+		)
 	})
 })
 

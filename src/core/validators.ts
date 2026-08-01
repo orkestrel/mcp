@@ -1,5 +1,11 @@
-import type { JSONRPCMessage, JSONRPCRequest, JSONRPCResponse, MCPVersion } from './types.js'
-import { isNumber, isRecord, isString, isUndefined } from '@orkestrel/contract'
+import type {
+	JSONRPCMessage,
+	JSONRPCRequest,
+	JSONRPCResponse,
+	MCPVersion,
+	SubscriptionFilter,
+} from './types.js'
+import { arrayOf, isBoolean, isNumber, isRecord, isString, isUndefined } from '@orkestrel/contract'
 import { MCP_META_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
 
 // AGENTS §14: every guard here is a TOTAL function over the already-`JSON.parse`d
@@ -40,6 +46,30 @@ export function isRequestId(value: unknown): value is string | number | undefine
  */
 export function isMCPVersion(value: unknown): value is MCPVersion {
 	return isString(value) && SUPPORTED_PROTOCOL_VERSIONS.some((version) => version === value)
+}
+
+/**
+ * Determine whether a value is an MCP {@link SubscriptionFilter}.
+ *
+ * @remarks
+ * Every filter field is optional. Boolean notification families accept only booleans, and
+ * `resourceSubscriptions` accepts only an array of string URIs. Unknown fields remain open
+ * for protocol extensions and are ignored by the built-in subscription matcher. Total over
+ * hostile input.
+ *
+ * @param value - The unknown value to inspect
+ * @returns `true` when every recognized filter field has its protocol shape
+ */
+export function isSubscriptionFilter(value: unknown): value is SubscriptionFilter {
+	if (!isRecord(value)) return false
+	const tools = value['toolsListChanged']
+	if (!isUndefined(tools) && !isBoolean(tools)) return false
+	const prompts = value['promptsListChanged']
+	if (!isUndefined(prompts) && !isBoolean(prompts)) return false
+	const resources = value['resourcesListChanged']
+	if (!isUndefined(resources) && !isBoolean(resources)) return false
+	const subscriptions = value['resourceSubscriptions']
+	return isUndefined(subscriptions) || arrayOf(isString)(subscriptions)
 }
 
 /**

@@ -230,8 +230,11 @@ export function createLoopbackTransport(mcp: MCPServerInterface): ClientTranspor
 		async start() {},
 		async send(message) {
 			if (!('method' in message)) return
-			const response = await mcp.dispatch(message)
-			if (response !== undefined) emitter.emit('message', response)
+			const answer = await mcp.dispatch(message)
+			// The loopback carries unary replies only; a held-open answer is a different
+			// arm and never arrives for the methods these scenarios drive.
+			if (answer === undefined || Symbol.asyncIterator in answer) return
+			emitter.emit('message', answer)
 		},
 		async close() {
 			emitter.emit('close')

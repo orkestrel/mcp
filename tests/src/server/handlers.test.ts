@@ -1,5 +1,14 @@
+import type { JSONRPCRequest } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { MCP_META_CAPABILITIES, MCP_META_VERSION, MCP_PROTOCOL_VERSION } from '@src/core'
+import {
+	createMCPServer,
+	MCP_META_CAPABILITIES,
+	MCP_META_SERVER,
+	MCP_META_SUBSCRIPTION,
+	MCP_META_VERSION,
+	MCP_PROTOCOL_VERSION,
+} from '@src/core'
+import { createToolManager } from '@orkestrel/tool'
 import {
 	createMCPPostHandler,
 	MCP_METHOD_HEADER,
@@ -12,6 +21,10 @@ import {
 	createJSONRPCNotification,
 	createJSONRPCRequest,
 } from '../../setup.js'
+
+async function* subscriptionEvents(): AsyncGenerator<JSONRPCRequest> {
+	yield { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }
+}
 
 describe('createMCPPostHandler', () => {
 	it('returns a JSON response for an id-bearing request', async () => {
@@ -120,6 +133,70 @@ describe('createMCPPostHandler', () => {
 		const event = events[0]
 		if (event === undefined) throw new Error('Expected one event-stream response')
 		expect(JSON.parse(event.data)).toEqual({ jsonrpc: '2.0', id: 1, result: {} })
+	})
+
+	it('pumps a held-open subscription acknowledgement, notifications, and closure onto SSE', async () => {
+		const identity = { name: 'stream-server', version: '1.0.0' }
+		const mcp = createMCPServer({
+			identity,
+			tools: createToolManager(),
+			subscription: {
+				notifications: { toolsListChanged: true },
+				listen: () => subscriptionEvents(),
+			},
+		})
+		const handler = createMCPPostHandler(mcp, { streaming: false })
+		const response = await handler(
+			new Request('http://localhost/mcp', {
+				method: 'POST',
+				headers: {
+					[MCP_PROTOCOL_VERSION_HEADER]: '2026-07-28',
+					[MCP_METHOD_HEADER]: 'subscriptions/listen',
+				},
+				body: JSON.stringify(
+					createJSONRPCRequest({
+						method: 'subscriptions/listen',
+						id: 'http-listen',
+						params: {
+							notifications: { toolsListChanged: true },
+							_meta: {
+								[MCP_META_VERSION]: '2026-07-28',
+								[MCP_META_CAPABILITIES]: {},
+							},
+						},
+					}),
+				),
+			}),
+		)
+		const events = await collectSSE(response)
+
+		expect(response.headers.get('x-accel-buffering')).toBe('no')
+		expect(events.map((event) => JSON.parse(event.data))).toEqual([
+			{
+				jsonrpc: '2.0',
+				method: 'notifications/subscriptions/acknowledged',
+				params: {
+					notifications: { toolsListChanged: true },
+					_meta: { [MCP_META_SUBSCRIPTION]: 'http-listen' },
+				},
+			},
+			{
+				jsonrpc: '2.0',
+				method: 'notifications/tools/list_changed',
+				params: { _meta: { [MCP_META_SUBSCRIPTION]: 'http-listen' } },
+			},
+			{
+				jsonrpc: '2.0',
+				id: 'http-listen',
+				result: {
+					resultType: 'complete',
+					_meta: {
+						[MCP_META_SUBSCRIPTION]: 'http-listen',
+						[MCP_META_SERVER]: identity,
+					},
+				},
+			},
+		])
 	})
 
 	it('accepts a headerless legacy initialize request', async () => {

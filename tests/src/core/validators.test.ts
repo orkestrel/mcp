@@ -6,6 +6,7 @@ import {
 	isMCPVersion,
 	isModernRequest,
 	isRequestId,
+	isSubscriptionFilter,
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
 	SUPPORTED_PROTOCOL_VERSIONS,
@@ -54,6 +55,37 @@ describe('isMCPVersion', () => {
 		for (const value of [undefined, null, 7, {}, [], true]) {
 			expect(isMCPVersion(value)).toBe(false)
 		}
+	})
+})
+
+describe('isSubscriptionFilter', () => {
+	it('accepts empty, complete, and extension-bearing filters', () => {
+		expect(isSubscriptionFilter({})).toBe(true)
+		expect(
+			isSubscriptionFilter({
+				toolsListChanged: true,
+				promptsListChanged: false,
+				resourcesListChanged: true,
+				resourceSubscriptions: ['resource://one'],
+				extension: { future: true },
+			}),
+		).toBe(true)
+	})
+
+	it('rejects invalid recognized fields and remains total over hostile input', () => {
+		for (const value of [
+			{ toolsListChanged: 'yes' },
+			{ promptsListChanged: 1 },
+			{ resourcesListChanged: null },
+			{ resourceSubscriptions: ['resource://one', 2] },
+			null,
+			[],
+		]) {
+			expect(isSubscriptionFilter(value)).toBe(false)
+		}
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(isSubscriptionFilter(proxy)).toBe(false)
 	})
 })
 
