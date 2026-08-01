@@ -17,6 +17,9 @@ export const MCP_PROTOCOL_VERSION: MCPVersion = '2025-11-25'
 /** The legacy fallback anchor used when an initialize request cannot be accepted as modern. */
 export const MCP_LEGACY_VERSION: MCPVersion = '2025-06-18'
 
+/** The modern revision offered by an unpinned client during discovery. */
+export const MCP_MODERN_VERSION: MCPVersion = '2026-07-28'
+
 /**
  * The MCP protocol revisions this server can negotiate.
  *
@@ -26,7 +29,7 @@ export const MCP_LEGACY_VERSION: MCPVersion = '2025-06-18'
  * package does not advertise `2025-03-26` because that revision mandates JSON-RPC
  * batching, while this package accepts only individual JSON-RPC messages.
  */
-export const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = Object.freeze([
+export const SUPPORTED_PROTOCOL_VERSIONS: readonly MCPVersion[] = Object.freeze([
 	'2026-07-28',
 	'2025-11-25',
 	'2025-06-18',
@@ -92,3 +95,6 @@ export const DEFAULT_MCP_CLIENT_VERSION = '1.0.0'
  * is unset — a request the remote server does not answer within it rejects.
  */
 export const DEFAULT_MCP_REQUEST_TIMEOUT = 30_000
+
+/** The maximum discovery-probe deadline used when a client deadline is configured. */
+export const DEFAULT_MCP_PROBE_TIMEOUT = 50

@@ -23,6 +23,7 @@ import {
 } from '@src/core'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
+import { waitForDelay } from '../../setup.js'
 
 // MCPClient ↔ a REAL MCPServer over an in-process LOOPBACK transport (AGENTS §16 — a
 // real server + real ToolManager, no mocks of the unit under test). The loopback's
@@ -216,7 +217,6 @@ describe('MCPClient — connect (dual-era negotiation)', () => {
 
 		expect(client.connected).toBe(true)
 		expect(client.version).toBe('2026-07-28')
-		expect(client.protocol).toBe('2026-07-28')
 		expect(loopback.started).toBe(1)
 		expect(loopback.sent).toEqual(['server/discover'])
 	})
@@ -250,7 +250,6 @@ describe('MCPClient — connect (dual-era negotiation)', () => {
 		await client.connect()
 
 		expect(client.version).toBe('2025-06-18')
-		expect(client.protocol).toBe('2025-06-18')
 		expect(loopback.sent).toEqual(['initialize', 'notifications/initialized'])
 	})
 
@@ -261,12 +260,12 @@ describe('MCPClient — connect (dual-era negotiation)', () => {
 		})
 		const client = createMCPClient({ transport: loopback, version: MCP_PROTOCOL_VERSION })
 
-		expect(client.protocol).toBeUndefined()
+		expect(client.version).toBeUndefined()
 		await expect(client.connect()).rejects.toThrow(
 			"MCP server negotiated unsupported protocol version '2099-01-01'",
 		)
 		expect(client.connected).toBe(false)
-		expect(client.protocol).toBeUndefined()
+		expect(client.version).toBeUndefined()
 		expect(loopback.closed).toBe(1)
 		expect(loopback.sent).toEqual(['initialize'])
 	})
@@ -350,6 +349,22 @@ describe('MCPClient — modern discovery and fallback', () => {
 		})
 	})
 
+	it('surfaces -32022 without changing a pinned modern revision', async () => {
+		const peer = createFixturePeer((request) => {
+			if (request.method !== 'server/discover' || request.id === undefined) return undefined
+			return errorResponse(request.id, MCP_UNSUPPORTED_VERSION, {
+				supported: ['2025-11-25', '2025-06-18'],
+			})
+		})
+		const client = createMCPClient({ transport: peer, version: '2026-07-28' })
+
+		await expect(client.connect()).rejects.toMatchObject({ code: MCP_UNSUPPORTED_VERSION })
+
+		expect(client.connected).toBe(false)
+		expect(client.version).toBeUndefined()
+		expect(peer.sent).toEqual(['server/discover'])
+	})
+
 	it('makes no third discovery attempt when the one retry also returns -32022', async () => {
 		const peer = createFixturePeer((request) => {
 			if (request.method !== 'server/discover' || request.id === undefined) return undefined
@@ -404,7 +419,7 @@ describe('MCPClient — modern discovery and fallback', () => {
 		expect(peer.sent).toEqual(['server/discover', 'initialize', 'notifications/initialized'])
 	})
 
-	it('falls back when discovery returns a malformed unrecognized result', async () => {
+	it('surfaces a malformed result after a parseable discovery response settles the modern era', async () => {
 		const peer = createFixturePeer((request) => {
 			if (request.id === undefined) return undefined
 			if (request.method === 'server/discover') {
@@ -417,10 +432,42 @@ describe('MCPClient — modern discovery and fallback', () => {
 		})
 		const client = createMCPClient({ transport: peer })
 
-		await client.connect()
+		await expect(client.connect()).rejects.toMatchObject({ code: JSONRPC_INVALID_PARAMS })
 
-		expect(client.version).toBe(MCP_PROTOCOL_VERSION)
-		expect(peer.sent).toEqual(['server/discover', 'initialize', 'notifications/initialized'])
+		expect(client.version).toBeUndefined()
+		expect(peer.sent).toEqual(['server/discover'])
+	})
+
+	it('surfaces an unsupported result type from a parseable discovery response without fallback', async () => {
+		const peer = createFixturePeer((request) => {
+			if (request.id === undefined) return undefined
+			if (request.method === 'server/discover') {
+				return {
+					jsonrpc: '2.0',
+					id: request.id,
+					result: {
+						supportedVersions: ['2026-07-28'],
+						capabilities: {},
+						resultType: 'input_required',
+						ttlMs: 60_000,
+						cacheScope: 'private',
+					},
+				}
+			}
+			if (request.method === 'initialize') {
+				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+			}
+			return undefined
+		})
+		const client = createMCPClient({ transport: peer })
+
+		await expect(client.connect()).rejects.toMatchObject({
+			code: JSONRPC_INVALID_PARAMS,
+			message: "MCP result type 'input_required' is not supported",
+		})
+
+		expect(client.connected).toBe(false)
+		expect(peer.sent).toEqual(['server/discover'])
 	})
 
 	it('bounds a silent discovery probe and falls back when the peer sends no answer', async () => {
@@ -707,6 +754,31 @@ describe('MCPClient — per-request timeout', () => {
 
 		await expect(client.tools()).rejects.toThrow(/timed out/)
 	})
+
+	it('keeps the probe deadline scoped to discovery while another request is pending', async () => {
+		const peer = createFixturePeer((request) => {
+			if (request.method === 'initialize' && request.id !== undefined) {
+				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+			}
+			return undefined
+		})
+		const client = createMCPClient({ transport: peer, timeout: 200 })
+		const connecting = client.connect()
+		await waitForDelay()
+		const listing = client.tools()
+
+		await waitForDelay(75)
+		peer.emitter.emit('message', { jsonrpc: '2.0', id: 2, result: { tools: [] } })
+
+		await expect(listing).resolves.toEqual([])
+		await connecting
+		expect(peer.sent).toEqual([
+			'server/discover',
+			'tools/list',
+			'initialize',
+			'notifications/initialized',
+		])
+	})
 })
 
 describe('MCPClient — disconnect', () => {
@@ -720,7 +792,7 @@ describe('MCPClient — disconnect', () => {
 		await client.disconnect()
 
 		expect(client.connected).toBe(false)
-		expect(client.protocol).toBeUndefined()
+		expect(client.version).toBeUndefined()
 		expect(loopback.closed).toBe(1)
 		await expect(pending).rejects.toThrow(/disconnected/)
 	})

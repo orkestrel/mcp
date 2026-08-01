@@ -151,7 +151,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		expect(body.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['add', 'boom'])
 	})
 
-	it('a post-initialize request with the supported protocol-version header succeeds', async () => {
+	it('a post-initialize request with the pinned protocol-version header succeeds', async () => {
 		const handle = await startSession()
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
@@ -159,11 +159,36 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 			handle.base,
 			id ?? undefined,
 			createJSONRPCRequest({ method: 'ping', id: 7 }),
-			{ [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' },
+			{ [MCP_PROTOCOL_VERSION_HEADER]: '2025-11-25' },
 		)
 
 		expect(response.status).toBe(200)
 		expect(await response.json()).toEqual({ jsonrpc: '2.0', id: 7, result: {} })
+	})
+
+	it('a live session rejects a different supported protocol-version header', async () => {
+		const handle = await startSession()
+		const init = await postJSON(
+			handle.base,
+			createJSONRPCRequest({ params: { protocolVersion: '2025-11-25' } }),
+		)
+		const id = init.headers.get(MCP_SESSION_HEADER)
+		const response = await postSession(
+			handle.base,
+			id ?? undefined,
+			createJSONRPCRequest({ method: 'ping', id: 8 }),
+			{ [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' },
+		)
+
+		expect(response.status).toBe(400)
+		expect(await response.json()).toEqual({
+			jsonrpc: '2.0',
+			id: 8,
+			error: {
+				code: -32020,
+				message: 'MCP protocol version does not match the active session',
+			},
+		})
 	})
 
 	it('a post-initialize request with an unsupported protocol-version header is rejected', async () => {
@@ -182,14 +207,21 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 			jsonrpc: '2.0',
 			id: 8,
 			error: {
-				code: -32022,
-				message: "Unsupported MCP protocol version '2099-01-01'",
-				data: {
-					supported: ['2026-07-28', '2025-11-25', '2025-06-18'],
-					requested: '2099-01-01',
-				},
+				code: -32020,
+				message: 'MCP protocol version does not match the active session',
 			},
 		})
+	})
+
+	it('does not retain or return a session for a rejected initialize request', async () => {
+		const handle = await startSession()
+		const response = await postJSON(handle.base, createJSONRPCRequest(), {
+			headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2099-01-01' },
+		})
+
+		expect(response.status).toBe(400)
+		expect((await response.clone().json()).error.code).toBe(-32022)
+		expect(response.headers.get(MCP_SESSION_HEADER)).toBeNull()
 	})
 
 	it('a non-initialize POST with NO session id → 404 + a JSON-RPC error body', async () => {

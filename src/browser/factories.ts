@@ -67,9 +67,10 @@ export function createWebSocketClientTransport(
  * `Authorization` bearer) to reach a guarded server. `start` / `close` hold no
  * connection; against a STATEFUL server it captures the `mcp-session-id` from
  * `initialize` and echoes it on later requests. It also captures the initialize
- * result's `protocolVersion` and sends `mcp-protocol-version` on every subsequent
- * request, so the same `MCPClient` passes the session and 2025-06-18 protocol
- * gates without caller wiring.
+ * result's `protocolVersion` and sends `mcp-protocol-version` alone on subsequent
+ * legacy requests. Modern requests instead derive `mcp-protocol-version` and
+ * `mcp-method` from the message, plus `mcp-name` only for `tools/call`, so the
+ * same `MCPClient` passes either era's protocol gates without caller wiring.
  *
  * @param options - `url` (the remote endpoint; REQUIRED), optional `headers` merged
  *   onto every request, optional `fetch` (default `globalThis.fetch`), and optional

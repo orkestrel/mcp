@@ -18,17 +18,20 @@ import { isArray, isNumber, isRecord, isString } from '@orkestrel/contract'
 import {
 	DEFAULT_MCP_CLIENT_NAME,
 	DEFAULT_MCP_CLIENT_VERSION,
+	DEFAULT_MCP_PROBE_TIMEOUT,
 	DEFAULT_MCP_REQUEST_TIMEOUT,
 	JSONRPC_INVALID_PARAMS,
+	JSONRPC_INVALID_REQUEST,
+	JSONRPC_METHOD_NOT_FOUND,
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
 	MCP_META_VERSION,
+	MCP_MODERN_VERSION,
 	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
-	SUPPORTED_PROTOCOL_VERSIONS,
 } from './constants.js'
 import { MCPError, isMCPError } from './errors.js'
-import { inferEra } from './inferers.js'
+import { inferEra, inferVersion } from './inferers.js'
 import { isJSONRPCResponse, isMCPVersion, isRequestId } from './validators.js'
 
 /**
@@ -49,9 +52,9 @@ import { isJSONRPCResponse, isMCPVersion, isRequestId } from './validators.js'
  *   `id` ({@link #nextId}); a single transport `message` subscription resolves / rejects
  *   the matching {@link #pending} entry by `id`. A message that is NOT a response to a
  *   pending request is a server NOTIFICATION — re-surfaced on the `notification` event.
- * - **Per-request deadline.** `#request` races `AbortSignal.timeout(this.#timeout)` (the
- *   taverna idiom — never a raw `setTimeout`): a server that never replies REJECTS the
- *   pending request once the deadline fires, never hanging.
+ * - **Per-request deadline.** Each `#request` receives its own deadline: ordinary calls use
+ *   `this.#timeout`, while an explicitly bounded discovery uses the shorter probe deadline.
+ *   `AbortSignal.timeout` (never a raw `setTimeout`) rejects only that pending request.
  * - **Transport-agnostic.** Imports only core siblings (JSON-RPC + the tool vocabulary);
  *   the concrete transport is injected. Wire fields are narrowed via the contracts
  *   guards (no `as`).
@@ -84,6 +87,7 @@ export class MCPClient implements MCPClientInterface {
 		{
 			readonly resolve: (value: unknown) => void
 			readonly reject: (reason?: unknown) => void
+			readonly method: string
 			readonly deadline?: AbortSignal
 			readonly timeout?: () => void
 		}
@@ -93,8 +97,6 @@ export class MCPClient implements MCPClientInterface {
 	#version: MCPVersion | undefined = undefined
 	#era: MCPEra | undefined = undefined
 	#offer: MCPVersion
-	#limit: number | undefined = undefined
-	#probing = false
 
 	constructor(options: MCPClientOptions) {
 		this.#emitter = new Emitter<MCPClientEventMap>({
@@ -108,9 +110,12 @@ export class MCPClient implements MCPClientInterface {
 		}
 		this.#capabilities = options.capabilities ?? {}
 		this.#pin = options.version
-		this.#offer = options.version ?? '2026-07-28'
+		this.#offer = options.version ?? MCP_MODERN_VERSION
 		this.#timeout = options.timeout ?? DEFAULT_MCP_REQUEST_TIMEOUT
-		this.#probe = options.timeout === undefined ? undefined : Math.min(options.timeout, 50)
+		this.#probe =
+			options.timeout === undefined
+				? undefined
+				: Math.min(options.timeout, DEFAULT_MCP_PROBE_TIMEOUT)
 		// One message subscription for the client's whole life: a response settles its
 		// pending request by id; anything else is a server notification.
 		this.#transport.emitter.on('message', (message) => this.#receive(message))
@@ -125,10 +130,6 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	get version(): MCPVersion | undefined {
-		return this.#version
-	}
-
-	get protocol(): string | undefined {
 		return this.#version
 	}
 
@@ -154,38 +155,21 @@ export class MCPClient implements MCPClientInterface {
 		let discovery: MCPDiscoverResult
 		try {
 			try {
-				// Only an explicitly bounded unresolved-era probe gets the short fallback deadline.
-				// With no configured bound, an unbound duplex transport remains pending because the
-				// client cannot distinguish it from a peer that has not received the request.
-				if (this.#era === undefined) {
-					this.#probing = true
-					this.#limit = this.#probe
-				}
-				try {
-					discovery = await this.discover()
-				} catch (error) {
-					if (!isMCPError(error) || error.code !== MCP_UNSUPPORTED_VERSION) throw error
-					const supported = isRecord(error.context) ? error.context['supported'] : undefined
-					let retry: MCPVersion | undefined
-					if (isArray(supported)) {
-						for (const candidate of SUPPORTED_PROTOCOL_VERSIONS) {
-							if (isMCPVersion(candidate) && supported.some((version) => version === candidate)) {
-								retry = candidate
-								break
-							}
-						}
-					}
-					if (retry === undefined) throw error
-					this.#offer = retry
-					discovery = await this.discover()
-				}
-			} finally {
-				this.#limit = undefined
-				this.#probing = false
+				discovery = await this.discover()
+			} catch (error) {
+				if (!isMCPError(error) || error.code !== MCP_UNSUPPORTED_VERSION) throw error
+				if (this.#pin !== undefined) throw error
+				const supported = isRecord(error.context) ? error.context['supported'] : undefined
+				const retry = isArray(supported)
+					? inferVersion(supported.filter((version): version is string => isString(version)))
+					: undefined
+				if (retry === undefined) throw error
+				this.#offer = retry
+				discovery = await this.discover()
 			}
 		} catch (error) {
 			const fallback =
-				this.#pin !== '2026-07-28' &&
+				this.#pin !== MCP_MODERN_VERSION &&
 				this.#era === undefined &&
 				(!isMCPError(error) || error.code !== MCP_UNSUPPORTED_VERSION)
 			if (!fallback) throw error
@@ -193,16 +177,7 @@ export class MCPClient implements MCPClientInterface {
 			return
 		}
 
-		let version: MCPVersion | undefined
-		for (const candidate of SUPPORTED_PROTOCOL_VERSIONS) {
-			if (
-				isMCPVersion(candidate) &&
-				discovery.supportedVersions.some((supported) => supported === candidate)
-			) {
-				version = candidate
-				break
-			}
-		}
+		const version = inferVersion(discovery.supportedVersions)
 		if (version === undefined) {
 			throw new MCPError(
 				'MCP server supports no compatible protocol version',
@@ -219,7 +194,12 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	async discover(): Promise<MCPDiscoverResult> {
-		const result = await this.#request('server/discover', undefined, this.#version ?? this.#offer)
+		const result = await this.#request(
+			'server/discover',
+			undefined,
+			this.#probe,
+			this.#version ?? this.#offer,
+		)
 		if (!isRecord(result)) {
 			throw new MCPError(
 				'MCP server returned a malformed discovery result',
@@ -233,11 +213,13 @@ export class MCPClient implements MCPClientInterface {
 		const scope = result['cacheScope']
 		const instructions = result['instructions']
 		const metadata = result['_meta']
+		const resultType = result['resultType']
 		if (
 			!isArray(advertised) ||
 			!isRecord(capabilities) ||
 			!isNumber(ttl) ||
 			(scope !== 'public' && scope !== 'private') ||
+			(resultType !== undefined && resultType !== 'complete') ||
 			(instructions !== undefined && !isString(instructions)) ||
 			(metadata !== undefined && !isRecord(metadata))
 		) {
@@ -254,7 +236,7 @@ export class MCPClient implements MCPClientInterface {
 		return {
 			supportedVersions,
 			capabilities,
-			resultType: 'complete',
+			resultType: resultType ?? 'complete',
 			ttlMs: ttl,
 			cacheScope: scope,
 			...(instructions === undefined ? {} : { instructions }),
@@ -276,7 +258,7 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	async tools(): Promise<readonly ToolInterface[]> {
-		const result = await this.#request('tools/list')
+		const result = await this.#request('tools/list', undefined, this.#timeout)
 		// The wire shape is `{ tools: MCPToolDescriptor[] }` — narrow it (§14): a
 		// non-record / non-array `tools` yields no tools rather than throwing.
 		if (!isRecord(result) || !isArray(result['tools'])) return []
@@ -290,7 +272,7 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	async call(name: string, args: Readonly<Record<string, unknown>>): Promise<unknown> {
-		const result = await this.#request('tools/call', { name, arguments: args })
+		const result = await this.#request('tools/call', { name, arguments: args }, this.#timeout)
 		// The inverse of the server's `buildCallResult`: concat the result's text blocks,
 		// then either throw (a remote `isError`) or parse the JSON value.
 		const text = this.#text(result)
@@ -315,12 +297,13 @@ export class MCPClient implements MCPClientInterface {
 	// here rather than leaving a pending request to time out.
 	#request(
 		method: string,
-		params?: Readonly<Record<string, unknown>>,
+		params: Readonly<Record<string, unknown>> | undefined,
+		deadline: number | undefined,
 		version?: MCPVersion,
 	): Promise<unknown> {
 		this.#nextId += 1
 		const id = this.#nextId
-		const timeout = this.#probing ? this.#limit : this.#timeout
+		const timeout = deadline
 		const modern = version ?? (this.#era === 'modern' ? this.#version : undefined)
 		const stamped =
 			modern === undefined
@@ -341,16 +324,16 @@ export class MCPClient implements MCPClientInterface {
 		}
 		return new Promise<unknown>((resolve, reject) => {
 			if (timeout === undefined) {
-				this.#pending.set(id, { resolve, reject })
+				this.#pending.set(id, { resolve, reject, method })
 				this.#transport.send(request).catch((error: unknown) => {
 					this.#settle(id, error instanceof Error ? error : new Error(String(error)), true)
 				})
 				return
 			}
-			const deadline = AbortSignal.timeout(timeout)
+			const signal = AbortSignal.timeout(timeout)
 			const abort = this.#timeoutRequest.bind(this, id, method, timeout)
-			deadline.addEventListener('abort', abort, { once: true })
-			this.#pending.set(id, { resolve, reject, deadline, timeout: abort })
+			signal.addEventListener('abort', abort, { once: true })
+			this.#pending.set(id, { resolve, reject, method, deadline: signal, timeout: abort })
 			this.#transport.send(request).catch((error: unknown) => {
 				this.#settle(id, error instanceof Error ? error : new Error(String(error)), true)
 			})
@@ -363,7 +346,16 @@ export class MCPClient implements MCPClientInterface {
 	// `notification` event.
 	#receive(message: JSONRPCMessage): void {
 		if (isJSONRPCResponse(message) && isRequestId(message.id)) {
-			if (this.#pending.has(message.id)) {
+			const pending = this.#pending.get(message.id)
+			if (pending !== undefined) {
+				if (
+					pending.method === 'server/discover' &&
+					(message.error === undefined ||
+						(message.error.code !== JSONRPC_METHOD_NOT_FOUND &&
+							message.error.code !== JSONRPC_INVALID_REQUEST))
+				) {
+					this.#era = 'modern'
+				}
 				if (message.error !== undefined) {
 					this.#settle(
 						message.id,
@@ -431,11 +423,15 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	async #initialize(version: MCPVersion): Promise<void> {
-		const result = await this.#request('initialize', {
-			protocolVersion: version,
-			capabilities: {},
-			clientInfo: this.#identity,
-		})
+		const result = await this.#request(
+			'initialize',
+			{
+				protocolVersion: version,
+				capabilities: {},
+				clientInfo: this.#identity,
+			},
+			this.#timeout,
+		)
 		const protocol = isRecord(result) ? result['protocolVersion'] : undefined
 		if (protocol === undefined) {
 			await this.#transport.close()

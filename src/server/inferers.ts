@@ -2,14 +2,14 @@ import type { JSONRPCRequest, JSONRPCResponse, MCPEra, MCPVersion } from '@src/c
 import {
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_METHOD_NOT_FOUND,
-	MCP_LEGACY_VERSION,
 	MCP_HEADER_MISMATCH,
 	MCP_MISSING_CAPABILITY,
+	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
-	SUPPORTED_PROTOCOL_VERSIONS,
 	inferEra,
-	isMCPVersion,
+	inferVersion,
 } from '@src/core'
+import { isString } from '@orkestrel/contract'
 
 /**
  * Infer the legacy revision an `initialize` request negotiates.
@@ -23,11 +23,9 @@ import {
  */
 export function inferLegacyVersion(request: JSONRPCRequest): MCPVersion {
 	const requested = request.params?.['protocolVersion']
-	if (isMCPVersion(requested) && inferEra(requested) === 'legacy') return requested
-	for (const version of SUPPORTED_PROTOCOL_VERSIONS) {
-		if (isMCPVersion(version) && inferEra(version) === 'legacy') return version
-	}
-	return MCP_LEGACY_VERSION
+	const version = inferVersion(isString(requested) ? [requested] : [])
+	if (version !== undefined && inferEra(version) === 'legacy') return version
+	return MCP_PROTOCOL_VERSION
 }
 
 /**

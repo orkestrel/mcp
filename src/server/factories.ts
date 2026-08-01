@@ -82,12 +82,11 @@ export function createMCPRoutes<TState = unknown>(
 	options?: HTTPTransportOptions,
 ): readonly RouteInput<string, TState>[] {
 	const path = options?.path ?? DEFAULT_MCP_PATH
-	const streaming = options?.streaming ?? true
 	const post: RouteInput<string, TState> = {
 		method: 'POST',
 		path,
 		name: 'mcp',
-		handler: createMCPPostHandler(mcp, streaming, options?.origin),
+		handler: createMCPPostHandler(mcp, options),
 	}
 	return [post]
 }

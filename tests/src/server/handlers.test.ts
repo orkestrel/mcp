@@ -15,7 +15,7 @@ import {
 
 describe('createMCPPostHandler', () => {
 	it('returns a JSON response for an id-bearing request', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), false)
+		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -29,7 +29,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('accepts a supported protocol-version header', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), false)
+		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -48,7 +48,7 @@ describe('createMCPPostHandler', () => {
 		mcp.emitter.on('request', () => {
 			requests += 1
 		})
-		const handler = createMCPPostHandler(mcp, false)
+		const handler = createMCPPostHandler(mcp, { streaming: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -74,7 +74,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('returns a parse error for malformed JSON', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), false)
+		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', { method: 'POST', body: '{ not json' }),
 		)
@@ -88,7 +88,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('returns an empty accepted response for a notification', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), false)
+		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -102,7 +102,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('frames a response as an event stream when negotiated', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), true)
+		const handler = createMCPPostHandler(createCalculatorServer())
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -123,7 +123,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('accepts a headerless legacy initialize request', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), false)
+		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -136,7 +136,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('rejects every other headerless request with -32020 and no data member', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), false)
+		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -154,7 +154,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('requires protocol and method headers on modern discovery, but not Mcp-Name', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), false)
+		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -180,7 +180,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('requires Mcp-Name only on tools/call and matches it to params.name', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), false)
+		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -209,7 +209,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('returns -32020 when a required modern header disagrees with the body', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), false)
+		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -238,8 +238,38 @@ describe('createMCPPostHandler', () => {
 		})
 	})
 
+	it('returns -32602 when the modern metadata version is present but not a string', async () => {
+		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
+		const response = await handler(
+			new Request('http://localhost/mcp', {
+				method: 'POST',
+				headers: {
+					[MCP_PROTOCOL_VERSION_HEADER]: '7',
+					[MCP_METHOD_HEADER]: 'server/discover',
+				},
+				body: JSON.stringify(
+					createJSONRPCRequest({
+						method: 'server/discover',
+						params: {
+							_meta: {
+								[MCP_META_VERSION]: 7,
+								[MCP_META_CAPABILITIES]: {},
+							},
+						},
+					}),
+				),
+			}),
+		)
+
+		expect(response.status).toBe(400)
+		expect((await response.json()).error).toEqual({
+			code: -32602,
+			message: 'Invalid params: malformed modern request metadata',
+		})
+	})
+
 	it('maps a modern unknown method to HTTP 404 while legacy remains HTTP 200', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), false)
+		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const params = {
 			_meta: {
 				[MCP_META_VERSION]: MCP_PROTOCOL_VERSION,
@@ -271,11 +301,15 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('allows no Origin and rejects every present origin outside the allowlist', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), false)
-		const allowed = createMCPPostHandler(createCalculatorServer(), false, {
-			origins: ['https://client.example'],
+		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
+		const allowed = createMCPPostHandler(createCalculatorServer(), {
+			streaming: false,
+			origin: { origins: ['https://client.example'] },
 		})
-		const delegated = createMCPPostHandler(createCalculatorServer(), false, { enabled: false })
+		const delegated = createMCPPostHandler(createCalculatorServer(), {
+			streaming: false,
+			origin: { enabled: false },
+		})
 		const body = JSON.stringify(createJSONRPCRequest())
 		const absent = await handler(new Request('http://localhost/mcp', { method: 'POST', body }))
 		const unlisted = await handler(

@@ -450,7 +450,7 @@ export interface MCPClientOptions {
  *   over a tool registry, the client ISSUES them over a transport: `connect` probes
  *   `server/discover` first unless pinned to a legacy revision, falling back to the
  *   legacy `initialize` handshake only when the peer does not speak the modern era.
- *   The negotiated revision is exposed through `version` and `protocol`; `tools()` lists
+ *   The negotiated revision is exposed through `version`; `tools()` lists
  *   the remote tools and wraps each as a local {@link ToolInterface} whose `execute`
  *   calls back through `call`; `call(name, args)` runs a remote `tools/call` and
  *   returns the tool's value (a remote tool FAILURE — `isError: true` — throws locally,
@@ -476,11 +476,6 @@ export interface MCPClientInterface {
 	readonly connected: boolean
 	/** The negotiated protocol revision, or `undefined` while disconnected. */
 	readonly version: MCPVersion | undefined
-	/**
-	 * The MCP protocol revision negotiated by {@link connect}, or `undefined` before
-	 * connecting and after {@link disconnect}. Mirrors {@link version}.
-	 */
-	readonly protocol: string | undefined
 	/** The injected transport the client drives the remote server over. */
 	readonly transport: ClientTransportInterface
 	/**

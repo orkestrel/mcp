@@ -98,7 +98,7 @@ export function allowsOrigin(request: Request, options?: MCPOriginOptions): bool
  * @param message - The parsed JSON-RPC request body
  * @returns `true` only when every method-applicable modern header matches
  */
-export function matchesRequestHeaders(request: Request, message: JSONRPCRequest): boolean {
+export function matchesModernHeaders(request: Request, message: JSONRPCRequest): boolean {
 	if (!isModernRequest(message)) return false
 	const metadata = isRecord(message.params?.['_meta']) ? message.params['_meta'] : undefined
 	const version = metadata?.[MCP_META_VERSION]

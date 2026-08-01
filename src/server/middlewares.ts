@@ -1,7 +1,13 @@
 import type { JSONRPCMessage } from '@src/core'
 import type { MiddlewareHandler } from '@orkestrel/server'
 import type { MCPSessionEntry, MCPSessionOptions, MCPSessionState } from './types.js'
-import { isInitializeRequest, isModernRequest, parseJSONRPCMessage } from '@src/core'
+import {
+	MCP_HEADER_MISMATCH,
+	buildJSONRPCError,
+	isInitializeRequest,
+	isModernRequest,
+	parseJSONRPCMessage,
+} from '@src/core'
 import { openStream } from '@orkestrel/server'
 import {
 	DEFAULT_MCP_PATH,
@@ -93,14 +99,22 @@ export function createMCPSession<TState extends MCPSessionState>(
 		if (context.url.pathname !== path) return next()
 		if (!allowsOrigin(request, origin)) return new Response(null, { status: 403 })
 		let parsed: JSONRPCMessage | undefined
+		let text: string | undefined
 		if (context.method === 'POST') {
 			try {
-				parsed = parseJSONRPCMessage(JSON.parse(await request.clone().text()))
+				text = await request.text()
+				parsed = parseJSONRPCMessage(JSON.parse(text))
 			} catch {
 				parsed = undefined
 			}
-			if (parsed !== undefined && 'method' in parsed && isModernRequest(parsed)) {
-				return next()
+			if (text !== undefined && parsed !== undefined && isModernRequest(parsed)) {
+				return next(
+					new Request(context.url, {
+						method: 'POST',
+						headers: request.headers,
+						body: text,
+					}),
+				)
 			}
 		}
 		if (ttl !== undefined) {
@@ -149,17 +163,18 @@ export function createMCPSession<TState extends MCPSessionState>(
 			return stream.response
 		}
 
-		// POST — buffer the body once so the downstream route can re-read it via a forwarded
-		// Request; only `initialize` mints a fresh session when no valid id is present.
-		const text = await request.text()
+		if (context.method !== 'POST' || text === undefined) return next()
+
+		// POST — only `initialize` mints a fresh session when no valid id is present.
+		let created: MCPSessionEntry | undefined
 		if (entry === undefined) {
 			if (parsed !== undefined && isInitializeRequest(parsed)) {
 				const session = new MCPSession(
 					crypto.randomUUID(),
 					capacity !== undefined ? { capacity } : {},
 				)
-				entry = { session, touched: clock(), version: inferLegacyVersion(parsed) }
-				store.set(session.id, entry)
+				created = { session, touched: clock(), version: inferLegacyVersion(parsed) }
+				entry = created
 			} else {
 				return rejectUnknownSession()
 			}
@@ -168,11 +183,21 @@ export function createMCPSession<TState extends MCPSessionState>(
 			throw new Error('MCP session state is not writable')
 		}
 		const headers = new Headers(request.headers)
-		if (
-			!headers.has(MCP_PROTOCOL_VERSION_HEADER) &&
-			(parsed === undefined || !isInitializeRequest(parsed))
-		) {
-			headers.set(MCP_PROTOCOL_VERSION_HEADER, entry.version)
+		if (parsed === undefined || !isInitializeRequest(parsed)) {
+			const protocol = headers.get(MCP_PROTOCOL_VERSION_HEADER)
+			if (protocol === null) {
+				headers.set(MCP_PROTOCOL_VERSION_HEADER, entry.version)
+			} else if (protocol !== entry.version) {
+				const requestId = parsed !== undefined && 'method' in parsed ? (parsed.id ?? null) : null
+				return Response.json(
+					buildJSONRPCError(
+						requestId,
+						MCP_HEADER_MISMATCH,
+						'MCP protocol version does not match the active session',
+					),
+					{ status: 400 },
+				)
+			}
 		}
 		const forwarded = new Request(context.url, {
 			method: 'POST',
@@ -180,6 +205,10 @@ export function createMCPSession<TState extends MCPSessionState>(
 			body: text,
 		})
 		const response = await next(forwarded)
+		if (created !== undefined) {
+			if (!response.ok) return response
+			store.set(created.session.id, created)
+		}
 		response.headers.set(MCP_SESSION_HEADER, entry.session.id)
 		return response
 	}

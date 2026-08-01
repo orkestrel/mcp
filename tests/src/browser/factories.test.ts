@@ -6,11 +6,15 @@ import {
 	createDuplexClientTransport,
 	createMCPClient,
 	MCP_LEGACY_VERSION,
+	MCP_META_VERSION,
+	MCP_MODERN_VERSION,
 } from '@src/core'
 import {
 	createHTTPClientTransport,
 	createMessagePortTransport,
 	createWebSocketClientTransport,
+	MCP_METHOD_HEADER,
+	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
 	MCP_WEBSOCKET_SUBPROTOCOL,
@@ -180,6 +184,41 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 		await client.disconnect()
 	})
 
+	it('stamps modern protocol and method headers from each body and names only tools/call', async () => {
+		const protocols: (string | null)[] = []
+		const methods: (string | null)[] = []
+		const names: (string | null)[] = []
+		const versions: unknown[] = []
+		const transport = createHTTPClientTransport({
+			url: `${serverURL}/mcp`,
+			fetch: (input, init) => {
+				const headers = new Headers(init?.headers)
+				protocols.push(headers.get(MCP_PROTOCOL_VERSION_HEADER))
+				methods.push(headers.get(MCP_METHOD_HEADER))
+				names.push(headers.get(MCP_NAME_HEADER))
+				const body = init?.body
+				if (typeof body === 'string') {
+					const message: unknown = JSON.parse(body)
+					const params = isRecord(message) ? message['params'] : undefined
+					const metadata = isRecord(params) ? params['_meta'] : undefined
+					versions.push(isRecord(metadata) ? metadata[MCP_META_VERSION] : undefined)
+				}
+				return fetch(input, init)
+			},
+		})
+		const client = createMCPClient({ transport })
+
+		await client.connect()
+		await client.tools()
+		await client.call('add', {})
+
+		expect(protocols).toEqual([MCP_MODERN_VERSION, MCP_MODERN_VERSION, MCP_MODERN_VERSION])
+		expect(protocols).toEqual(versions)
+		expect(methods).toEqual(['server/discover', 'tools/list', 'tools/call'])
+		expect(names).toEqual([null, null, 'add'])
+		await client.disconnect()
+	})
+
 	it('captures the mcp-session-id on initialize and reuses it across two sequential requests', async () => {
 		const transport = createHTTPClientTransport({ url: `${serverURL}/mcp` })
 		expect(transport.session).toBeUndefined()
@@ -211,10 +250,15 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 
 	it('captures the negotiated protocol and sends it on the subsequent real fetch request', async () => {
 		const protocols: (string | null)[] = []
+		const methods: (string | null)[] = []
+		const names: (string | null)[] = []
 		const transport = createHTTPClientTransport({
 			url: `${serverURL}/mcp`,
 			fetch: (input, init) => {
-				protocols.push(new Headers(init?.headers).get(MCP_PROTOCOL_VERSION_HEADER))
+				const headers = new Headers(init?.headers)
+				protocols.push(headers.get(MCP_PROTOCOL_VERSION_HEADER))
+				methods.push(headers.get(MCP_METHOD_HEADER))
+				names.push(headers.get(MCP_NAME_HEADER))
 				return fetch(input, init)
 			},
 		})
@@ -225,6 +269,8 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 		// The initialize POST has no protocol header. The initialized notification does;
 		// its successful real-Chromium exchange also proves the CORS preflight admitted it.
 		expect(protocols).toEqual([null, MCP_LEGACY_VERSION])
+		expect(methods).toEqual([null, null])
+		expect(names).toEqual([null, null])
 		await client.disconnect()
 	})
 

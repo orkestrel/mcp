@@ -178,8 +178,9 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 
 | Constant                      | Kind  | Value                                                                                |
 | ----------------------------- | ----- | ------------------------------------------------------------------------------------ |
-| `MCP_PROTOCOL_VERSION`        | const | `'2026-07-28'` — the current modern protocol revision.                               |
+| `MCP_PROTOCOL_VERSION`        | const | `'2025-11-25'` — the newest legacy initialize revision.                              |
 | `MCP_LEGACY_VERSION`          | const | `'2025-06-18'` — the legacy fallback anchor.                                         |
+| `MCP_MODERN_VERSION`          | const | `'2026-07-28'` — the modern discovery revision.                                      |
 | `SUPPORTED_PROTOCOL_VERSIONS` | const | Frozen preference order: `2026-07-28`, `2025-11-25`, `2025-06-18`.                   |
 | `MCP_META_VERSION`            | const | `'io.modelcontextprotocol/protocolVersion'` — reserved request-version metadata key. |
 | `MCP_META_CAPABILITIES`       | const | `'io.modelcontextprotocol/clientCapabilities'` — reserved capability metadata key.   |
@@ -197,6 +198,7 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 | `DEFAULT_MCP_CLIENT_NAME`     | const | `'taverna'` — the default client name reported in the `initialize` handshake.        |
 | `DEFAULT_MCP_CLIENT_VERSION`  | const | `'1.0.0'` — the default client version reported in the `initialize` handshake.       |
 | `DEFAULT_MCP_REQUEST_TIMEOUT` | const | `30000` — the default per-request deadline (ms) an `MCPClient` applies.              |
+| `DEFAULT_MCP_PROBE_TIMEOUT`   | const | `50` — the maximum configured discovery-probe deadline in milliseconds.              |
 
 ### Helpers
 
@@ -213,6 +215,7 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 | `parseJSONRPCMessage`   | function | Narrow an already-parsed value to a `JSONRPCMessage`, or `undefined` (total; sound with `isJSONRPCMessage`).                                               |
 | `parseRequestContext`   | function | Coerce valid modern metadata to `MCPRequestContext`, or `undefined` for malformed required metadata.                                                       |
 | `inferEra`              | function | Map a supported revision to `modern` or `legacy`; unsupported revisions return `undefined`.                                                                |
+| `inferVersion`          | function | Select the newest locally supported revision present in a peer's offer.                                                                                    |
 | `buildJSONRPCResult`    | function | Build a success `JSONRPCResponse` — the `id` echoed, the value as `result`.                                                                                |
 | `buildJSONRPCError`     | function | Build an error `JSONRPCResponse` — the `id`, a reserved `code` / `message`, and optional `data`.                                                           |
 | `buildToolDescriptors`  | function | Map a `ToolManagerInterface`'s definitions to `tools/list` descriptors, renaming `parameters` → `inputSchema`.                                             |
@@ -248,12 +251,12 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 | `ClientTransportInterface` | interface | `emitter` / `session` data members + the `start` / `send` / `close` methods — the client's transport-agnostic carrier.                                                                                                     |
 | `MCPClientEventMap`        | type      | `{ connect: []; disconnect: []; notification: [JSONRPCMessage]; error: [unknown] }`.                                                                                                                                       |
 | `MCPClientOptions`         | interface | `{ on?; error?; transport; identity?; capabilities?; version?; timeout? }` — options for `createMCPClient`.                                                                                                                |
-| `MCPClientInterface`       | interface | `emitter` / `connected` / `version` / `protocol` / `transport` data members + the `on` / `connect` / `discover` / `disconnect` / `tools` / `call` methods.                                                                 |
+| `MCPClientInterface`       | interface | `emitter` / `connected` / `version` / `transport` data members + the `on` / `connect` / `discover` / `disconnect` / `tools` / `call` methods.                                                                              |
 
 The `emitter`, `name`, and `version` members of `MCPServerInterface` are
 `readonly` data members (Surface rows, above) — its call-signature methods
 are documented under [Methods](#methods). Likewise the `emitter` /
-`connected` / `version` / `protocol` / `transport` members of `MCPClientInterface` and
+`connected` / `version` / `transport` members of `MCPClientInterface` and
 the `emitter` / `session` members of `ClientTransportInterface` are data
 members; their methods are under [Methods](#methods). The `id` member of
 `MCPSessionInterface` is likewise a data member; its methods (`attach` /
@@ -370,7 +373,7 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | ------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `acceptsEventStream`     | function | Whether the request's `Accept` header contains `text/event-stream`.                                                                                                                                                 |
 | `allowsOrigin`           | function | Allow an absent Origin; require every present serialized Origin in the explicit list unless validation is delegated upstream.                                                                                       |
-| `matchesRequestHeaders`  | function | Validate the modern protocol/method headers and the tools/call-only name header against the body.                                                                                                                   |
+| `matchesModernHeaders`   | function | Validate the modern protocol/method headers and the tools/call-only name header against the body.                                                                                                                   |
 | `inferLegacyVersion`     | function | Pin a supported requested legacy revision, otherwise select the newest supported legacy revision.                                                                                                                   |
 | `inferStatus`            | function | Map a dispatch outcome to its era-aware HTTP status while preserving legacy in-band `200` errors.                                                                                                                   |
 | `readSessionHeader`      | function | Read the request's `mcp-session-id` header for the stateful transport, or `undefined`.                                                                                                                              |
@@ -387,7 +390,7 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 
 | Type                         | Kind      | Shape                                                                                                                                                                                                                                    |
 | ---------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MCPOriginOptions`           | interface | `{ enabled?: boolean; origins?: readonly string[] }` — shared default-on origin validation; `enabled: false` delegates to an upstream validator.                                                                                         |
+| `MCPOriginOptions`           | interface | `{ enabled?: boolean; origins?: readonly string[] }` — shared default-on origin validation; `enabled: false` delegates upstream and ignores `origins`.                                                                                   |
 | `HTTPTransportOptions`       | interface | `{ path?: string; streaming?: boolean; origin?: MCPOriginOptions }` — mount path, SSE choice, and shared origin options for `createMCPRoutes`.                                                                                           |
 | `HTTPClientTransportOptions` | interface | `{ url: string; headers?: Record<string, string>; fetch?: typeof fetch; timeout?: number }` — the remote endpoint, extra headers, an injectable `fetch`, and an optional `AbortSignal.timeout` deadline for `createHTTPClientTransport`. |
 | `MCPSessionOptions`          | interface | `{ path?; ttl?; capacity?; clock?; origin? }` — the owned path, session TTL, replay bound, deterministic clock, and the same shared origin options for `createMCPSession`.                                                               |
@@ -494,7 +497,7 @@ const client = createMCPClient({
 	transport: createStdioClientTransport({ command: 'node', args: ['./server.js'] }),
 })
 await client.connect()
-client.protocol // '2025-06-18'
+client.version // the negotiated legacy revision
 const tools = await client.tools()
 ```
 
@@ -539,13 +542,19 @@ implement, so `createMCPClient` consumes either identically.
 host performs the RFC 6455 handshake, so this face carries none of the
 Node client's `node:crypto` / `node:http(s)` machinery);
 `createHTTPClientTransport` drives the native `fetch` + `ReadableStream`,
-decoding the SSE leg with `@orkestrel/sse` and honoring the SAME
-`mcp-session-id` and `mcp-protocol-version` echo semantics as the Node
-face's HTTP client, so a browser client interoperates with an
+decoding the SSE leg with `@orkestrel/sse` and honoring the SAME era-aware
+HTTP headers as the Node face: modern requests derive protocol and method
+headers from their body plus the name only for `tools/call`, while legacy
+requests echo only their captured negotiated protocol. It also honors the
+same `mcp-session-id` semantics, so a browser client interoperates with an
 `MCPSession`-based server unchanged. Both share their exported NAMES with
 the Node face's transports — same API shape, a different host underneath
 — deliberately, so a consumer swaps `@orkestrel/mcp/server` for
 `@orkestrel/mcp/browser` with no call-site change.
+
+A browser deployment must list the page origin in the shared `origin.origins` value passed
+to both server enforcement sites, or delegate validation with `origin.enabled: false`; see
+[Mount the HTTP transport with sessions](#mount-the-http-transport-with-sessions).
 
 `createMessagePortTransport` is the genuinely NEW capability: MCP over
 `postMessage`. A `MessagePort` is SYMMETRIC, so `MessagePortTransport` is the
@@ -601,18 +610,20 @@ inside a hostable scope and wire its message events to it.
 
 #### Entities
 
-| API                        | Kind  | Summary                                                                                                                                      |
-| -------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WebSocketClientTransport` | class | The browser-face `ClientTransportInterface` over the native `WebSocket` — queues sends until `open`, flushed in order.                       |
-| `HTTPClientTransport`      | class | The browser-face `ClientTransportInterface` over native `fetch` — POSTs each message, decodes JSON/SSE, and echoes the session and protocol. |
-| `MessagePortTransport`     | class | The SYMMETRIC `MCPTransportInterface` over a native `MessagePort` — `start()`s at construction, string payloads only, `close()` idempotent.  |
+| API                        | Kind  | Summary                                                                                                                                                |
+| -------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `WebSocketClientTransport` | class | The browser-face `ClientTransportInterface` over the native `WebSocket` — queues sends until `open`, flushed in order.                                 |
+| `HTTPClientTransport`      | class | The browser-face `ClientTransportInterface` over native `fetch` — POSTs each message, decodes JSON/SSE, echoes sessions, and stamps era-aware headers. |
+| `MessagePortTransport`     | class | The SYMMETRIC `MCPTransportInterface` over a native `MessagePort` — `start()`s at construction, string payloads only, `close()` idempotent.            |
 
 #### Constants
 
 | Constant                      | Kind  | Value                                                                                                                                                                                                                                                                                                   |
 | ----------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `MCP_SESSION_HEADER`          | const | `'mcp-session-id'` — the SAME header name as the Node face's `MCP_SESSION_HEADER`, echoed identically.                                                                                                                                                                                                  |
-| `MCP_PROTOCOL_VERSION_HEADER` | const | `'mcp-protocol-version'` — the SAME header name as the Node face; sent with the negotiated version after initialize.                                                                                                                                                                                    |
+| `MCP_PROTOCOL_VERSION_HEADER` | const | `'mcp-protocol-version'` — the SAME header name as the Node face; derived per modern request or echoed from legacy negotiation.                                                                                                                                                                         |
+| `MCP_METHOD_HEADER`           | const | `'mcp-method'` — the SAME browser-local literal as the Node face; carries every modern request's body method.                                                                                                                                                                                           |
+| `MCP_NAME_HEADER`             | const | `'mcp-name'` — the SAME browser-local literal as the Node face; carries `params.name` only for modern `tools/call`.                                                                                                                                                                                     |
 | `MCP_WEBSOCKET_SUBPROTOCOL`   | const | `'mcp'` — the WebSocket subprotocol `createWebSocketClientTransport` requests by default, matching `createWebSocketServer`'s unconditional echo. Per RFC 6455 §4.1 a client must fail the connection if the server returns a subprotocol it did not request; Node ≥ 22 (undici) enforces this strictly. |
 | `DEFAULT_MCP_SERVER_NAME`     | const | `'taverna'` — `serveMCPScope`'s default `serverInfo.name` when `options.name` is omitted.                                                                                                                                                                                                               |
 | `DEFAULT_MCP_SERVER_VERSION`  | const | `'1.0.0'` — `serveMCPScope`'s default `serverInfo.version` when `options.version` is omitted.                                                                                                                                                                                                           |
@@ -685,7 +696,7 @@ closes; `on` is the convenience forward to `emitter.on`.
 | `on`         | `void`                              | Subscribe a listener to a `MCPClientEventMap` event (`connect` / `disconnect` / `notification` / `error`) — forwards to `emitter.on`.                                         |
 | `connect`    | `Promise<void>`                     | Open and negotiate once: pinned legacy initializes directly; otherwise discover modern first, retry one `-32022`, or fall back for a legacy peer. Idempotent while connected. |
 | `discover`   | `Promise<MCPDiscoverResult>`        | Send a stamped modern `server/discover` request and return its validated result, filtered to revisions this client supports.                                                  |
-| `disconnect` | `Promise<void>`                     | Reject every pending request, clear `version` / `protocol`, close the transport, and fire `disconnect`. The era cache remains for this instance.                              |
+| `disconnect` | `Promise<void>`                     | Reject every pending request, clear `version`, close the transport, and fire `disconnect`. The era cache remains for this instance.                                           |
 | `tools`      | `Promise<readonly ToolInterface[]>` | Run `tools/list` and wrap each descriptor as a local `ToolInterface` (`inputSchema` → `parameters`; `execute` calls back via `call`).                                         |
 | `call`       | `Promise<unknown>`                  | Run a remote `tools/call`, reject a non-complete result, concat text blocks, throw on `isError`, else parse the JSON value (raw-string fallback).                             |
 
@@ -699,7 +710,6 @@ const client = createMCPClient({
 client.on('notification', (message) => log(message))
 await client.connect()
 client.version // '2026-07-28' for a modern peer
-client.protocol // the same negotiated revision
 const discovery = await client.discover()
 const tools = await client.tools()
 const value = await client.call('add', { x: 2, y: 5 })
@@ -889,16 +899,18 @@ on? })` drives a REMOTE server over an injected `ClientTransportInterface`
     client capabilities, and client identity. It intersects the peer's
     `supportedVersions` with `SUPPORTED_PROTOCOL_VERSIONS` in local preference
     order and stores the newest match. A `-32022` reads `error.context.supported`
-    and retries discovery exactly once under a NEW monotonic id; the second
-    failure is never retried. `-32601`, `-32600`, or an unrecognized HTTP 400
+    and, when unpinned, retries discovery exactly once under a NEW monotonic id;
+    the second failure is never retried. `-32601`, `-32600`, or an unrecognized HTTP 400
     send failure falls back to legacy `initialize`, except when modern
     `'2026-07-28'` is pinned. The selected era is cached for the instance's
     lifetime. A legacy result's absent, malformed, modern, or unsupported
     `protocolVersion` closes the transport and rejects; a valid legacy revision
     is stored before `notifications/initialized` is sent. Modern connect sends
-    NO notification. The readonly `version` and `protocol` surfaces expose the
-    same negotiated revision while connected and are `undefined` while
-    disconnected. `discover()` exposes a validated modern discovery result,
+    NO notification. The readonly `version` surface exposes the negotiated
+    revision while connected and is `undefined` while disconnected. A parseable discovery
+    response other than the two legacy fallback errors settles the modern era before result
+    validation, so a malformed or unsupported result type surfaces instead of degrading.
+    `discover()` exposes a validated modern discovery result,
     filtering unknown advertised revisions from its `MCPVersion` collection.
     `tools()` runs `tools/list` and wraps each descriptor as a
     local `ToolInterface` — `name` narrowed (`isString`), `inputSchema` mapped
@@ -1097,8 +1109,11 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     `createHTTPClientTransport({ url, headers?, fetch?, timeout? })` returns a
     `ClientTransportInterface` whose `send` POSTs to `url` over the injectable
     `fetch` (default `globalThis.fetch`) with the SAME `content-type` /
-    `Accept` / session-and-protocol-echo contract as the Node face's HTTP
-    client (clause 15) — an `application/json` reply is narrowed via `parseJSONRPCMessage`, a
+    `Accept` / session and era-aware header contract as the Node face's HTTP
+    client (clause 15): modern requests carry `MCP_PROTOCOL_VERSION_HEADER`
+    and `MCP_METHOD_HEADER` from the body, plus `MCP_NAME_HEADER` only for
+    `tools/call`; legacy requests carry only the captured negotiated protocol.
+    An `application/json` reply is narrowed via `parseJSONRPCMessage`, a
     `text/event-stream` reply is decoded via the browser face's OWN
     `readEventStream` (`@orkestrel/sse`, the same decode shape as
     `src/server`'s), a `202` emits nothing, and any `fetch` / decode failure
@@ -1277,6 +1292,7 @@ import {
 	buildDiscoverResult,
 	buildModernResult,
 	inferEra,
+	inferVersion,
 	isMCPVersion,
 	isModernRequest,
 	parseRequestContext,
@@ -1298,6 +1314,11 @@ isMCPVersion('2026-07-28') // true
 isMCPVersion('2024-11-05') // false — not a supported revision
 inferEra('2026-07-28') // 'modern'
 inferEra('2025-11-25') // 'legacy'
+
+// Selection walks the supported revisions newest-first, so the peer's own ordering
+// never decides the outcome — this is how `connect` picks a revision from a discovery.
+inferVersion(['2025-11-25', '2026-07-28']) // '2026-07-28' — newest in common
+inferVersion(['2024-11-05']) // undefined — nothing in common
 
 // `tools/list` is a cacheable result and carries both `ttlMs` and `cacheScope`;
 // `tools/call` carries neither, because only the former is a `CacheableResult`.
@@ -1348,7 +1369,7 @@ import {
 	allowsOrigin,
 	createMCPPostHandler,
 	decodeEvent,
-	matchesRequestHeaders,
+	matchesModernHeaders,
 	readEventStream,
 	readLastEventId,
 	readSessionHeader,
@@ -1358,7 +1379,7 @@ import {
 
 const request = new Request('http://localhost/mcp', { headers: { accept: 'text/event-stream' } })
 acceptsEventStream(request) // true
-createMCPPostHandler(mcp, true) // the same stateless POST handler createMCPRoutes mounts
+createMCPPostHandler(mcp, { streaming: true }) // the same stateless POST handler createMCPRoutes mounts
 readSessionHeader(request) // undefined — no mcp-session-id header
 readLastEventId(request) // undefined — no Last-Event-ID header
 rejectUnknownSession() // a 404 JSON-RPC error Response
@@ -1387,8 +1408,8 @@ const call = {
 	method: 'tools/call',
 	params: { name: 'search', _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' } },
 }
-matchesRequestHeaders(posted, call) // true — protocol, method, and the tools/call name agree
-matchesRequestHeaders(posted, { ...call, method: 'tools/list' }) // false — Mcp-Method disagrees
+matchesModernHeaders(posted, call) // true — protocol, method, and the tools/call name agree
+matchesModernHeaders(posted, { ...call, method: 'tools/list' }) // false — Mcp-Method disagrees
 
 const reply = await fetch('http://localhost:3000/mcp')
 const messages = await readEventStream(reply)

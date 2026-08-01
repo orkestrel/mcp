@@ -3,9 +3,9 @@ import type { EmitterInterface } from '@orkestrel/emitter'
 import type { HTTPClientTransportOptions } from '../types.js'
 import {
 	MCP_META_VERSION,
-	SUPPORTED_PROTOCOL_VERSIONS,
 	isJSONRPCRequest,
 	isJSONRPCResponse,
+	isMCPVersion,
 	isModernRequest,
 	parseJSONRPCMessage,
 } from '@src/core'
@@ -174,8 +174,7 @@ export class HTTPClientTransport implements ClientTransportInterface {
 		if (
 			isJSONRPCResponse(message) &&
 			isRecord(message.result) &&
-			isString(message.result['protocolVersion']) &&
-			SUPPORTED_PROTOCOL_VERSIONS.includes(message.result['protocolVersion'])
+			isMCPVersion(message.result['protocolVersion'])
 		) {
 			this.#protocol = message.result['protocolVersion']
 		}

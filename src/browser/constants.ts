@@ -1,8 +1,9 @@
 // The MCP browser-transport constants (AGENTS §5 constants file) — the wire-level
 // header names the browser-face HTTP client transport echoes, matching the Node
-// face's session and protocol-version headers byte-for-byte. The browser face imports
-// nothing from `src/server` (peer environment faces, per AGENTS §2), so the literals
-// are declared once here too — the SAME strings, not shared symbols.
+// face's session, protocol-version, method, and name headers byte-for-byte. The
+// browser face imports nothing from `src/server` (peer environment faces, per
+// AGENTS §2), so the literals are declared once here too — the SAME strings, not
+// shared symbols.
 
 /**
  * The Streamable-HTTP transport header that carries the MCP session id. The browser
@@ -14,11 +15,23 @@
 export const MCP_SESSION_HEADER = 'mcp-session-id'
 
 /**
- * The Streamable-HTTP transport header carrying the negotiated MCP protocol version
- * on every post-initialize request. The browser HTTP client captures the initialize
- * result's `protocolVersion` and sends this header on each subsequent request.
+ * The Streamable-HTTP transport header carrying the MCP protocol version. Modern
+ * requests derive it from their own `_meta`; legacy requests echo the negotiated
+ * initialize result on each subsequent request.
  */
 export const MCP_PROTOCOL_VERSION_HEADER = 'mcp-protocol-version'
+
+/**
+ * The modern Streamable-HTTP request header carrying the JSON-RPC method. It is
+ * emitted on every modern request and never on a legacy request.
+ */
+export const MCP_METHOD_HEADER = 'mcp-method'
+
+/**
+ * The modern Streamable-HTTP request header carrying a named target. The browser
+ * HTTP client emits it only for `tools/call`, from that request's `params.name`.
+ */
+export const MCP_NAME_HEADER = 'mcp-name'
 
 // `serveMCP` server-identity defaults — `src/core`'s `createMCPServer` REQUIRES
 // `name`/`version`, but `ServeMCPOptions` (this face's bootstrap) makes both optional

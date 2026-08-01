@@ -1,4 +1,5 @@
-import type { MCPEra } from './types.js'
+import type { MCPEra, MCPVersion } from './types.js'
+import { SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
 
 /**
  * Infer the wire era for an MCP protocol revision.
@@ -17,4 +18,17 @@ export function inferEra(version: string): MCPEra | undefined {
 		default:
 			return undefined
 	}
+}
+
+/**
+ * Infer the newest supported protocol revision present in a peer's offer.
+ *
+ * @param offered - The protocol revisions offered by the peer
+ * @returns The newest locally supported offered revision, or `undefined`
+ */
+export function inferVersion(offered: readonly string[]): MCPVersion | undefined {
+	for (const version of SUPPORTED_PROTOCOL_VERSIONS) {
+		if (offered.includes(version)) return version
+	}
+	return undefined
 }

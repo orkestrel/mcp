@@ -2,6 +2,7 @@ import type { MCPServerInterface } from '@src/core'
 import type { MCPOriginOptions } from './types.js'
 import {
 	JSONRPC_INVALID_REQUEST,
+	JSONRPC_INVALID_PARAMS,
 	JSONRPC_PARSE_ERROR,
 	MCP_HEADER_MISMATCH,
 	MCP_UNSUPPORTED_VERSION,
@@ -10,6 +11,7 @@ import {
 	isInitializeRequest,
 	isMCPVersion,
 	isModernRequest,
+	parseRequestContext,
 	parseJSONRPCMessage,
 } from '@src/core'
 import { openStream } from '@orkestrel/server'
@@ -18,7 +20,7 @@ import {
 	SSE_BUFFERING_DISABLED,
 	SSE_BUFFERING_HEADER,
 } from './constants.js'
-import { acceptsEventStream, allowsOrigin, matchesRequestHeaders } from './helpers.js'
+import { acceptsEventStream, allowsOrigin, matchesModernHeaders } from './helpers.js'
 import { inferStatus } from './inferers.js'
 
 /**
@@ -33,8 +35,7 @@ import { inferStatus } from './inferers.js'
  * errors remain in-band at HTTP `200`.
  *
  * @param mcp - The transport-agnostic MCP server to dispatch through
- * @param streaming - Whether an event-stream response may be negotiated
- * @param origin - Shared origin validation and delegation options
+ * @param options - Optional streaming and origin-validation options
  * @returns A request handler for the stateless MCP POST route
  *
  * @example
@@ -44,7 +45,7 @@ import { inferStatus } from './inferers.js'
  * import { createToolManager } from '@orkestrel/tool'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
- * const handler = createMCPPostHandler(mcp, true)
+ * const handler = createMCPPostHandler(mcp, { streaming: true })
  * await handler(new Request('http://localhost/mcp', {
  * 	method: 'POST',
  * 	body: '{"jsonrpc":"2.0","method":"ping","id":1}',
@@ -53,9 +54,13 @@ import { inferStatus } from './inferers.js'
  */
 export function createMCPPostHandler(
 	mcp: MCPServerInterface,
-	streaming: boolean,
-	origin?: MCPOriginOptions,
+	options?: {
+		readonly streaming?: boolean
+		readonly origin?: MCPOriginOptions
+	},
 ): (request: Request) => Promise<Response> {
+	const streaming = options?.streaming ?? true
+	const origin = options?.origin
 	return async (request): Promise<Response> => {
 		if (!allowsOrigin(request, origin)) return new Response(null, { status: 403 })
 		let text: string
@@ -81,30 +86,51 @@ export function createMCPPostHandler(
 			})
 		}
 		const era = isModernRequest(rpcRequest) ? 'modern' : 'legacy'
+		const id = rpcRequest.id ?? null
 		const protocol = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
-		if (
-			(era === 'modern' && !matchesRequestHeaders(request, rpcRequest)) ||
-			(era === 'legacy' && protocol === null && !isInitializeRequest(rpcRequest))
-		) {
-			return Response.json(
-				buildJSONRPCError(
-					rpcRequest.id ?? null,
-					MCP_HEADER_MISMATCH,
-					'MCP request headers do not match the request body',
-				),
-				{ status: 400 },
-			)
-		}
-		if (era === 'legacy' && protocol !== null && !isMCPVersion(protocol)) {
-			return Response.json(
-				buildJSONRPCError(
-					rpcRequest.id ?? null,
-					MCP_UNSUPPORTED_VERSION,
-					`Unsupported MCP protocol version '${protocol}'`,
-					{ supported: SUPPORTED_PROTOCOL_VERSIONS, requested: protocol },
-				),
-				{ status: 400 },
-			)
+		if (era === 'modern') {
+			if (parseRequestContext(rpcRequest) === undefined) {
+				return Response.json(
+					buildJSONRPCError(
+						id,
+						JSONRPC_INVALID_PARAMS,
+						'Invalid params: malformed modern request metadata',
+					),
+					{ status: 400 },
+				)
+			}
+			if (!matchesModernHeaders(request, rpcRequest)) {
+				return Response.json(
+					buildJSONRPCError(
+						id,
+						MCP_HEADER_MISMATCH,
+						'MCP request headers do not match the request body',
+					),
+					{ status: 400 },
+				)
+			}
+		} else {
+			if (protocol === null && !isInitializeRequest(rpcRequest)) {
+				return Response.json(
+					buildJSONRPCError(
+						id,
+						MCP_HEADER_MISMATCH,
+						'MCP request headers do not match the request body',
+					),
+					{ status: 400 },
+				)
+			}
+			if (protocol !== null && !isMCPVersion(protocol)) {
+				return Response.json(
+					buildJSONRPCError(
+						id,
+						MCP_UNSUPPORTED_VERSION,
+						`Unsupported MCP protocol version '${protocol}'`,
+						{ supported: SUPPORTED_PROTOCOL_VERSIONS, requested: protocol },
+					),
+					{ status: 400 },
+				)
+			}
 		}
 		const response = await mcp.dispatch(rpcRequest)
 		const status = inferStatus(response, era)

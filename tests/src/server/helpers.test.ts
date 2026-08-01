@@ -12,7 +12,7 @@ import {
 	acceptsEventStream,
 	allowsOrigin,
 	decodeEvent,
-	matchesRequestHeaders,
+	matchesModernHeaders,
 	MCP_METHOD_HEADER,
 	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
@@ -140,7 +140,16 @@ describe('allowsOrigin — explicit validation with upstream delegation', () => 
 	})
 })
 
-describe('matchesRequestHeaders — modern standard-header parity', () => {
+describe('matchesModernHeaders — modern standard-header parity', () => {
+	it('returns false for a valid legacy request because the predicate is modern-only', () => {
+		const message = createJSONRPCRequest({ method: 'tools/list' })
+		const request = requestWithHeaders({
+			[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
+		})
+
+		expect(matchesModernHeaders(request, message)).toBe(false)
+	})
+
 	it('matches protocol and method without requiring a name for tools/list', () => {
 		const message = createJSONRPCRequest({
 			method: 'tools/list',
@@ -156,7 +165,7 @@ describe('matchesRequestHeaders — modern standard-header parity', () => {
 			[MCP_METHOD_HEADER]: 'tools/list',
 		})
 
-		expect(matchesRequestHeaders(request, message)).toBe(true)
+		expect(matchesModernHeaders(request, message)).toBe(true)
 	})
 
 	it('requires tools/call name parity and rejects a mismatched method', () => {
@@ -181,8 +190,8 @@ describe('matchesRequestHeaders — modern standard-header parity', () => {
 			[MCP_NAME_HEADER]: 'add',
 		})
 
-		expect(matchesRequestHeaders(matching, message)).toBe(true)
-		expect(matchesRequestHeaders(mismatched, message)).toBe(false)
+		expect(matchesModernHeaders(matching, message)).toBe(true)
+		expect(matchesModernHeaders(mismatched, message)).toBe(false)
 	})
 })
 

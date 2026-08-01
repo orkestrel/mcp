@@ -69,11 +69,13 @@ export interface MCPOriginOptions {
  * - `origin` — the shared origin-validation options passed to both the route and session
  *   enforcement sites. Validation is enabled by default: requests without `Origin` pass,
  *   while every present `Origin` must occur exactly in `origin.origins`. Set
- *   `origin.enabled` to `false` only when validation is delegated upstream.
+ *   `origin.enabled` to `false` only when validation is delegated upstream; `origins` is
+ *   ignored in that mode. Both enforcement sites must receive the same value.
  */
 export interface HTTPTransportOptions {
 	readonly path?: string
 	readonly streaming?: boolean
+	/** Must match the session layer's value; `origins` is ignored when `enabled` is `false`. */
 	readonly origin?: MCPOriginOptions
 }
 
@@ -102,13 +104,15 @@ export interface HTTPTransportOptions {
  * - `origin` — the same shared origin-validation options supplied to `createMCPRoutes`.
  *   Validation is enabled by default and rejects a present origin outside its exact list before
  *   any session is minted. Set `origin.enabled` to `false` only when validation is delegated
- *   upstream.
+ *   upstream; `origins` is ignored in that mode. Both enforcement sites must receive the same
+ *   value.
  */
 export interface MCPSessionOptions {
 	readonly path?: string
 	readonly ttl?: number
 	readonly capacity?: number
 	readonly clock?: () => number
+	/** Must match the route layer's value; `origins` is ignored when `enabled` is `false`. */
 	readonly origin?: MCPOriginOptions
 }
 
