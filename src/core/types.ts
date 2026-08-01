@@ -2,6 +2,10 @@ import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkes
 import type { TokenSecret } from '@orkestrel/server'
 import type { ToolInterface, ToolManagerInterface } from '@orkestrel/tool'
 
+// Wire-modelling types carry protocol field names verbatim. Everywhere the library
+// speaks for itself, the repository naming laws bind fully (`identity`, `instructions`,
+// `cache.ttl`, `version`, `discover()`, and `era`).
+
 // JSON-RPC 2.0 wire types (https://www.jsonrpc.org/specification) — the envelope
 // the Model Context Protocol speaks. A request carries a `method` and optional
 // `params`; an `id` correlates it with its response, and its ABSENCE marks a

@@ -1696,6 +1696,15 @@ is a different decision from an empty allowlist and deserves its own word.
 
 ## Declared conformance gaps
 
+A reproducible run is `npm run build && node scripts/conformance.mjs`: it starts the
+real Streamable HTTP server from this package's published `dist` output and runs
+`@modelcontextprotocol/conformance@0.2.0-alpha.10` against specification revision
+`2026-07-28`. The recorded baseline is **8 passed / 15 failed**: every failure is a
+declared non-goal (Resources, Prompts, or `completion/complete` returning `-32601`) or
+a declared gap (four non-text content cases, progress notifications, `Mcp-Param-*`,
+rate limiting, unary cancellation, or `notifications/cancelled`); the
+`dns-rebinding-protection` security regression guard is **2 passed / 0 failed**.
+
 A non-goal is a capability this package chose not to build. A **gap** is different: an
 obligation or a protocol capability it does not satisfy. Declining is not available for
 those, so they are stated here rather than left for a consumer to discover on the wire.
@@ -2212,3 +2221,13 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     onto the implicit scope channel; any other event is dropped. The returned
     dispose is IDEMPOTENT: it removes the scope listener, unbinds the implicit
     channel, and — for every accepted port — unbinds AND closes it.
+23. **Wire names stay verbatim; library names obey the naming laws.** A type that
+    models a protocol message carries the wire's own field names unchanged, including
+    `jsonrpc`, `_meta`, `resultType`, `ttlMs`, `cacheScope`, `supportedVersions`,
+    `inputSchema`, `isError`, `structuredContent`, `inputRequests`, and `requestState`.
+    Everywhere the library speaks for itself, the repository naming laws bind fully,
+    including `identity`, `instructions`, `cache.ttl`, `version`, `discover()`, and
+    `era`.
+24. **`tools/list` order is deterministic.** Each response lists tool descriptors in
+    the live `ToolManagerInterface` definition order; repeated requests against the
+    same registry state return the same order.

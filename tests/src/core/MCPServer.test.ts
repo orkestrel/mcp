@@ -1395,6 +1395,18 @@ describe('MCPServer — tools/list', () => {
 		])
 	})
 
+	it('keeps tools/list in deterministic registry order', async () => {
+		const mcp = server()
+		const first = responseOf(
+			await mcp.dispatch(createJSONRPCRequest({ method: 'tools/list', id: 20 })),
+		)
+		const second = responseOf(
+			await mcp.dispatch(createJSONRPCRequest({ method: 'tools/list', id: 21 })),
+		)
+
+		expect(resultOf(second)['tools']).toEqual(resultOf(first)['tools'])
+	})
+
 	it('lists an empty tool set for an empty registry', async () => {
 		const mcp = createMCPServer({
 			identity: { name: 'empty', version: '0.0.0' },

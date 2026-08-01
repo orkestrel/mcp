@@ -1,4 +1,4 @@
-import { globSync, accessSync, constants as FS_CONSTANTS, statSync } from 'node:fs'
+import { globSync, accessSync, constants as FS_CONSTANTS, readFileSync, statSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { isBrowserVuePath } from './setup.js'
 import { inspectCodingWorkspace } from './setupPolicy.js'
@@ -14,6 +14,17 @@ describe('repository coding law', () => {
 
 	it('enforces source placement, exports, readonly contracts, and syntax law', () => {
 		expect(inspectCodingWorkspace(process.cwd())).toEqual([])
+	})
+
+	it('keeps retired server error codes out of published source', () => {
+		const occurrences = globSync('src/**/*.ts').flatMap((path) => {
+			const source = readFileSync(path, 'utf8')
+			return ['-32002', '-32042']
+				.filter((code) => source.includes(code))
+				.map((code) => `${path}: ${code}`)
+		})
+
+		expect(occurrences).toEqual([])
 	})
 
 	it('resolves Chromium only to a real executable file', () => {
