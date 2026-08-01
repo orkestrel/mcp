@@ -116,8 +116,11 @@ describe('createMCPRoutes — dispatch the four MCP methods', () => {
 		)
 		expect(response.status).toBe(200)
 		const body = await response.json()
-		// The `add` stub returns 5 → one text content block carrying `JSON.stringify(5)`.
-		expect(body.result).toEqual({ content: [{ type: 'text', text: '5' }] })
+		// The `add` stub returns 5 → the text block carrying `JSON.stringify(5)` for a
+		// client that only reads content, AND `structuredContent` carrying the value in its
+		// original shape, so a caller never has to parse a handle back out of a string.
+		// Both travel a real HTTP round trip here, which the core-level test cannot prove.
+		expect(body.result).toEqual({ content: [{ type: 'text', text: '5' }], structuredContent: 5 })
 	})
 
 	it('POST tools/call on an erroring tool → isError:true in the body at 200', async () => {

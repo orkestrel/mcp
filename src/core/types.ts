@@ -81,13 +81,17 @@ export interface MCPContent {
  * with `isError` flagging a tool failure.
  *
  * @remarks
- * A success carries the tool's value serialized into one `text` content block; a
- * tool FAILURE (the `success: false` branch the registry isolated) carries its
- * `error` text in `content` AND sets `isError: true`, so the model sees the
- * failure as a tool result it can react to rather than a protocol error.
+ * A success carries the tool's value unchanged as `structuredContent` alongside
+ * its serialized form in one `text` content block. A value-less success omits
+ * `structuredContent`. A tool FAILURE (the `success: false` branch the registry
+ * isolated) carries its `error` text in `content` AND sets `isError: true`, so the
+ * model sees the failure as a tool result it can react to rather than a protocol
+ * error.
  */
 export interface MCPCallResult {
 	readonly content: readonly MCPContent[]
+	/** The successful tool value in its original structure; absent when no value was returned. */
+	readonly structuredContent?: unknown
 	/** `true` when the tool failed — its error text is in `content`. */
 	readonly isError?: boolean
 	/** The modern result discriminator; absent on a legacy result. */

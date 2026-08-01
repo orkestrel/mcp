@@ -97,15 +97,18 @@ export function buildToolDescriptors(manager: ToolManagerInterface): readonly MC
 
 /**
  * Map an executed tool's {@link ToolResult} to an MCP {@link MCPCallResult} — the
- * value (or error) as a `text` content block.
+ * value as structured content plus a backwards-compatible `text` block, or the
+ * error as a `text` block.
  *
  * @remarks
  * The {@link ToolManagerInterface} already isolates a thrown tool into a
  * `success: false` result (so the server adds NO try/catch around `execute`):
  * that branch builds an `isError: true` result carrying `result.error`, so the
  * model sees the failure as a tool result it can react to rather than a protocol
- * error; the `success: true` branch serializes `result.value` (via
- * `JSON.stringify`) into one `text` block.
+ * error; a valued `success: true` branch carries `result.value` unchanged as
+ * `structuredContent` and serializes it (via `JSON.stringify`) into one `text`
+ * block. A value-less success retains the required empty `content` block and
+ * omits `structuredContent`.
  *
  * @param result - The tool's execution outcome
  * @returns The MCP tool-call result
@@ -116,8 +119,11 @@ export function buildCallResult(result: ToolResult): MCPCallResult {
 	}
 	// A content block must carry a string `text`; `JSON.stringify(undefined)` is the value
 	// `undefined` (which serializes away), so a value-less result becomes an empty text block.
-	const text = result.value === undefined ? '' : JSON.stringify(result.value)
-	return { content: [{ type: 'text', text }] }
+	if (result.value === undefined) return { content: [{ type: 'text', text: '' }] }
+	return {
+		content: [{ type: 'text', text: JSON.stringify(result.value) }],
+		structuredContent: result.value,
+	}
 }
 
 /**

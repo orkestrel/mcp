@@ -78,7 +78,7 @@ const reply = await server.handle('{"jsonrpc":"2.0","method":"tools/list","id":1
 const out = await server.handle(
 	'{"jsonrpc":"2.0","method":"tools/call","id":2,"params":{"name":"add","arguments":{"x":2,"y":5}}}',
 )
-// out → '…"result":{"content":[{"type":"text","text":"7"}]}}'
+// out → '…"result":{"content":[{"type":"text","text":"7"}],"structuredContent":7}}'
 ```
 
 `dispatch` is the typed core; `handle` wraps it with the `JSON.parse` ↔
@@ -340,7 +340,7 @@ server.methods.method('subscriptions/listen') // registered on the same modern s
 | `buildJSONRPCResult`               | function | Build a success `JSONRPCResponse` — the `id` echoed, the value as `result`.                                                                                |
 | `buildJSONRPCError`                | function | Build an error `JSONRPCResponse` — the `id`, a reserved `code` / `message`, and optional `data`.                                                           |
 | `buildToolDescriptors`             | function | Map a `ToolManagerInterface`'s definitions to `tools/list` descriptors, renaming `parameters` → `inputSchema`.                                             |
-| `buildCallResult`                  | function | Map a `ToolResult` (`@orkestrel/tool`) to an MCP tool-call result — the value (or error text + `isError: true`) as a text block.                           |
+| `buildCallResult`                  | function | Map a `ToolResult` (`@orkestrel/tool`) to an MCP tool-call result — a successful value as `structuredContent` plus JSON text, or an error text block.      |
 | `buildDiscoverResult`              | function | Build the required modern `server/discover` result with supported revisions and cache stamps.                                                              |
 | `buildModernResult`                | function | Stamp a modern result with `resultType`, server metadata, and cache fields only when a TTL is supplied.                                                    |
 | `buildSubscriptionFilter`          | function | Intersect requested notification families and resource URIs with the server's declared support.                                                            |
@@ -365,7 +365,7 @@ server.methods.method('subscriptions/listen') // registered on the same modern s
 | `MCPVersion`                          | type      | `'2026-07-28' \| '2025-11-25' \| '2025-06-18'` — a supported protocol revision.                                                                                                                                            |
 | `MCPEra`                              | type      | `'modern' \| 'legacy'` — the structural wire era.                                                                                                                                                                          |
 | `MCPContent`                          | interface | `{ type: 'text'; text: string }` — one content block of a tool-call result.                                                                                                                                                |
-| `MCPCallResult`                       | interface | `{ content; isError?; resultType?; _meta? }` — a `tools/call` result with optional modern stamps.                                                                                                                          |
+| `MCPCallResult`                       | interface | `{ content; structuredContent?; isError?; resultType?; _meta? }` — a `tools/call` result with optional structured output and modern stamps.                                                                                |
 | `MCPListResult`                       | interface | `{ tools; resultType?; ttlMs?; cacheScope?; _meta? }` — a legacy or modern `tools/list` result.                                                                                                                            |
 | `MCPToolDescriptor`                   | interface | `{ name: string; description?: string; inputSchema: Record<string, unknown> }` — one `tools/list` entry.                                                                                                                   |
 | `MCPIdentity`                         | interface | `{ name: string; version: string }` — the identity echoed in the `initialize` result.                                                                                                                                      |
@@ -986,8 +986,10 @@ tools: {} }, serverInfo: { name, version } }`, the version NEGOTIATED
    (`@orkestrel/tool`) ALREADY isolates a thrown tool (and an unknown name)
    into a `success: false` result, the server adds NO try/catch: that branch's
    `error` maps to `{ content: [{ type: 'text', text: <error> }], isError: true }`;
-   the `success: true` branch's `value` maps to
-   `{ content: [{ type: 'text', text: JSON.stringify(value) }] }`.
+   a valued `success: true` branch maps to `{ content: [{ type: 'text', text:
+JSON.stringify(value) }], structuredContent: value }`, carrying the value unchanged
+   alongside the backwards-compatible text. A value-less success retains the required
+   empty text block and omits `structuredContent`.
 6. **One modern seam, subscriptions included, and `-32601` for anything off it.**
    `server/discover`, `tools/list`, `tools/call`, and `subscriptions/listen` are registered on `server.methods` at
    construction and EVERY modern method is resolved from there — `add` under an
@@ -1463,8 +1465,10 @@ import { createToolManager } from '@orkestrel/tool'
 
 const tools = createToolManager()
 const descriptors = buildToolDescriptors(tools) // tools/list payload
-const result = buildCallResult({ id: '1', name: 'example', success: true, value: 7 })
-// { content: [{ type: 'text', text: '7' }] }
+const value = { id: 'task-1', revision: 3, status: 'working' }
+const result = buildCallResult({ id: '1', name: 'example', success: true, value })
+// { content: [{ type: 'text', text: '{"id":"task-1","revision":3,"status":"working"}' }],
+//   structuredContent: value }
 const init = buildInitializeResult('docs', '1.0.0', '2025-06-18')
 
 const ok = buildJSONRPCResult(1, { tools: descriptors })

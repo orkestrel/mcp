@@ -197,7 +197,9 @@ describe('MCPServer — dual-era dispatch', () => {
 			await mcp.handle(
 				'{"jsonrpc":"2.0","method":"tools/call","id":4,"params":{"name":"sum","arguments":{"a":2,"b":5}}}',
 			),
-		).toBe('{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"7"}]}}')
+		).toBe(
+			'{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"7"}],"structuredContent":7}}',
+		)
 	})
 
 	it('rejects malformed modern metadata with -32602', async () => {
@@ -320,12 +322,36 @@ describe('MCPServer — dual-era dispatch', () => {
 		const result = resultOf(response)
 
 		expect(result['content']).toEqual([{ type: 'text', text: '7' }])
+		expect(result['structuredContent']).toBe(7)
 		expect(result['resultType']).toBe('complete')
 		expect(result['_meta']).toEqual({
 			[MCP_META_SERVER]: { name: 'test-server', version: '1.2.3' },
 		})
 		expect(result['ttlMs']).toBeUndefined()
 		expect(result['cacheScope']).toBeUndefined()
+	})
+
+	it('keeps a value-less modern tools/call result valid and omits structured content', async () => {
+		const manager = createToolManager()
+		manager.add(createTool({ name: 'noop', execute: () => undefined }))
+		const mcp = createMCPServer({
+			identity: { name: 'test-server', version: '1.2.3' },
+			tools: manager,
+		})
+		const response = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					params: { name: 'noop', _meta: MODERN_METADATA },
+				}),
+			),
+		)
+		const result = resultOf(response)
+
+		expect(result['content']).toEqual([{ type: 'text', text: '' }])
+		expect(result['resultType']).toBe('complete')
+		expect(Object.hasOwn(result, 'structuredContent')).toBe(false)
+		expect(Object.hasOwn(result, 'ttlMs')).toBe(false)
 	})
 
 	it.each(['initialize', 'ping', 'does/not/exist'])(
@@ -730,7 +756,7 @@ describe('MCPServer — tools/list', () => {
 })
 
 describe('MCPServer — tools/call', () => {
-	it('executes a tool and round-trips its value through a text content block', async () => {
+	it('executes a tool and carries its value as structured content and JSON text', async () => {
 		const response = responseOf(
 			await server().dispatch(
 				createJSONRPCRequest({
@@ -743,10 +769,11 @@ describe('MCPServer — tools/call', () => {
 		const result = resultOf(response)
 
 		expect(result['content']).toEqual([{ type: 'text', text: '7' }])
+		expect(result['structuredContent']).toBe(7)
 		expect(result['isError']).toBeUndefined()
 	})
 
-	it('round-trips a structured value (the echo tool) as serialized JSON', async () => {
+	it('round-trips a structured value unchanged alongside serialized JSON', async () => {
 		const response = responseOf(
 			await server().dispatch(
 				createJSONRPCRequest({
@@ -757,9 +784,12 @@ describe('MCPServer — tools/call', () => {
 			),
 		)
 
-		expect(resultOf(response)['content']).toEqual([
+		const result = resultOf(response)
+
+		expect(result['content']).toEqual([
 			{ type: 'text', text: JSON.stringify({ hello: 'world', n: 1 }) },
 		])
+		expect(result['structuredContent']).toEqual({ hello: 'world', n: 1 })
 	})
 
 	it('defaults arguments to an empty record when omitted', async () => {
@@ -874,7 +904,10 @@ describe('MCPServer — handle (string boundary)', () => {
 			JSON.stringify({
 				jsonrpc: '2.0',
 				id: 2,
-				result: { content: [{ type: 'text', text: '7' }] },
+				result: {
+					content: [{ type: 'text', text: '7' }],
+					structuredContent: 7,
+				},
 			}),
 		)
 	})

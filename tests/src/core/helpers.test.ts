@@ -183,21 +183,32 @@ describe('buildCallResult', () => {
 	it('serializes a value into one text content block', () => {
 		const result: ToolResult = { id: '1', name: 'sum', success: true, value: 7 }
 
-		expect(buildCallResult(result)).toEqual({ content: [{ type: 'text', text: '7' }] })
+		expect(buildCallResult(result)).toEqual({
+			content: [{ type: 'text', text: '7' }],
+			structuredContent: 7,
+		})
 	})
 
-	it('serializes a structured value as JSON', () => {
-		const result: ToolResult = { id: '1', name: 'echo', success: true, value: { a: 1 } }
+	it('carries a structured value unchanged alongside its serialized JSON text', () => {
+		const value = { id: 'task-1', revision: 3, status: 'working' }
+		const result: ToolResult = { id: '1', name: 'echo', success: true, value }
 
-		expect(buildCallResult(result)).toEqual({
-			content: [{ type: 'text', text: JSON.stringify({ a: 1 }) }],
+		const call = buildCallResult(result)
+
+		expect(call).toEqual({
+			content: [{ type: 'text', text: JSON.stringify(value) }],
+			structuredContent: value,
 		})
+		expect(call.structuredContent).toBe(value)
 	})
 
 	it('maps a value-less result to an EMPTY text block (a content block must carry a string text)', () => {
 		const result: ToolResult = { id: '1', name: 'noop', success: true, value: undefined }
 
-		expect(buildCallResult(result)).toEqual({ content: [{ type: 'text', text: '' }] })
+		const call = buildCallResult(result)
+
+		expect(call).toEqual({ content: [{ type: 'text', text: '' }] })
+		expect(Object.hasOwn(call, 'structuredContent')).toBe(false)
 	})
 
 	it('maps an error result to an isError content block', () => {
@@ -235,6 +246,7 @@ describe('buildModernResult', () => {
 
 		expect(modern).toEqual({
 			content: [{ type: 'text', text: '7' }],
+			structuredContent: 7,
 			resultType: 'complete',
 			_meta: { [MCP_META_SERVER]: identity },
 		})

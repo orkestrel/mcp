@@ -64,7 +64,10 @@ describe('createMCPServer', () => {
 			throw new Error('expected a unary response, got a held-open stream')
 		}
 
-		expect(answer.result).toEqual({ content: [{ type: 'text', text: '10' }] })
+		expect(answer.result).toEqual({
+			content: [{ type: 'text', text: '10' }],
+			structuredContent: 10,
+		})
 	})
 
 	it('wires the on hooks (the §8 reserved key) to the emitter', async () => {
