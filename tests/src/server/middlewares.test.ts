@@ -1,14 +1,22 @@
 import type { JSONRPCMessage } from '@src/core'
 import type { SSEEvent } from '@orkestrel/sse'
 import type { MiddlewareHandler } from '@orkestrel/server'
-import type { MCPSessionState } from '@src/server'
+import type { MCPOriginOptions, MCPSessionState } from '@src/server'
 import type { StartedServerInterface } from '../../setupServer.js'
+import { request } from 'node:http'
 import { describe, expect, it } from 'vitest'
-import { createMCPClient } from '@src/core'
+import {
+	MCP_LEGACY_VERSION,
+	MCP_META_CAPABILITIES,
+	MCP_META_VERSION,
+	MCP_PROTOCOL_VERSION,
+	createMCPClient,
+} from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import {
 	createHTTPClientTransport,
+	MCP_METHOD_HEADER,
 	createMCPRoutes,
 	createMCPSession,
 	MCP_PROTOCOL_VERSION_HEADER,
@@ -53,8 +61,8 @@ const { track } = createTeardown<StartedServerInterface<AppState>>((handle) => h
 // supplied message to its resumable GET stream — then short-circuit 202. The real shape of a
 // request handler pushing a server-initiated message (no test-only seam).
 function pushTrigger(payload: JSONRPCMessage): MiddlewareHandler<AppState> {
-	return (request, context, next) => {
-		if (context.method === 'POST' && request.headers.get('x-push-now') === '1') {
+	return (input, context, next) => {
+		if (context.method === 'POST' && input.headers.get('x-push-now') === '1') {
 			const session = context.state.session
 			if (session !== undefined) {
 				session.push(payload)
@@ -74,15 +82,22 @@ async function startSession(options?: {
 	readonly capacity?: number
 	readonly push?: JSONRPCMessage
 	readonly clock?: () => number
+	readonly origin?: MCPOriginOptions
 }): Promise<StartedServerInterface<AppState>> {
+	const origin = options?.origin
 	const dispatcher = createDispatcher<AppState>()
-	dispatcher.add(createMCPRoutes<AppState>(createCalculatorServer()))
+	dispatcher.add(
+		createMCPRoutes<AppState>(createCalculatorServer(), {
+			...(origin !== undefined ? { origin } : {}),
+		}),
+	)
 	const server = createServer<AppState>({ dispatcher, state: () => ({}) })
 	server.use(
 		createMCPSession<AppState>({
 			...(options?.ttl !== undefined ? { ttl: options.ttl } : {}),
 			...(options?.capacity !== undefined ? { capacity: options.capacity } : {}),
 			...(options?.clock !== undefined ? { clock: options.clock } : {}),
+			...(origin !== undefined ? { origin } : {}),
 		}),
 	)
 	if (options?.push !== undefined) server.use(pushTrigger(options.push))
@@ -119,7 +134,10 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 
 	it('a tools/list echoing the minted id succeeds', async () => {
 		const handle = await startSession()
-		const init = await postJSON(handle.base, createJSONRPCRequest())
+		const init = await postJSON(
+			handle.base,
+			createJSONRPCRequest({ params: { protocolVersion: '2025-11-25' } }),
+		)
 		const id = init.headers.get(MCP_SESSION_HEADER)
 		expect(id).not.toBeNull()
 		const listed = await postSession(
@@ -128,6 +146,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 			createJSONRPCRequest({ method: 'tools/list', id: 2 }),
 		)
 		expect(listed.status).toBe(200)
+		expect((await init.clone().json()).result.protocolVersion).toBe('2025-11-25')
 		const body = await listed.json()
 		expect(body.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['add', 'boom'])
 	})
@@ -161,10 +180,14 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		expect(response.status).toBe(400)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
-			id: null,
+			id: 8,
 			error: {
-				code: -32600,
+				code: -32022,
 				message: "Unsupported MCP protocol version '2099-01-01'",
+				data: {
+					supported: ['2026-07-28', '2025-11-25', '2025-06-18'],
+					requested: '2099-01-01',
+				},
 			},
 		})
 	})
@@ -202,6 +225,31 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		const response = await postSession(handle.base, undefined, createJSONRPCRequest())
 		expect(response.status).toBe(200)
 		expect(response.headers.get(MCP_SESSION_HEADER)).not.toBeNull()
+	})
+
+	it('passes a modern POST straight through and ignores an unknown session id', async () => {
+		const handle = await startSession()
+		const response = await postSession(
+			handle.base,
+			'unknown-modern-session',
+			createJSONRPCRequest({
+				method: 'server/discover',
+				params: {
+					_meta: {
+						[MCP_META_VERSION]: MCP_PROTOCOL_VERSION,
+						[MCP_META_CAPABILITIES]: {},
+					},
+				},
+			}),
+			{
+				[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
+				[MCP_METHOD_HEADER]: 'server/discover',
+			},
+		)
+
+		expect(response.status).toBe(200)
+		expect(response.headers.get(MCP_SESSION_HEADER)).toBeNull()
+		expect((await response.json()).result.supportedVersions).toContain(MCP_PROTOCOL_VERSION)
 	})
 
 	it('a malformed body on a VALID session still gets the route -32700 (not pre-empted)', async () => {
@@ -260,6 +308,77 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 			headers: { [MCP_SESSION_HEADER]: 'never-minted' },
 		})
 		expect(unknown.status).toBe(404)
+	})
+
+	it('denies session verbs with an unlisted origin and accepts an allowlisted origin', async () => {
+		const deniedHandle = await startSession()
+		const deniedInit = await postJSON(deniedHandle.base, createJSONRPCRequest())
+		const deniedId = deniedInit.headers.get(MCP_SESSION_HEADER)
+		const denied = await fetch(`${deniedHandle.base}/mcp`, {
+			method: 'DELETE',
+			headers: {
+				origin: 'https://client.example',
+				...(deniedId === null ? {} : { [MCP_SESSION_HEADER]: deniedId }),
+			},
+		})
+
+		const allowedHandle = await startSession({
+			origin: { origins: ['https://client.example'] },
+		})
+		const allowedInit = await postJSON(allowedHandle.base, createJSONRPCRequest())
+		const allowedId = allowedInit.headers.get(MCP_SESSION_HEADER)
+		const allowed = await fetch(`${allowedHandle.base}/mcp`, {
+			method: 'DELETE',
+			headers: {
+				origin: 'https://client.example',
+				...(allowedId === null ? {} : { [MCP_SESSION_HEADER]: allowedId }),
+			},
+		})
+
+		expect(denied.status).toBe(403)
+		expect(allowed.status).toBe(204)
+	})
+
+	it('delegates a present unlisted origin to an upstream validator when disabled', async () => {
+		const handle = await startSession({ origin: { enabled: false } })
+		const response = await postJSON(handle.base, createJSONRPCRequest(), {
+			headers: { origin: 'https://unlisted.example' },
+		})
+
+		expect(response.status).toBe(200)
+		expect(response.headers.get(MCP_SESSION_HEADER)).not.toBeNull()
+	})
+
+	it('rejects a DNS-rebinding shape before minting a session', async () => {
+		const handle = await startSession()
+		const body = JSON.stringify(createJSONRPCRequest())
+		const outcome = await new Promise<{
+			readonly status: number | undefined
+			readonly session: string | string[] | undefined
+		}>((resolve, reject) => {
+			const outgoing = request(`${handle.base}/mcp`, {
+				method: 'POST',
+				headers: {
+					Host: 'evil.com',
+					Origin: 'http://evil.com',
+					'content-type': 'application/json',
+				},
+			})
+			outgoing.on('response', (response) => {
+				response.resume()
+				response.on('end', () => {
+					resolve({
+						status: response.statusCode,
+						session: response.headers[MCP_SESSION_HEADER],
+					})
+				})
+			})
+			outgoing.on('error', reject)
+			outgoing.end(body)
+		})
+
+		expect(outcome.status).toBe(403)
+		expect(outcome.session).toBeUndefined()
 	})
 
 	it('a request to ANOTHER path passes straight through (the middleware owns only its path)', async () => {
@@ -336,6 +455,7 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 		const { response, controller } = await openStream(handle.base, id)
 		expect(response.status).toBe(200)
 		expect(response.headers.get('content-type')).toContain('text/event-stream')
+		expect(response.headers.get('x-accel-buffering')).toBe('no')
 
 		// Drive the push the REAL way: an in-request handler reads the session off context.state and
 		// pushes — the message fans out to the attached stream.
@@ -454,6 +574,7 @@ describe('MCPClient over a server with createMCPSession — the client echoes th
 		const handle = await startSession()
 		const client = createMCPClient({
 			transport: createHTTPClientTransport({ url: `${handle.base}/mcp` }),
+			version: MCP_LEGACY_VERSION,
 		})
 
 		await client.connect() // initialize mints the session; the transport captures it

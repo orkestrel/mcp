@@ -1,10 +1,22 @@
 import type { ClientTransportEventMap, ClientTransportInterface, JSONRPCMessage } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { HTTPClientTransportOptions } from '../types.js'
-import { isJSONRPCResponse, parseJSONRPCMessage, SUPPORTED_PROTOCOL_VERSIONS } from '@src/core'
+import {
+	MCP_META_VERSION,
+	SUPPORTED_PROTOCOL_VERSIONS,
+	isJSONRPCRequest,
+	isJSONRPCResponse,
+	isModernRequest,
+	parseJSONRPCMessage,
+} from '@src/core'
 import { isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
-import { MCP_PROTOCOL_VERSION_HEADER, MCP_SESSION_HEADER } from '../constants.js'
+import {
+	MCP_METHOD_HEADER,
+	MCP_NAME_HEADER,
+	MCP_PROTOCOL_VERSION_HEADER,
+	MCP_SESSION_HEADER,
+} from '../constants.js'
 import { readEventStream } from '../helpers.js'
 
 /**
@@ -26,16 +38,17 @@ import { readEventStream } from '../helpers.js'
  *   readEventStream}) — the inverse of the server's `openStream` seam, so the wire
  *   round-trips. A `202`
  *   Accepted (a notification) carries no body and emits nothing.
- * - **Session and protocol echo.** `start()` is a no-op (a
+ * - **Session and protocol headers.** `start()` is a no-op (a
  *   request/response transport opens no long-lived connection). The
  *   `mcp-session-id` response header, when a STATEFUL server sends one (on
  *   `initialize`), is captured into `session` and then ECHOED as the
  *   `mcp-session-id` request header on every SUBSEQUENT request — so an
  *   `MCPClient` passes a stateful server's session validation. The
  *   initialize result's `protocolVersion` is likewise captured, but only
- *   when it is a SUPPORTED value, and echoed as `mcp-protocol-version` on
- *   every subsequent request, as required by the 2025-06-18 Streamable-HTTP
- *   transport. Before initialize returns, neither captured header is sent.
+ *   when it is a SUPPORTED value, and echoed as `mcp-protocol-version` alone on
+ *   subsequent legacy requests. Modern requests instead derive protocol and method
+ *   headers from the message, plus the name header only for `tools/call`.
+ *   Before initialize returns, neither captured legacy header is sent.
  *   `close()` clears the captured protocol so a reconnect's `initialize`
  *   POST is headerless; the captured `session` persists across `close()`.
  * - **Total at the boundary (§14).** Every reply is narrowed (`parseJSONRPCMessage`,
@@ -93,9 +106,7 @@ export class HTTPClientTransport implements ClientTransportInterface {
 					// `initialize` returns one `#session` is undefined → no header (safe for a
 					// stateless server). A caller `headers` key still wins (merged last).
 					...(this.#session === undefined ? {} : { [MCP_SESSION_HEADER]: this.#session }),
-					...(this.#protocol === undefined
-						? {}
-						: { [MCP_PROTOCOL_VERSION_HEADER]: this.#protocol }),
+					...this.#buildHeaders(message),
 					...this.#headers,
 				},
 				body: JSON.stringify(message),
@@ -119,6 +130,20 @@ export class HTTPClientTransport implements ClientTransportInterface {
 	async close(): Promise<void> {
 		this.#protocol = undefined
 		this.#emitter.emit('close')
+	}
+
+	#buildHeaders(message: JSONRPCMessage): Readonly<Record<string, string>> {
+		if (isJSONRPCRequest(message) && isModernRequest(message)) {
+			const metadata = isRecord(message.params?.['_meta']) ? message.params['_meta'] : undefined
+			const version = metadata?.[MCP_META_VERSION]
+			const name = message.params?.['name']
+			return {
+				...(isString(version) ? { [MCP_PROTOCOL_VERSION_HEADER]: version } : {}),
+				[MCP_METHOD_HEADER]: message.method,
+				...(message.method === 'tools/call' && isString(name) ? { [MCP_NAME_HEADER]: name } : {}),
+			}
+		}
+		return this.#protocol === undefined ? {} : { [MCP_PROTOCOL_VERSION_HEADER]: this.#protocol }
 	}
 
 	// Decode a reply and emit each carried message. A 202 (notification accepted) has no

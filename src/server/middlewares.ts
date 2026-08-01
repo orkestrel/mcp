@@ -1,9 +1,22 @@
+import type { JSONRPCMessage } from '@src/core'
 import type { MiddlewareHandler } from '@orkestrel/server'
 import type { MCPSessionEntry, MCPSessionOptions, MCPSessionState } from './types.js'
-import { isInitializeRequest, parseJSONRPCMessage } from '@src/core'
+import { isInitializeRequest, isModernRequest, parseJSONRPCMessage } from '@src/core'
 import { openStream } from '@orkestrel/server'
-import { DEFAULT_MCP_PATH, MCP_SESSION_HEADER } from './constants.js'
-import { readLastEventId, readSessionHeader, rejectUnknownSession } from './helpers.js'
+import {
+	DEFAULT_MCP_PATH,
+	MCP_PROTOCOL_VERSION_HEADER,
+	MCP_SESSION_HEADER,
+	SSE_BUFFERING_DISABLED,
+	SSE_BUFFERING_HEADER,
+} from './constants.js'
+import {
+	allowsOrigin,
+	readLastEventId,
+	readSessionHeader,
+	rejectUnknownSession,
+} from './helpers.js'
+import { inferLegacyVersion } from './inferers.js'
 import { MCPSession } from './MCPSession.js'
 
 /**
@@ -18,12 +31,17 @@ import { MCPSession } from './MCPSession.js'
  * `path` (default {@link DEFAULT_MCP_PATH}); a request to any other path passes straight
  * through (`next()`).
  *
+ * A modern-shaped POST also passes straight through via `next()`, ignoring any session id.
+ * The remaining behavior is the legacy session layer:
+ *
  * - **`POST {path}`.** Buffers `const text = await request.text()` (so the downstream route
  *   can re-read it via a freshly-built forwarded `Request`). Resolves a session via {@link
  *   readSessionHeader}: a VALID id touches the entry and sets `context.state.session`; an
  *   ABSENT / unknown id whose (guarded) body parses to an `initialize` request ({@link
  *   isInitializeRequest}) MINTS a fresh {@link MCPSession} (`crypto.randomUUID()`, `capacity`)
- *   and sets `context.state.session`; neither → {@link rejectUnknownSession} (`404`). It then
+ *   and sets `context.state.session`; neither → {@link rejectUnknownSession} (`404`). The
+ *   minted entry pins the negotiated legacy revision, which is supplied to a later headerless
+ *   live-session request. It then
  *   FORWARDS a fresh `Request` carrying the buffered `text` (`next(forwarded)`) — never the
  *   already-consumed original — so the route re-reads the same body, and stamps the response
  *   with {@link MCP_SESSION_HEADER}.
@@ -46,7 +64,8 @@ import { MCPSession } from './MCPSession.js'
  * @param options - Optional `path` (default {@link DEFAULT_MCP_PATH}), `ttl` (idle-session
  *   sweep window, ms — omit for sessions that live until an explicit `DELETE`), `capacity`
  *   (the folded per-session replay-log bound), and `clock` (the deterministic epoch-ms clock;
- *   defaults to `Date.now`); see {@link MCPSessionOptions}
+ *   defaults to `Date.now`), plus the shared `origin` validation options; see
+ *   {@link MCPSessionOptions}
  * @returns A {@link MiddlewareHandler} that mints / validates sessions + serves the resumable
  *   `GET` / `DELETE`
  *
@@ -67,10 +86,23 @@ export function createMCPSession<TState extends MCPSessionState>(
 	const capacity = options?.capacity
 	const ttl = options?.ttl
 	const clock = options?.clock ?? Date.now
+	const origin = options?.origin
 	const store = new Map<string, MCPSessionEntry>()
 
 	return async (request, context, next) => {
 		if (context.url.pathname !== path) return next()
+		if (!allowsOrigin(request, origin)) return new Response(null, { status: 403 })
+		let parsed: JSONRPCMessage | undefined
+		if (context.method === 'POST') {
+			try {
+				parsed = parseJSONRPCMessage(JSON.parse(await request.clone().text()))
+			} catch {
+				parsed = undefined
+			}
+			if (parsed !== undefined && 'method' in parsed && isModernRequest(parsed)) {
+				return next()
+			}
+		}
 		if (ttl !== undefined) {
 			const cutoff = clock() - ttl
 			for (const [id, entry] of store) {
@@ -89,7 +121,7 @@ export function createMCPSession<TState extends MCPSessionState>(
 		if (id !== undefined) {
 			const current = store.get(id)
 			if (current !== undefined) {
-				entry = { session: current.session, touched: clock() }
+				entry = { session: current.session, touched: clock(), version: current.version }
 				store.set(id, entry)
 			}
 		}
@@ -98,6 +130,7 @@ export function createMCPSession<TState extends MCPSessionState>(
 			if (entry === undefined) return rejectUnknownSession()
 			const session = entry.session
 			const stream = openStream()
+			stream.response.headers.set(SSE_BUFFERING_HEADER, SSE_BUFFERING_DISABLED)
 			// A comment write flushes the response headers immediately (the underlying node:http
 			// response only sends headers on its first `write`/`end`) — without it a client's fetch
 			// hangs waiting for headers until the first replay/push write, which may never come.
@@ -120,18 +153,12 @@ export function createMCPSession<TState extends MCPSessionState>(
 		// Request; only `initialize` mints a fresh session when no valid id is present.
 		const text = await request.text()
 		if (entry === undefined) {
-			let parsed: unknown
-			try {
-				parsed = parseJSONRPCMessage(JSON.parse(text))
-			} catch {
-				parsed = undefined
-			}
 			if (parsed !== undefined && isInitializeRequest(parsed)) {
 				const session = new MCPSession(
 					crypto.randomUUID(),
 					capacity !== undefined ? { capacity } : {},
 				)
-				entry = { session, touched: clock() }
+				entry = { session, touched: clock(), version: inferLegacyVersion(parsed) }
 				store.set(session.id, entry)
 			} else {
 				return rejectUnknownSession()
@@ -140,9 +167,16 @@ export function createMCPSession<TState extends MCPSessionState>(
 		if (!Reflect.set(context.state, 'session', entry.session)) {
 			throw new Error('MCP session state is not writable')
 		}
+		const headers = new Headers(request.headers)
+		if (
+			!headers.has(MCP_PROTOCOL_VERSION_HEADER) &&
+			(parsed === undefined || !isInitializeRequest(parsed))
+		) {
+			headers.set(MCP_PROTOCOL_VERSION_HEADER, entry.version)
+		}
 		const forwarded = new Request(context.url, {
 			method: 'POST',
-			headers: request.headers,
+			headers,
 			body: text,
 		})
 		const response = await next(forwarded)

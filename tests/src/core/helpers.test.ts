@@ -401,19 +401,31 @@ describe('bindClient', () => {
 		const connecting = mcp.connect()
 		await waitForDelay()
 		expect(transport.sent).toHaveLength(1)
-		const sentRequest: { id: number } = JSON.parse(transport.sent[0] ?? '{}')
+		const probe: { id: number; method: string } = JSON.parse(transport.sent[0] ?? '{}')
+		expect(probe.method).toBe('server/discover')
 		transport.deliver(
 			JSON.stringify({
 				jsonrpc: '2.0',
-				id: sentRequest.id,
+				id: probe.id,
+				error: { code: -32601, message: 'Method not found: server/discover' },
+			}),
+		)
+		await waitForDelay()
+		expect(transport.sent).toHaveLength(2)
+		const initialize: { id: number; method: string } = JSON.parse(transport.sent[1] ?? '{}')
+		expect(initialize.method).toBe('initialize')
+		transport.deliver(
+			JSON.stringify({
+				jsonrpc: '2.0',
+				id: initialize.id,
 				result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: {} },
 			}),
 		)
 		await connecting
 
 		expect(mcp.connected).toBe(true)
-		// notifications/initialized fires as the second, un-replied write.
-		expect(transport.sent).toHaveLength(2)
+		// notifications/initialized fires as the third, un-replied write.
+		expect(transport.sent).toHaveLength(3)
 	})
 
 	it('drops a malformed inbound message rather than throwing', () => {
@@ -482,11 +494,13 @@ describe('bindClient', () => {
 				settled = true
 			},
 		)
-		await waitForDelay()
+		// Wait beyond the former 50ms discovery-probe bound: without an inbound binding there
+		// is no peer signal that can justify settling the connection attempt.
+		await waitForDelay(75)
 		await Promise.resolve()
 
 		expect(settled).toBe(false)
-		expect(transport.sent).toHaveLength(1) // the outbound initialize request was still written
+		expect(transport.sent).toHaveLength(1) // the outbound discovery request was still written
 
 		// Bind now so the pending connect can be settled and the test doesn't hang.
 		bindClient(mcp, transport)
@@ -495,7 +509,13 @@ describe('bindClient', () => {
 			JSON.stringify({
 				jsonrpc: '2.0',
 				id: sentRequest.id,
-				result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: {} },
+				result: {
+					supportedVersions: ['2026-07-28', '2025-11-25', '2025-06-18'],
+					capabilities: { tools: {} },
+					resultType: 'complete',
+					ttlMs: 60_000,
+					cacheScope: 'private',
+				},
 			}),
 		)
 		await connecting

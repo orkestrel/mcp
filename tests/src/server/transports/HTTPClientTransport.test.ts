@@ -2,13 +2,22 @@ import type { MCPClientInterface, MCPServerInterface } from '@src/core'
 import type { MiddlewareHandler } from '@orkestrel/server'
 import type { StartedServerInterface } from '../../../setupServer.js'
 import { describe, expect, it } from 'vitest'
-import { createMCPClient, createMCPServer, MCP_PROTOCOL_VERSION } from '@src/core'
+import {
+	MCP_LEGACY_VERSION,
+	MCP_META_CAPABILITIES,
+	MCP_META_VERSION,
+	MCP_PROTOCOL_VERSION,
+	createMCPClient,
+	createMCPServer,
+} from '@src/core'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import {
 	createHTTPClientTransport,
 	createMCPRoutes,
+	MCP_METHOD_HEADER,
+	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
 } from '@src/server'
 import { createTeardown, startServer } from '../../../setupServer.js'
@@ -170,24 +179,77 @@ describe('HTTPClientTransport — policy composes in front', () => {
 })
 
 describe('HTTPClientTransport — lifecycle', () => {
+	it('stamps modern POSTs from the message and scopes Mcp-Name to tools/call', async () => {
+		const headers: Headers[] = []
+		const transport = createHTTPClientTransport({
+			url: 'http://localhost/mcp',
+			fetch: (_input, init) => {
+				headers.push(new Headers(init?.headers))
+				return Promise.resolve(new Response(null, { status: 202 }))
+			},
+		})
+		const metadata = {
+			[MCP_META_VERSION]: MCP_PROTOCOL_VERSION,
+			[MCP_META_CAPABILITIES]: {},
+		}
+
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'server/discover',
+			params: { _meta: metadata },
+		})
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 2,
+			method: 'tools/list',
+			params: { _meta: metadata },
+		})
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 3,
+			method: 'tools/call',
+			params: { name: 'add', arguments: {}, _meta: metadata },
+		})
+
+		expect(
+			headers.map((header) => [
+				header.get(MCP_PROTOCOL_VERSION_HEADER),
+				header.get(MCP_METHOD_HEADER),
+				header.get(MCP_NAME_HEADER),
+			]),
+		).toEqual([
+			[MCP_PROTOCOL_VERSION, 'server/discover', null],
+			[MCP_PROTOCOL_VERSION, 'tools/list', null],
+			[MCP_PROTOCOL_VERSION, 'tools/call', 'add'],
+		])
+	})
+
 	it('captures the initialize result and sends its protocol on the subsequent request', async () => {
 		const dispatcher = createDispatcher<unknown>()
 		dispatcher.add(createMCPRoutes(mcpServer(), { streaming: false }))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
 		const handle = track(await startServer(server))
 		const protocols: (string | null)[] = []
+		const methods: (string | null)[] = []
+		const names: (string | null)[] = []
 		const transport = createHTTPClientTransport({
 			url: `${handle.base}/mcp`,
 			fetch: (input, init) => {
-				protocols.push(new Headers(init?.headers).get(MCP_PROTOCOL_VERSION_HEADER))
+				const headers = new Headers(init?.headers)
+				protocols.push(headers.get(MCP_PROTOCOL_VERSION_HEADER))
+				methods.push(headers.get(MCP_METHOD_HEADER))
+				names.push(headers.get(MCP_NAME_HEADER))
 				return fetch(input, init)
 			},
 		})
-		const client = createMCPClient({ transport })
+		const client = createMCPClient({ transport, version: MCP_LEGACY_VERSION })
 
 		await client.connect()
 
-		expect(protocols).toEqual([null, MCP_PROTOCOL_VERSION])
+		expect(protocols).toEqual([null, MCP_LEGACY_VERSION])
+		expect(methods).toEqual([null, null])
+		expect(names).toEqual([null, null])
 		await client.disconnect()
 	})
 
@@ -247,14 +309,14 @@ describe('HTTPClientTransport — lifecycle', () => {
 				return fetch(input, init)
 			},
 		})
-		const client = createMCPClient({ transport })
+		const client = createMCPClient({ transport, version: MCP_LEGACY_VERSION })
 
 		await client.connect()
-		expect(protocols).toEqual([null, MCP_PROTOCOL_VERSION])
+		expect(protocols).toEqual([null, MCP_LEGACY_VERSION])
 
 		await client.disconnect()
 		await transport.send({ jsonrpc: '2.0', id: 99, method: 'ping', params: {} })
 
-		expect(protocols).toEqual([null, MCP_PROTOCOL_VERSION, null])
+		expect(protocols).toEqual([null, MCP_LEGACY_VERSION, null])
 	})
 })

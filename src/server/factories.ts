@@ -38,12 +38,11 @@ import { WebSocketServerTransport } from './transports/WebSocketServerTransport.
  * - A **transport** failure — a malformed JSON body, or a parsed value that is not a
  *   JSON-RPC REQUEST — is an HTTP `400` carrying a JSON-RPC error BODY (`-32700` Parse
  *   error / `-32600` Invalid Request, id `null`).
- * - A present `mcp-protocol-version` header is validated before dispatch: a supported
- *   value proceeds, while an unsupported value returns HTTP `400` with a JSON-RPC
- *   `-32600` body. An absent value proceeds for initialize/bootstrap compatibility.
- * - A **dispatch** result — a success OR an IN-BAND JSON-RPC error from `mcp.dispatch`
- *   (e.g. `-32601` method-not-found) — is an HTTP `200` carrying the JSON-RPC response
- *   envelope (the error is in-band per JSON-RPC, NOT an HTTP error).
+ * - Modern protocol/method/name headers are validated against the body; a mismatch is
+ *   HTTP `400` + `-32020`. Headerless initialize is accepted, a live legacy session supplies
+ *   its pinned revision, and every other headerless request is rejected.
+ * - Legacy dispatch errors stay IN-BAND at HTTP `200`; modern errors map to `400` for
+ *   `-32020` / `-32021` / `-32022` / `-32602`, `404` for `-32601`, and `200` otherwise.
  * - A **notification** (a request with no `id`, which `dispatch` resolves to
  *   `undefined`) is a `202 Accepted` with no body.
  *
@@ -58,13 +57,15 @@ import { WebSocketServerTransport } from './transports/WebSocketServerTransport.
  * validates the `mcp-session-id`, and serves the resumable `GET {path}` + `DELETE {path}`,
  * leaving this route to dispatch the validated `POST`.
  *
- * This is MECHANISM, not policy: compose auth / CORS / rate-limiting (and the session
- * middleware) IN FRONT as ordinary middleware — the transport route adds none.
+ * This is MECHANISM, not policy: compose auth / rate-limiting (and the session middleware)
+ * IN FRONT as ordinary middleware; the optional `origin` group carries the deployment's shared
+ * allowlist or explicitly delegates validation to an upstream layer.
  *
  * @typeParam TState - The consumer's opaque per-request state type
  * @param mcp - The transport-agnostic {@link MCPServerInterface} to expose over HTTP
  * @param options - Optional `path` (default {@link DEFAULT_MCP_PATH}) and `streaming`
- *   (default `true`); see {@link HTTPTransportOptions}
+ *   (default `true`), plus the shared `origin` validation options; see
+ *   {@link HTTPTransportOptions}
  * @returns The {@link RouteInput}s to register with the router
  *
  * @example
@@ -86,7 +87,7 @@ export function createMCPRoutes<TState = unknown>(
 		method: 'POST',
 		path,
 		name: 'mcp',
-		handler: createMCPPostHandler(mcp, streaming),
+		handler: createMCPPostHandler(mcp, streaming, options?.origin),
 	}
 	return [post]
 }
@@ -105,9 +106,9 @@ export function createMCPRoutes<TState = unknown>(
  * correlation. Add `options.headers` (e.g. an `Authorization` bearer) to reach a guarded
  * server. `start` / `close` hold no connection; against a STATEFUL server it captures the
  * `mcp-session-id` from `initialize` and echoes it on later requests. It also captures
- * the initialize result's `protocolVersion` and sends `mcp-protocol-version` on every
- * subsequent request, so the same `MCPClient` passes the session and 2025-06-18
- * protocol gates without caller wiring.
+ * the initialize result's `protocolVersion` and sends `mcp-protocol-version` alone on each
+ * subsequent legacy request. Modern requests derive protocol and method headers directly
+ * from the message, plus a name header only for `tools/call`.
  *
  * @param options - `url` (the remote endpoint; REQUIRED), optional `headers` merged onto
  *   every request, optional `fetch` (default `globalThis.fetch`), and optional `timeout`

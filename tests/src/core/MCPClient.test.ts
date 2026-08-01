@@ -2,11 +2,25 @@ import type {
 	ClientTransportEventMap,
 	ClientTransportInterface,
 	JSONRPCMessage,
+	JSONRPCRequest,
+	JSONRPCResponse,
 	MCPServerInterface,
 } from '@src/core'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 import { describe, expect, it } from 'vitest'
-import { createMCPClient, createMCPServer, isMCPError, MCP_PROTOCOL_VERSION } from '@src/core'
+import {
+	createMCPClient,
+	createMCPServer,
+	isMCPError,
+	JSONRPC_INVALID_PARAMS,
+	JSONRPC_INVALID_REQUEST,
+	JSONRPC_METHOD_NOT_FOUND,
+	MCP_META_CAPABILITIES,
+	MCP_META_CLIENT,
+	MCP_META_VERSION,
+	MCP_PROTOCOL_VERSION,
+	MCP_UNSUPPORTED_VERSION,
+} from '@src/core'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
 
@@ -28,6 +42,7 @@ import { createEmitter } from '@orkestrel/emitter'
 // every method sent, for the correlation / handshake assertions.
 interface LoopbackInterface extends ClientTransportInterface {
 	readonly sent: readonly string[]
+	readonly requests: readonly JSONRPCRequest[]
 	readonly started: number
 	readonly closed: number
 }
@@ -37,14 +52,17 @@ function createLoopback(
 	gate?: (method: string) => boolean,
 ): LoopbackInterface {
 	const emitter = createEmitter<ClientTransportEventMap>()
-	const sent: string[] = []
+	const requests: JSONRPCRequest[] = []
 	let started = 0
 	let closed = 0
 	return {
 		emitter,
 		session: undefined,
 		get sent() {
-			return sent
+			return requests.map((request) => request.method)
+		},
+		get requests() {
+			return requests
 		},
 		get started() {
 			return started
@@ -57,7 +75,7 @@ function createLoopback(
 		},
 		async send(message: JSONRPCMessage) {
 			if (!('method' in message)) return
-			sent.push(message.method)
+			requests.push(message)
 			const response = await server.dispatch(message)
 			// `gate(method)` true → withhold the response (the request stays pending), to
 			// drive the timeout / disconnect tests; otherwise emit it for id correlation.
@@ -71,19 +89,24 @@ function createLoopback(
 	}
 }
 
-// A protocol-faithful boundary fixture for an initialize result a conforming local
-// MCPServer cannot produce: it answers only `initialize`, with the caller-selected
-// protocol value, and records lifecycle/message behavior around the failed handshake.
-function createNegotiationTransport(protocol: unknown): LoopbackInterface {
+// A minimal protocol-faithful peer for negotiation paths a conforming local MCPServer
+// cannot produce. The script returns a correlated response, no response, or a transport
+// failure; the peer records every real JSON-RPC request and preserves lifecycle counts.
+function createFixturePeer(
+	reply: (request: JSONRPCRequest, count: number) => JSONRPCResponse | Error | undefined,
+): LoopbackInterface {
 	const emitter = createEmitter<ClientTransportEventMap>()
-	const sent: string[] = []
+	const requests: JSONRPCRequest[] = []
 	let started = 0
 	let closed = 0
 	return {
 		emitter,
 		session: undefined,
 		get sent() {
-			return sent
+			return requests.map((request) => request.method)
+		},
+		get requests() {
+			return requests
 		},
 		get started() {
 			return started
@@ -96,20 +119,54 @@ function createNegotiationTransport(protocol: unknown): LoopbackInterface {
 		},
 		async send(message) {
 			if (!('method' in message)) return
-			sent.push(message.method)
-			if (message.method !== 'initialize' || message.id === undefined) return
-			emitter.emit('message', {
-				jsonrpc: '2.0',
-				id: message.id,
-				result: {
-					protocolVersion: protocol,
-					capabilities: {},
-					serverInfo: { name: 'fixture', version: '1.0.0' },
-				},
-			})
+			requests.push(message)
+			const response = reply(message, requests.length)
+			if (response instanceof Error) throw response
+			if (response !== undefined) emitter.emit('message', response)
 		},
 		async close() {
 			closed += 1
+		},
+	}
+}
+
+function initializeResponse(id: string | number, protocol: unknown): JSONRPCResponse {
+	return {
+		jsonrpc: '2.0',
+		id,
+		result: {
+			protocolVersion: protocol,
+			capabilities: {},
+			serverInfo: { name: 'fixture', version: '1.0.0' },
+		},
+	}
+}
+
+function discoverResponse(
+	id: string | number,
+	versions: readonly unknown[] = ['2026-07-28', '2025-11-25'],
+): JSONRPCResponse {
+	return {
+		jsonrpc: '2.0',
+		id,
+		result: {
+			supportedVersions: versions,
+			capabilities: { tools: {} },
+			resultType: 'complete',
+			ttlMs: 60_000,
+			cacheScope: 'private',
+		},
+	}
+}
+
+function errorResponse(id: string | number, code: number, data?: unknown): JSONRPCResponse {
+	return {
+		jsonrpc: '2.0',
+		id,
+		error: {
+			code,
+			message: code === MCP_UNSUPPORTED_VERSION ? 'Unsupported protocol version' : 'Legacy peer',
+			...(data === undefined ? {} : { data }),
 		},
 	}
 }
@@ -146,8 +203,8 @@ function serverWithTools(): MCPServerInterface {
 	})
 }
 
-describe('MCPClient — connect (the initialize handshake)', () => {
-	it('opens the transport, handshakes, and reports connected', async () => {
+describe('MCPClient — connect (dual-era negotiation)', () => {
+	it('opens the transport, discovers modern support, and reports the newest common version', async () => {
 		const loopback = createLoopback(serverWithTools())
 		const client = createMCPClient({
 			transport: loopback,
@@ -158,10 +215,10 @@ describe('MCPClient — connect (the initialize handshake)', () => {
 		await client.connect()
 
 		expect(client.connected).toBe(true)
-		expect(client.protocol).toBe(MCP_PROTOCOL_VERSION)
+		expect(client.version).toBe('2026-07-28')
+		expect(client.protocol).toBe('2026-07-28')
 		expect(loopback.started).toBe(1)
-		// The handshake sends `initialize` then the `notifications/initialized` notification.
-		expect(loopback.sent).toEqual(['initialize', 'notifications/initialized'])
+		expect(loopback.sent).toEqual(['server/discover'])
 	})
 
 	it('fires the connect event and is idempotent', async () => {
@@ -186,9 +243,23 @@ describe('MCPClient — connect (the initialize handshake)', () => {
 		expect(client.transport).toBe(loopback)
 	})
 
-	it('rejects an unsupported negotiated protocol, closes, and sends no initialized notification', async () => {
-		const loopback = createNegotiationTransport('2099-01-01')
-		const client = createMCPClient({ transport: loopback })
+	it('keeps a pinned legacy handshake unchanged, including its initialized notification', async () => {
+		const loopback = createLoopback(serverWithTools())
+		const client = createMCPClient({ transport: loopback, version: '2025-06-18' })
+
+		await client.connect()
+
+		expect(client.version).toBe('2025-06-18')
+		expect(client.protocol).toBe('2025-06-18')
+		expect(loopback.sent).toEqual(['initialize', 'notifications/initialized'])
+	})
+
+	it('rejects an unsupported legacy protocol, closes, and sends no initialized notification', async () => {
+		const loopback = createFixturePeer((request) => {
+			if (request.method !== 'initialize' || request.id === undefined) return undefined
+			return initializeResponse(request.id, '2099-01-01')
+		})
+		const client = createMCPClient({ transport: loopback, version: MCP_PROTOCOL_VERSION })
 
 		expect(client.protocol).toBeUndefined()
 		await expect(client.connect()).rejects.toThrow(
@@ -200,17 +271,244 @@ describe('MCPClient — connect (the initialize handshake)', () => {
 		expect(loopback.sent).toEqual(['initialize'])
 	})
 
-	it('rejects a non-string negotiated protocol and closes before initialization completes', async () => {
-		const loopback = createNegotiationTransport(42)
-		const client = createMCPClient({ transport: loopback })
+	it('rejects an absent legacy protocol and closes before initialization completes', async () => {
+		const loopback = createFixturePeer((request) => {
+			if (request.method !== 'initialize' || request.id === undefined) return undefined
+			return { jsonrpc: '2.0', id: request.id, result: { capabilities: {} } }
+		})
+		const client = createMCPClient({ transport: loopback, version: MCP_PROTOCOL_VERSION })
 
-		await expect(client.connect()).rejects.toThrow(
-			'MCP server returned a non-string protocol version',
-		)
+		await expect(client.connect()).rejects.toThrow('MCP server returned no protocol version')
 		expect(client.connected).toBe(false)
-		expect(client.protocol).toBeUndefined()
+		expect(client.version).toBeUndefined()
 		expect(loopback.closed).toBe(1)
 		expect(loopback.sent).toEqual(['initialize'])
+	})
+
+	it('rejects a malformed legacy protocol and closes before initialization completes', async () => {
+		const loopback = createFixturePeer((request) => {
+			if (request.method !== 'initialize' || request.id === undefined) return undefined
+			return initializeResponse(request.id, 42)
+		})
+		const client = createMCPClient({ transport: loopback, version: MCP_PROTOCOL_VERSION })
+
+		await expect(client.connect()).rejects.toThrow(
+			'MCP server returned a malformed protocol version',
+		)
+		expect(client.connected).toBe(false)
+		expect(client.version).toBeUndefined()
+		expect(loopback.closed).toBe(1)
+		expect(loopback.sent).toEqual(['initialize'])
+	})
+})
+
+describe('MCPClient — modern discovery and fallback', () => {
+	it('exposes discover() and stamps its request with version, capabilities, and client identity', async () => {
+		const loopback = createLoopback(serverWithTools())
+		const client = createMCPClient({
+			transport: loopback,
+			identity: { name: 'inspector', version: '2.0.0' },
+			capabilities: { elicitation: {} },
+		})
+
+		const result = await client.discover()
+
+		expect(result.supportedVersions).toEqual(['2026-07-28', '2025-11-25', '2025-06-18'])
+		expect(result.resultType).toBe('complete')
+		const request = loopback.requests[0]
+		expect(request?.method).toBe('server/discover')
+		expect(request?.params?.['_meta']).toEqual({
+			[MCP_META_VERSION]: '2026-07-28',
+			[MCP_META_CAPABILITIES]: { elicitation: {} },
+			[MCP_META_CLIENT]: { name: 'inspector', version: '2.0.0' },
+		})
+	})
+
+	it('retries -32022 exactly once with a new id and the newest mutually supported offer', async () => {
+		let discoveries = 0
+		const peer = createFixturePeer((request) => {
+			if (request.method !== 'server/discover' || request.id === undefined) return undefined
+			discoveries += 1
+			if (discoveries === 1) {
+				return errorResponse(request.id, MCP_UNSUPPORTED_VERSION, {
+					supported: ['2025-11-25', '2025-06-18'],
+				})
+			}
+			return discoverResponse(request.id, ['2025-11-25'])
+		})
+		const client = createMCPClient({ transport: peer })
+
+		await client.connect()
+
+		expect(client.version).toBe('2025-11-25')
+		expect(peer.sent).toEqual(['server/discover', 'server/discover'])
+		expect(peer.requests.map((request) => request.id)).toEqual([1, 2])
+		expect(peer.requests[1]?.params?.['_meta']).toEqual({
+			[MCP_META_VERSION]: '2025-11-25',
+			[MCP_META_CAPABILITIES]: {},
+			[MCP_META_CLIENT]: { name: 'taverna', version: '1.0.0' },
+		})
+	})
+
+	it('makes no third discovery attempt when the one retry also returns -32022', async () => {
+		const peer = createFixturePeer((request) => {
+			if (request.method !== 'server/discover' || request.id === undefined) return undefined
+			return errorResponse(request.id, MCP_UNSUPPORTED_VERSION, {
+				supported: ['2025-11-25'],
+			})
+		})
+		const client = createMCPClient({ transport: peer })
+
+		await expect(client.connect()).rejects.toMatchObject({ code: MCP_UNSUPPORTED_VERSION })
+
+		expect(peer.sent).toEqual(['server/discover', 'server/discover'])
+		expect(peer.requests.map((request) => request.id)).toEqual([1, 2])
+	})
+
+	it.each([JSONRPC_METHOD_NOT_FOUND, JSONRPC_INVALID_REQUEST])(
+		'falls back to legacy initialize when discovery returns %i',
+		async (code) => {
+			const peer = createFixturePeer((request) => {
+				if (request.id === undefined) return undefined
+				if (request.method === 'server/discover') return errorResponse(request.id, code)
+				if (request.method === 'initialize')
+					return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+				return undefined
+			})
+			const client = createMCPClient({ transport: peer })
+
+			await client.connect()
+
+			expect(client.version).toBe(MCP_PROTOCOL_VERSION)
+			expect(peer.sent).toEqual(['server/discover', 'initialize', 'notifications/initialized'])
+		},
+	)
+
+	it.each([
+		['an unrecognized HTTP 400', 'HTTP 400 response did not contain a recognized modern error'],
+		['an unrecognized HTTP 404', 'HTTP 404 response did not contain a recognized modern error'],
+		['a transport send failure', 'Transport closed while sending'],
+	])('falls back to legacy initialize after %s', async (_scenario, message) => {
+		const peer = createFixturePeer((request) => {
+			if (request.method === 'server/discover') return new Error(message)
+			if (request.method === 'initialize' && request.id !== undefined) {
+				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+			}
+			return undefined
+		})
+		const client = createMCPClient({ transport: peer })
+
+		await client.connect()
+
+		expect(client.version).toBe(MCP_PROTOCOL_VERSION)
+		expect(peer.sent).toEqual(['server/discover', 'initialize', 'notifications/initialized'])
+	})
+
+	it('falls back when discovery returns a malformed unrecognized result', async () => {
+		const peer = createFixturePeer((request) => {
+			if (request.id === undefined) return undefined
+			if (request.method === 'server/discover') {
+				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+			}
+			if (request.method === 'initialize') {
+				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+			}
+			return undefined
+		})
+		const client = createMCPClient({ transport: peer })
+
+		await client.connect()
+
+		expect(client.version).toBe(MCP_PROTOCOL_VERSION)
+		expect(peer.sent).toEqual(['server/discover', 'initialize', 'notifications/initialized'])
+	})
+
+	it('bounds a silent discovery probe and falls back when the peer sends no answer', async () => {
+		const peer = createFixturePeer((request) => {
+			if (request.method === 'initialize' && request.id !== undefined) {
+				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+			}
+			return undefined
+		})
+		const client = createMCPClient({ transport: peer, timeout: 5_000 })
+
+		await client.connect()
+
+		expect(client.version).toBe(MCP_PROTOCOL_VERSION)
+		expect(peer.sent).toEqual(['server/discover', 'initialize', 'notifications/initialized'])
+	})
+
+	it('does not fall back when the modern revision is pinned', async () => {
+		const peer = createFixturePeer((request) => {
+			if (request.method !== 'server/discover' || request.id === undefined) return undefined
+			return errorResponse(request.id, JSONRPC_METHOD_NOT_FOUND)
+		})
+		const client = createMCPClient({ transport: peer, version: '2026-07-28' })
+
+		await expect(client.connect()).rejects.toMatchObject({ code: JSONRPC_METHOD_NOT_FOUND })
+		expect(peer.sent).toEqual(['server/discover'])
+		expect(client.connected).toBe(false)
+	})
+
+	it('surfaces a transport failure after the modern era has been settled', async () => {
+		const peer = createFixturePeer((request) => {
+			if (request.id === undefined) return undefined
+			if (request.method === 'server/discover') return discoverResponse(request.id)
+			if (request.method === 'tools/list') return new Error('Settled modern transport failed')
+			return undefined
+		})
+		const client = createMCPClient({ transport: peer })
+		await client.connect()
+
+		await expect(client.tools()).rejects.toThrow('Settled modern transport failed')
+
+		expect(peer.sent).toEqual(['server/discover', 'tools/list'])
+		expect(client.version).toBe('2026-07-28')
+	})
+
+	it('caches a legacy era across disconnect and reconnect without probing modern again', async () => {
+		const peer = createFixturePeer((request) => {
+			if (request.id === undefined) return undefined
+			if (request.method === 'server/discover') {
+				return errorResponse(request.id, JSONRPC_METHOD_NOT_FOUND)
+			}
+			if (request.method === 'initialize')
+				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+			return undefined
+		})
+		const client = createMCPClient({ transport: peer })
+
+		await client.connect()
+		await client.disconnect()
+		await client.connect()
+
+		expect(peer.sent).toEqual([
+			'server/discover',
+			'initialize',
+			'notifications/initialized',
+			'initialize',
+			'notifications/initialized',
+		])
+		expect(client.version).toBe(MCP_PROTOCOL_VERSION)
+	})
+
+	it('stamps every modern request and sends no client notification', async () => {
+		const loopback = createLoopback(serverWithTools())
+		const client = createMCPClient({ transport: loopback })
+
+		await client.connect()
+		await client.tools()
+		await client.call('greet', {})
+
+		expect(loopback.sent).toEqual(['server/discover', 'tools/list', 'tools/call'])
+		for (const request of loopback.requests) {
+			expect(request.id).toBeDefined()
+			expect(request.params?.['_meta']).toEqual({
+				[MCP_META_VERSION]: '2026-07-28',
+				[MCP_META_CAPABILITIES]: {},
+				[MCP_META_CLIENT]: { name: 'taverna', version: '1.0.0' },
+			})
+		}
 	})
 })
 
@@ -295,6 +593,46 @@ describe('MCPClient — call() (the content round-trip)', () => {
 		// so the client throws.
 		await expect(client.call('absent', {})).rejects.toThrow(/not found/)
 	})
+})
+
+describe('MCPClient — result-type safety', () => {
+	it('accepts a legacy result with no resultType', async () => {
+		const client = createMCPClient({
+			transport: createLoopback(serverWithTools()),
+			version: MCP_PROTOCOL_VERSION,
+		})
+		await client.connect()
+
+		expect(await client.call('greet', {})).toBe('hello')
+	})
+
+	it.each(['input_required', 'task', 'future'])(
+		'rejects resultType %s with an MCPError that names it',
+		async (resultType) => {
+			const peer = createFixturePeer((request) => {
+				if (request.id === undefined) return undefined
+				if (request.method === 'server/discover') return discoverResponse(request.id)
+				if (request.method === 'tools/list') {
+					return { jsonrpc: '2.0', id: request.id, result: { tools: [], resultType } }
+				}
+				return undefined
+			})
+			const client = createMCPClient({ transport: peer })
+			await client.connect()
+
+			let caught: unknown
+			try {
+				await client.tools()
+			} catch (error) {
+				caught = error
+			}
+
+			expect(isMCPError(caught)).toBe(true)
+			if (!isMCPError(caught)) throw new Error('Expected an MCPError')
+			expect(caught.code).toBe(JSONRPC_INVALID_PARAMS)
+			expect(caught.message).toBe(`MCP result type '${resultType}' is not supported`)
+		},
+	)
 })
 
 describe('MCPClient — id correlation', () => {

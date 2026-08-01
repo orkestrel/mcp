@@ -6,9 +6,9 @@
 //
 // The HTTP transport mounts a transport-agnostic `MCPServerInterface` (the `@src/core` MCP
 // dispatch core) on a spine `Server` via `createMCPRoutes`, pumping each POST body through
-// `mcp.dispatch`. It is MECHANISM, never policy — auth / CORS / rate-limiting compose IN
-// FRONT as ordinary middleware (`createTokenGuard` / `createCors` / `createRateLimiter`),
-// not baked in here. `createMCPRoutes` is STATELESS — a single `POST {path}`. Statefulness is
+// `mcp.dispatch`. It is MECHANISM, never policy — auth / rate-limiting compose IN FRONT as
+// ordinary middleware, while the protocol-required origin mechanism takes its policy from the
+// consumer's shared `origin` options. `createMCPRoutes` is STATELESS — a single `POST {path}`. Statefulness is
 // a SEPARATE, plug-and-play middleware: `server.use(createMCPSession())` mounts the session
 // layer IN FRONT (mirroring `createRateLimiter` — a closure owning the session `Map` + lazy
 // TTL), minting + validating a session id (the `mcp-session-id` header), serving a `DELETE
@@ -30,9 +30,24 @@
 // / `ClientTransportInterface` the HTTP pair does — the wire framing differs, the dispatch
 // core does not.
 
-import type { JSONRPCMessage } from '@src/core'
+import type { JSONRPCMessage, MCPVersion } from '@src/core'
 import type { StreamInterface } from '@orkestrel/server'
 import type { MCPSession } from './MCPSession.js'
+
+/**
+ * Shared options for the protocol-required HTTP `Origin` validation at the route and session
+ * enforcement sites.
+ *
+ * @remarks
+ * - `enabled` — whether this package validates `Origin`; defaults to `true`. Set `false` only
+ *   when an upstream layer performs the validation for the deployment.
+ * - `origins` — the exact serialized origins accepted when an `Origin` header is present.
+ *   Omission accepts requests without `Origin` and rejects every request carrying one.
+ */
+export interface MCPOriginOptions {
+	readonly enabled?: boolean
+	readonly origins?: readonly string[]
+}
 
 /**
  * Options for `createMCPRoutes` — the path the transport is mounted at and whether an SSE
@@ -51,10 +66,15 @@ import type { MCPSession } from './MCPSession.js'
  *   `text/event-stream`; when `false` it always answers with a plain JSON body. Either
  *   mode carries the SAME JSON-RPC response envelope — the choice is purely the wire
  *   framing the Streamable-HTTP spec lets the client negotiate.
+ * - `origin` — the shared origin-validation options passed to both the route and session
+ *   enforcement sites. Validation is enabled by default: requests without `Origin` pass,
+ *   while every present `Origin` must occur exactly in `origin.origins`. Set
+ *   `origin.enabled` to `false` only when validation is delegated upstream.
  */
 export interface HTTPTransportOptions {
 	readonly path?: string
 	readonly streaming?: boolean
+	readonly origin?: MCPOriginOptions
 }
 
 /**
@@ -79,12 +99,17 @@ export interface HTTPTransportOptions {
  *   uses directly for its own session-touch / TTL-sweep bookkeeping; defaults to `Date.now`. The
  *   deterministic clock a TTL test advances explicitly instead of racing a real idle window
  *   against wall-clock (AGENTS §16). Production never sets it.
+ * - `origin` — the same shared origin-validation options supplied to `createMCPRoutes`.
+ *   Validation is enabled by default and rejects a present origin outside its exact list before
+ *   any session is minted. Set `origin.enabled` to `false` only when validation is delegated
+ *   upstream.
  */
 export interface MCPSessionOptions {
 	readonly path?: string
 	readonly ttl?: number
 	readonly capacity?: number
 	readonly clock?: () => number
+	readonly origin?: MCPOriginOptions
 }
 
 /**
@@ -162,10 +187,14 @@ export interface EventStoreEntry {
  * - `session` — the live {@link MCPSession} entity the store keys by session id.
  * - `touched` — the epoch-ms instant of the last access; the entry is replaced on every
  *   resolved request so the middleware's lazy sweep can evict an idle entry past `ttl`.
+ * - `version` — the legacy revision negotiated by the session's initialize request, used
+ *   when a later live-session request legitimately omits its protocol header.
  */
 export interface MCPSessionEntry {
 	readonly session: MCPSession
 	readonly touched: number
+	/** The legacy revision negotiated when this session was minted. */
+	readonly version: MCPVersion
 }
 
 /**

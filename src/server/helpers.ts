@@ -2,21 +2,29 @@ import type {
 	ClientTransportEventMap,
 	ClientTransportInterface,
 	JSONRPCMessage,
+	JSONRPCRequest,
 	MCPTransportInterface,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { SSEParserInterface } from '@orkestrel/sse'
 import type { IncomingMessage } from 'node:http'
-import type { LineExtraction } from './types.js'
+import type { LineExtraction, MCPOriginOptions } from './types.js'
 import { createSSEParser } from '@orkestrel/sse'
 import {
 	isJSONRPCRequest,
+	isModernRequest,
 	JSONRPC_INVALID_REQUEST,
+	MCP_META_VERSION,
 	buildJSONRPCError,
 	parseJSONRPCMessage,
 } from '@src/core'
-import { isString } from '@orkestrel/contract'
-import { MCP_SESSION_HEADER } from './constants.js'
+import { isRecord, isString } from '@orkestrel/contract'
+import {
+	MCP_METHOD_HEADER,
+	MCP_NAME_HEADER,
+	MCP_PROTOCOL_VERSION_HEADER,
+	MCP_SESSION_HEADER,
+} from './constants.js'
 
 // The MCP server-transport helpers (AGENTS §4.3 module-scope names — no entity context).
 // The server-side reader `acceptsEventStream` reads the request's `Accept` header to
@@ -48,6 +56,62 @@ export function acceptsEventStream(request: Request): boolean {
 	const accept = request.headers.get('accept')
 	if (accept === null) return false
 	return accept.toLowerCase().includes('text/event-stream')
+}
+
+/**
+ * Whether an HTTP request satisfies the endpoint's origin gate.
+ *
+ * @remarks
+ * Validation is enabled by default. A request without `Origin` is allowed; a request carrying
+ * one is allowed only when its exact serialized origin occurs in the caller-supplied list.
+ * Invalid and opaque (`null`) origins are denied. `enabled: false` delegates validation to an
+ * upstream layer and allows the request through this gate.
+ *
+ * @param request - The fetch-standard request to validate
+ * @param options - Shared origin validation and delegation options
+ * @returns `true` when the request may reach MCP dispatch
+ */
+export function allowsOrigin(request: Request, options?: MCPOriginOptions): boolean {
+	if (options?.enabled === false) return true
+	const origin = request.headers.get('origin')
+	if (origin === null) return true
+	let parsed: URL
+	try {
+		parsed = new URL(origin)
+	} catch {
+		return false
+	}
+	if (parsed.origin !== origin) return false
+	return options?.origins?.includes(parsed.origin) ?? false
+}
+
+/**
+ * Whether a modern HTTP request's required standard headers match its JSON-RPC body.
+ *
+ * @remarks
+ * Requires `MCP-Protocol-Version` to equal the reserved `_meta` version and `Mcp-Method`
+ * to equal `method`. `Mcp-Name` is required only for `tools/call`, where it must equal
+ * `params.name`; discovery and listing requests need no name because none is derivable.
+ * Legacy requests return `false` because this predicate models the modern contract only.
+ *
+ * @param request - The HTTP request carrying the headers
+ * @param message - The parsed JSON-RPC request body
+ * @returns `true` only when every method-applicable modern header matches
+ */
+export function matchesRequestHeaders(request: Request, message: JSONRPCRequest): boolean {
+	if (!isModernRequest(message)) return false
+	const metadata = isRecord(message.params?.['_meta']) ? message.params['_meta'] : undefined
+	const version = metadata?.[MCP_META_VERSION]
+	if (
+		!isString(version) ||
+		request.headers.get(MCP_PROTOCOL_VERSION_HEADER) !== version ||
+		request.headers.get(MCP_METHOD_HEADER) !== message.method
+	) {
+		return false
+	}
+	if (message.method !== 'tools/call') return true
+	const name = message.params?.['name']
+	return isString(name) && request.headers.get(MCP_NAME_HEADER) === name
 }
 
 /**

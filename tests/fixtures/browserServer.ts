@@ -1,5 +1,5 @@
 import type { MiddlewareContext, NextFunction, UpgradeHandler } from '@orkestrel/server'
-import type { MCPSessionState } from '@src/server'
+import type { MCPOriginOptions, MCPSessionState } from '@src/server'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer, mergeVary, resolveOrigin } from '@orkestrel/server'
 import { createNodeWebSocket } from '@orkestrel/websocket'
@@ -90,8 +90,11 @@ export function createRawWebSocketHandler(): UpgradeHandler {
  */
 export async function start(): Promise<BrowserFixtureInterface> {
 	const mcp = createCalculatorServer()
+	// applyBrowserCORS is a permissive test double: it approves every requesting Origin, so
+	// this fixture explicitly delegates the two built-in enforcement sites to that upstream layer.
+	const origin: MCPOriginOptions = { enabled: false }
 	const dispatcher = createDispatcher<MCPSessionState>()
-	dispatcher.add(createMCPRoutes<MCPSessionState>(mcp))
+	dispatcher.add(createMCPRoutes<MCPSessionState>(mcp, { origin }))
 	dispatcher.add({
 		method: 'POST',
 		path: '/broken',
@@ -104,7 +107,7 @@ export async function start(): Promise<BrowserFixtureInterface> {
 		host: '127.0.0.1',
 	})
 	server.use(applyBrowserCORS)
-	server.use(createMCPSession<MCPSessionState>())
+	server.use(createMCPSession<MCPSessionState>({ origin }))
 	server.upgrade(createWebSocketServer(mcp))
 	server.upgrade(createRawWebSocketHandler())
 	const port = await server.start()

@@ -1,9 +1,21 @@
 import type { JSONRPCMessage } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { JSONRPC_INVALID_REQUEST, buildJSONRPCError, parseJSONRPCMessage } from '@src/core'
+import {
+	JSONRPC_INVALID_REQUEST,
+	MCP_META_CAPABILITIES,
+	MCP_META_VERSION,
+	MCP_PROTOCOL_VERSION,
+	buildJSONRPCError,
+	parseJSONRPCMessage,
+} from '@src/core'
 import {
 	acceptsEventStream,
+	allowsOrigin,
 	decodeEvent,
+	matchesRequestHeaders,
+	MCP_METHOD_HEADER,
+	MCP_NAME_HEADER,
+	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
 	readEventStream,
 	readLastEventId,
@@ -80,6 +92,97 @@ describe('acceptsEventStream — does the client opt into SSE?', () => {
 
 	it('is false for an absent Accept header', () => {
 		expect(acceptsEventStream(requestWithHeaders())).toBe(false)
+	})
+})
+
+describe('allowsOrigin — explicit validation with upstream delegation', () => {
+	it('allows an absent Origin but requires every present origin to be allowlisted', () => {
+		expect(allowsOrigin(new Request('https://server.example/mcp'))).toBe(true)
+		const request = new Request('https://server.example/mcp', {
+			headers: { origin: 'https://client.example' },
+		})
+		expect(allowsOrigin(request)).toBe(false)
+		expect(allowsOrigin(request, { origins: ['https://client.example'] })).toBe(true)
+	})
+
+	it('does not trust a present origin merely because it matches the request URL', () => {
+		const request = new Request('https://server.example/mcp', {
+			headers: { origin: 'https://server.example' },
+		})
+		expect(allowsOrigin(request)).toBe(false)
+		expect(allowsOrigin(request, { origins: ['https://server.example'] })).toBe(true)
+	})
+
+	it('allows a present unlisted origin when validation is delegated upstream', () => {
+		const request = new Request('https://server.example/mcp', {
+			headers: { origin: 'https://client.example' },
+		})
+		expect(allowsOrigin(request, { enabled: false })).toBe(true)
+	})
+
+	it('rejects invalid and opaque origins', () => {
+		expect(
+			allowsOrigin(
+				new Request('https://server.example/mcp', { headers: { origin: 'not an origin' } }),
+			),
+		).toBe(false)
+		expect(
+			allowsOrigin(new Request('https://server.example/mcp', { headers: { origin: 'null' } })),
+		).toBe(false)
+		expect(
+			allowsOrigin(
+				new Request('https://server.example/mcp', {
+					headers: { origin: 'https://client.example/path' },
+				}),
+				{ origins: ['https://client.example'] },
+			),
+		).toBe(false)
+	})
+})
+
+describe('matchesRequestHeaders — modern standard-header parity', () => {
+	it('matches protocol and method without requiring a name for tools/list', () => {
+		const message = createJSONRPCRequest({
+			method: 'tools/list',
+			params: {
+				_meta: {
+					[MCP_META_VERSION]: MCP_PROTOCOL_VERSION,
+					[MCP_META_CAPABILITIES]: {},
+				},
+			},
+		})
+		const request = requestWithHeaders({
+			[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
+			[MCP_METHOD_HEADER]: 'tools/list',
+		})
+
+		expect(matchesRequestHeaders(request, message)).toBe(true)
+	})
+
+	it('requires tools/call name parity and rejects a mismatched method', () => {
+		const message = createJSONRPCRequest({
+			method: 'tools/call',
+			params: {
+				name: 'add',
+				_meta: {
+					[MCP_META_VERSION]: MCP_PROTOCOL_VERSION,
+					[MCP_META_CAPABILITIES]: {},
+				},
+			},
+		})
+		const matching = requestWithHeaders({
+			[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
+			[MCP_METHOD_HEADER]: 'tools/call',
+			[MCP_NAME_HEADER]: 'add',
+		})
+		const mismatched = requestWithHeaders({
+			[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
+			[MCP_METHOD_HEADER]: 'tools/list',
+			[MCP_NAME_HEADER]: 'add',
+		})
+
+		expect(matchesRequestHeaders(matching, message)).toBe(true)
+		expect(matchesRequestHeaders(mismatched, message)).toBe(false)
 	})
 })
 

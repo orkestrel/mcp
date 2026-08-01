@@ -441,15 +441,16 @@ export interface MCPClientOptions {
 
 /**
  * A transport-agnostic Model Context Protocol CLIENT — connects to a REMOTE MCP
- * server over an injected {@link ClientTransportInterface}, performs the
- * `initialize` handshake, and exposes the server's tools as local
+ * server over an injected {@link ClientTransportInterface}, negotiates the
+ * modern or legacy wire era, and exposes the server's tools as local
  * {@link ToolInterface}s an agent can run.
  *
  * @remarks
  * - **The mirror of {@link MCPServerInterface}.** Where the server DISPATCHES requests
- *   over a tool registry, the client ISSUES them over a transport: `connect` runs the
- *   `initialize` handshake, validates and exposes the negotiated `protocol` (then sends
- *   `notifications/initialized`); `tools()` lists
+ *   over a tool registry, the client ISSUES them over a transport: `connect` probes
+ *   `server/discover` first unless pinned to a legacy revision, falling back to the
+ *   legacy `initialize` handshake only when the peer does not speak the modern era.
+ *   The negotiated revision is exposed through `version` and `protocol`; `tools()` lists
  *   the remote tools and wraps each as a local {@link ToolInterface} whose `execute`
  *   calls back through `call`; `call(name, args)` runs a remote `tools/call` and
  *   returns the tool's value (a remote tool FAILURE — `isError: true` — throws locally,
@@ -471,11 +472,13 @@ export interface MCPClientOptions {
  */
 export interface MCPClientInterface {
 	readonly emitter: EmitterInterface<MCPClientEventMap>
-	/** Whether the `initialize` handshake has completed and the client is connected. */
+	/** Whether era negotiation has completed and the client is connected. */
 	readonly connected: boolean
+	/** The negotiated protocol revision, or `undefined` while disconnected. */
+	readonly version: MCPVersion | undefined
 	/**
 	 * The MCP protocol revision negotiated by {@link connect}, or `undefined` before
-	 * connecting and after {@link disconnect}.
+	 * connecting and after {@link disconnect}. Mirrors {@link version}.
 	 */
 	readonly protocol: string | undefined
 	/** The injected transport the client drives the remote server over. */
@@ -492,19 +495,29 @@ export interface MCPClientInterface {
 		handler: (...args: MCPClientEventMap[K]) => void,
 	): void
 	/**
-	 * Connect to the remote server — open the transport and run the `initialize`
-	 * handshake, validate its negotiated protocol, then send
-	 * `notifications/initialized`.
+	 * Connect to the remote server — open the transport and negotiate the modern or
+	 * legacy wire era without exposing that choice to the caller.
 	 *
 	 * @remarks
-	 * Idempotent — a second `connect` while already connected is a no-op. On success
-	 * {@link protocol} contains a supported revision and the `connect` event fires. A
-	 * non-string or unsupported revision closes the transport and rejects without
-	 * connecting or sending the initialized notification.
+	 * Idempotent — a second `connect` while already connected is a no-op. An unpinned
+	 * client probes `server/discover`; a pinned legacy client and a legacy fallback run
+	 * `initialize` and send `notifications/initialized`. On success {@link version}
+	 * contains a supported revision and the `connect` event fires.
 	 *
 	 * @returns Resolves once the handshake completes and the client is connected
 	 */
 	connect(): Promise<void>
+	/**
+	 * Discover a modern server's supported revisions and capabilities.
+	 *
+	 * @remarks
+	 * The request carries the modern per-request metadata stamp. Unknown revisions in
+	 * the peer's advertisement are ignored because {@link MCPDiscoverResult} exposes
+	 * only revisions this client can negotiate.
+	 *
+	 * @returns The validated modern discovery result
+	 */
+	discover(): Promise<MCPDiscoverResult>
 	/**
 	 * Disconnect from the remote server — reject every pending request and close the
 	 * transport.

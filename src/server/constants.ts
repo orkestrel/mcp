@@ -25,6 +25,18 @@ export const MCP_SESSION_HEADER = 'mcp-session-id'
  */
 export const MCP_PROTOCOL_VERSION_HEADER = 'mcp-protocol-version'
 
+/** The modern Streamable-HTTP request header carrying the JSON-RPC method name. */
+export const MCP_METHOD_HEADER = 'mcp-method'
+
+/** The modern Streamable-HTTP request header carrying a named method's target. */
+export const MCP_NAME_HEADER = 'mcp-name'
+
+/** The reverse-proxy response header controlling buffering of an SSE response. */
+export const SSE_BUFFERING_HEADER = 'x-accel-buffering'
+
+/** The `X-Accel-Buffering` value that disables reverse-proxy buffering. */
+export const SSE_BUFFERING_DISABLED = 'no'
+
 /** The default request path `createMCPRoutes` mounts the transport's `POST` route at. */
 export const DEFAULT_MCP_PATH = '/mcp'
 

@@ -5,7 +5,7 @@ import {
 	bindServer,
 	createDuplexClientTransport,
 	createMCPClient,
-	MCP_PROTOCOL_VERSION,
+	MCP_LEGACY_VERSION,
 } from '@src/core'
 import {
 	createHTTPClientTransport,
@@ -218,13 +218,13 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 				return fetch(input, init)
 			},
 		})
-		const client = createMCPClient({ transport })
+		const client = createMCPClient({ transport, version: MCP_LEGACY_VERSION })
 
 		await client.connect()
 
 		// The initialize POST has no protocol header. The initialized notification does;
 		// its successful real-Chromium exchange also proves the CORS preflight admitted it.
-		expect(protocols).toEqual([null, MCP_PROTOCOL_VERSION])
+		expect(protocols).toEqual([null, MCP_LEGACY_VERSION])
 		await client.disconnect()
 	})
 
@@ -252,7 +252,7 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 				})
 			},
 		})
-		const client = createMCPClient({ transport })
+		const client = createMCPClient({ transport, version: MCP_LEGACY_VERSION })
 
 		await expect(client.connect()).rejects.toThrow(
 			"MCP server negotiated unsupported protocol version '2099-01-01'",

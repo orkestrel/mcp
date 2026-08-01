@@ -1109,7 +1109,59 @@ The one exception this unit carries: typing `SUPPORTED_PROTOCOL_VERSIONS` as
 single behaviour-preserving swap at that one call site — the sole edit it may make outside its
 owned files, and no other line of `MCPClient.ts` is in scope.
 
-Order: U0 → U1 → U2 → U3 → U4 → U5 → U6, with the §6.1 amendment units slotting in after U5
+**Third amendment, 2026-08-01 after U4 — the §9.2 Origin ruling is overturned on evidence, and
+U4b is inserted.** §9.2 ruled "same-origin default + `origins` allowlist". U4 implemented it
+faithfully. The full suite then found it: 365 passed, 5 failed, every failure the browser HTTP
+block, and the cause measured rather than inferred — a real Chromium page POSTing to the real
+fixture gets **403**, because a browser page is always cross-origin to a separately bound server
+and the page's port is assigned after `globalSetup` returns.
+
+That alone would only relocate the gate. What overturns the ruling is that **the gate does not
+work.** `allowsOrigin` (`src/server/helpers.ts:84`) admits a request whose `Origin` equals
+`new URL(request.url).origin` — but that origin is built from the **`Host` header**
+(`@orkestrel/router` `buildRequest`, `server/index.js:62-67`), and `@orkestrel/server` calls
+`buildRequest(message)` with no options (`server/index.js:1899`), so the fallback always applies.
+The branch compares one attacker-controlled header against another. Measured against the real
+fixture with a raw `node:http` client:
+
+```text
+honest cross-origin (attacker origin, real Host)     {"status":403,"session":null}
+DNS-REBIND SHAPE (Host and Origin both attacker)     {"status":200,"session":"1bb38093-..."}
+```
+
+The control is inverted: it blocks the legitimate browser client and admits the DNS-rebinding
+request that `s0728-http.md:57-58` names as the threat — and mints a session for it, so the
+bypass reaches state, not merely dispatch.
+
+The ruling, reconciled from the Opus/Sol round (`tmp/origin-brief.md`, evidence at
+`tmp/origin-evidence.md`):
+
+1. **Default-on stays.** The planner argued for an opt-in `createMCPOrigin` middleware and named
+   its own falsification: "produce the verbatim clause and show it binds the server
+   unconditionally." The clause does — "Servers **MUST** validate the `Origin` header on **all
+   incoming connections**" — so that falsification fires. Sol independently reached the same
+   place: an optional-only gate makes `createMCPRoutes(mcp)` nonconformant on its own.
+2. **The same-origin branch is deleted.** A present `Origin` must be allowlisted; an absent one
+   is allowed. That is the clause exactly (403 only when "present and invalid") and it removes
+   the `Host` comparison at the root instead of patching it.
+3. **One authority, one list.** Two enforcement _sites_ are right — the handler owns POST, the
+   session middleware must reject before minting state — but two independent `origins` keys
+   (`src/server/types.ts:61`, `:94`) are one decision with two authorities that silently
+   intersect. They collapse to one shared options value.
+4. **Explicit delegation** for a deployment that validates upstream: grouped `origin?:
+MCPOriginOptions { readonly enabled?: boolean; readonly origins?: readonly string[] }`.
+   `enabled` is a genuine binary switch (validate here vs. delegate), which no value of `origins`
+   can express without a sentinel.
+5. **A rebinding regression test is mandatory** — `Host: evil.com` + `Origin: http://evil.com`
+   MUST be 403.
+
+The general lesson, recorded because it is the second time this campaign a ruling survived
+review and died to a measurement: an adversarial design round settles what is _coherent_; only
+running the thing settles what is _true_. §9.2 was argued by two engines and accepted, and it was
+still both misplaced and ineffective. Security rulings get a probe, not a debate.
+
+Order: U0 → U1 → U2 → U3 → U4 → **U4b** → U5 → U6, with the §6.1 amendment units slotting in
+after U5
 and before the guide unit. Each nontrivial unit gets the standard audit chain
 (reviewer = Opus design fit; analyst = Sol correctness; checker = mechanical conformance;
 independent verifier runs the five gates, including the real-Chromium browser suite for U5).

@@ -96,6 +96,7 @@ describe('createMCPRoutes — dispatch the four MCP methods', () => {
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ method: 'tools/list', id: 2 }),
+			{ headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' } },
 		)
 		expect(response.status).toBe(200)
 		const body = await response.json()
@@ -111,6 +112,7 @@ describe('createMCPRoutes — dispatch the four MCP methods', () => {
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ method: 'tools/call', id: 3, params: { name: 'add', arguments: {} } }),
+			{ headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' } },
 		)
 		expect(response.status).toBe(200)
 		const body = await response.json()
@@ -127,6 +129,7 @@ describe('createMCPRoutes — dispatch the four MCP methods', () => {
 				id: 4,
 				params: { name: 'boom', arguments: {} },
 			}),
+			{ headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' } },
 		)
 		// A tool throw is an in-band tool RESULT, not a transport/protocol error — HTTP 200.
 		expect(response.status).toBe(200)
@@ -156,10 +159,14 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 		expect(response.status).toBe(400)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
-			id: null,
+			id: 13,
 			error: {
-				code: -32600,
+				code: -32022,
 				message: "Unsupported MCP protocol version '2099-01-01'",
+				data: {
+					supported: ['2026-07-28', '2025-11-25', '2025-06-18'],
+					requested: '2099-01-01',
+				},
 			},
 		})
 	})
@@ -169,6 +176,7 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCNotification('notifications/initialized'),
+			{ headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' } },
 		)
 		expect(response.status).toBe(202)
 		expect(await response.text()).toBe('')
@@ -206,7 +214,13 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 	it('POST an unknown method (id-bearing) → 200 + an IN-BAND -32601 error', async () => {
 		const handle = await startMCP()
 		// method-not-found is a DISPATCH result — the JSON-RPC error rides in the body at HTTP 200.
-		const response = await postJSON(handle.base, createJSONRPCRequest({ method: 'no/such', id: 5 }))
+		const response = await postJSON(
+			handle.base,
+			createJSONRPCRequest({ method: 'no/such', id: 5 }),
+			{
+				headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' },
+			},
+		)
 		expect(response.status).toBe(200)
 		const body = await response.json()
 		expect(body.id).toBe(5)
@@ -220,7 +234,12 @@ describe('createMCPRoutes — the Streamable-HTTP SSE response', () => {
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ method: 'tools/list', id: 6 }),
-			{ headers: { accept: 'text/event-stream' } },
+			{
+				headers: {
+					accept: 'text/event-stream',
+					[MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18',
+				},
+			},
 		)
 		expect(response.status).toBe(200)
 		expect(response.headers.get('content-type')).toContain('text/event-stream')
@@ -239,7 +258,10 @@ describe('createMCPRoutes — the Streamable-HTTP SSE response', () => {
 	it('still answers JSON for an event-stream Accept when streaming is disabled', async () => {
 		const handle = await startMCP({ streaming: false })
 		const response = await postJSON(handle.base, createJSONRPCRequest({ method: 'ping', id: 7 }), {
-			headers: { accept: 'text/event-stream' },
+			headers: {
+				accept: 'text/event-stream',
+				[MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18',
+			},
 		})
 		expect(response.status).toBe(200)
 		expect(response.headers.get('content-type')).toContain('application/json')
@@ -262,6 +284,7 @@ describe('createMCPRoutes — the spine answers other verbs', () => {
 		const handle = await startMCP({ path: '/rpc' })
 		const response = await postJSON(handle.base, createJSONRPCRequest({ method: 'ping', id: 8 }), {
 			path: '/rpc',
+			headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' },
 		})
 		expect(response.status).toBe(200)
 		expect((await response.json()).result).toEqual({})
@@ -277,7 +300,10 @@ describe('createMCPRoutes — mechanism, not policy', () => {
 		expect(denied.status).toBe(401)
 		// A valid token reaches the transport, which dispatches normally.
 		const allowed = await postJSON(handle.base, createJSONRPCRequest({ method: 'ping', id: 11 }), {
-			headers: { authorization: `Bearer ${secret}` },
+			headers: {
+				authorization: `Bearer ${secret}`,
+				[MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18',
+			},
 		})
 		expect(allowed.status).toBe(200)
 		expect((await allowed.json()).result).toEqual({})
@@ -295,16 +321,17 @@ describe('createMCPRoutes — the stateless default (no session middleware)', ()
 		expect(response.headers.get(MCP_SESSION_HEADER)).toBeNull()
 	})
 
-	it('a non-initialize POST is accepted WITHOUT any session id (no validation)', async () => {
-		// Statelessly, a `tools/list` with no session header dispatches normally — there is no
-		// session gate to fail. (With `createMCPSession` in front, the same request would 404.)
+	it('a headerless non-initialize POST is rejected without inferring a legacy version', async () => {
 		const handle = await startMCP()
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ method: 'tools/list', id: 2 }),
 		)
-		expect(response.status).toBe(200)
-		expect((await response.json()).result.tools).toHaveLength(2)
+		expect(response.status).toBe(400)
+		expect((await response.json()).error).toEqual({
+			code: -32020,
+			message: 'MCP request headers do not match the request body',
+		})
 	})
 
 	it('DELETE {path} → the spine automatic 405 (no DELETE route registered)', async () => {
