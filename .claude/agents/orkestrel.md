@@ -30,7 +30,7 @@ descriptions never enter agent instruction context.
 | Package               | Version |
 | --------------------- | ------- |
 | @orkestrel/abort      | 0.0.4   |
-| @orkestrel/agent      | 0.0.12  |
+| @orkestrel/agent      | 0.0.13  |
 | @orkestrel/browser    | 0.0.8   |
 | @orkestrel/budget     | 0.0.4   |
 | @orkestrel/console    | 0.0.4   |
@@ -43,20 +43,20 @@ descriptions never enter agent instruction context.
 | @orkestrel/indexeddb  | 0.0.6   |
 | @orkestrel/interpret  | 0.0.7   |
 | @orkestrel/markdown   | 0.0.7   |
-| @orkestrel/mcp        | 0.0.7   |
+| @orkestrel/mcp        | 0.0.8   |
 | @orkestrel/middleware | 0.0.6   |
 | @orkestrel/msg        | 0.0.5   |
 | @orkestrel/ndjson     | 0.0.5   |
-| @orkestrel/ollama     | 0.0.7   |
+| @orkestrel/ollama     | 0.0.8   |
 | @orkestrel/pool       | 0.0.4   |
 | @orkestrel/program    | 0.0.6   |
 | @orkestrel/qualifier  | 0.0.7   |
 | @orkestrel/queue      | 0.0.4   |
 | @orkestrel/rater      | 0.0.8   |
 | @orkestrel/reason     | 0.0.4   |
-| @orkestrel/relation   | 0.0.6   |
-| @orkestrel/router     | 0.0.6   |
-| @orkestrel/scaffold   | 0.0.13  |
+| @orkestrel/relation   | 0.0.7   |
+| @orkestrel/router     | 0.0.7   |
+| @orkestrel/scaffold   | 0.0.14  |
 | @orkestrel/sea        | 0.0.4   |
 | @orkestrel/server     | 0.0.7   |
 | @orkestrel/sqlite     | 0.0.6   |
@@ -65,10 +65,10 @@ descriptions never enter agent instruction context.
 | @orkestrel/terminal   | 0.0.5   |
 | @orkestrel/timeout    | 0.0.4   |
 | @orkestrel/tool       | 0.0.8   |
-| @orkestrel/toolbox    | 0.0.1   |
+| @orkestrel/toolbox    | 0.0.2   |
 | @orkestrel/websocket  | 0.0.7   |
 | @orkestrel/worker     | 0.0.4   |
-| @orkestrel/workflow   | 0.0.7   |
+| @orkestrel/workflow   | 0.0.8   |
 | @orkestrel/workspace  | 0.0.2   |
 
 <!-- catalog:end -->
