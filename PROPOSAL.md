@@ -1196,7 +1196,32 @@ disjoint owned files, mirrored `tests/src/**` per unit.
 | A6   | Hostile-input limits + protocol-faithful fixtures (§5.1.7): bounded message bytes, `_meta` size/key count, `requestState` size, content size, live subscriptions; configurable with secure defaults; fixture peers on the wire                                                                                                                                                   | `src/core/{types,constants,parsers}.ts`, `src/server/{types,constants,handlers}.ts`, `tests/fixtures/**` + tests           | `implementer` (Sol)    | A2, A3, A4, A5           |
 | A7   | Tasks extension (§5.1.3) — **NOT scheduled**; adopt only once a client that negotiates `io.modelcontextprotocol/tasks` exists: `tasks/get`/`tasks/update`/`tasks/cancel`, unsolicited `CreateTaskResult`, injected task store                                                                                                                                                    | —                                                                                                                          | —                      | A1; a negotiating client |
 
-Order: U0 → U1 → U2 → U3 → U4 → U5 → A1 → A2 → A3 → A4 → A5 → A6 → U6. A7 is unscheduled by
+**Fourth amendment, 2026-08-01 at U6 — A5's stdio criterion describes code that never existed,
+and the gap is wider than stdio.** §6.2's A5 criterion reads "a stdio `notifications/cancelled`
+still routes", and the §5.1 item 6 entry says it "survives on stdio only". Both assumed an
+implementation. `notifications/cancelled` has **zero occurrences** in `src/**` and `tests/**` —
+verified by grep — so there was never anything to keep.
+
+The gap is also broader than the plan's wording. `bindServer` (`src/core/helpers.ts:469-480`)
+calls `server.handle(message)` with **no `MCPDispatchOptions`**, so no cancellation signal reaches
+a handler on **stdio, WebSocket, `MessagePort`, or the worker scope** — every transport that
+routes through it. Only the HTTP POST path constructs an `HTTPDisconnect` and passes a signal.
+
+Two orderings were also changed during execution, both because a unit's declared dependency
+permitted it and a real blocker required it: **A4 ran before A2 and A3**, because A4's only
+dependency is A1 and A1 deliberately left `src/server/handlers.ts` unable to typecheck a
+held-open answer — a behavioural decision A4 owns. And **A6's owned set had to include
+`src/core/MCPServer.ts`**, because all five enforcement points live there; the first attempt
+correctly refused to start rather than ship options with nothing enforcing them.
+
+The recurring lesson across all four amendments: a unit's owned-file list must be derived from
+where the behaviour lives, not from the ledger row's file column. Four dispatches were lost to
+that gap (A4's server files, A5d's guide parity, A6's `MCPServer.ts`, and this one).
+
+The gap is now declared in the guide as unimplemented on every transport rather than claimed as
+working. Closing it needs an in-flight request registry in the binder and is not scheduled.
+
+Order: U0 → U1 → U2 → U3 → U4 → U5 → A1 → **A4** → A2 → A3 → A5 → A6 → U6. A7 is unscheduled by
 construction, exactly like U7, and both remain droppable without loss of any promised
 capability.
 

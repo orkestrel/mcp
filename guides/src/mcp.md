@@ -1,60 +1,131 @@
 # MCP
 
 > The [Model Context Protocol](https://modelcontextprotocol.io) layer — a typed
-> JSON-RPC 2.0 client/server pair with pluggable HTTP, WebSocket, and stdio
-> transports. **Ingress:** `createMCPServer` wraps a live `ToolManagerInterface`
+> JSON-RPC 2.0 client/server pair with pluggable HTTP, WebSocket, stdio, and
+> browser transports.
+>
+> **Ingress:** `createMCPServer` wraps a live `ToolManagerInterface`
 > (`@orkestrel/tool`) as an MCP server any MCP client can drive. **Egress:**
 > `createMCPClient` drives a _remote_ MCP server and surfaces its tools as local
-> `ToolInterface`s an agent can call as if they were its own. The server dispatches
-> each request by structural wire era: modern requests are answered from a
-> registrable method seam carrying the built-in `server/discover`, `tools/list`,
-> `tools/call`, and `subscriptions/listen`; legacy requests retain a fixed `initialize`, `ping`,
-> `tools/list`, and `tools/call` switch.
+> `ToolInterface`s an agent can call as if they were its own. Requests are
+> dispatched by structural wire era — a modern request resolves from a registrable
+> method seam carrying the built-in `server/discover`, `tools/list`, `tools/call`,
+> and `subscriptions/listen`; a legacy request runs a fixed `initialize` / `ping` /
+> `tools/list` / `tools/call` switch. See [Protocol](#protocol).
 >
-> The split that keeps it lean: **the dispatch core is transport-agnostic and
-> provider-agnostic.** `MCPServer` and `MCPClient` live in `src/core` and import
-> only siblings (JSON-RPC types + `@orkestrel/tool`'s tool registry +
-> `@orkestrel/emitter`'s observable surface + `@orkestrel/contract`'s guards) —
-> **no HTTP, no WebSocket, no stdio, no `as`** (all wire input is narrowed via
-> total guards). The server is pure logic with two entry points: `dispatch(request)`
-> runs an already-parsed `JSONRPCRequest` → a `JSONRPCResponse` (or `undefined`
-> for a notification); `handle(message)` is the string boundary — `JSON.parse` →
-> narrow → dispatch → `JSON.stringify` (a parse failure → `-32700`, a non-request
-> → `-32600`, a notification → `undefined`). The client mirrors it: `connect`
-> (modern `server/discover` first, with a validated legacy `initialize` fallback),
-> `tools()` (discover the remote tools as local
-> `ToolInterface`s), `call` (run one — a remote failure throws locally, so an
-> agent's `ToolManager` isolates it exactly like a local throw). A remote
-> JSON-RPC error rejects with `MCPError`, preserving its numeric `code` and
-> optional `error.data` as `context`.
+> **The dispatch core is transport-agnostic and provider-agnostic.** `MCPServer`
+> and `MCPClient` live in [`src/core`](../../src/core) and import only siblings —
+> JSON-RPC types, `@orkestrel/tool`'s tool registry, `@orkestrel/emitter`'s
+> observable surface, `@orkestrel/contract`'s guards. No HTTP, no WebSocket, no
+> stdio, and no `as`: every value off the wire is narrowed by a total guard. The
+> server has two entry points — `dispatch(request)` runs an already-parsed
+> `JSONRPCRequest` into a `JSONRPCResponse` (or `undefined` for a notification),
+> and `handle(message)` is the string boundary that wraps it with `JSON.parse` /
+> `JSON.stringify` plus the parse (`-32700`) and invalid-request (`-32600`)
+> mapping. The client mirrors it: `connect` negotiates the era once, `tools()`
+> exposes the remote tools as local `ToolInterface`s, and `call` runs one — a
+> remote failure throws locally, so an agent's `ToolManager` isolates it exactly
+> like a local throw. A remote JSON-RPC error rejects with `MCPError`, preserving
+> its numeric `code` and optional `error.data` as `context`.
 >
-> The wire lives ONE layer out, in `src/server` — three interchangeable server
-> transports, each a matched ingress/egress pair, all speaking the SAME
-> `MCPServerInterface` / `ClientTransportInterface` (only the framing differs):
+> **The wire lives ONE layer out.** [`src/server`](../../src/server) carries the
+> three Node transports and [`src/browser`](../../src/browser) the browser face.
+> Each is a matched ingress/egress pair speaking the same `MCPServerInterface` /
+> `ClientTransportInterface`; only the framing differs:
 >
-> - **Streamable HTTP** — `createMCPRoutes` mounts a server as `POST {path}`
->   (JSON or SSE per the client's `Accept`, via `@orkestrel/server`'s
->   `openStream`); the opt-in `createMCPSession` middleware adds native
->   stateful sessions + a resumable server→client SSE channel.
->   `createHTTPClientTransport` is the injectable-`fetch` egress.
-> - **WebSocket** — `createWebSocketServer` claims an upgrade on `@orkestrel/server`'s
->   upgrade seam, composing `@orkestrel/websocket`'s RFC 6455 wrapper for a
->   full-duplex alternative over one persistent connection.
+> - **Streamable HTTP** — `createMCPRoutes` mounts a server as `POST {path}` (JSON
+>   or SSE per the client's `Accept`, via `@orkestrel/server`'s `openStream`); the
+>   opt-in `createMCPSession` middleware adds native stateful sessions and a
+>   resumable server→client SSE channel. `createHTTPClientTransport` is the
+>   injectable-`fetch` egress.
+> - **WebSocket** — `createWebSocketServer` claims an upgrade on
+>   `@orkestrel/server`'s upgrade seam, composing `@orkestrel/websocket`'s RFC 6455
+>   wrapper for full duplex over one persistent connection.
 >   `createWebSocketClientTransport` is the `node:http(s)`-upgrade egress.
 > - **stdio** — `createStdioServer` pumps newline-delimited JSON-RPC over a
 >   process's `stdin`/`stdout` (or injected streams); `createStdioClientTransport`
 >   spawns a child process and drives the same protocol over its piped stdio.
+> - **browser** — the page / Web Worker / Service Worker face: the same two client
+>   transports over the native `WebSocket` and `fetch` globals, plus the symmetric
+>   `MessagePort` carrier and the `serveMCP` worker bootstrap.
 >
-> Every transport is **mechanism, not policy** — auth and rate-limiting compose
-> IN FRONT as ordinary `@orkestrel/server` middleware. HTTP ingress supplies only
-> the protocol-required origin mechanism: requests without `Origin` pass, while every present
-> origin must occur in the shared `origin.origins` list by default. A deployment validating
-> upstream explicitly delegates with `origin.enabled: false`. Observable: the `MCPServer` owns an `emitter` firing `request`
-> per dispatch; the `MCPClient` owns one firing `connect` / `disconnect` /
-> `notification` / `error`; every transport owns one firing `message` / `close`
-> / `error`. Source: [`src/core`](../../src/core) (the dispatch core + the
-> client, via `@src/core`) + [`src/server`](../../src/server) (the transports +
-> session middleware, via `@src/server`).
+> **Every transport is mechanism, not policy.** Auth, invocation rate limiting, and
+> body-size guards compose IN FRONT as ordinary `@orkestrel/server` middleware.
+> HTTP ingress supplies only the protocol-required origin gate, on by default: a
+> request without `Origin` passes, every present origin must occur in the shared
+> `origin.origins` list, and a deployment that validates upstream delegates with
+> `origin.enabled: false`. What this package deliberately does not build is listed
+> under [Declared non-goals](#declared-non-goals); the obligations it does not meet
+> are under [Declared conformance gaps](#declared-conformance-gaps).
+>
+> **Observable.** The `MCPServer` owns an `emitter` firing `request` per dispatch;
+> the `MCPClient` owns one firing `connect` / `disconnect` / `notification` /
+> `error`; every transport owns one firing `message` / `close` / `error`.
+
+## Protocol
+
+The layer speaks three revisions across two wire **eras**, on one endpoint, with no
+era flag anywhere in the API. Era is the shape of the wire; version is the revision
+it names.
+
+| Revision     | Era    | How a request announces it                                                                |
+| ------------ | ------ | ----------------------------------------------------------------------------------------- |
+| `2026-07-28` | modern | Per-request `_meta` carrying the reserved protocol-version key. No handshake, no session. |
+| `2025-11-25` | legacy | The `initialize` handshake. `MCP_PROTOCOL_VERSION` — the revision this server offers.     |
+| `2025-06-18` | legacy | The `initialize` handshake. `MCP_LEGACY_VERSION` — the older anchor a client may pin.     |
+
+`SUPPORTED_PROTOCOL_VERSIONS` is exactly that list, frozen and newest-first: it is
+both the client's preference order and the `server/discover` advertisement. Two
+older revisions are deliberately absent, and their absence is this package's
+decision rather than the ecosystem's — see [Declared non-goals](#declared-non-goals).
+
+**The era discriminator is KEY PRESENCE.** A request is modern **iff** the key
+`params._meta['io.modelcontextprotocol/protocolVersion']` (`MCP_META_VERSION`) is
+present — the key itself, not its value and not its type. **Presence routes;
+validity answers.** The two steps are separate on purpose. A legacy `2025-06-18`
+request may legally carry `_meta.progressToken`, so keying on "`_meta` exists" would
+misclassify it; and requiring a _string_ value would send a modern request holding a
+malformed version down the legacy branch, to be answered as a handshake, when what it
+is owed is `-32602`. So `isModernRequest` fixes the era irrevocably, and
+`parseRequestContext` then decides whether the modern metadata is well formed. A
+request cannot escape the modern branch by carrying a bad version — only by carrying
+no version key at all.
+
+**Wire names are the wire's, verbatim.** A type that models a message on the wire
+carries the protocol's own field names: `jsonrpc`, `_meta`, `resultType`, `ttlMs`,
+`cacheScope`, `supportedVersions`, `inputSchema`, `isError`, `structuredContent`,
+`inputRequests`, `requestState`. Everywhere the library speaks for itself the naming
+laws bind normally: `identity`, `instructions`, `cache.ttl`, `limit.message`,
+`version`, `discover()`, `era`. One rule, stated once, so neither half has to be
+argued field by field.
+
+**HTTP headers are scoped by method.** A modern POST carries `MCP-Protocol-Version`
+equal to its `_meta` version and `Mcp-Method` equal to its body method. `Mcp-Name` is
+required on `tools/call` alone, where it must equal `params.name`, and MUST NOT be
+required on `server/discover` or `tools/list` — neither carries anything to derive a
+name from. Any mismatch is HTTP `400` + `-32020`, with no `data`.
+
+**A headerless legacy POST has exactly three cases.** The library infers no revision
+from an absent header. Defaulting one is licensed only for a server that still serves
+pre-`2025-06-18` clients, and this package does not:
+
+- `initialize` — legitimately headerless; nothing is negotiated yet. Accepted.
+- A post-`initialize` legacy request on a **live session** — accepted, under the
+  revision pinned at that session's `initialize`. That is a negotiated fact, not a
+  default.
+- Anything else — nothing identifies the revision, so HTTP `400` + `-32020`.
+
+A header naming an unsupported revision is a separate failure: HTTP `400` + `-32022`,
+carrying `{ supported, requested }`.
+
+**Status is per era.** A legacy dispatch result keeps a uniform HTTP `200` and reports
+its errors in band, byte-identically to what a `2025-06-18` client already expects. A
+modern result maps to real statuses: `202` for a notification, `400` for `-32020` /
+`-32021` / `-32022` / `-32602`, `404` for `-32601`, and `200` otherwise. A
+transport-level failure — malformed JSON or a body that is not a JSON-RPC request — is
+`400` under both eras, since no era was ever established. See
+[Route a request by era and build a modern result](#route-a-request-by-era-and-build-a-modern-result)
+for the two inferers this rides on.
 
 ## Surface
 
@@ -93,73 +164,9 @@ thrown tool into a `success: false` result, which `tools/call` maps to an
 `isError: true` tool result carrying its `error` text — so the server wraps
 `execute` in NO try/catch.
 
-### Bind an `MCPServer` / `MCPClient` to any duplex transport
-
-`bindServer` / `bindClient` pipe an `MCPServerInterface` / `MCPClientInterface`
-over an `MCPTransportInterface` — the environment-agnostic duplex message
-channel (`send` / `listen` / `closed` / `close`, ALL string messages; framing
-is entirely the transport's concern). Every environment face (Node stdio /
-WebSocket, a future browser `MessagePort`) implements this ONE port instead of
-duplicating the dispatch/correlation pump per transport:
-
-```ts
-import {
-	bindClient,
-	bindServer,
-	createDuplexClientTransport,
-	createMCPClient,
-	createMCPServer,
-} from '@orkestrel/mcp'
-import { createTool, createToolManager } from '@orkestrel/tool'
-
-// An in-memory duplex channel — a real MCPTransportInterface, the same shape a
-// Node stdio pair or a browser MessagePort would implement.
-function createLoopback() {
-	let onMessage: ((message: string) => void) | undefined
-	let peer: ReturnType<typeof createLoopback> | undefined
-	const transport = {
-		async send(message: string) {
-			peer?.deliver(message)
-		},
-		listen(handler: (message: string) => void) {
-			onMessage = handler
-		},
-		closed() {},
-		async close() {},
-		deliver(message: string) {
-			onMessage?.(message)
-		},
-		connect(other: ReturnType<typeof createLoopback>) {
-			peer = other
-		},
-	}
-	return transport
-}
-const serverSide = createLoopback()
-const clientSide = createLoopback()
-serverSide.connect(clientSide)
-clientSide.connect(serverSide)
-
-const tools = createToolManager()
-tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
-const server = createMCPServer({ name: 'calculator', version: '1.0.0', tools })
-bindServer(server, serverSide)
-
-const client = createMCPClient({ transport: createDuplexClientTransport(clientSide) })
-const unbind = bindClient(client, clientSide)
-await client.connect()
-const value = await client.call('add', { x: 2, y: 5 })
-// value → 7
-unbind() // detaches without closing either side of the loopback
-```
-
-`bindServer`'s unbind stops routing inbound messages through `server.handle`
-(a `transport.closed()` signal does the same); `bindClient`'s unbind stops
-delivering onto `client.transport.emitter`. Neither closes the underlying
-transport — that stays the caller's call. A `send` throw or rejection from
-either binder is caught and surfaced (never an unhandled rejection): a
-server-side one on `server.emitter`'s `error` event, a client-side one on
-`client.transport.emitter`'s `error` event.
+That is the whole of the common case. The sections below add one capability at a
+time — the method seam, subscriptions, elicitation, input bounds, and the duplex
+port — then the reference tables for the core, then one section per transport.
 
 ### Register a modern method on the seam
 
@@ -366,6 +373,15 @@ parseMCPInputState(await verifyToken(token, ['current-secret', 'older-secret']))
 server.methods.method('tools/call') // the MRTR-aware built-in remains on the one method seam
 ```
 
+The retry uses a new JSON-RPC id and preserves the original `name` /
+`arguments`; `inputResponses` and the byte-exact `requestState` are top-level
+`params` siblings. A missing or URL-only elicitation declaration receives
+`-32021` with `{ requiredCapabilities: { elicitation: {} } }`. A malformed,
+mutated, expired, same-id, or cross-principal state receives `-32602`. The
+server produces `input_required` only from its built-in modern `tools/call`;
+the unimplemented legal carriers `prompts/get` and `resources/read` remain
+`-32601`, and the legacy branch is unchanged.
+
 ### Bound hostile input and live resources
 
 Every server uses the frozen `DEFAULT_MCP_LIMITS`: one MiB for a raw message,
@@ -412,22 +428,81 @@ deeper than the configured depth, accessors/hostile proxies, `Map`/`Set`, and
 the prototype-pollution keys `__proto__`, `constructor`, and `prototype` all
 return `false`; no adversarial shape throws from the guard.
 
-The retry uses a new JSON-RPC id and preserves the original `name` /
-`arguments`; `inputResponses` and the byte-exact `requestState` are top-level
-`params` siblings. A missing or URL-only elicitation declaration receives
-`-32021` with `{ requiredCapabilities: { elicitation: {} } }`. A malformed,
-mutated, expired, same-id, or cross-principal state receives `-32602`. The
-server produces `input_required` only from its built-in modern `tools/call`;
-the unimplemented legal carriers `prompts/get` and `resources/read` remain
-`-32601`, and the legacy branch is unchanged.
+### Bind an `MCPServer` / `MCPClient` to any duplex transport
+
+`bindServer` / `bindClient` pipe an `MCPServerInterface` / `MCPClientInterface`
+over an `MCPTransportInterface` — the environment-agnostic duplex message
+channel (`send` / `listen` / `closed` / `close`, ALL string messages; framing
+is entirely the transport's concern). Every environment face — Node stdio and
+WebSocket, the browser's `MessagePort` and worker scope — implements this ONE port
+instead of duplicating the dispatch/correlation pump per transport:
+
+```ts
+import {
+	bindClient,
+	bindServer,
+	createDuplexClientTransport,
+	createMCPClient,
+	createMCPServer,
+} from '@orkestrel/mcp'
+import { createTool, createToolManager } from '@orkestrel/tool'
+
+// An in-memory duplex channel — a real MCPTransportInterface, the same shape a
+// Node stdio pair or a browser MessagePort would implement.
+function createLoopback() {
+	let onMessage: ((message: string) => void) | undefined
+	let peer: ReturnType<typeof createLoopback> | undefined
+	const transport = {
+		async send(message: string) {
+			peer?.deliver(message)
+		},
+		listen(handler: (message: string) => void) {
+			onMessage = handler
+		},
+		closed() {},
+		async close() {},
+		deliver(message: string) {
+			onMessage?.(message)
+		},
+		connect(other: ReturnType<typeof createLoopback>) {
+			peer = other
+		},
+	}
+	return transport
+}
+const serverSide = createLoopback()
+const clientSide = createLoopback()
+serverSide.connect(clientSide)
+clientSide.connect(serverSide)
+
+const tools = createToolManager()
+tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
+const server = createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
+bindServer(server, serverSide)
+
+const client = createMCPClient({ transport: createDuplexClientTransport(clientSide) })
+const unbind = bindClient(client, clientSide)
+await client.connect()
+const value = await client.call('add', { x: 2, y: 5 })
+// value → 7
+unbind() // detaches without closing either side of the loopback
+```
+
+`bindServer`'s unbind stops routing inbound messages through `server.handle`
+(a `transport.closed()` signal does the same); `bindClient`'s unbind stops
+delivering onto `client.transport.emitter`. Neither closes the underlying
+transport — that stays the caller's call. A `send` throw or rejection from
+either binder is caught and surfaced (never an unhandled rejection): a
+server-side one on `server.emitter`'s `error` event, a client-side one on
+`client.transport.emitter`'s `error` event.
 
 ### Factories
 
-| API                           | Kind     | Summary                                                                                                                                                                                |
-| ----------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createMCPServer`             | function | Create an `MCPServerInterface` exposing tools plus optional signed MRTR input and event-driven subscription mechanisms over JSON-RPC 2.0.                                              |
-| `createMCPClient`             | function | Create an `MCPClientInterface` that drives a REMOTE server over an injected transport and exposes its tools as local `ToolInterface`s.                                                 |
-| `createDuplexClientTransport` | function | Adapt an `MCPTransportInterface` into a `ClientTransportInterface` — the additive bridge letting `createMCPClient` run over the new environment-agnostic port; pair with `bindClient`. |
+| API                           | Kind     | Summary                                                                                                                                                                          |
+| ----------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createMCPServer`             | function | Create an `MCPServerInterface` exposing tools plus optional signed MRTR input and event-driven subscription mechanisms over JSON-RPC 2.0.                                        |
+| `createMCPClient`             | function | Create an `MCPClientInterface` that drives a REMOTE server over an injected transport and exposes its tools as local `ToolInterface`s.                                           |
+| `createDuplexClientTransport` | function | Adapt an `MCPTransportInterface` into a `ClientTransportInterface` — the bridge letting `createMCPClient` run over the environment-agnostic duplex port; pair with `bindClient`. |
 
 ### Entities
 
@@ -599,7 +674,10 @@ import { createMCPServer } from '@orkestrel/mcp'
 import { createMCPRoutes } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/tool'
 
-const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
+const mcp = createMCPServer({
+	identity: { name: 'docs', version: '1.0.0' },
+	tools: createToolManager(),
+})
 const routes = createMCPRoutes(mcp) // POST /mcp dispatches JSON-RPC (JSON or SSE per Accept)
 ```
 
@@ -620,10 +698,10 @@ notification is written in order, the generator's returned response is written
 last, and only then does the HTTP stream end. Waiting is on the producer's async
 iterator, never polling.
 
-The HTTP face can propagate cancellation only after a streamed response has begun; an idle
-stream writes SSE keepalive comments and notices a disconnect within one configured keepalive
-interval. A long-running unary request, including a unary `tools/call`, cannot be cancelled
-mid-flight over HTTP.
+An idle held-open stream writes SSE keepalive comments and notices a disconnect within one
+configured keepalive interval, which is how a streamed handler learns its caller left. A
+unary response has no such moment — see
+[Declared conformance gaps](#declared-conformance-gaps).
 
 A modern POST requires `MCP-Protocol-Version` equal to its reserved `_meta`
 version and `Mcp-Method` equal to its body method. `Mcp-Name` is required only
@@ -761,7 +839,10 @@ import { createMCPClient, createMCPServer } from '@orkestrel/mcp'
 import { createWebSocketClientTransport, createWebSocketServer } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/tool'
 
-const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
+const mcp = createMCPServer({
+	identity: { name: 'docs', version: '1.0.0' },
+	tools: createToolManager(),
+})
 server.upgrade(createWebSocketServer(mcp)) // claims an MCP WebSocket upgrade to /mcp
 
 // An MCP client connects over the SAME MCPClient, a WebSocket transport instead of HTTP:
@@ -827,7 +908,10 @@ import { createMCPClient, createMCPServer } from '@orkestrel/mcp'
 import { createStdioClientTransport, createStdioServer } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/tool'
 
-const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
+const mcp = createMCPServer({
+	identity: { name: 'docs', version: '1.0.0' },
+	tools: createToolManager(),
+})
 createStdioServer(mcp).start() // an MCP client now connects over this process's stdio
 
 // A client spawns a stdio MCP server as a child process and drives it the same way:
@@ -1161,436 +1245,6 @@ if (session !== undefined) {
 }
 ```
 
-## Contract
-
-These invariants hold across the MCP layer (`src/core` + `src/server`) ↔ `mcp.md`:
-
-1. **DOC ↔ SOURCE bijection.** Every `function` / `class` / `const` /
-   `interface` / `type` row in the `## Surface` tables (the core dispatch
-   tables AND the `### HTTP transport` + `### WebSocket transport` + `### stdio
-transport` tables) is a real export of the mcp layer (`src/core` or
-   `src/server`), and every export of either appears as a Surface row —
-   exhaustive, both directions.
-2. **JSON-RPC 2.0 envelope.** A `dispatch` response is always `{ jsonrpc:
-'2.0', id, … }` with EXACTLY ONE of `result` / `error`; the `id` echoes the
-   request's id (or `null` only on a `handle` parse / invalid-request error).
-   `handle` serializes that envelope with `JSON.stringify` and returns the
-   string. A HELD-OPEN answer is the other arm of the same return: `dispatch`
-   resolves an `MCPStream` and `handle` its serialized `MCPTextStream` mirror,
-   narrowed apart at ONE point (`Symbol.asyncIterator in result`). The stream's
-   `return` value is the terminating response and obeys this same envelope.
-3. **Notifications yield no response.** A request with NO `id` is a
-   notification: `dispatch` emits `request` (with a `null` id and the structural era) and then
-   resolves `undefined` WHATEVER the method (`ping`, `notifications/initialized`,
-   an unknown method — all silent); `handle` returns `undefined`. Neither era
-   branch ever runs for a request without an `id`.
-4. **The four methods.** `initialize` → `{ protocolVersion, capabilities: {
-tools: {} }, serverInfo: { name, version } }`, the version NEGOTIATED
-   (echo the client's `params.protocolVersion` when it is one of
-   `SUPPORTED_PROTOCOL_VERSIONS`, else `MCP_PROTOCOL_VERSION`; a non-string
-   requested version falls back). The list currently contains only
-   `'2025-06-18'`: the package does not advertise `'2025-03-26'`, whose
-   mandatory JSON-RPC batching this single-message implementation does not
-   support. `ping` → `{}`. `tools/list` → `{ tools }`, each tool a
-   `MCPToolDescriptor` (its `parameters` renamed to `inputSchema`,
-   defaulting to `{ type: 'object' }`). `tools/call` → the executed
-   tool's `MCPCallResult`.
-5. **Tool errors are tool results, not protocol errors.** `tools/call` reads
-   `params.name` (a string) + `params.arguments` (a record, default `{}`),
-   narrowed via `@orkestrel/contract`'s guards (no `as`); a missing /
-   non-string `name` → a `-32602` invalid-params error. Otherwise it runs
-   `tools.execute({ id, name, arguments })` — and because the `ToolManager`
-   (`@orkestrel/tool`) ALREADY isolates a thrown tool (and an unknown name)
-   into a `success: false` result, the server adds NO try/catch: that branch's
-   `error` maps to `{ content: [{ type: 'text', text: <error> }], isError: true }`;
-   a valued `success: true` branch maps to `{ content: [{ type: 'text', text:
-JSON.stringify(value) }], structuredContent: value }`, carrying the value unchanged
-   alongside the backwards-compatible text. A value-less success retains the required
-   empty text block and omits `structuredContent`.
-6. **One modern seam, subscriptions included, and `-32601` for anything off it.**
-   `server/discover`, `tools/list`, `tools/call`, and `subscriptions/listen` are registered on `server.methods` at
-   construction and EVERY modern method is resolved from there — `add` under an
-   existing name replaces it, so a consumer's override wins by ordinary
-   registration rather than by a precedence rule, and there is no second
-   dispatch path. An id-bearing request whose method resolves to `undefined`
-   (modern) or falls off the fixed legacy switch resolves a
-   `JSONRPC_METHOD_NOT_FOUND` error whose message names the method. The modern
-   metadata checks (`-32602`, `-32022`) run BEFORE the seam is consulted, and
-   the legacy branch never consults it at all. A modern `subscriptions/listen`
-   requires `params.notifications`; the server acknowledges the exact intersection
-   with its configured support, and that acknowledgement is the first message
-   carrying this request's reserved subscription id. Every delivered notification
-   carries the same stamp. Ending the event-driven producer closes gracefully with
-   `{ resultType: 'complete', _meta: { 'io.modelcontextprotocol/subscriptionId': id,
-… } }`. The request id is only stream identity: a later request does not supersede
-   an earlier one. The legacy method remains absent and answers `-32601`.
-7. **`handle` maps the boundary failures.** A `JSON.parse` throw (malformed
-   JSON) → a serialized `-32700` (Parse error) response with a `null` id; a
-   message above `limit.message` reaches that same response BEFORE `JSON.parse`;
-   `_meta` is then bounded by serialized bytes, total object keys, and depth
-   before modern context parsing; `requestState` is bounded before HMAC verification
-   and before/after signing; produced tool content is bounded before serialization; and
-   built-in subscription admission is capped until each stream's `finally` releases it.
-   Metadata/state failures use `-32602`; content/capacity failures use `-32000`. A
-   parsed value that is not a valid REQUEST (a response, or any non-message)
-   → a serialized `-32600` (Invalid Request) response with a `null` id. The
-   raw-string parse is the ONLY `try`/`catch`; the guards (`parseJSONRPCMessage`
-   over `isJSONRPCMessage`) are total and never throw.
-8. **Total wire guards.** `isBoundedString` / `isBoundedJSON` /
-   `isJSONRPCRequest` / `isJSONRPCResponse` /
-   `isJSONRPCMessage` / `isInitializeRequest` / `isSubscriptionFilter` are total functions over an
-   already-parsed `unknown` — adversarial input returns `false`, never
-   throws. `isBoundedJSON` is iterative and rejects excessive depth, cycles,
-   accessors/hostile proxies, `Map`/`Set`, and prototype-pollution keys. A request
-   accepts an absent `id` (a notification) but rejects a
-   `null` id (valid only on a response); a response requires an `id` (string /
-   number / `null`) and exactly one of `result` / `error`. `parseJSONRPCMessage`
-   is sound with `isJSONRPCMessage` (a guard-valid input returned unchanged;
-   every non-`undefined` output satisfies the guard).
-9. **The CORE is provider-agnostic, no transport.** `src/core` imports ONLY
-   `@orkestrel/emitter`, `@orkestrel/tool`, and `@orkestrel/contract` (plus,
-   for the client's per-request deadline, `AbortSignal.timeout`) — never
-   `@orkestrel/server`, `@orkestrel/router`, `@orkestrel/sse`, or
-   `@orkestrel/websocket` — and carries no transport, no HTTP, and no model.
-   Both the dispatch core (the server) AND the client live here,
-   transport-abstract; every transport lives ONE layer out in `src/server`
-   (clauses 12–20): the ingress transport pumps message bodies through
-   `dispatch`, the egress transport drives a remote server, and the session /
-   version HEADER names are reserved there, not in the core.
-10. **Observable.** The `MCPServer` owns an `emitter` (`MCPServerEventMap`)
-    and fires `request` (method, id-or-`null`, era) at the TOP of every `dispatch`,
-    BEFORE the method runs; the emitter isolates a listener throw, routing it
-    to its OWN `error` handler (the `error` option, surfaced as `(error,
-event)`, NOT a domain event) — so a buggy observer can never corrupt a
-    dispatch, and a throwing `error` handler neither escapes nor recurses.
-11. **DOC ↔ SOURCE method bijection.** The `## Methods` tables list exactly
-    the public methods of each behavioral interface — `MCPServerInterface`,
-    `MCPClientInterface`, `ClientTransportInterface`, and `MCPSessionInterface`
-    — exhaustive, both directions, and each implementing class (`MCPServer` /
-    `MCPClient`; the SEVEN transports `HTTPClientTransport` /
-    `WebSocketServerTransport` / `WebSocketClientTransport` /
-    `StdioClientTransport` / `StdioServerTransport` (`src/server`) plus the
-    browser face's own `HTTPClientTransport` / `WebSocketClientTransport`
-    (`src/browser`), all seven implementing the one `ClientTransportInterface`;
-    and `MCPSession`) exposes the same public methods, no more. The internal
-    `HTTPDisconnect` entity exposes only `bridge` (its `signal` is data). The remaining
-    exports add no behavioral interface with methods (the factories,
-    `acceptsEventStream` / `readSessionHeader` /
-    `readLastEventId` / `rejectUnknownSession` / `readEventStream` /
-    `decodeEvent` / `upgradeRequestPath` / `extractLines` / `dispatchLines` /
-    `createScopeMessageListener` are functions; the options interfaces / event
-    maps / `EventStoreEntry` / `LineExtraction` are bags), so they contribute
-    no `## Methods` row. `MessagePortTransport` (`src/browser`) is likewise
-    excluded: it implements `MCPTransportInterface`, not
-    `ClientTransportInterface`, and `MCPTransportInterface` itself is
-    documented as a `## Surface` Types bag (its members are arrow-typed
-    properties, `readonly send: (message) => …`, not method syntax) rather than
-    a `## Methods` group — the SAME treatment `bindServer`/`bindClient`'s test
-    doubles already give it, so `MessagePortTransport` (and
-    `createScopeTransport`'s returned `ScopeTransportInterface`) add no new
-    `## Methods` row either, consistent with that existing precedent.
-12. **The HTTP transport route is stateless mechanism (`src/server`).**
-    `createMCPRoutes(mcp, options?)` returns a SINGLE `POST {path}` route
-    (`path` default `DEFAULT_MCP_PATH`). The handler is self-contained (its
-    OWN JSON-parse `try`/`catch`) and draws a sharp line: a TRANSPORT-level
-    failure — malformed JSON (`-32700`) or a parsed value that is not a
-    JSON-RPC REQUEST (`-32600`, narrowed via `parseJSONRPCMessage` + `'method'
-in request`, no `as`) — is HTTP **400** with a JSON-RPC error BODY (id
-    `null`). A legacy DISPATCH result — success or in-band JSON-RPC error — is
-    HTTP **200**. A modern result is **400** for `-32020` / `-32021` / `-32022`
-    / `-32602`, **404** for `-32601`, and **200** otherwise; every notification
-    is **202** with no body. Modern `MCP_PROTOCOL_VERSION_HEADER` and
-    `MCP_METHOD_HEADER` values must equal the body; `MCP_NAME_HEADER` is required
-    only for `tools/call`. A mismatch is **400** + `-32020` with no `data`.
-    Headerless `initialize` is accepted; a live-session legacy request uses its
-    pinned negotiated revision; every other headerless request is **400** +
-    `-32020`. A request without `Origin` is allowed; every present serialized
-    origin requires an exact consumer-supplied `origin.origins` entry or receives
-    **403**. `origin.enabled: false` explicitly delegates validation to an upstream
-    layer. When `streaming` is enabled (default `true`) and the client
-    `Accept`s `text/event-stream` (`acceptsEventStream`), the 200 reply is one
-    SSE `data:` event over `@orkestrel/server`'s `openStream` seam, then the
-    stream ends, carrying `X-Accel-Buffering: no`; else a plain JSON body. A
-    held-open dispatch result always uses that SSE seam: yields are written in
-    order, the generator's returned response is written last, and the response
-    ends after it. The route supplies a signal composed from `request.signal` and
-    response-stream cancellation to `mcp.dispatch`, while the session middleware
-    preserves the incoming signal across each forwarded `Request`; the pump awaits
-    the async iterator and never polls. An SSE comment is written every configured
-    `keepalive.interval` (default `DEFAULT_MCP_KEEPALIVE_INTERVAL`), so an idle
-    streamed response notices a dead client within one interval; this is transport
-    liveness, not polling for producer work. Unary dispatch completes before response
-    streaming begins and receives no keepalive, so the HTTP face cannot cancel a
-    long-running unary request mid-flight.
-    `createMCPRoutes` mints / reads NO
-    session id. It is MECHANISM, not policy: auth / rate-limiting / sessions
-    compose IN FRONT as ordinary middleware; origin policy is only the
-    consumer-provided list.
-13. **The CLIENT is the dual-era egress mirror (`src/core`).**
-    `createMCPClient({ transport, identity?, capabilities?, version?, timeout?,
-on? })` drives a REMOTE server over an injected `ClientTransportInterface`
-    (transport-abstract, like the server). A pinned legacy `version` runs the
-    legacy `initialize` handshake directly. Otherwise `connect()` first issues
-    a modern `server/discover` carrying `_meta` with the offered revision,
-    client capabilities, and client identity. It intersects the peer's
-    `supportedVersions` with `SUPPORTED_PROTOCOL_VERSIONS` in local preference
-    order and stores the newest match. A `-32022` reads `error.context.supported`
-    and, when unpinned, retries discovery exactly once under a NEW monotonic id;
-    the second failure is never retried. `-32601`, `-32600`, or an unrecognized HTTP 400
-    send failure falls back to legacy `initialize`, except when modern
-    `'2026-07-28'` is pinned. The selected era is cached for the instance's
-    lifetime. A legacy result's absent, malformed, modern, or unsupported
-    `protocolVersion` closes the transport and rejects; a valid legacy revision
-    is stored before `notifications/initialized` is sent. Modern connect sends
-    NO notification. The readonly `version` surface exposes the negotiated
-    revision while connected and is `undefined` while disconnected. A parseable discovery
-    response other than the two legacy fallback errors settles the modern era before result
-    validation, so a malformed or unsupported result type surfaces instead of degrading.
-    `discover()` exposes a validated modern discovery result,
-    filtering unknown advertised revisions from its `MCPVersion` collection.
-    `tools()` runs `tools/list` and wraps each descriptor as a
-    local `ToolInterface` — `name` narrowed (`isString`), `inputSchema` mapped
-    back to `parameters` (the inverse of clause 4's rename, no `as`),
-    `execute` bound to `call(name, …)`. `call(name, args)` runs `tools/call`,
-    concatenates the result's `text` content blocks, and — the inverse of
-    clause 5's `buildCallResult` — THROWS an `Error` carrying the text when
-    `isError === true`, else `JSON.parse`s the text (raw-string fallback;
-    empty → `undefined`); so a remote tool failure throws locally and an
-    agent's `ToolManager` isolates it into a `success: false` result exactly
-    like a local throw. `disconnect()` rejects every pending request, clears
-    negotiated revision, closes the transport, and fires `disconnect`
-    (idempotent) without clearing the lifetime era cache.
-14. **Client correlation + deadline + notifications.** Each request is
-    tagged with a monotonic numeric `id`; a SINGLE transport `message`
-    subscription resolves / rejects the matching pending request by `id`
-    (an `error` response rejects with `MCPError`, a complete `result` resolves) —
-    concurrent requests each route to their own pending. `MCPError`
-    preserves the peer's human message, numeric `code`, and optional
-    `error.data` as `context`; local disconnect and timeout failures
-    remain plain `Error`s. An absent `resultType` and `'complete'` both mean a
-    complete result; every other value rejects with `MCPError` using the message
-    `MCP result type '<value>' is not supported`, so input-required, task, and
-    unknown results can never be consumed as fabricated tool output. A message
-    that is NOT a correlated response is
-    a server NOTIFICATION, re-surfaced on the `notification` event. Every
-    ordinary request races `AbortSignal.timeout(timeout)` (never a raw
-    `setTimeout`; default `DEFAULT_MCP_REQUEST_TIMEOUT`): a server that
-    never replies REJECTS the pending request (`timed out`) rather than
-    hanging. The unresolved initial discovery probe is the exception: it is
-    unbounded when `timeout` is omitted because the transport cannot distinguish
-    an unbound channel from a silent peer; an explicitly supplied `timeout`
-    enables its short legacy-fallback probe bound. A `send` write failure rejects
-    its own pending request.
-    Observable: the client owns an `emitter` (`MCPClientEventMap`) firing
-    `connect` / `disconnect` / `notification` / `error`; the emitter
-    isolates a listener throw, routing it to its `error` handler (the
-    `error` option, NOT a domain event); `on(...)` is the convenience
-    forward to `emitter.on`.
-15. **The HTTP CLIENT transport drives a remote server over `fetch`
-    (`src/server`).** `createHTTPClientTransport({ url, headers?, fetch?,
-timeout? })` returns a `ClientTransportInterface` whose `send` POSTs one
-    JSON-serialized message to `url` with `content-type:
-application/json` and an `Accept` of BOTH `application/json` and
-    `text/event-stream` (plus any `headers`), then decodes the reply and
-    emits each carried `JSONRPCMessage` on the `message` event: an
-    `application/json` body is narrowed via `parseJSONRPCMessage`; a
-    `text/event-stream` body is decoded via `@orkestrel/sse`'s `SSEParser`
-    (`readEventStream`); a `202` (a notification accepted) carries no body
-    and emits nothing. It is TOTAL at the boundary: a non-message reply is
-    dropped, never asserted; a `fetch` / decode failure surfaces on the
-    `error` event rather than escaping `send`. `fetch` defaults to
-    `globalThis.fetch` (injectable); when `timeout` is set, each `fetch` call
-    passes `signal: AbortSignal.timeout(timeout)`. `start` / `close` hold no
-    long-lived connection. It ECHOES the session (clause 18): an
-    `mcp-session-id` response header, when a STATEFUL server sends one (on
-    `initialize`), is captured into `session` and then sent as the
-    `mcp-session-id` REQUEST header on every SUBSEQUENT request — so an
-    `MCPClient` passes a stateful server's validation with NO caller wiring;
-    before `initialize` returns an id, `session` is `undefined` and no header
-    is sent (safe against a stateless server). It also recognizes a decoded
-    result whose `result.protocolVersion` is a supported string, captures that
-    negotiated value, and sends `MCP_PROTOCOL_VERSION_HEADER` on every SUBSEQUENT
-    legacy request. The initialize POST itself carries no protocol header, and
-    legacy requests never carry `Mcp-Method` or `Mcp-Name`. A modern request derives
-    `MCP_PROTOCOL_VERSION_HEADER` and `MCP_METHOD_HEADER` directly from its `_meta`
-    version and method, plus `MCP_NAME_HEADER` only for `tools/call`; no transport
-    state or widened `send` contract is needed. Both captured
-    headers are merged before `options.headers`, so a caller-supplied key wins.
-16. **The WebSocket transport is the full-duplex ingress over the spine
-    upgrade seam (`src/server`).** `createWebSocketServer(mcp, options?)`
-    returns an `UpgradeHandler` (`@orkestrel/server`) to register with
-    `server.upgrade(...)`; it composes `@orkestrel/websocket`'s RFC 6455
-    wrapper over the spine's generic upgrade seam. It DECLINES (returns
-    `false`) when the `Upgrade` header is not `websocket`, the request path
-    (`upgradeRequestPath`) is not `options.path` (default `DEFAULT_MCP_PATH`),
-    the `Sec-WebSocket-Key` is absent, or the `Sec-WebSocket-Version` is not
-    `13`. Otherwise it CLAIMS (returns `true`): `createNodeWebSocket({
-socket, key, head, protocol })` (SERVER mode → writes the `101` handshake
-    echoing the `subprotocol`, default `MCP_WEBSOCKET_SUBPROTOCOL` `'mcp'`,
-    and sends UNMASKED frames), wraps it in a `WebSocketServerTransport`, and
-    PUMPS — each inbound `JSONRPCMessage` that `isJSONRPCRequest` runs
-    through `mcp.dispatch`, a defined response written back as a frame (a
-    notification → `dispatch` `undefined` → nothing sent); a non-request
-    message is ignored; a `dispatch` / `send` fault surfaces on the
-    transport's `error` event rather than escaping the async listener.
-    `WebSocketServerTransport` REUSES `ClientTransportInterface` (`session`
-    `undefined`, `start` arms the socket subscriptions, `send` writes ONE
-    text frame per message, `close` closes the socket): inbound text frames
-    are `JSON.parse`d (guarded) + narrowed via `parseJSONRPCMessage` onto
-    `message`, a malformed / non-message frame surfaces on `error` and is
-    DROPPED, and the socket's `close` bridges to the transport's `close`.
-17. **The WebSocket CLIENT transport drives a remote server over an upgrade
-    (`src/server`).** `createWebSocketClientTransport({ url, headers? })`
-    returns a `ClientTransportInterface` — the WebSocket egress mirror of
-    clause 16. `start()` (run by `client.connect()`) performs the RFC 6455
-    client handshake: a `node:http`(`s`) `GET` carrying `Connection: Upgrade`
-    / `Upgrade: websocket` / a random `Sec-WebSocket-Key` /
-    `Sec-WebSocket-Version: 13` / `Sec-WebSocket-Protocol: mcp` (plus any
-    `headers`), awaiting the client `'upgrade'` event and VALIDATING
-    `Sec-WebSocket-Accept === computeWebSocketAccept(key)`
-    (`@orkestrel/websocket`) — a mismatch / a non-`101` response / a request
-    error REJECTS `start()` (the socket destroyed). On success it wraps the
-    upgraded socket in `createNodeWebSocket({ socket, head })` (CLIENT mode —
-    no key → frames MASKED) and bridges its frames as the client's `message`
-    channel (decoded + narrowed via `parseJSONRPCMessage`). `send` writes ONE
-    masked text frame per message; `close()` closes the socket + fires
-    `close` (idempotent). `url` accepts `ws://` / `wss://` OR `http://` /
-    `https://` (a `ws(s)` scheme is converted to `http(s)` for the underlying
-    request; `wss` → TLS via `node:https`).
-18. **Sessions are an opt-in native middleware on the HTTP transport
-    (`src/server`).** `createMCPSession({ path?, ttl?, capacity?, clock?, origin?, keepalive? })`
-    returns a `MiddlewareHandler<TState>` (`TState extends MCPSessionState`)
-    that owns its own closure `Map<string, { session: MCPSession; touched:
-number; version: MCPVersion }>` — NO dependency on `@orkestrel/middleware` and no shared
-    session primitive; the store, mint, and validation are all native to
-    this package. Compose it via `router.use(createMCPSession())` IN FRONT
-    of a session-agnostic `createMCPRoutes(mcp)`; it OWNS its `path` (default
-    `DEFAULT_MCP_PATH`, MUST match the route's) — a request to any other path
-    passes straight through (`next()`). With a `ttl`, a session not touched
-    within `ttl` ms is lazily evicted on the next access (no background
-    timer). Session-owned verbs apply the same origin gate as the route, consuming the same
-    `MCPOriginOptions` value; a rejected origin returns **403** before session lookup or minting,
-    while `enabled: false` delegates both sites to an upstream validator. A
-    modern-shaped POST passes straight through via `next()`, ignoring
-    `Mcp-Session-Id`. Otherwise, for its `path`, it makes the legacy transport
-    STATEFUL across the three verbs: a `POST` buffers `await request.text()` — resolves a session via
-    `readSessionHeader`; a VALID id touches the entry and sets
-    `context.state.session`; an ABSENT / unknown id whose (guarded) body
-    parses to an `initialize` request (`isInitializeRequest`) MINTS a fresh
-    `MCPSession` (`crypto.randomUUID()`, `capacity`), pins the negotiated legacy
-    revision, and sets
-    `context.state.session`; neither → `rejectUnknownSession()` (`404`). It
-    then FORWARDS a fresh `Request` carrying the buffered text
-    (`next(forwarded)`) — never the already-consumed original — so the route
-    re-reads the same body, injects that pinned revision when a live-session POST
-    is headerless, and stamps the response with `MCP_SESSION_HEADER`.
-    A `GET {path}` resolves the session the same way (no mint) and opens the
-    resumable stream (clause 19); an invalid / unknown id is the same `404`.
-    A `DELETE {path}` resolves the session, deletes it from the store and
-    answers `204`, or the same `404` when invalid / unknown. The WebSocket
-    and stdio transports are inherently one session per connection, so this
-    middleware does not apply to them.
-19. **Resumable server→client push is the GET-SSE channel, folded into
-    `MCPSession` (`src/server`).** Each `MCPSession` FOLDS IN its own bounded
-    replay log — a plain in-memory `Map` + capacity + lazy-TTL eviction,
-    PRIVATE to the entity — built with `createMCPSession`'s `capacity`
-    (default `DEFAULT_MCP_SESSION_CAPACITY`) and a per-event
-    `DEFAULT_MCP_SESSION_TTL`. `session.push(message)` APPENDS the message to
-    the log under a MONOTONE base36 event id (RETURNED), evicting the OLDEST
-    past `capacity` + any entry older than the per-event TTL, AND fans the
-    message out to every `attach`ed open stream as `stream.write({ id, data:
-JSON.stringify(message) })`. `session.replay(afterId)` returns every
-    retained log entry STRICTLY AFTER `afterId` in append order — an UNKNOWN
-    / evicted cursor replays NOTHING. The `createMCPSession` middleware
-    serves the resumable `GET {path}`: it validates the `mcp-session-id`
-    (the same **404** as clause 18 on a missing / unknown id), opens
-    `openStream()` (`@orkestrel/server`), reads `Last-Event-ID`
-    (`readLastEventId`) and REPLAYS `session.replay(lastEventId)` onto the
-    stream FIRST, THEN `session.attach(stream)`, THEN detaches on the composed
-    request / response-stream `AbortSignal` firing (or immediately if already
-    aborted). Its configured keepalive bounds idle disconnect detection to one
-    interval. The stream is long-lived — it is NEVER `end()`ed by the middleware.
-20. **The stdio transport is newline-delimited JSON-RPC over process stdio
-    (`src/server`).** `createStdioServer(mcp, options?)` wraps
-    `options.input` (default `process.stdin`) / `options.output` (default
-    `process.stdout`) in a `StdioServerTransport` and PUMPS: each inbound
-    `JSONRPCMessage` that is a REQUEST runs through `mcp.dispatch`, a defined
-    response written back as a newline-terminated line (a notification writes
-    nothing); a non-request message is ignored; a `dispatch` / `send` fault
-    surfaces on the transport's `error` event. `createStdioClientTransport(options)`
-    spawns `options.command` via `node:child_process.spawn(command, args, {
-env, stdio: ['pipe', 'pipe', 'inherit'] })` (an omitted `env` inherits
-    `process.env`; a provided one REPLACES it entirely, `spawn` semantics);
-    `send` writes `JSON.stringify(message) + '\n'` per message to the
-    child's `stdin`; the child's `stdout` is read through the shared
-    `extractLines` / `dispatchLines` helpers (also used by
-    `StdioServerTransport`) to decode complete lines onto `message` (a
-    malformed line emits `error`); the child's exit bridges to the
-    transport's `close`. `close()` kills the child. Both stdio transports'
-    `session` is always `undefined` (the process pipe carries no session
-    concept).
-21. **The browser transport carries the SAME `ClientTransportInterface`
-    contract over native host APIs (`src/browser`).**
-    `createWebSocketClientTransport({ url, protocols? })` returns a
-    `ClientTransportInterface` whose `start()` opens `new WebSocket(url,
-protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
-    is the host's concern; a connection failure — the native `'error'` event
-    while not yet `OPEN` — REJECTS `start()`); `send` writes each message as
-    ONE text frame once `OPEN`, QUEUING (in order) any message sent before —
-    flushed the moment the socket opens; inbound text frames are `JSON.parse`d
-    (guarded) + narrowed via `parseJSONRPCMessage` onto `message` (a
-    non-text / non-JSON / non-message frame surfaces on `error` and is
-    DROPPED, never thrown); `close()` closes the socket and fires `close`
-    exactly once — a server-initiated close (the native `close` event) fires
-    the SAME `close` exactly once too, guarded so the two never double-emit.
-    `createHTTPClientTransport({ url, headers?, fetch?, timeout? })` returns a
-    `ClientTransportInterface` whose `send` POSTs to `url` over the injectable
-    `fetch` (default `globalThis.fetch`) with the SAME `content-type` /
-    `Accept` / session and era-aware header contract as the Node face's HTTP
-    client (clause 15): modern requests carry `MCP_PROTOCOL_VERSION_HEADER`
-    and `MCP_METHOD_HEADER` from the body, plus `MCP_NAME_HEADER` only for
-    `tools/call`; legacy requests carry only the captured negotiated protocol.
-    An `application/json` reply is narrowed via `parseJSONRPCMessage`, a
-    `text/event-stream` reply is decoded via the browser face's OWN
-    `readEventStream` (`@orkestrel/sse`, the same decode shape as
-    `src/server`'s), a `202` emits nothing, and any `fetch` / decode failure
-    surfaces on `error` rather than escaping `send` or hanging. Both browser
-    transports are type-checked DOM-free (`lib: ["ESNext", "WebWorker"]`,
-    proven by `check:src:browser`), so the same code runs in a page, a Web
-    Worker, or a Service Worker.
-22. **`MessagePortTransport` is SYMMETRIC; `serveMCP` unifies dedicated-worker
-    and Service-Worker wiring with no upfront shape flag (`src/browser`).**
-    `createMessagePortTransport({ port })` returns an `MCPTransportInterface`
-    (not a `ClientTransportInterface` — the SAME class works as either a
-    server or a client carrier depending on whether it is handed to
-    `bindServer` or `bindClient`/`createDuplexClientTransport`). `port.start()`
-    runs at CONSTRUCTION (there is no separate open step on the port contract
-    for the caller to hook one into); inbound is STRING-ONLY — a non-string
-    `event.data` is dropped, never forwarded (the port contract carries no
-    `error` channel to surface it on); `messageerror` is IGNORED, not routed
-    to `closed` (one bad frame is not a dead channel); `close()` closes the
-    port and fires the registered `closed` handler EXACTLY ONCE, idempotently
-    — there is no native "peer closed" signal for a `MessagePort`, so `closed`
-    fires ONLY from this transport's own `close()`. `listen`/`closed` are
-    single-handler-replace, per the port contract (clause 1's sketch).
-    `serveMCP(options)` is `serveMCPScope(globalThis, options)`; `serveMCPScope`
-    (the exported, scope-parameterized core) creates an `MCPServer` (`name`/
-    `version` defaulting to `DEFAULT_MCP_SERVER_NAME`/`DEFAULT_MCP_SERVER_VERSION`
-    when omitted), `bindServer`s it EAGERLY over a `createScopeTransport(scope)`
-    (the implicit, portless channel — bound once, for the whole lifetime of
-    the returned dispose, so a dedicated worker's very first portless message
-    needs no first-use setup), and registers ONE `scope.addEventListener(
-'message', …)` listener built by `createScopeMessageListener`. That ONE
-    listener handles BOTH shapes uniformly, per event, with no upfront
-    detection flag: `event.ports.length > 0` spawns a FRESH
-    `createMessagePortTransport` + `bindServer` for THAT port (tracked for
-    teardown) — a Service Worker's normal per-client channel, and ALSO a
-    dedicated-worker-shaped scope's cross-case if it happens to receive a
-    port-bearing event; an event with NO ports and a STRING `data` delivers
-    onto the implicit scope channel; any other event is dropped. The returned
-    dispose is IDEMPOTENT: it removes the scope listener, unbinds the implicit
-    channel, and — for every accepted port — unbinds AND closes it.
-
 ## Patterns
 
 ### Expose a tool registry over MCP
@@ -1611,7 +1265,7 @@ tools.add(
 	}),
 )
 
-const server = createMCPServer({ name: 'docs', version: '1.0.0', tools })
+const server = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools })
 
 // A transport reads a framed message string and writes the reply:
 for await (const message of transport) {
@@ -1645,7 +1299,10 @@ import type { MCPOriginOptions } from '@orkestrel/mcp/server'
 import { createMCPRoutes, createMCPSession } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/tool'
 
-const mcp = createMCPServer({ name: 'docs', version: '1.0.0', tools: createToolManager() })
+const mcp = createMCPServer({
+	identity: { name: 'docs', version: '1.0.0' },
+	tools: createToolManager(),
+})
 const origin: MCPOriginOptions = { origins: ['https://app.example'] }
 router.use(createMCPSession({ ttl: 60_000, origin })) // stateful: mint + validate + resumable GET / DELETE
 router.add(createMCPRoutes(mcp, { origin })) // both enforcement sites consume the same policy
@@ -1966,3 +1623,565 @@ port2.postMessage('{"jsonrpc":"2.0","method":"tools/list","id":1}')
 log(await reply) // '{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"add","inputSchema":{"type":"object"}}]}}'
 dispose() // unbinds every binding, closes every accepted MessagePort
 ```
+
+## Declared non-goals
+
+Everything below is intentionally absent, with its reason. A capability named here is
+not a defect and not a roadmap entry: it is a decision, and the guide states it so a
+consumer can plan around it instead of discovering it.
+
+**Protocol surfaces this package does not implement.**
+
+| Not built                                                      | Why                                                                                                                                                                                                                                                   |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Resources, Prompts, Roots, Sampling, Logging                   | No registry and no consumer for any of them; roots, sampling, and logging are deprecated in 2026-07-28. The local `emitter`s are observability, not an MCP logging capability.                                                                        |
+| Server-initiated `elicitation/create` requests                 | 2026-07-28 removes server-initiated requests entirely. Form elicitation survives only inside a modern `tools/call` `input_required` result — see [Produce a form elicitation for the call in hand](#produce-a-form-elicitation-for-the-call-in-hand). |
+| Sampling and roots as input-request carriers                   | Both remain legal members of `InputRequest` and both are deprecated; this server produces `ElicitRequest` and nothing else.                                                                                                                           |
+| The Tasks extension (`io.modelcontextprotocol/tasks`)          | The durable handle is an ordinary value in an ordinary `tools/call` result, on every era, with no negotiation. Nothing here depends on the extension being negotiated.                                                                                |
+| Durable task or session storage                                | Task state outlives the request that created it and this package owns no persistence. A store would arrive injected, exactly as `ToolManagerInterface` does.                                                                                          |
+| `outputSchema` on tool descriptors                             | `ToolResult.value` (`@orkestrel/tool`) is `unknown`; the contract that owns the value owns its schema. `structuredContent` is produced without one, which no clause gates.                                                                            |
+| Icons (2025-11-25)                                             | Installed `@orkestrel/tool` definitions carry no icon field, so an MCP-only wrapper would have no originating consumer.                                                                                                                               |
+| `x-mcp-header` server-side annotation and definition filtering | The MUST to keep invalidly annotated definitions out of `tools/list` binds a server that accepts the annotation. No installed definition carries one, so none can be invalid.                                                                         |
+| `_meta.logLevel`                                               | Belongs to the logging capability above and is deprecated in 2026-07-28. No consumer opts a single request into server log emission.                                                                                                                  |
+| W3C `traceparent` / `tracestate` / `baggage`                   | Tracing is application policy. The `request` event is the observation seam; a consumer stamps its own spans there.                                                                                                                                    |
+| The `extensions` capability field                              | Capabilities are an open record, so a consumer can already declare an extension id without a library change. Nothing in this package reads the map.                                                                                                   |
+| JSON-RPC batching                                              | Removed by deletion: only individual messages are accepted, and the types enforce it.                                                                                                                                                                 |
+| The optional 2025-11-25 SSE polling protocol                   | No consumer. Resumability exists only as the legacy session middleware's `GET` channel, and a modern request must not use it.                                                                                                                         |
+
+**Revisions this package does not speak.** `2025-03-26` is dropped because its
+mandatory JSON-RPC batching is unimplemented here, and `2024-11-05` because it
+requires the two-endpoint HTTP+SSE transport this package never implemented and
+2026-07-28 deprecates. Both revisions are still live upstream: removing them is this
+library's decision, not the ecosystem retiring them. Advertising a version whose
+transport or framing is absent would be a false handshake, which is the one thing a
+handshake may not be.
+
+**Era-scoped surfaces, stated as limits rather than gaps.**
+
+- `initialize`, `ping`, sessions, and the resumable `GET` stream are **legacy-only**.
+  A modern request naming one gets `-32601`, and the session middleware passes every
+  modern-shaped POST straight through.
+- `subscriptions/listen` is **modern-only**, by design: it is a 2026-07-28 method. A
+  legacy-era client asking for it gets `-32601` and keeps the strictly weaker
+  unsubscribed channel — the session stream's `notifications/message`. Nothing
+  degrades into polling either way, because a call's own result stays authoritative
+  and notifications are hints.
+
+**Policy this package will not decide.** Framework code supplies mechanism and stops
+before the deployment's decisions. Auth, tool-invocation rate limiting (see
+[Declared conformance gaps](#declared-conformance-gaps)), and request-body size guards
+are all composed IN FRONT as ordinary `@orkestrel/server` middleware; `limit.message`
+bounds only the raw string a transport hands to `MCPServer.handle`, which is a
+different boundary from an HTTP body.
+
+**The origin split is the shape of that rule.** The 2025-11-25 origin clause binds the
+server component this package ships, so the **mechanism** ships here and is on by
+default: a request without `Origin` is allowed, and a request carrying one is allowed
+only when its exact serialized origin occurs in the list. The **policy** — which
+origins a deployment trusts — is the consumer's, supplied once as `origin.origins` and
+consumed by both enforcement sites (the POST handler and the session middleware). A
+deployment that already validates origin upstream says so explicitly with
+`origin: { enabled: false }` rather than by passing an empty list, because delegation
+is a different decision from an empty allowlist and deserves its own word.
+
+## Declared conformance gaps
+
+A non-goal is a capability this package chose not to build. A **gap** is different: an
+obligation or a protocol capability it does not satisfy. Declining is not available for
+those, so they are stated here rather than left for a consumer to discover on the wire.
+Each entry names the clause, what it costs, and who could close it — including where
+the honest answer is that nothing inside this package will.
+
+**`Mcp-Param-*` / `x-mcp-header` client projection — not satisfied.** An HTTP client
+MUST project tool arguments annotated with `x-mcp-header` in a tool's `inputSchema`
+into `Mcp-Param-*` request headers. Neither HTTP client transport does: the projection
+needs the tool's schema — knowledge the client holds and the transport does not — inside
+the HTTP transport, which means widening the transport-agnostic `ClientTransportInterface.send`
+into an HTTP-shaped contract that every other transport would then carry. **What it
+costs:** against a foreign 2026-07-28 server whose tool schemas use the annotation,
+this client sends those parameters in the request body only. A server that also accepts
+body parameters is unaffected; a server that requires the header projection has tools
+this client cannot call. The exposure is bounded to foreign modern servers using an
+optional annotation, and to nothing this package's own server produces. **Closer:** one
+isolated unit (U7), deliberately sequenced last so nothing depends on the widened
+contract; it is not scheduled.
+
+**Tool-invocation rate limiting — not satisfied, and no unit will close it.**
+2025-11-25's `server/tools` § Security Considerations binds a server to validate tool
+inputs, implement access controls, **rate limit tool invocations**, and sanitize tool
+outputs. The first, third, and fourth are already true here or belong to the tool
+contract that owns the values. The rate limit is neither, and will not become either: a
+limit is a judgement about how much traffic one caller may spend against one
+deployment's capacity, and both numbers belong to the deployment. A framework that
+picked one would be picking product policy, and a framework that picked an unlimited
+one would be pretending to satisfy the clause. **The consumer's obligation:** a
+deployment exposing this server beyond a trusted process boundary must impose its own
+per-caller invocation limit in the layer fronting it — ordinary `@orkestrel/server`
+middleware in front of `createMCPRoutes`, composed exactly like auth. **Closer:** none
+inside this package; it is the deployment's.
+
+**A unary HTTP request cannot be cancelled mid-flight.** The HTTP face can propagate
+cancellation only after a streamed response has begun. An idle held-open stream writes
+SSE keepalive comments and notices a disconnected client within one configured
+keepalive interval, aborting the `MCPDispatchOptions.signal` its handler observes. A
+unary response is produced in full before anything is written, so nothing observes the
+disconnect while it runs: a long-running unary `tools/call` runs to completion even
+after its caller has gone. **The consumer's options:** bound the tool itself, or return
+a held-open `MCPStream` from a registered method so the keepalive seam applies.
+**Closer:** none named; the limit is structural to a unary HTTP response.
+
+**`notifications/cancelled` is not implemented on any transport.** 2026-07-28 removes
+client→server notifications over HTTP, leaving `notifications/cancelled` as the
+message-based cancellation path for the transports that still have one — stdio,
+WebSocket, and `MessagePort`. This package does not implement it: the method name is
+recognized nowhere, and `bindServer` calls `handle(message)` with no
+`MCPDispatchOptions`, so no signal exists to abort on those transports at all. An
+inbound `notifications/cancelled` is accepted as an ordinary notification — it fires the
+`request` event and is answered with nothing — while the call it names keeps running.
+**What it costs:** a stdio, WebSocket, or `MessagePort` client cannot cancel an
+in-flight call; only the HTTP face supplies a cancellation signal, and only for a
+streamed response. **Closer:** none named.
+
+The modern-only scope of `subscriptions/listen` is a stated limit rather than a gap —
+it is recorded under [Declared non-goals](#declared-non-goals) with the other era-scoped
+surfaces.
+
+## Contract
+
+The normative reference, last because it is the least narrative thing here. These
+invariants hold across the MCP layer (`src/core` + `src/server` + `src/browser`) ↔
+`mcp.md`; where a sentence earlier in this guide summarizes one, the clause below is
+the exact statement:
+
+1. **DOC ↔ SOURCE bijection.** Every `function` / `class` / `const` /
+   `interface` / `type` row in the `## Surface` tables (the core dispatch
+   tables AND the `### HTTP transport` + `### WebSocket transport` + `### stdio
+transport` tables) is a real export of the mcp layer (`src/core` or
+   `src/server`), and every export of either appears as a Surface row —
+   exhaustive, both directions.
+2. **JSON-RPC 2.0 envelope.** A `dispatch` response is always `{ jsonrpc:
+'2.0', id, … }` with EXACTLY ONE of `result` / `error`; the `id` echoes the
+   request's id (or `null` only on a `handle` parse / invalid-request error).
+   `handle` serializes that envelope with `JSON.stringify` and returns the
+   string. A HELD-OPEN answer is the other arm of the same return: `dispatch`
+   resolves an `MCPStream` and `handle` its serialized `MCPTextStream` mirror,
+   narrowed apart at ONE point (`Symbol.asyncIterator in result`). The stream's
+   `return` value is the terminating response and obeys this same envelope.
+3. **Notifications yield no response.** A request with NO `id` is a
+   notification: `dispatch` emits `request` (with a `null` id and the structural era) and then
+   resolves `undefined` WHATEVER the method (`ping`, `notifications/initialized`,
+   an unknown method — all silent); `handle` returns `undefined`. Neither era
+   branch ever runs for a request without an `id`.
+4. **The four legacy methods.** `initialize` → `{ protocolVersion, capabilities: {
+tools: {} }, serverInfo: { name, version } }`, the version NEGOTIATED over the
+   LEGACY subset only: the client's `params.protocolVersion` is echoed when it is a
+   supported LEGACY revision, and every other request — the modern `'2026-07-28'`,
+   an unsupported revision, a non-string, or an absent one — falls back to the
+   newest supported legacy revision (`MCP_PROTOCOL_VERSION`, `'2025-11-25'`). A
+   handshake is a legacy act, so it can only ever settle on a legacy revision; a
+   client asking to `initialize` at `'2026-07-28'` is asking to negotiate a
+   revision that defines no negotiation, and the client decides what to do with
+   the legacy answer it gets. `ping` → `{}`. `tools/list` → `{ tools }`, each tool a
+   `MCPToolDescriptor` (its `parameters` renamed to `inputSchema`,
+   defaulting to `{ type: 'object' }`). `tools/call` → the executed
+   tool's `MCPCallResult`.
+5. **Tool errors are tool results, not protocol errors.** `tools/call` reads
+   `params.name` (a string) + `params.arguments` (a record, default `{}`),
+   narrowed via `@orkestrel/contract`'s guards (no `as`); a missing /
+   non-string `name` → a `-32602` invalid-params error. Otherwise it runs
+   `tools.execute({ id, name, arguments })` — and because the `ToolManager`
+   (`@orkestrel/tool`) ALREADY isolates a thrown tool (and an unknown name)
+   into a `success: false` result, the server adds NO try/catch: that branch's
+   `error` maps to `{ content: [{ type: 'text', text: <error> }], isError: true }`;
+   a valued `success: true` branch maps to `{ content: [{ type: 'text', text:
+JSON.stringify(value) }], structuredContent: value }`, carrying the value unchanged
+   alongside the backwards-compatible text. A value-less success retains the required
+   empty text block and omits `structuredContent`.
+6. **One modern seam, subscriptions included, and `-32601` for anything off it.**
+   `server/discover`, `tools/list`, `tools/call`, and `subscriptions/listen` are registered on `server.methods` at
+   construction and EVERY modern method is resolved from there — `add` under an
+   existing name replaces it, so a consumer's override wins by ordinary
+   registration rather than by a precedence rule, and there is no second
+   dispatch path. An id-bearing request whose method resolves to `undefined`
+   (modern) or falls off the fixed legacy switch resolves a
+   `JSONRPC_METHOD_NOT_FOUND` error whose message names the method. The modern
+   metadata checks (`-32602`, `-32022`) run BEFORE the seam is consulted, and
+   the legacy branch never consults it at all. A modern `subscriptions/listen`
+   requires `params.notifications`; the server acknowledges the exact intersection
+   with its configured support, and that acknowledgement is the first message
+   carrying this request's reserved subscription id. Every delivered notification
+   carries the same stamp. Ending the event-driven producer closes gracefully with
+   `{ resultType: 'complete', _meta: { 'io.modelcontextprotocol/subscriptionId': id,
+… } }`. The request id is only stream identity: a later request does not supersede
+   an earlier one. The legacy method remains absent and answers `-32601`.
+7. **`handle` maps the boundary failures.** A `JSON.parse` throw (malformed
+   JSON) → a serialized `-32700` (Parse error) response with a `null` id; a
+   message above `limit.message` reaches that same response BEFORE `JSON.parse`;
+   `_meta` is then bounded by serialized bytes, total object keys, and depth
+   before modern context parsing; `requestState` is bounded before HMAC verification
+   and before/after signing; produced tool content is bounded before serialization; and
+   built-in subscription admission is capped until each stream's `finally` releases it.
+   Metadata/state failures use `-32602`; content/capacity failures use `-32000`. A
+   parsed value that is not a valid REQUEST (a response, or any non-message)
+   → a serialized `-32600` (Invalid Request) response with a `null` id. The
+   raw-string parse is the ONLY `try`/`catch`; the guards (`parseJSONRPCMessage`
+   over `isJSONRPCMessage`) are total and never throw.
+8. **Total wire guards.** `isBoundedString` / `isBoundedJSON` /
+   `isJSONRPCRequest` / `isJSONRPCResponse` /
+   `isJSONRPCMessage` / `isInitializeRequest` / `isSubscriptionFilter` are total functions over an
+   already-parsed `unknown` — adversarial input returns `false`, never
+   throws. `isBoundedJSON` is iterative and rejects excessive depth, cycles,
+   accessors/hostile proxies, `Map`/`Set`, and prototype-pollution keys. A request
+   accepts an absent `id` (a notification) but rejects a
+   `null` id (valid only on a response); a response requires an `id` (string /
+   number / `null`) and exactly one of `result` / `error`. `parseJSONRPCMessage`
+   is sound with `isJSONRPCMessage` (a guard-valid input returned unchanged;
+   every non-`undefined` output satisfies the guard).
+9. **The CORE is provider-agnostic, no transport.** `src/core` imports ONLY
+   `@orkestrel/emitter`, `@orkestrel/tool`, and `@orkestrel/contract` (plus,
+   for the client's per-request deadline, `AbortSignal.timeout`) — never
+   `@orkestrel/server`, `@orkestrel/router`, `@orkestrel/sse`, or
+   `@orkestrel/websocket` — and carries no transport, no HTTP, and no model.
+   Both the dispatch core (the server) AND the client live here,
+   transport-abstract; every transport lives ONE layer out in `src/server`
+   (clauses 12–20): the ingress transport pumps message bodies through
+   `dispatch`, the egress transport drives a remote server, and the session /
+   version HEADER names are reserved there, not in the core.
+10. **Observable.** The `MCPServer` owns an `emitter` (`MCPServerEventMap`)
+    and fires `request` (method, id-or-`null`, era) at the TOP of every `dispatch`,
+    BEFORE the method runs; the emitter isolates a listener throw, routing it
+    to its OWN `error` handler (the `error` option, surfaced as `(error,
+event)`, NOT a domain event) — so a buggy observer can never corrupt a
+    dispatch, and a throwing `error` handler neither escapes nor recurses.
+11. **DOC ↔ SOURCE method bijection.** The `## Methods` tables list exactly
+    the public methods of each behavioral interface — `MCPServerInterface`,
+    `MCPMethodManagerInterface`, `MCPClientInterface`,
+    `ClientTransportInterface`, and `MCPSessionInterface` — exhaustive, both
+    directions, so the client's table carries `discover` alongside `connect` /
+    `disconnect` / `tools` / `call` / `on`, and each implementing class (`MCPServer` /
+    `MCPClient`; the SEVEN transports `HTTPClientTransport` /
+    `WebSocketServerTransport` / `WebSocketClientTransport` /
+    `StdioClientTransport` / `StdioServerTransport` (`src/server`) plus the
+    browser face's own `HTTPClientTransport` / `WebSocketClientTransport`
+    (`src/browser`), all seven implementing the one `ClientTransportInterface`;
+    and `MCPSession`) exposes the same public methods, no more. The internal
+    `HTTPDisconnect` entity exposes only `bridge` (its `signal` is data). The remaining
+    exports add no behavioral interface with methods (the factories,
+    `acceptsEventStream` / `readSessionHeader` /
+    `readLastEventId` / `rejectUnknownSession` / `readEventStream` /
+    `decodeEvent` / `upgradeRequestPath` / `extractLines` / `dispatchLines` /
+    `createScopeMessageListener` are functions; the options interfaces / event
+    maps / `EventStoreEntry` / `LineExtraction` are bags), so they contribute
+    no `## Methods` row. `MessagePortTransport` (`src/browser`) is likewise
+    excluded: it implements `MCPTransportInterface`, not
+    `ClientTransportInterface`, and `MCPTransportInterface` itself is
+    documented as a `## Surface` Types bag (its members are arrow-typed
+    properties, `readonly send: (message) => …`, not method syntax) rather than
+    a `## Methods` group — the SAME treatment `bindServer`/`bindClient`'s test
+    doubles already give it, so `MessagePortTransport` (and
+    `createScopeTransport`'s returned `ScopeTransportInterface`) add no new
+    `## Methods` row either, consistent with that existing precedent.
+12. **The HTTP transport route is stateless mechanism (`src/server`).**
+    `createMCPRoutes(mcp, options?)` returns a SINGLE `POST {path}` route
+    (`path` default `DEFAULT_MCP_PATH`). The handler is self-contained (its
+    OWN JSON-parse `try`/`catch`) and draws a sharp line: a TRANSPORT-level
+    failure — malformed JSON (`-32700`) or a parsed value that is not a
+    JSON-RPC REQUEST (`-32600`, narrowed via `parseJSONRPCMessage` + `'method'
+in request`, no `as`) — is HTTP **400** with a JSON-RPC error BODY (id
+    `null`). A legacy DISPATCH result — success or in-band JSON-RPC error — is
+    HTTP **200**. A modern result is **400** for `-32020` / `-32021` / `-32022`
+    / `-32602`, **404** for `-32601`, and **200** otherwise; every notification
+    is **202** with no body. Modern `MCP_PROTOCOL_VERSION_HEADER` and
+    `MCP_METHOD_HEADER` values must equal the body; `MCP_NAME_HEADER` is required
+    only for `tools/call`. A mismatch is **400** + `-32020` with no `data`.
+    Headerless `initialize` is accepted; a live-session legacy request uses its
+    pinned negotiated revision; every other headerless request is **400** +
+    `-32020`. A request without `Origin` is allowed; every present serialized
+    origin requires an exact consumer-supplied `origin.origins` entry or receives
+    **403**. `origin.enabled: false` explicitly delegates validation to an upstream
+    layer. When `streaming` is enabled (default `true`) and the client
+    `Accept`s `text/event-stream` (`acceptsEventStream`), the 200 reply is one
+    SSE `data:` event over `@orkestrel/server`'s `openStream` seam, then the
+    stream ends, carrying `X-Accel-Buffering: no`; else a plain JSON body. A
+    held-open dispatch result always uses that SSE seam: yields are written in
+    order, the generator's returned response is written last, and the response
+    ends after it. The route supplies a signal composed from `request.signal` and
+    response-stream cancellation to `mcp.dispatch`, while the session middleware
+    preserves the incoming signal across each forwarded `Request`; the pump awaits
+    the async iterator and never polls. An SSE comment is written every configured
+    `keepalive.interval` (default `DEFAULT_MCP_KEEPALIVE_INTERVAL`), so an idle
+    streamed response notices a dead client within one interval; this is transport
+    liveness, not polling for producer work. Unary dispatch completes before response
+    streaming begins and receives no keepalive, so the HTTP face cannot cancel a
+    long-running unary request mid-flight.
+    `createMCPRoutes` mints / reads NO
+    session id. It is MECHANISM, not policy: auth / rate-limiting / sessions
+    compose IN FRONT as ordinary middleware; origin policy is only the
+    consumer-provided list.
+13. **The CLIENT is the dual-era egress mirror (`src/core`).**
+    `createMCPClient({ transport, identity?, capabilities?, version?, timeout?,
+on? })` drives a REMOTE server over an injected `ClientTransportInterface`
+    (transport-abstract, like the server). A pinned legacy `version` runs the
+    legacy `initialize` handshake directly. Otherwise `connect()` first issues
+    a modern `server/discover` carrying `_meta` with the offered revision,
+    client capabilities, and client identity. It intersects the peer's
+    `supportedVersions` with `SUPPORTED_PROTOCOL_VERSIONS` in local preference
+    order and stores the newest match. A `-32022` reads `error.context.supported`
+    and, when unpinned, retries discovery exactly once under a NEW monotonic id;
+    the second failure is never retried. `-32601`, `-32600`, or an unrecognized HTTP 400
+    send failure falls back to legacy `initialize`, except when modern
+    `'2026-07-28'` is pinned. The selected era is cached for the instance's
+    lifetime. A legacy result's absent, malformed, modern, or unsupported
+    `protocolVersion` closes the transport and rejects; a valid legacy revision
+    is stored before `notifications/initialized` is sent. Modern connect sends
+    NO notification. The readonly `version` surface exposes the negotiated
+    revision while connected and is `undefined` while disconnected. A parseable discovery
+    response other than the two legacy fallback errors settles the modern era before result
+    validation, so a malformed or unsupported result type surfaces instead of degrading.
+    `discover()` exposes a validated modern discovery result,
+    filtering unknown advertised revisions from its `MCPVersion` collection.
+    `tools()` runs `tools/list` and wraps each descriptor as a
+    local `ToolInterface` — `name` narrowed (`isString`), `inputSchema` mapped
+    back to `parameters` (the inverse of clause 4's rename, no `as`),
+    `execute` bound to `call(name, …)`. `call(name, args)` runs `tools/call`,
+    concatenates the result's `text` content blocks, and — the inverse of
+    clause 5's `buildCallResult` — THROWS an `Error` carrying the text when
+    `isError === true`, else `JSON.parse`s the text (raw-string fallback;
+    empty → `undefined`); so a remote tool failure throws locally and an
+    agent's `ToolManager` isolates it into a `success: false` result exactly
+    like a local throw. `disconnect()` rejects every pending request, clears
+    negotiated revision, closes the transport, and fires `disconnect`
+    (idempotent) without clearing the lifetime era cache.
+14. **Client correlation + deadline + notifications.** Each request is
+    tagged with a monotonic numeric `id`; a SINGLE transport `message`
+    subscription resolves / rejects the matching pending request by `id`
+    (an `error` response rejects with `MCPError`, a complete `result` resolves) —
+    concurrent requests each route to their own pending. `MCPError`
+    preserves the peer's human message, numeric `code`, and optional
+    `error.data` as `context`; local disconnect and timeout failures
+    remain plain `Error`s. An absent `resultType` and `'complete'` both mean a
+    complete result; every other value rejects with `MCPError` using the message
+    `MCP result type '<value>' is not supported`, so input-required, task, and
+    unknown results can never be consumed as fabricated tool output. A message
+    that is NOT a correlated response is
+    a server NOTIFICATION, re-surfaced on the `notification` event. Every
+    ordinary request races `AbortSignal.timeout(timeout)` (never a raw
+    `setTimeout`; default `DEFAULT_MCP_REQUEST_TIMEOUT`): a server that
+    never replies REJECTS the pending request (`timed out`) rather than
+    hanging. The unresolved initial discovery probe is the exception: it is
+    unbounded when `timeout` is omitted because the transport cannot distinguish
+    an unbound channel from a silent peer; an explicitly supplied `timeout`
+    enables its short legacy-fallback probe bound. A `send` write failure rejects
+    its own pending request.
+    Observable: the client owns an `emitter` (`MCPClientEventMap`) firing
+    `connect` / `disconnect` / `notification` / `error`; the emitter
+    isolates a listener throw, routing it to its `error` handler (the
+    `error` option, NOT a domain event); `on(...)` is the convenience
+    forward to `emitter.on`.
+15. **The HTTP CLIENT transport drives a remote server over `fetch`
+    (`src/server`).** `createHTTPClientTransport({ url, headers?, fetch?,
+timeout? })` returns a `ClientTransportInterface` whose `send` POSTs one
+    JSON-serialized message to `url` with `content-type:
+application/json` and an `Accept` of BOTH `application/json` and
+    `text/event-stream` (plus any `headers`), then decodes the reply and
+    emits each carried `JSONRPCMessage` on the `message` event: an
+    `application/json` body is narrowed via `parseJSONRPCMessage`; a
+    `text/event-stream` body is decoded via `@orkestrel/sse`'s `SSEParser`
+    (`readEventStream`); a `202` (a notification accepted) carries no body
+    and emits nothing. It is TOTAL at the boundary: a non-message reply is
+    dropped, never asserted; a `fetch` / decode failure surfaces on the
+    `error` event rather than escaping `send`. `fetch` defaults to
+    `globalThis.fetch` (injectable); when `timeout` is set, each `fetch` call
+    passes `signal: AbortSignal.timeout(timeout)`. `start` / `close` hold no
+    long-lived connection. It ECHOES the session (clause 18): an
+    `mcp-session-id` response header, when a STATEFUL server sends one (on
+    `initialize`), is captured into `session` and then sent as the
+    `mcp-session-id` REQUEST header on every SUBSEQUENT request — so an
+    `MCPClient` passes a stateful server's validation with NO caller wiring;
+    before `initialize` returns an id, `session` is `undefined` and no header
+    is sent (safe against a stateless server). It also recognizes a decoded
+    result whose `result.protocolVersion` is a supported string, captures that
+    negotiated value, and sends `MCP_PROTOCOL_VERSION_HEADER` on every SUBSEQUENT
+    legacy request. The initialize POST itself carries no protocol header, and
+    legacy requests never carry `Mcp-Method` or `Mcp-Name`. A modern request derives
+    `MCP_PROTOCOL_VERSION_HEADER` and `MCP_METHOD_HEADER` directly from its `_meta`
+    version and method, plus `MCP_NAME_HEADER` only for `tools/call`; no transport
+    state or widened `send` contract is needed. Both captured
+    headers are merged before `options.headers`, so a caller-supplied key wins.
+16. **The WebSocket transport is the full-duplex ingress over the spine
+    upgrade seam (`src/server`).** `createWebSocketServer(mcp, options?)`
+    returns an `UpgradeHandler` (`@orkestrel/server`) to register with
+    `server.upgrade(...)`; it composes `@orkestrel/websocket`'s RFC 6455
+    wrapper over the spine's generic upgrade seam. It DECLINES (returns
+    `false`) when the `Upgrade` header is not `websocket`, the request path
+    (`upgradeRequestPath`) is not `options.path` (default `DEFAULT_MCP_PATH`),
+    the `Sec-WebSocket-Key` is absent, or the `Sec-WebSocket-Version` is not
+    `13`. Otherwise it CLAIMS (returns `true`): `createNodeWebSocket({
+socket, key, head, protocol })` (SERVER mode → writes the `101` handshake
+    echoing the `subprotocol`, default `MCP_WEBSOCKET_SUBPROTOCOL` `'mcp'`,
+    and sends UNMASKED frames), wraps it in a `WebSocketServerTransport`, and
+    PUMPS — each inbound `JSONRPCMessage` that `isJSONRPCRequest` runs
+    through `mcp.dispatch`, a defined response written back as a frame (a
+    notification → `dispatch` `undefined` → nothing sent); a non-request
+    message is ignored; a `dispatch` / `send` fault surfaces on the
+    transport's `error` event rather than escaping the async listener.
+    `WebSocketServerTransport` REUSES `ClientTransportInterface` (`session`
+    `undefined`, `start` arms the socket subscriptions, `send` writes ONE
+    text frame per message, `close` closes the socket): inbound text frames
+    are `JSON.parse`d (guarded) + narrowed via `parseJSONRPCMessage` onto
+    `message`, a malformed / non-message frame surfaces on `error` and is
+    DROPPED, and the socket's `close` bridges to the transport's `close`.
+17. **The WebSocket CLIENT transport drives a remote server over an upgrade
+    (`src/server`).** `createWebSocketClientTransport({ url, headers? })`
+    returns a `ClientTransportInterface` — the WebSocket egress mirror of
+    clause 16. `start()` (run by `client.connect()`) performs the RFC 6455
+    client handshake: a `node:http`(`s`) `GET` carrying `Connection: Upgrade`
+    / `Upgrade: websocket` / a random `Sec-WebSocket-Key` /
+    `Sec-WebSocket-Version: 13` / `Sec-WebSocket-Protocol: mcp` (plus any
+    `headers`), awaiting the client `'upgrade'` event and VALIDATING
+    `Sec-WebSocket-Accept === computeWebSocketAccept(key)`
+    (`@orkestrel/websocket`) — a mismatch / a non-`101` response / a request
+    error REJECTS `start()` (the socket destroyed). On success it wraps the
+    upgraded socket in `createNodeWebSocket({ socket, head })` (CLIENT mode —
+    no key → frames MASKED) and bridges its frames as the client's `message`
+    channel (decoded + narrowed via `parseJSONRPCMessage`). `send` writes ONE
+    masked text frame per message; `close()` closes the socket + fires
+    `close` (idempotent). `url` accepts `ws://` / `wss://` OR `http://` /
+    `https://` (a `ws(s)` scheme is converted to `http(s)` for the underlying
+    request; `wss` → TLS via `node:https`).
+18. **Sessions are an opt-in native middleware on the HTTP transport
+    (`src/server`).** `createMCPSession({ path?, ttl?, capacity?, clock?, origin?, keepalive? })`
+    returns a `MiddlewareHandler<TState>` (`TState extends MCPSessionState`)
+    that owns its own closure `Map<string, { session: MCPSession; touched:
+number; version: MCPVersion }>` — NO dependency on `@orkestrel/middleware` and no shared
+    session primitive; the store, mint, and validation are all native to
+    this package. Compose it via `router.use(createMCPSession())` IN FRONT
+    of a session-agnostic `createMCPRoutes(mcp)`; it OWNS its `path` (default
+    `DEFAULT_MCP_PATH`, MUST match the route's) — a request to any other path
+    passes straight through (`next()`). With a `ttl`, a session not touched
+    within `ttl` ms is lazily evicted on the next access (no background
+    timer). Session-owned verbs apply the same origin gate as the route, consuming the same
+    `MCPOriginOptions` value; a rejected origin returns **403** before session lookup or minting,
+    while `enabled: false` delegates both sites to an upstream validator. A
+    modern-shaped POST passes straight through via `next()`, ignoring
+    `Mcp-Session-Id`. Otherwise, for its `path`, it makes the legacy transport
+    STATEFUL across the three verbs: a `POST` buffers `await request.text()` — resolves a session via
+    `readSessionHeader`; a VALID id touches the entry and sets
+    `context.state.session`; an ABSENT / unknown id whose (guarded) body
+    parses to an `initialize` request (`isInitializeRequest`) MINTS a fresh
+    `MCPSession` (`crypto.randomUUID()`, `capacity`), pins the negotiated legacy
+    revision, and sets
+    `context.state.session`; neither → `rejectUnknownSession()` (`404`). It
+    then FORWARDS a fresh `Request` carrying the buffered text
+    (`next(forwarded)`) — never the already-consumed original — so the route
+    re-reads the same body, injects that pinned revision when a live-session POST
+    is headerless, and stamps the response with `MCP_SESSION_HEADER`. A
+    live-session POST whose `MCP-Protocol-Version` header names a DIFFERENT
+    revision than the session pinned is `400` + `-32020` — a session negotiates its
+    revision once, and a later request may not renegotiate it.
+    A `GET {path}` resolves the session the same way (no mint) and opens the
+    resumable stream (clause 19); an invalid / unknown id is the same `404`.
+    A `DELETE {path}` resolves the session, deletes it from the store and
+    answers `204`, or the same `404` when invalid / unknown. The WebSocket
+    and stdio transports are inherently one session per connection, so this
+    middleware does not apply to them.
+19. **Resumable server→client push is the GET-SSE channel, folded into
+    `MCPSession` (`src/server`).** Each `MCPSession` FOLDS IN its own bounded
+    replay log — a plain in-memory `Map` + capacity + lazy-TTL eviction,
+    PRIVATE to the entity — built with `createMCPSession`'s `capacity`
+    (default `DEFAULT_MCP_SESSION_CAPACITY`) and a per-event
+    `DEFAULT_MCP_SESSION_TTL`. `session.push(message)` APPENDS the message to
+    the log under a MONOTONE base36 event id (RETURNED), evicting the OLDEST
+    past `capacity` + any entry older than the per-event TTL, AND fans the
+    message out to every `attach`ed open stream as `stream.write({ id, data:
+JSON.stringify(message) })`. `session.replay(afterId)` returns every
+    retained log entry STRICTLY AFTER `afterId` in append order — an UNKNOWN
+    / evicted cursor replays NOTHING. The `createMCPSession` middleware
+    serves the resumable `GET {path}`: it validates the `mcp-session-id`
+    (the same **404** as clause 18 on a missing / unknown id), opens
+    `openStream()` (`@orkestrel/server`), reads `Last-Event-ID`
+    (`readLastEventId`) and REPLAYS `session.replay(lastEventId)` onto the
+    stream FIRST, THEN `session.attach(stream)`, THEN detaches on the composed
+    request / response-stream `AbortSignal` firing (or immediately if already
+    aborted). Its configured keepalive bounds idle disconnect detection to one
+    interval. The stream is long-lived — it is NEVER `end()`ed by the middleware.
+20. **The stdio transport is newline-delimited JSON-RPC over process stdio
+    (`src/server`).** `createStdioServer(mcp, options?)` wraps
+    `options.input` (default `process.stdin`) / `options.output` (default
+    `process.stdout`) in a `StdioServerTransport` and PUMPS: each inbound
+    `JSONRPCMessage` that is a REQUEST runs through `mcp.dispatch`, a defined
+    response written back as a newline-terminated line (a notification writes
+    nothing); a non-request message is ignored; a `dispatch` / `send` fault
+    surfaces on the transport's `error` event. `createStdioClientTransport(options)`
+    spawns `options.command` via `node:child_process.spawn(command, args, {
+env, stdio: ['pipe', 'pipe', 'inherit'] })` (an omitted `env` inherits
+    `process.env`; a provided one REPLACES it entirely, `spawn` semantics);
+    `send` writes `JSON.stringify(message) + '\n'` per message to the
+    child's `stdin`; the child's `stdout` is read through the shared
+    `extractLines` / `dispatchLines` helpers (also used by
+    `StdioServerTransport`) to decode complete lines onto `message` (a
+    malformed line emits `error`); the child's exit bridges to the
+    transport's `close`. `close()` kills the child. Both stdio transports'
+    `session` is always `undefined` (the process pipe carries no session
+    concept).
+21. **The browser transport carries the SAME `ClientTransportInterface`
+    contract over native host APIs (`src/browser`).**
+    `createWebSocketClientTransport({ url, protocols? })` returns a
+    `ClientTransportInterface` whose `start()` opens `new WebSocket(url,
+protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
+    is the host's concern; a connection failure — the native `'error'` event
+    while not yet `OPEN` — REJECTS `start()`); `send` writes each message as
+    ONE text frame once `OPEN`, QUEUING (in order) any message sent before —
+    flushed the moment the socket opens; inbound text frames are `JSON.parse`d
+    (guarded) + narrowed via `parseJSONRPCMessage` onto `message` (a
+    non-text / non-JSON / non-message frame surfaces on `error` and is
+    DROPPED, never thrown); `close()` closes the socket and fires `close`
+    exactly once — a server-initiated close (the native `close` event) fires
+    the SAME `close` exactly once too, guarded so the two never double-emit.
+    `createHTTPClientTransport({ url, headers?, fetch?, timeout? })` returns a
+    `ClientTransportInterface` whose `send` POSTs to `url` over the injectable
+    `fetch` (default `globalThis.fetch`) with the SAME `content-type` /
+    `Accept` / session and era-aware header contract as the Node face's HTTP
+    client (clause 15): modern requests carry `MCP_PROTOCOL_VERSION_HEADER`
+    and `MCP_METHOD_HEADER` from the body, plus `MCP_NAME_HEADER` only for
+    `tools/call`; legacy requests carry only the captured negotiated protocol.
+    An `application/json` reply is narrowed via `parseJSONRPCMessage`, a
+    `text/event-stream` reply is decoded via the browser face's OWN
+    `readEventStream` (`@orkestrel/sse`, the same decode shape as
+    `src/server`'s), a `202` emits nothing, and any `fetch` / decode failure
+    surfaces on `error` rather than escaping `send` or hanging. Both browser
+    transports are type-checked DOM-free (`lib: ["ESNext", "WebWorker"]`,
+    proven by `check:src:browser`), so the same code runs in a page, a Web
+    Worker, or a Service Worker.
+22. **`MessagePortTransport` is SYMMETRIC; `serveMCP` unifies dedicated-worker
+    and Service-Worker wiring with no upfront shape flag (`src/browser`).**
+    `createMessagePortTransport({ port })` returns an `MCPTransportInterface`
+    (not a `ClientTransportInterface` — the SAME class works as either a
+    server or a client carrier depending on whether it is handed to
+    `bindServer` or `bindClient`/`createDuplexClientTransport`). `port.start()`
+    runs at CONSTRUCTION (there is no separate open step on the port contract
+    for the caller to hook one into); inbound is STRING-ONLY — a non-string
+    `event.data` is dropped, never forwarded (the port contract carries no
+    `error` channel to surface it on); `messageerror` is IGNORED, not routed
+    to `closed` (one bad frame is not a dead channel); `close()` closes the
+    port and fires the registered `closed` handler EXACTLY ONCE, idempotently
+    — there is no native "peer closed" signal for a `MessagePort`, so `closed`
+    fires ONLY from this transport's own `close()`. `listen`/`closed` are
+    single-handler-replace, per the port contract (clause 1's sketch).
+    `serveMCP(options)` is `serveMCPScope(globalThis, options)`; `serveMCPScope`
+    (the exported, scope-parameterized core) creates an `MCPServer` (`name`/
+    `version` defaulting to `DEFAULT_MCP_SERVER_NAME`/`DEFAULT_MCP_SERVER_VERSION`
+    when omitted), `bindServer`s it EAGERLY over a `createScopeTransport(scope)`
+    (the implicit, portless channel — bound once, for the whole lifetime of
+    the returned dispose, so a dedicated worker's very first portless message
+    needs no first-use setup), and registers ONE `scope.addEventListener(
+'message', …)` listener built by `createScopeMessageListener`. That ONE
+    listener handles BOTH shapes uniformly, per event, with no upfront
+    detection flag: `event.ports.length > 0` spawns a FRESH
+    `createMessagePortTransport` + `bindServer` for THAT port (tracked for
+    teardown) — a Service Worker's normal per-client channel, and ALSO a
+    dedicated-worker-shaped scope's cross-case if it happens to receive a
+    port-bearing event; an event with NO ports and a STRING `data` delivers
+    onto the implicit scope channel; any other event is dropped. The returned
+    dispose is IDEMPOTENT: it removes the scope listener, unbinds the implicit
+    channel, and — for every accepted port — unbinds AND closes it.
