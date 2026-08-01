@@ -18,7 +18,7 @@ import {
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { createJSONRPCRequest } from '../../setup.js'
+import { createJSONRPCRequest, waitForDelay } from '../../setup.js'
 
 // An in-memory MCPTransportInterface double (AGENTS §16 — a real duplex channel, no
 // mocks): `listen`/`closed` each hold THE SINGLE handler (replace semantics, per the
@@ -296,8 +296,7 @@ describe('bindServer', () => {
 		bindServer(mcp, transport)
 
 		transport.deliver(JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 1 })))
-		await Promise.resolve()
-		await Promise.resolve()
+		await waitForDelay()
 
 		expect(transport.sent).toEqual([JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} })])
 	})
@@ -308,8 +307,7 @@ describe('bindServer', () => {
 		bindServer(mcp, transport)
 
 		transport.deliver(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }))
-		await Promise.resolve()
-		await Promise.resolve()
+		await waitForDelay()
 
 		expect(transport.sent).toEqual([])
 	})
@@ -321,8 +319,7 @@ describe('bindServer', () => {
 		unbind()
 
 		transport.deliver(JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 1 })))
-		await Promise.resolve()
-		await Promise.resolve()
+		await waitForDelay()
 
 		expect(transport.sent).toEqual([])
 		expect(transport.closedCalls).toBe(0)
@@ -337,8 +334,7 @@ describe('bindServer', () => {
 		bindServer(mcp, transport)
 
 		transport.deliver(JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 1 })))
-		await Promise.resolve()
-		await Promise.resolve()
+		await waitForDelay()
 		await Promise.resolve()
 
 		expect(seen).toEqual([transport.failSend])
@@ -354,8 +350,7 @@ describe('bindServer', () => {
 		bindServer(mcp, transport)
 
 		transport.deliver(JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 1 })))
-		await Promise.resolve()
-		await Promise.resolve()
+		await waitForDelay()
 		await Promise.resolve()
 
 		// Reaching here (no unhandled rejection failing the run) is the assertion.
@@ -369,8 +364,7 @@ describe('bindServer', () => {
 		transport.signalClosed()
 
 		transport.deliver(JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 1 })))
-		await Promise.resolve()
-		await Promise.resolve()
+		await waitForDelay()
 
 		expect(transport.sent).toEqual([])
 	})
@@ -383,8 +377,7 @@ describe('bindServer', () => {
 		bindServer(mcp, transport)
 
 		transport.deliver(JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 1 })))
-		await Promise.resolve()
-		await Promise.resolve()
+		await waitForDelay()
 
 		expect(transport.sent).toEqual([JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} })])
 	})
@@ -406,8 +399,7 @@ describe('bindClient', () => {
 		bindClient(mcp, transport)
 
 		const connecting = mcp.connect()
-		await Promise.resolve()
-		await Promise.resolve()
+		await waitForDelay()
 		expect(transport.sent).toHaveLength(1)
 		const sentRequest: { id: number } = JSON.parse(transport.sent[0] ?? '{}')
 		transport.deliver(
@@ -490,8 +482,7 @@ describe('bindClient', () => {
 				settled = true
 			},
 		)
-		await Promise.resolve()
-		await Promise.resolve()
+		await waitForDelay()
 		await Promise.resolve()
 
 		expect(settled).toBe(false)

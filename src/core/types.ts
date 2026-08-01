@@ -167,16 +167,16 @@ export interface MCPDiscoverResult {
  * via `server.emitter.on`.
  *
  * @remarks
- * `request` fires at the TOP of every `dispatch` with the method and the
- * correlating id (`null` for a notification), BEFORE the method runs — so an
- * observer sees every inbound call. Listener isolation is the emitter's (§13): a
+ * `request` fires at the TOP of every `dispatch` with the method, correlating id
+ * (`null` for a notification), and structurally selected wire era, BEFORE the
+ * method runs — so an observer sees every inbound call. Listener isolation is the emitter's (§13): a
  * listener throw is routed to the emitter's `error` handler (the `error` option),
  * never onto this map, so a buggy observer can never corrupt a dispatch. Declared as
  * a `type` alias (§4.5) so the type-literal satisfies `EventMap` structurally.
  */
 export type MCPServerEventMap = {
-	/** A request is being dispatched — its `method` and correlating `id` (`null` for a notification). */
-	readonly request: readonly [method: string, id: string | number | null]
+	/** A request is being dispatched — its method, correlating id, and structural wire era. */
+	readonly request: readonly [method: string, id: string | number | null, era: MCPEra]
 	/**
 	 * A transport-level fault surfaced while a bound {@link MCPTransportInterface} was
 	 * piping a reply out (a `send` throw or rejection from {@link bindServer}). A DOMAIN

@@ -5,9 +5,10 @@
 > transports. **Ingress:** `createMCPServer` wraps a live `ToolManagerInterface`
 > (`@orkestrel/tool`) as an MCP server any MCP client can drive. **Egress:**
 > `createMCPClient` drives a _remote_ MCP server and surfaces its tools as local
-> `ToolInterface`s an agent can call as if they were its own. Four methods carry
-> both directions — `initialize` (version handshake + capability advertise),
-> `ping` (liveness), `tools/list` (discovery), `tools/call` (execution).
+> `ToolInterface`s an agent can call as if they were its own. The server dispatches
+> each request by structural wire era: modern requests expose `server/discover`,
+> `tools/list`, and `tools/call`; legacy requests retain `initialize`, `ping`,
+> `tools/list`, and `tools/call`.
 >
 > The split that keeps it lean: **the dispatch core is transport-agnostic and
 > provider-agnostic.** `MCPServer` and `MCPClient` live in `src/core` and import
@@ -63,8 +64,8 @@ import { createTool, createToolManager } from '@orkestrel/tool'
 const tools = createToolManager()
 tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
 
-const server = createMCPServer({ name: 'calculator', version: '1.0.0', tools })
-server.emitter.on('request', (method, id) => log(method, id))
+const server = createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
+server.emitter.on('request', (method, id, era) => log(method, id, era))
 
 // A transport pumps message strings through `handle`:
 const reply = await server.handle('{"jsonrpc":"2.0","method":"tools/list","id":1}')
@@ -236,7 +237,7 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 | `MCPIdentity`              | interface | `{ name: string; version: string }` — the identity echoed in the `initialize` result.                                                                                                                                      |
 | `MCPRequestContext`        | interface | `{ version: string; capabilities: Record<string, unknown>; identity?: MCPIdentity }` — validated modern request metadata.                                                                                                  |
 | `MCPDiscoverResult`        | interface | Required modern discovery fields: supported revisions, capabilities, complete-result and cache stamps, optional instructions and metadata.                                                                                 |
-| `MCPServerEventMap`        | type      | `{ request: [method, id]; error: [unknown] }` — the observation surface (`error` is a transport fault a bound `bindServer` reply-`send` surfaced).                                                                         |
+| `MCPServerEventMap`        | type      | `{ request: [method, id, era]; error: [unknown] }` — the observation surface (`era` is selected structurally per request; `error` is a bound-transport fault).                                                             |
 | `MCPServerOptions`         | interface | `{ on?; error?; identity; tools; instructions?; cache? }` — options for `createMCPServer`.                                                                                                                                 |
 | `MCPServerInterface`       | interface | `emitter` / `name` / `version` data members + the `dispatch` / `handle` methods.                                                                                                                                           |
 | `MCPTransportInterface`    | interface | `{ send(message: string): void \| Promise<void>; listen(handler): void; closed(handler): void; close(): void \| Promise<void> }` — the environment-agnostic duplex message-channel port `bindServer` / `bindClient` drive. |
@@ -634,10 +635,10 @@ response or `undefined` for a notification); `handle` is the string boundary
 that wraps it with parse / serialize and the parse / invalid-request error
 mapping.
 
-| Method     | Returns                                 | Behavior                                                                                                                                                                              |
-| ---------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dispatch` | `Promise<JSONRPCResponse \| undefined>` | Emit `request`, then run the method (`initialize` / `ping` / `tools/list` / `tools/call`); resolve the response, or `undefined` for a notification or an unknown-method notification. |
-| `handle`   | `Promise<string \| undefined>`          | `JSON.parse` → narrow to a request → `dispatch` → `JSON.stringify`. A parse failure → a `-32700` string; a non-request → a `-32600` string; a notification → `undefined`.             |
+| Method     | Returns                                 | Behavior                                                                                                                                                                  |
+| ---------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dispatch` | `Promise<JSONRPCResponse \| undefined>` | Select the structural era, emit `request(method, id, era)`, then run the modern or legacy method branch; resolve the response, or `undefined` for any notification.       |
+| `handle`   | `Promise<string \| undefined>`          | `JSON.parse` → narrow to a request → `dispatch` → `JSON.stringify`. A parse failure → a `-32700` string; a non-request → a `-32600` string; a notification → `undefined`. |
 
 ```ts
 import { createMCPServer } from '@orkestrel/mcp'
@@ -745,7 +746,7 @@ transport` tables) is a real export of the mcp layer (`src/core` or
    `handle` serializes that envelope with `JSON.stringify` and returns the
    string.
 3. **Notifications yield no response.** A request with NO `id` is a
-   notification: `dispatch` emits `request` (with a `null` id) and then
+   notification: `dispatch` emits `request` (with a `null` id and the structural era) and then
    resolves `undefined` WHATEVER the method (`ping`, `notifications/initialized`,
    an unknown method — all silent); `handle` returns `undefined`. The method
    switch only ever runs for an id-bearing request.
@@ -797,7 +798,7 @@ tools: {} }, serverInfo: { name, version } }`, the version NEGOTIATED
    `dispatch`, the egress transport drives a remote server, and the session /
    version HEADER names are reserved there, not in the core.
 10. **Observable.** The `MCPServer` owns an `emitter` (`MCPServerEventMap`)
-    and fires `request` (method, id-or-`null`) at the TOP of every `dispatch`,
+    and fires `request` (method, id-or-`null`, era) at the TOP of every `dispatch`,
     BEFORE the method runs; the emitter isolates a listener throw, routing it
     to its OWN `error` handler (the `error` option, surfaced as `(error,
 event)`, NOT a domain event) — so a buggy observer can never corrupt a

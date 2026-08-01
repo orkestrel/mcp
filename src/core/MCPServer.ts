@@ -1,8 +1,8 @@
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { ToolManagerInterface } from '@orkestrel/tool'
 import type {
 	JSONRPCRequest,
 	JSONRPCResponse,
+	MCPCallResult,
 	MCPIdentity,
 	MCPServerEventMap,
 	MCPServerInterface,
@@ -11,19 +11,26 @@ import type {
 import { Emitter } from '@orkestrel/emitter'
 import { isRecord, isString } from '@orkestrel/contract'
 import {
+	DEFAULT_MCP_CACHE_TTL,
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_INVALID_REQUEST,
 	JSONRPC_METHOD_NOT_FOUND,
 	JSONRPC_PARSE_ERROR,
+	MCP_UNSUPPORTED_VERSION,
+	SUPPORTED_PROTOCOL_VERSIONS,
 } from './constants.js'
 import {
 	buildCallResult,
+	buildDiscoverResult,
 	buildInitializeResult,
 	buildJSONRPCError,
 	buildJSONRPCResult,
+	buildModernResult,
 	buildToolDescriptors,
 } from './helpers.js'
-import { parseJSONRPCMessage } from './parsers.js'
+import { inferEra } from './inferers.js'
+import { parseJSONRPCMessage, parseRequestContext } from './parsers.js'
+import { isModernRequest } from './validators.js'
 
 /**
  * A transport-agnostic Model Context Protocol server — dispatches JSON-RPC 2.0
@@ -36,14 +43,11 @@ import { parseJSONRPCMessage } from './parsers.js'
  *   `JSON.parse`s the raw message (a failure → a `-32700` response), narrows it to
  *   a request (a non-request → a `-32600` response), dispatches, and serializes the
  *   response back to a string (`undefined` for a notification).
- * - **The method switch.** `initialize` negotiates the protocol version + advertises
- *   the tools capability; `notifications/initialized` is a notification (no
- *   response); `ping` returns `{}`; `tools/list` lists the registry's tools (its
- *   `parameters` renamed to `inputSchema`); `tools/call` runs a tool by name (the
- *   {@link ToolManagerInterface} isolates a tool throw into a `success: false`
- *   result, which maps to an `isError: true` tool result — so the server adds NO
- *   try/catch). An unknown method → `-32601`; a `tools/call` with a missing /
- *   non-string `name` → `-32602`.
+ * - **Dual-era dispatch.** A request carrying the reserved modern version key uses
+ *   modern metadata validation and the `server/discover` / `tools/list` /
+ *   `tools/call` method set. Every other request uses the legacy `initialize` /
+ *   `ping` / `tools/list` / `tools/call` switch. The wire era is selected per
+ *   request and never stored.
  * - **Provider-agnostic.** Imports only core siblings — JSON-RPC + the tool registry,
  *   no HTTP, no model. Wire fields are narrowed via the contracts guards (no `as`).
  * - **Observable (§13).** The owned `emitter` fires `request` at the top of every
@@ -60,16 +64,14 @@ import { parseJSONRPCMessage } from './parsers.js'
  */
 export class MCPServer implements MCPServerInterface {
 	readonly #emitter: Emitter<MCPServerEventMap>
-	readonly #identity: MCPIdentity
-	readonly #tools: ToolManagerInterface
+	readonly #options: MCPServerOptions
 
 	constructor(options: MCPServerOptions) {
 		this.#emitter = new Emitter<MCPServerEventMap>({
 			...(options.on !== undefined ? { on: options.on } : {}),
 			...(options.error !== undefined ? { error: options.error } : {}),
 		})
-		this.#identity = options.identity
-		this.#tools = options.tools
+		this.#options = options
 	}
 
 	get emitter(): EmitterInterface<MCPServerEventMap> {
@@ -77,12 +79,14 @@ export class MCPServer implements MCPServerInterface {
 	}
 
 	get identity(): MCPIdentity {
-		return this.#identity
+		return this.#options.identity
 	}
 
 	async dispatch(request: JSONRPCRequest): Promise<JSONRPCResponse | undefined> {
 		const id = request.id ?? null
-		this.#emitter.emit('request', request.method, id)
+		const modern = isModernRequest(request)
+		const era = modern ? 'modern' : 'legacy'
+		this.#emitter.emit('request', request.method, id, era)
 		// JSON-RPC: a request with NO `id` is a NOTIFICATION — it is handled (the
 		// `request` event already fired) but NEVER produces a response, whatever its
 		// method (`notifications/initialized`, a fire-and-forget `ping`, an unknown
@@ -91,31 +95,7 @@ export class MCPServer implements MCPServerInterface {
 		if (request.id === undefined) {
 			return undefined
 		}
-		switch (request.method) {
-			case 'initialize': {
-				const requested = request.params?.['protocolVersion']
-				return buildJSONRPCResult(
-					id,
-					buildInitializeResult(
-						this.#identity.name,
-						this.#identity.version,
-						isString(requested) ? requested : undefined,
-					),
-				)
-			}
-			case 'ping':
-				return buildJSONRPCResult(id, {})
-			case 'tools/list':
-				return buildJSONRPCResult(id, { tools: buildToolDescriptors(this.#tools) })
-			case 'tools/call':
-				return this.#call(request, id)
-			default:
-				return buildJSONRPCError(
-					id,
-					JSONRPC_METHOD_NOT_FOUND,
-					`Method not found: ${request.method}`,
-				)
-		}
+		return modern ? this.#modern(request, id) : this.#legacy(request, id)
 	}
 
 	async handle(message: string): Promise<string | undefined> {
@@ -134,10 +114,90 @@ export class MCPServer implements MCPServerInterface {
 		return response === undefined ? undefined : JSON.stringify(response)
 	}
 
+	async #legacy(request: JSONRPCRequest, id: string | number | null): Promise<JSONRPCResponse> {
+		switch (request.method) {
+			case 'initialize': {
+				const requested = request.params?.['protocolVersion']
+				return buildJSONRPCResult(
+					id,
+					buildInitializeResult(
+						this.#options.identity.name,
+						this.#options.identity.version,
+						isString(requested) ? requested : undefined,
+					),
+				)
+			}
+			case 'ping':
+				return buildJSONRPCResult(id, {})
+			case 'tools/list':
+				return buildJSONRPCResult(id, {
+					tools: buildToolDescriptors(this.#options.tools),
+				})
+			case 'tools/call': {
+				const result = await this.#call(request, id)
+				return 'jsonrpc' in result ? result : buildJSONRPCResult(id, result)
+			}
+			default:
+				return buildJSONRPCError(
+					id,
+					JSONRPC_METHOD_NOT_FOUND,
+					`Method not found: ${request.method}`,
+				)
+		}
+	}
+
+	async #modern(request: JSONRPCRequest, id: string | number | null): Promise<JSONRPCResponse> {
+		const context = parseRequestContext(request)
+		if (context === undefined) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: malformed modern request metadata',
+			)
+		}
+		if (inferEra(context.version) === undefined) {
+			return buildJSONRPCError(
+				id,
+				MCP_UNSUPPORTED_VERSION,
+				`Unsupported protocol version: ${context.version}`,
+				{ supported: SUPPORTED_PROTOCOL_VERSIONS, requested: context.version },
+			)
+		}
+		switch (request.method) {
+			case 'server/discover':
+				return buildJSONRPCResult(id, buildDiscoverResult(this.#options))
+			case 'tools/list':
+				return buildJSONRPCResult(
+					id,
+					buildModernResult(
+						{ tools: buildToolDescriptors(this.#options.tools) },
+						this.#options.identity,
+						this.#options.cache?.ttl ?? DEFAULT_MCP_CACHE_TTL,
+						this.#options.cache?.scope,
+					),
+				)
+			case 'tools/call': {
+				const result = await this.#call(request, id)
+				return 'jsonrpc' in result
+					? result
+					: buildJSONRPCResult(id, buildModernResult(result, this.#options.identity))
+			}
+			default:
+				return buildJSONRPCError(
+					id,
+					JSONRPC_METHOD_NOT_FOUND,
+					`Method not found: ${request.method}`,
+				)
+		}
+	}
+
 	// Run a `tools/call`: narrow `params.name` (string) + `params.arguments` (record,
 	// default `{}`) with no `as`, execute the tool (the manager isolates a throw into
 	// `success: false`), and map the result to an MCP tool-call result.
-	async #call(request: JSONRPCRequest, id: string | number | null): Promise<JSONRPCResponse> {
+	async #call(
+		request: JSONRPCRequest,
+		id: string | number | null,
+	): Promise<MCPCallResult | JSONRPCResponse> {
 		const params = request.params
 		const name = params?.['name']
 		if (!isString(name)) {
@@ -150,7 +210,7 @@ export class MCPServer implements MCPServerInterface {
 		const rawArguments = params?.['arguments']
 		const args = isRecord(rawArguments) ? rawArguments : {}
 		const callId = request.id === undefined ? crypto.randomUUID() : String(request.id)
-		const result = await this.#tools.execute({ id: callId, name, arguments: args })
-		return buildJSONRPCResult(id, buildCallResult(result))
+		const result = await this.#options.tools.execute({ id: callId, name, arguments: args })
+		return buildCallResult(result)
 	}
 }
