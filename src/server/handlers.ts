@@ -1,5 +1,5 @@
 import type { MCPServerInterface } from '@src/core'
-import type { MCPOriginOptions } from './types.js'
+import type { MCPKeepaliveOptions, MCPOriginOptions } from './types.js'
 import {
 	JSONRPC_INVALID_REQUEST,
 	JSONRPC_INVALID_PARAMS,
@@ -22,6 +22,7 @@ import {
 } from './constants.js'
 import { acceptsEventStream, allowsOrigin, matchesModernHeaders } from './helpers.js'
 import { inferStatus } from './inferers.js'
+import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
 
 /**
  * Create the Streamable-HTTP POST handler used by `createMCPRoutes`.
@@ -32,10 +33,12 @@ import { inferStatus } from './inferers.js'
  * accepted, while every other headerless request needs a live legacy session to supply its
  * pinned version. A present origin must occur in `origin.origins` unless validation is
  * explicitly delegated upstream. Modern dispatch errors use their protocol status map; legacy
- * errors remain in-band at HTTP `200`.
+ * errors remain in-band at HTTP `200`. A streamed response composes the fetch-standard request
+ * signal with response-body cancellation and supplies the result to every dispatched modern
+ * handler through `MCPDispatchOptions.signal`.
  *
  * @param mcp - The transport-agnostic MCP server to dispatch through
- * @param options - Optional streaming and origin-validation options
+ * @param options - Optional streaming, origin-validation, and SSE keepalive options
  * @returns A request handler for the stateless MCP POST route
  *
  * @example
@@ -57,6 +60,7 @@ export function createMCPPostHandler(
 	options?: {
 		readonly streaming?: boolean
 		readonly origin?: MCPOriginOptions
+		readonly keepalive?: MCPKeepaliveOptions
 	},
 ): (request: Request) => Promise<Response> {
 	const streaming = options?.streaming ?? true
@@ -132,7 +136,8 @@ export function createMCPPostHandler(
 				)
 			}
 		}
-		const response = await mcp.dispatch(rpcRequest)
+		const disconnect = new HTTPDisconnect(request.signal, options?.keepalive)
+		const response = await mcp.dispatch(rpcRequest, { signal: disconnect.signal })
 		if (response !== undefined && Symbol.asyncIterator in response) {
 			const stream = openStream()
 			stream.response.headers.set(SSE_BUFFERING_HEADER, SSE_BUFFERING_DISABLED)
@@ -150,7 +155,7 @@ export function createMCPPostHandler(
 					stream.end()
 				}
 			})
-			return stream.response
+			return disconnect.bridge(stream)
 		}
 		const status = inferStatus(response, era)
 		if (response === undefined) return new Response(null, { status })

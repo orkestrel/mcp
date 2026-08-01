@@ -186,8 +186,8 @@ server.methods.add('demo/probe', async (request) =>
 ```
 
 A handler receives the request plus an `MCPDispatchOptions` bag whose
-`signal` aborts when the caller's request ends (a closed HTTP response
-stream, a stdio cancel). Both `dispatch` and `handle` take that bag as an
+`signal` aborts when the bound transport can observe that the caller's request
+has ended. Both `dispatch` and `handle` take that bag as an
 OPTIONAL second argument, so a caller that cannot abort simply never
 supplies one and a handler always receives an object:
 
@@ -501,7 +501,7 @@ the unimplemented legal carriers `prompts/get` and `resources/read` remain
 | `SubscriptionFilter`                  | interface | Optional tool, prompt, resource-list, and resource-URI notification families for `subscriptions/listen`.                                                                                                                   |
 | `SubscriptionsListenResultMetaObject` | interface | Required graceful-close metadata carrying the reserved subscription id.                                                                                                                                                    |
 | `SubscriptionsListenResult`           | interface | `{ resultType: 'complete'; _meta: SubscriptionsListenResultMetaObject }` — a graceful subscription closure.                                                                                                                |
-| `MCPDispatchOptions`                  | interface | `{ signal?: AbortSignal }` — the per-request execution options every dispatched handler receives; the signal aborts when the caller's request ends.                                                                        |
+| `MCPDispatchOptions`                  | interface | `{ signal?: AbortSignal }` — the per-request execution options every dispatched handler receives; the signal aborts when the bound transport observes that the caller's request ended.                                     |
 | `MCPSubscriptionHandler`              | type      | `(notifications, options) => AsyncIterable<JSONRPCRequest>` (or a promise of one) — an event-driven notification producer.                                                                                                 |
 | `MCPSubscriptionOptions`              | interface | `{ notifications; listen }` — the supported filter and producer for the built-in subscription method.                                                                                                                      |
 | `MCPStream`                           | type      | `AsyncGenerator<JSONRPCRequest, JSONRPCResponse>` — a held-open result: each `yield` is a notification, the `return` value is the terminating response.                                                                    |
@@ -549,7 +549,10 @@ const routes = createMCPRoutes(mcp) // POST /mcp dispatches JSON-RPC (JSON or SS
 ```
 
 `createMCPRoutes` is **stateless**: a single `POST {path}` route pumps each
-request body through `mcp.dispatch`. A malformed JSON body, or a parsed value
+request body through `mcp.dispatch`. For a streamed response,
+`MCPDispatchOptions.signal` composes the fetch-standard request signal with
+response-stream cancellation; the optional session middleware preserves the request
+signal when it rebuilds a buffered POST. A malformed JSON body, or a parsed value
 that is not a JSON-RPC request, is an HTTP `400` carrying a JSON-RPC error
 body (`-32700` / `-32600`, id `null`). Legacy dispatch results retain uniform
 HTTP `200` with in-band errors. Modern responses use `202` for notifications,
@@ -561,6 +564,11 @@ body. A held-open `MCPStream` always occupies that same SSE seam: every yielded
 notification is written in order, the generator's returned response is written
 last, and only then does the HTTP stream end. Waiting is on the producer's async
 iterator, never polling.
+
+The HTTP face can propagate cancellation only after a streamed response has begun; an idle
+stream writes SSE keepalive comments and notices a disconnect within one configured keepalive
+interval. A long-running unary request, including a unary `tools/call`, cannot be cancelled
+mid-flight over HTTP.
 
 A modern POST requires `MCP-Protocol-Version` equal to its reserved `_meta`
 version and `Mcp-Method` equal to its body method. `Mcp-Name` is required only
@@ -621,27 +629,31 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | API                   | Kind  | Summary                                                                                                                                                                                                 |
 | --------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `HTTPClientTransport` | class | The HTTP `ClientTransportInterface` over an injectable `fetch` — POSTs each message, decodes the JSON / SSE reply onto the `message` event.                                                             |
+| `HTTPDisconnect`      | class | The internal HTTP lifecycle bridge that composes the incoming request signal with streamed-response cancellation, forwards the SSE body, and writes held-open keepalive comments.                       |
 | `MCPSession`          | class | One MCP transport session — its `id` + attached SSE streams + the FOLDED bounded replay log (`Map` + capacity + lazy TTL); `push`/`attach`/`detach`/`replay` drive the resumable server→client channel. |
 
 #### Constants
 
-| Constant                       | Kind  | Value                                                                                                                               |
-| ------------------------------ | ----- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `MCP_SESSION_HEADER`           | const | `'mcp-session-id'` — the session header `createMCPSession` sets on `initialize` + reads thereafter.                                 |
-| `MCP_PROTOCOL_VERSION_HEADER`  | const | `'mcp-protocol-version'` — required by 2025-06-18 on post-initialize requests; the clients send it and the POST route validates it. |
-| `MCP_METHOD_HEADER`            | const | `'mcp-method'` — the modern request method, required to equal the JSON-RPC body method.                                             |
-| `MCP_NAME_HEADER`              | const | `'mcp-name'` — the modern named target, required only for `tools/call`.                                                             |
-| `SSE_BUFFERING_HEADER`         | const | `'x-accel-buffering'` — the reverse-proxy buffering response header used by SSE responses.                                          |
-| `SSE_BUFFERING_DISABLED`       | const | `'no'` — the value disabling reverse-proxy buffering for SSE responses.                                                             |
-| `DEFAULT_MCP_PATH`             | const | `'/mcp'` — the default path `createMCPRoutes` mounts the `POST` at (and `createMCPSession` owns for `GET` / `DELETE`).              |
-| `DEFAULT_MCP_SESSION_CAPACITY` | const | `1024` — the default max retained pushed messages in a session's folded resumable event log (oldest evicted past it).               |
-| `DEFAULT_MCP_SESSION_TTL`      | const | `300000` — the default per-event idle lifetime (ms, 5 min) of a session's folded event log; a staler entry is lazily evicted.       |
+| Constant                         | Kind  | Value                                                                                                                               |
+| -------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `MCP_SESSION_HEADER`             | const | `'mcp-session-id'` — the session header `createMCPSession` sets on `initialize` + reads thereafter.                                 |
+| `MCP_PROTOCOL_VERSION_HEADER`    | const | `'mcp-protocol-version'` — required by 2025-06-18 on post-initialize requests; the clients send it and the POST route validates it. |
+| `MCP_METHOD_HEADER`              | const | `'mcp-method'` — the modern request method, required to equal the JSON-RPC body method.                                             |
+| `MCP_NAME_HEADER`                | const | `'mcp-name'` — the modern named target, required only for `tools/call`.                                                             |
+| `SSE_BUFFERING_HEADER`           | const | `'x-accel-buffering'` — the reverse-proxy buffering response header used by SSE responses.                                          |
+| `SSE_BUFFERING_DISABLED`         | const | `'no'` — the value disabling reverse-proxy buffering for SSE responses.                                                             |
+| `DEFAULT_MCP_PATH`               | const | `'/mcp'` — the default path `createMCPRoutes` mounts the `POST` at (and `createMCPSession` owns for `GET` / `DELETE`).              |
+| `DEFAULT_MCP_KEEPALIVE_INTERVAL` | const | `15000` — the default interval (ms) between keepalive comments on a held-open SSE response.                                         |
+| `SSE_KEEPALIVE_COMMENT`          | const | `'keepalive'` — the SSE comment text written at each keepalive interval.                                                            |
+| `DEFAULT_MCP_SESSION_CAPACITY`   | const | `1024` — the default max retained pushed messages in a session's folded resumable event log (oldest evicted past it).               |
+| `DEFAULT_MCP_SESSION_TTL`        | const | `300000` — the default per-event idle lifetime (ms, 5 min) of a session's folded event log; a staler entry is lazily evicted.       |
 
 #### Helpers
 
 | API                      | Kind     | Summary                                                                                                                                                                                                             |
 | ------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `acceptsEventStream`     | function | Whether the request's `Accept` header contains `text/event-stream`.                                                                                                                                                 |
+| `createReadableStream`   | function | Build a `ReadableStream` from its `pull` and `cancel` behaviours, supplied as arguments rather than an inline source object.                                                                                        |
 | `allowsOrigin`           | function | Allow an absent Origin; require every present serialized Origin in the explicit list unless validation is delegated upstream.                                                                                       |
 | `matchesModernHeaders`   | function | Validate the modern protocol/method headers and the tools/call-only name header against the body.                                                                                                                   |
 | `inferLegacyVersion`     | function | Pin a supported requested legacy revision, otherwise select the newest supported legacy revision.                                                                                                                   |
@@ -661,9 +673,10 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | Type                         | Kind      | Shape                                                                                                                                                                                                                                    |
 | ---------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `MCPOriginOptions`           | interface | `{ enabled?: boolean; origins?: readonly string[] }` — shared default-on origin validation; `enabled: false` delegates upstream and ignores `origins`.                                                                                   |
-| `HTTPTransportOptions`       | interface | `{ path?: string; streaming?: boolean; origin?: MCPOriginOptions }` — mount path, SSE choice, and shared origin options for `createMCPRoutes`.                                                                                           |
+| `MCPKeepaliveOptions`        | interface | `{ interval?: number }` — the held-open SSE comment interval, defaulting to `DEFAULT_MCP_KEEPALIVE_INTERVAL`.                                                                                                                            |
+| `HTTPTransportOptions`       | interface | `{ path?; streaming?; origin?; keepalive? }` — mount path, unary SSE choice, shared origin options, and held-open keepalive options for `createMCPRoutes`.                                                                               |
 | `HTTPClientTransportOptions` | interface | `{ url: string; headers?: Record<string, string>; fetch?: typeof fetch; timeout?: number }` — the remote endpoint, extra headers, an injectable `fetch`, and an optional `AbortSignal.timeout` deadline for `createHTTPClientTransport`. |
-| `MCPSessionOptions`          | interface | `{ path?; ttl?; capacity?; clock?; origin? }` — the owned path, session TTL, replay bound, deterministic clock, and the same shared origin options for `createMCPSession`.                                                               |
+| `MCPSessionOptions`          | interface | `{ path?; ttl?; capacity?; clock?; origin?; keepalive? }` — the owned path, session TTL, replay bound, deterministic clock, shared origin options, and held-open keepalive options for `createMCPSession`.                               |
 | `MCPSessionInterface`        | interface | `id` data member + `attach` / `detach` / `push` / `replay` methods — one session + its resumable server→client push channel (the `MCPSession` entity).                                                                                   |
 | `MCPSessionState`            | interface | `{ session?: MCPSessionInterface }` — the `context.state` slice a consumer's `TState` extends so `createMCPSession` can thread the resolved session through.                                                                             |
 | `EventStoreEntry`            | interface | `{ id: string; message: JSONRPCMessage; timestamp: number }` — one logged pushed message (the unit `MCPSession.replay` returns).                                                                                                         |
@@ -931,7 +944,9 @@ browser face's own `HTTPClientTransport` / `WebSocketClientTransport`
 `ClientTransportInterface` (all seven share the one generic bidirectional
 JSON-RPC carrier — only the wire framing / host differs, so they add no new
 behavioral interface), and the session entity `MCPSession` ↔
-`MCPSessionInterface` (the folded replay log is private to it).
+`MCPSessionInterface` (the folded replay log is private to it). The internal
+`HTTPDisconnect` lifecycle entity exposes only `bridge`; its `signal` is a
+readonly data member.
 
 #### `MCPServerInterface`
 
@@ -1042,6 +1057,26 @@ await transport.send({ jsonrpc: '2.0', method: 'ping', id: 1 })
 await transport.close()
 ```
 
+#### `HTTPDisconnect`
+
+The internal HTTP lifecycle entity composes the incoming request signal with an
+MCP-owned response cancellation signal. Its readonly `signal` data member is
+supplied to dispatch or observed by session cleanup; `bridge` wraps the matching
+SSE response body, writes `: keepalive` comments at `keepalive.interval` (default
+15 seconds), and makes consumer cancellation abort that signal without inventing
+a protocol result or error. The timer stops when the body ends or either signal aborts.
+
+| Method   | Returns    | Behavior                                                                                                                                                     |
+| -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `bridge` | `Response` | Forward an open SSE stream through a keepalive-writing response body whose consumer cancellation aborts the entity's composed signal; stop its timer on end. |
+
+```ts
+const disconnect = new HTTPDisconnect(request.signal)
+const answer = await mcp.dispatch(rpcRequest, { signal: disconnect.signal })
+// after narrowing `answer` to a held-open stream and opening its SSE carrier:
+return disconnect.bridge(stream)
+```
+
 #### `MCPSessionInterface`
 
 One MCP transport session (the `MCPSession` entity) — its `id` is a data
@@ -1053,7 +1088,7 @@ and `push`es.
 | Method   | Returns                      | Behavior                                                                                                                                       |
 | -------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `attach` | `void`                       | Register an OPEN server→client SSE stream (a resumable `GET {path}`) so future `push`es reach it.                                              |
-| `detach` | `void`                       | Unregister a stream — called when the client disconnects (via the request's `AbortSignal`).                                                    |
+| `detach` | `void`                       | Unregister a stream — called when the composed HTTP request / response-stream `AbortSignal` fires.                                             |
 | `push`   | `string`                     | Append `message` to the folded log under a fresh MONOTONE id (returned) AND fan it out to every attached stream as one `id:`-tagged SSE event. |
 | `replay` | `readonly EventStoreEntry[]` | Every retained log entry STRICTLY AFTER `afterId`, in order; an unknown / evicted cursor replays nothing (the spec-sane resume).               |
 
@@ -1173,7 +1208,8 @@ event)`, NOT a domain event) — so a buggy observer can never corrupt a
     `StdioClientTransport` / `StdioServerTransport` (`src/server`) plus the
     browser face's own `HTTPClientTransport` / `WebSocketClientTransport`
     (`src/browser`), all seven implementing the one `ClientTransportInterface`;
-    and `MCPSession`) exposes the same public methods, no more. The remaining
+    and `MCPSession`) exposes the same public methods, no more. The internal
+    `HTTPDisconnect` entity exposes only `bridge` (its `signal` is data). The remaining
     exports add no behavioral interface with methods (the factories,
     `acceptsEventStream` / `readSessionHeader` /
     `readLastEventId` / `rejectUnknownSession` / `readEventStream` /
@@ -1213,7 +1249,15 @@ in request`, no `as`) — is HTTP **400** with a JSON-RPC error BODY (id
     stream ends, carrying `X-Accel-Buffering: no`; else a plain JSON body. A
     held-open dispatch result always uses that SSE seam: yields are written in
     order, the generator's returned response is written last, and the response
-    ends after it. The pump awaits the async iterator and never polls.
+    ends after it. The route supplies a signal composed from `request.signal` and
+    response-stream cancellation to `mcp.dispatch`, while the session middleware
+    preserves the incoming signal across each forwarded `Request`; the pump awaits
+    the async iterator and never polls. An SSE comment is written every configured
+    `keepalive.interval` (default `DEFAULT_MCP_KEEPALIVE_INTERVAL`), so an idle
+    streamed response notices a dead client within one interval; this is transport
+    liveness, not polling for producer work. Unary dispatch completes before response
+    streaming begins and receives no keepalive, so the HTTP face cannot cancel a
+    long-running unary request mid-flight.
     `createMCPRoutes` mints / reads NO
     session id. It is MECHANISM, not policy: auth / rate-limiting / sessions
     compose IN FRONT as ordinary middleware; origin policy is only the
@@ -1350,7 +1394,7 @@ socket, key, head, protocol })` (SERVER mode → writes the `101` handshake
     `https://` (a `ws(s)` scheme is converted to `http(s)` for the underlying
     request; `wss` → TLS via `node:https`).
 18. **Sessions are an opt-in native middleware on the HTTP transport
-    (`src/server`).** `createMCPSession({ path?, ttl?, capacity?, clock?, origin? })`
+    (`src/server`).** `createMCPSession({ path?, ttl?, capacity?, clock?, origin?, keepalive? })`
     returns a `MiddlewareHandler<TState>` (`TState extends MCPSessionState`)
     that owns its own closure `Map<string, { session: MCPSession; touched:
 number; version: MCPVersion }>` — NO dependency on `@orkestrel/middleware` and no shared
@@ -1398,9 +1442,10 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     (the same **404** as clause 18 on a missing / unknown id), opens
     `openStream()` (`@orkestrel/server`), reads `Last-Event-ID`
     (`readLastEventId`) and REPLAYS `session.replay(lastEventId)` onto the
-    stream FIRST, THEN `session.attach(stream)`, THEN detaches on the
-    request's `AbortSignal` firing (or immediately if already aborted). The
-    stream is long-lived — it is NEVER `end()`ed by the middleware.
+    stream FIRST, THEN `session.attach(stream)`, THEN detaches on the composed
+    request / response-stream `AbortSignal` firing (or immediately if already
+    aborted). Its configured keepalive bounds idle disconnect detection to one
+    interval. The stream is long-lived — it is NEVER `end()`ed by the middleware.
 20. **The stdio transport is newline-delimited JSON-RPC over process stdio
     (`src/server`).** `createStdioServer(mcp, options?)` wraps
     `options.input` (default `process.stdin`) / `options.output` (default
@@ -1698,6 +1743,7 @@ import {
 	acceptsEventStream,
 	allowsOrigin,
 	createMCPPostHandler,
+	createReadableStream,
 	decodeEvent,
 	matchesModernHeaders,
 	readEventStream,
@@ -1713,6 +1759,14 @@ createMCPPostHandler(mcp, { streaming: true }) // the same stateless POST handle
 readSessionHeader(request) // undefined — no mcp-session-id header
 readLastEventId(request) // undefined — no Last-Event-ID header
 rejectUnknownSession() // a 404 JSON-RPC error Response
+
+// The stream's behaviours are arguments rather than an inline source object, which is
+// what keeps them out of a nested function assignment. The HTTP disconnect bridge builds
+// its SSE body this way.
+const ticks = createReadableStream<Uint8Array>(
+	(controller) => controller.enqueue(new TextEncoder().encode(': keepalive\n\n')),
+	() => {},
+) // a ReadableStream whose pull writes one SSE comment frame
 
 const posted = new Request('http://localhost/mcp', {
 	method: 'POST',

@@ -393,7 +393,7 @@ export interface SubscriptionsListenResult {
 
 /** Per-request execution options every dispatched handler receives. */
 export interface MCPDispatchOptions {
-	/** Aborts when the caller's request ends — a closed HTTP response stream, a stdio cancel. */
+	/** Aborts when the bound transport can observe that the caller's request has ended. */
 	readonly signal?: AbortSignal
 }
 

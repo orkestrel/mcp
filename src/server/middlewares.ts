@@ -24,6 +24,7 @@ import {
 } from './helpers.js'
 import { inferLegacyVersion } from './inferers.js'
 import { MCPSession } from './MCPSession.js'
+import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
 
 /**
  * Create the native MCP session {@link MiddlewareHandler} — the plug-and-play stateful layer
@@ -55,8 +56,8 @@ import { MCPSession } from './MCPSession.js'
  *   an invalid / unknown id is the same `404`. A valid session opens the resumable
  *   server→client stream via `@orkestrel/server`'s {@link import('@orkestrel/server').openStream}:
  *   replays every event after the client's `Last-Event-ID` ({@link readLastEventId}) BEFORE
- *   attaching the stream for live pushes, then attaches; a client disconnect (`request.signal`)
- *   detaches it. Long-lived — never `end()`ed here.
+ *   attaching the stream for live pushes, then attaches; cancellation of the streamed response
+ *   body composes with `request.signal` and detaches it. Long-lived — never `end()`ed here.
  * - **`DELETE {path}`.** Resolves the session; a valid id deletes it from the store and answers
  *   `204`; an invalid / unknown id is the same `404`.
  *
@@ -113,6 +114,7 @@ export function createMCPSession<TState extends MCPSessionState>(
 						method: 'POST',
 						headers: request.headers,
 						body: text,
+						signal: request.signal,
 					}),
 				)
 			}
@@ -144,6 +146,7 @@ export function createMCPSession<TState extends MCPSessionState>(
 			if (entry === undefined) return rejectUnknownSession()
 			const session = entry.session
 			const stream = openStream()
+			const disconnect = new HTTPDisconnect(request.signal, options?.keepalive)
 			stream.response.headers.set(SSE_BUFFERING_HEADER, SSE_BUFFERING_DISABLED)
 			// A comment write flushes the response headers immediately (the underlying node:http
 			// response only sends headers on its first `write`/`end`) — without it a client's fetch
@@ -158,9 +161,9 @@ export function createMCPSession<TState extends MCPSessionState>(
 				}
 			}
 			session.attach(stream)
-			if (request.signal.aborted) session.detach(stream)
-			else request.signal.addEventListener('abort', () => session.detach(stream), { once: true })
-			return stream.response
+			if (disconnect.signal.aborted) session.detach(stream)
+			else disconnect.signal.addEventListener('abort', () => session.detach(stream), { once: true })
+			return disconnect.bridge(stream)
 		}
 
 		if (context.method !== 'POST' || text === undefined) return next()
@@ -203,6 +206,7 @@ export function createMCPSession<TState extends MCPSessionState>(
 			method: 'POST',
 			headers,
 			body: text,
+			signal: request.signal,
 		})
 		const response = await next(forwarded)
 		if (created !== undefined) {

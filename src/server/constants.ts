@@ -41,6 +41,19 @@ export const SSE_BUFFERING_DISABLED = 'no'
 export const DEFAULT_MCP_PATH = '/mcp'
 
 /**
+ * The default interval in milliseconds between SSE keepalive comments on held-open MCP
+ * responses.
+ *
+ * @remarks
+ * Fifteen seconds is infrequent enough to avoid chatty idle connections while bounding dead
+ * client detection and staying comfortably inside common intermediary idle windows.
+ */
+export const DEFAULT_MCP_KEEPALIVE_INTERVAL = 15_000
+
+/** The comment text written by the held-open MCP response keepalive. */
+export const SSE_KEEPALIVE_COMMENT = 'keepalive'
+
+/**
  * The WebSocket subprotocol the MCP-over-WebSocket transports negotiate — sent by the
  * client in `Sec-WebSocket-Protocol`, echoed by the server in its `101` handshake.
  *

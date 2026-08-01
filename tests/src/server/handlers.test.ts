@@ -1,4 +1,7 @@
-import type { JSONRPCRequest } from '@src/core'
+import type { JSONRPCRequest, MCPServerInterface } from '@src/core'
+import type { HTTPTransportOptions } from '@src/server'
+import type { StartedServerInterface } from '../../setupServer.js'
+import { request as httpRequest } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import {
 	createMCPServer,
@@ -9,8 +12,11 @@ import {
 	MCP_PROTOCOL_VERSION,
 } from '@src/core'
 import { createToolManager } from '@orkestrel/tool'
+import { createDispatcher } from '@orkestrel/router'
+import { createServer } from '@orkestrel/server'
 import {
 	createMCPPostHandler,
+	createMCPRoutes,
 	MCP_METHOD_HEADER,
 	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
@@ -21,9 +27,63 @@ import {
 	createJSONRPCNotification,
 	createJSONRPCRequest,
 } from '../../setup.js'
+import { createTeardown, startServer } from '../../setupServer.js'
 
 async function* subscriptionEvents(): AsyncGenerator<JSONRPCRequest> {
 	yield { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }
+}
+
+async function* disconnectEvents(
+	signal: AbortSignal,
+	observe: () => void,
+): AsyncGenerator<JSONRPCRequest> {
+	await new Promise<void>((resolve) => {
+		if (signal.aborted) resolve()
+		else signal.addEventListener('abort', () => resolve(), { once: true })
+	})
+	observe()
+	// This yield is reachable only after the disconnect signal was observed; the live stream
+	// remains idle and cannot use a producer write to trigger its own cancellation.
+	yield { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }
+	throw new Error('subscription client disconnected')
+}
+
+const { track } = createTeardown<StartedServerInterface<undefined>>((handle) => handle.stop())
+
+async function startHTTP(
+	mcp: MCPServerInterface,
+	options?: HTTPTransportOptions,
+): Promise<StartedServerInterface<undefined>> {
+	const dispatcher = createDispatcher<undefined>()
+	dispatcher.add(createMCPRoutes<undefined>(mcp, options))
+	return track(await startServer(createServer({ dispatcher, state: () => undefined })))
+}
+
+function disconnectHTTP(
+	url: string,
+	options: {
+		readonly method: string
+		readonly headers: Readonly<Record<string, string>>
+		readonly body: string
+	},
+): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		const outgoing = httpRequest(url, {
+			method: options.method,
+			headers: options.headers,
+		})
+		outgoing.on('response', (response) => {
+			response.once('data', () => response.destroy())
+			response.once('close', () => setImmediate(resolve))
+			response.on('error', (error) => {
+				if (!response.destroyed) reject(error)
+			})
+		})
+		outgoing.on('error', (error) => {
+			if (!outgoing.destroyed) reject(error)
+		})
+		outgoing.end(options.body)
+	})
 }
 
 describe('createMCPPostHandler', () => {
@@ -115,7 +175,9 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('frames a response as an event stream when negotiated', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer())
+		const handler = createMCPPostHandler(createCalculatorServer(), {
+			keepalive: { interval: 1 },
+		})
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -126,13 +188,10 @@ describe('createMCPPostHandler', () => {
 				body: JSON.stringify(createJSONRPCRequest({ method: 'ping' })),
 			}),
 		)
-		const events = await collectSSE(response)
+		const body = await response.text()
 
 		expect(response.headers.get('x-accel-buffering')).toBe('no')
-		expect(events).toHaveLength(1)
-		const event = events[0]
-		if (event === undefined) throw new Error('Expected one event-stream response')
-		expect(JSON.parse(event.data)).toEqual({ jsonrpc: '2.0', id: 1, result: {} })
+		expect(body).toBe('data: {"jsonrpc":"2.0","id":1,"result":{}}\n\n')
 	})
 
 	it('pumps a held-open subscription acknowledgement, notifications, and closure onto SSE', async () => {
@@ -197,6 +256,103 @@ describe('createMCPPostHandler', () => {
 				},
 			},
 		])
+	})
+
+	it('aborts an A4 subscription handler when a real HTTP client disconnects', async () => {
+		const mcp = createMCPServer({
+			identity: { name: 'signal-server', version: '1.0.0' },
+			tools: createToolManager(),
+			subscription: {
+				notifications: { toolsListChanged: true },
+				listen: (_notifications, options) => {
+					if (options.signal === undefined) throw new Error('expected HTTP disconnect signal')
+					observed = options.signal
+					return disconnectEvents(options.signal, () => abortedResolve?.())
+				},
+			},
+		})
+		let observed: AbortSignal | undefined
+		let abortedResolve: (() => void) | undefined
+		const aborted = new Promise<void>((resolve) => {
+			abortedResolve = resolve
+		})
+		const handle = await startHTTP(mcp, { keepalive: { interval: 25 } })
+		const body = JSON.stringify(
+			createJSONRPCRequest({
+				method: 'subscriptions/listen',
+				id: 'disconnect-listen',
+				params: {
+					notifications: { toolsListChanged: true },
+					_meta: {
+						[MCP_META_VERSION]: '2026-07-28',
+						[MCP_META_CAPABILITIES]: {},
+					},
+				},
+			}),
+		)
+		await disconnectHTTP(`${handle.base}/mcp`, {
+			method: 'POST',
+			headers: {
+				accept: 'text/event-stream',
+				'content-type': 'application/json',
+				[MCP_PROTOCOL_VERSION_HEADER]: '2026-07-28',
+				[MCP_METHOD_HEADER]: 'subscriptions/listen',
+			},
+			body,
+		})
+		await aborted
+
+		expect(observed).toBeDefined()
+		expect(observed?.aborted).toBe(true)
+	})
+
+	it('composes the incoming request signal into the handler signal', async () => {
+		const mcp = createMCPServer({
+			identity: { name: 'signal-server', version: '1.0.0' },
+			tools: createToolManager(),
+		})
+		let observed: AbortSignal | undefined
+		let startedResolve: (() => void) | undefined
+		const started = new Promise<void>((resolve) => {
+			startedResolve = resolve
+		})
+		mcp.methods.add('demo/slow', async (request, options) => {
+			observed = options.signal
+			startedResolve?.()
+			await new Promise<void>((resolve) => {
+				options.signal?.addEventListener('abort', () => resolve(), { once: true })
+			})
+			return { jsonrpc: '2.0', id: request.id ?? null, result: {} }
+		})
+		const controller = new AbortController()
+		const request = new Request('http://localhost/mcp', {
+			method: 'POST',
+			headers: {
+				[MCP_PROTOCOL_VERSION_HEADER]: '2026-07-28',
+				[MCP_METHOD_HEADER]: 'demo/slow',
+			},
+			body: JSON.stringify(
+				createJSONRPCRequest({
+					method: 'demo/slow',
+					params: {
+						_meta: {
+							[MCP_META_VERSION]: '2026-07-28',
+							[MCP_META_CAPABILITIES]: {},
+						},
+					},
+				}),
+			),
+			signal: controller.signal,
+		})
+		const pending = createMCPPostHandler(mcp, { streaming: false })(request)
+		await started
+		controller.abort()
+		const response = await pending
+
+		expect(observed).not.toBe(request.signal)
+		expect(observed?.aborted).toBe(true)
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({ jsonrpc: '2.0', id: 1, result: {} })
 	})
 
 	it('accepts a headerless legacy initialize request', async () => {

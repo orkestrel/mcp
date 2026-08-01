@@ -26,6 +26,20 @@ import {
 	MCP_SESSION_HEADER,
 } from './constants.js'
 
+/**
+ * Create a readable stream from its pull and cancellation behaviours.
+ *
+ * @param pull - The behaviour that supplies the stream's next chunk
+ * @param cancel - The behaviour that releases the stream after consumer cancellation
+ * @returns A readable stream backed by the supplied behaviours
+ */
+export function createReadableStream<T>(
+	pull: (controller: ReadableStreamDefaultController<T>) => void | PromiseLike<void>,
+	cancel: (reason?: unknown) => void | PromiseLike<void>,
+): ReadableStream<T> {
+	return new ReadableStream<T>({ pull, cancel })
+}
+
 // The MCP server-transport helpers (AGENTS §4.3 module-scope names — no entity context).
 // The server-side reader `acceptsEventStream` reads the request's `Accept` header to
 // decide whether a Streamable-HTTP SSE response is allowed; `readSessionHeader` reads the

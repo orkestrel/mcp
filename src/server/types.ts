@@ -50,6 +50,19 @@ export interface MCPOriginOptions {
 }
 
 /**
+ * Shared SSE keepalive options for held-open HTTP responses.
+ *
+ * @remarks
+ * - `interval` — milliseconds between SSE comment frames. Defaults to {@link
+ *   import('./constants.js').DEFAULT_MCP_KEEPALIVE_INTERVAL}. Each comment keeps an idle
+ *   connection live through intermediaries and bounds how long a dead client can remain
+ *   unobserved by the HTTP writer.
+ */
+export interface MCPKeepaliveOptions {
+	readonly interval?: number
+}
+
+/**
  * Options for `createMCPRoutes` — the path the transport is mounted at and whether an SSE
  * response is allowed. `createMCPRoutes` is STATELESS; sessions are a separate middleware
  * ({@link import('./middlewares.js').createMCPSession}), composed via `server.use`.
@@ -71,12 +84,16 @@ export interface MCPOriginOptions {
  *   while every present `Origin` must occur exactly in `origin.origins`. Set
  *   `origin.enabled` to `false` only when validation is delegated upstream; `origins` is
  *   ignored in that mode. Both enforcement sites must receive the same value.
+ * - `keepalive` — the SSE liveness options for held-open responses. `interval` defaults to
+ *   {@link import('./constants.js').DEFAULT_MCP_KEEPALIVE_INTERVAL}. Keepalives never apply
+ *   to unary responses.
  */
 export interface HTTPTransportOptions {
 	readonly path?: string
 	readonly streaming?: boolean
 	/** Must match the session layer's value; `origins` is ignored when `enabled` is `false`. */
 	readonly origin?: MCPOriginOptions
+	readonly keepalive?: MCPKeepaliveOptions
 }
 
 /**
@@ -106,6 +123,8 @@ export interface HTTPTransportOptions {
  *   any session is minted. Set `origin.enabled` to `false` only when validation is delegated
  *   upstream; `origins` is ignored in that mode. Both enforcement sites must receive the same
  *   value.
+ * - `keepalive` — the SSE liveness options for the held-open resumable response. `interval`
+ *   defaults to {@link import('./constants.js').DEFAULT_MCP_KEEPALIVE_INTERVAL}.
  */
 export interface MCPSessionOptions {
 	readonly path?: string
@@ -114,6 +133,7 @@ export interface MCPSessionOptions {
 	readonly clock?: () => number
 	/** Must match the route layer's value; `origins` is ignored when `enabled` is `false`. */
 	readonly origin?: MCPOriginOptions
+	readonly keepalive?: MCPKeepaliveOptions
 }
 
 /**
