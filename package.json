@@ -110,8 +110,8 @@
 		"vitest": "^4.1.10"
 	},
 	"peerDependencies": {
-		"@orkestrel/router": ">=0.0.8 <0.1.0",
-		"@orkestrel/server": ">=0.0.9 <0.1.0"
+		"@orkestrel/router": ">=0.0.8",
+		"@orkestrel/server": ">=0.0.9"
 	},
 	"engines": {
 		"node": ">=22.12.0"
