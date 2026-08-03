@@ -115,7 +115,7 @@ Cross-face and substrate usage appear under [Patterns](#patterns).
 | `clientRateKey`         | function | Collapse a client IP into its rate-limit bucket key (IPv6 `/64`, IPv4 unchanged).                                                           |
 | `serializeEvent`        | function | Serialize one `SSEMessage` to the SSE wire.                                                                                                 |
 | `enqueueStreamText`     | function | Enqueue encoded text into an open byte stream, safely ignoring closed or unstarted streams.                                                 |
-| `openStream`            | function | Open a generic Server-Sent-Events stream over a `ReadableStream` `Response`.                                                                |
+| `openStream`            | function | Open a generic Server-Sent-Events stream whose producer can observe and await process-local queue backpressure.                             |
 | `isDangerousKey`        | function | Whether a key is a prototype-pollution vector (`__proto__`/`constructor`/`prototype`).                                                      |
 | `scrubPrototype`        | function | Recursively strip prototype-pollution keys from a parsed value in place.                                                                    |
 | `collectRequestBody`    | function | Collect a `Request` body into one `Uint8Array`, enforcing a size limit.                                                                     |
@@ -153,7 +153,7 @@ Cross-face and substrate usage appear under [Patterns](#patterns).
 | `NegotiatorInterface`     | interface | `negotiate` / `encoding` / `language` / `format` — the content-negotiation contract.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `SSEMessage`              | interface | `{ data; event?; id?; retry? }` — one Server-Sent Event.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `StreamOptions`           | interface | `{ status?; headers? }` — options for `openStream`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `StreamInterface`         | interface | `response` / `closed` data members + `write` / `comment` / `end`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `StreamInterface`         | interface | `response` / `closed` data members + `write` / `comment` / `drain` / `end`; `write` returns local queue readiness and `drain` parks until capacity or closure.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `RangeSpec`               | type      | `{ satisfiable: true; start; end } \| { satisfiable: false }` — a parsed `Range`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `BodyOptions`             | interface | `{ limit?; decompression? }` — caps for `readBody`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `ServerStatus`            | type      | `'idle' \| 'starting' \| 'listening' \| 'stopping' \| 'stopped'` — the AGENTS §10 lifecycle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -166,15 +166,17 @@ Cross-face and substrate usage appear under [Patterns](#patterns).
 The `value`/`q` members of `AcceptEntry`, the `response`/`closed` members of
 `StreamInterface`, and the `id` / `status` / `port` / `dispatcher` / `emitter`
 members of `ServerInterface` are all `readonly` data members (Surface rows,
-above) — the call-signature methods of `NegotiatorInterface` and
-`ServerInterface` are documented under [Methods](#methods).
+above) — the call-signature methods of `NegotiatorInterface`,
+`StreamInterface`, and `ServerInterface` are documented under
+[Methods](#methods).
 
 ## Methods
 
-The public methods of `NegotiatorInterface` and `ServerInterface` — every
-call-signature member listed (their `readonly` data members stay Surface
-rows). `Negotiator` and `Server` implement their interfaces exactly, so this
-doubles as each class's instance-method surface (AGENTS §22).
+The public methods of `NegotiatorInterface`, `StreamInterface`, and
+`ServerInterface` — every call-signature member listed (their `readonly` data
+members stay Surface rows). `Negotiator` and `Server` implement their
+interfaces exactly, so their tables also double as each class's
+instance-method surface (AGENTS §22).
 
 #### `NegotiatorInterface`
 
@@ -189,6 +191,27 @@ invokes the winner, or answers `406`.
 | `encoding`  | `Encoding \| undefined` | Pick the best `available` content-coding for an `Accept-Encoding` header.   |
 | `language`  | `string \| undefined`   | Pick the best `available` language for an `Accept-Language` header.         |
 | `format`    | `Promise<Response>`     | Dispatch to the handler whose media type the client most prefers, or `406`. |
+
+#### `StreamInterface`
+
+`write` always accepts an event while open and returns whether the local
+`ReadableStream` queue still has positive desired size afterward. A producer
+receiving `false` parks on `drain` before writing again. This is process-local
+queue state, not proof that the remote peer consumed bytes; the router's
+drain-honoring response pump makes socket pressure stop pulls so the local
+queue can faithfully signal that transport pressure. Ignoring the boolean
+preserves the prior unconditional-enqueue behavior. The default queue strategy
+counts chunks rather than their byte lengths, so a producer needing a byte
+bound must also cap each individual event. The route must return `response`
+before its producer awaits a `false` write, because no consumer can pull the
+body before receiving that response.
+
+| Method    | Returns         | Behavior                                                                                                                                   |
+| --------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `write`   | `boolean`       | Serialize and enqueue one event; report positive local queue capacity afterward (`false` also when already closed).                        |
+| `comment` | `void`          | Enqueue one SSE comment/keep-alive line; safely do nothing once closed.                                                                    |
+| `drain`   | `Promise<void>` | Resolve on the pull that restores positive local queue capacity, or immediately when already writable/closed; event-driven, never polling. |
+| `end`     | `void`          | Close the response stream; safely do nothing once already closed and settle any parked producer.                                           |
 
 #### `ServerInterface`
 
@@ -348,6 +371,18 @@ stopping → stopped`; `start()` from `listening`/`starting`/`stopping`
     a string `message` — the exact fields the boundary reads off a
     recognized error. The brand is an implementation detail of `HTTPError`'s
     constructor, not a field a consumer sets by hand.
+19. **SSE producers can cooperate with real process-local transport
+    backpressure.** `StreamInterface.write` returns `true` only while the
+    underlying `ReadableStream` controller retains positive desired size after
+    accepting the event. A `false` result means the producer should await
+    `drain()`; that promise parks without polling until a consumer pull restores
+    capacity, or stream closure settles the wait. Because the router response
+    pump stops pulling while `ServerResponse.write` is backpressured, a slow TCP
+    consumer makes this queue fill and the producer park. The signal remains
+    process-local — it does not prove remote receipt — and callers that ignore
+    it retain the original unconditional-enqueue behavior. The queue's default
+    strategy counts chunks, not their byte lengths, so a producer seeking a
+    byte bound must also cap each individual event.
 
 ## Patterns
 
@@ -436,13 +471,18 @@ const withUser: MiddlewareHandler<State> = async (_request, context, next) => ne
 ### SSE route
 
 ```ts
+import type { StreamInterface } from '@orkestrel/server'
 import { openStream } from '@orkestrel/server'
+
+async function pumpStream(stream: StreamInterface): Promise<void> {
+	if (!stream.write({ event: 'token', data: 'hello' })) await stream.drain()
+	stream.comment('keep-alive')
+	stream.end()
+}
 
 function streamHandler(): Response {
 	const stream = openStream()
-	stream.write({ event: 'token', data: 'hello' })
-	stream.comment('keep-alive')
-	stream.end()
+	void pumpStream(stream)
 	return stream.response
 }
 ```
@@ -567,7 +607,8 @@ await decompressRequestBody(gzipped, 'gzip', 1_048_576) // capped decompression 
   `compose` (outer-first ordering, double-`next` rejection, short-circuit,
   request substitution, response transformation), cookie parse/serialize/
   attribute-injection guards, `resolveSecure`, `appendCookie`/`clearCookie`,
-  `isAddressInfo` narrowing, and `discoverPort` (default, preferred, and
+  `isAddressInfo` narrowing, `openStream` readiness/drain and
+  ignore-the-signal behavior, and `discoverPort` (default, preferred, and
   taken-preferred-falls-back cases).
 - [`tests/src/server/Negotiator.test.ts`](../../tests/src/server/Negotiator.test.ts) —
   `negotiate`/`encoding`/`language`/`format`: exact vs subtype-wildcard vs
@@ -583,8 +624,10 @@ await decompressRequestBody(gzipped, 'gzip', 1_048_576) // capped decompression 
   bounded startup, `EADDRINUSE` honesty, host/port binds, ephemeral default,
   connection / header / per-socket request caps, graceful-vs-forced drain,
   20-parallel-none-dropped, connection facts threaded into state,
-  `context.body()` caching, boundary mapping (`HTTPError`/other/`expose`), and
-  the stop-signal-reaches-handlers case.
+  `context.body()` caching, boundary mapping (`HTTPError`/other/`expose`), the
+  stop-signal-reaches-handlers case, and the real slow-TCP proof that an SSE
+  producer parks at local queue pressure, resumes on drain, and stays bounded
+  when cooperative while ignored readiness retains unconditional enqueue.
 
 ## See also
 

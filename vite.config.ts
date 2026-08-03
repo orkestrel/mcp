@@ -1,3 +1,4 @@
+import type { PlaywrightProviderOptions } from '@vitest/browser-playwright'
 import type { CSSOptions, Plugin, ResolvedConfig, UserConfig } from 'vite'
 import { isCSSRequest, parseSync, preprocessCSS, transformWithOxc, Visitor } from 'vite'
 import { defineConfig, mergeConfig } from 'vitest/config'
@@ -5,6 +6,7 @@ import tsconfig from './tsconfig.json' with { type: 'json' }
 import { fileURLToPath, URL } from 'node:url'
 import { isBuiltin } from 'node:module'
 import {
+	accessSync,
 	closeSync,
 	constants as FS_CONSTANTS,
 	existsSync,
@@ -16,7 +18,15 @@ import {
 	realpathSync,
 	statSync,
 } from 'node:fs'
-import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from 'node:path'
+import {
+	basename,
+	join,
+	dirname,
+	isAbsolute,
+	relative,
+	resolve as resolvePath,
+	sep,
+} from 'node:path'
 import { playwright } from '@vitest/browser-playwright'
 import { chromium } from 'playwright'
 
@@ -30,15 +40,64 @@ export const CHROMIUM_LAYOUTS = Object.freeze([
 	'chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium',
 ])
 
+/** Stable Playwright Chromium channels and their standard executable layouts. */
+export const SYSTEM_BROWSER_CHANNELS = Object.freeze([
+	Object.freeze({
+		channel: 'chrome',
+		layouts: Object.freeze({
+			linux: '/opt/google/chrome/chrome',
+			darwin: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+			win32: Object.freeze(['Google', 'Chrome', 'Application', 'chrome.exe']),
+		}),
+	}),
+	Object.freeze({
+		channel: 'msedge',
+		layouts: Object.freeze({
+			linux: '/opt/microsoft/msedge/msedge',
+			darwin: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+			win32: Object.freeze(['Microsoft', 'Edge', 'Application', 'msedge.exe']),
+		}),
+	}),
+])
+
 /**
- * Resolve a launchable Chromium executable: the pinned revision when installed,
+ * Determine whether a path identifies an executable regular file.
+ *
+ * @param path - The filesystem path to inspect.
+ * @returns Whether the path is a regular file with execute access.
+ *
+ * @example
+ * ```ts
+ * isBrowserExecutable('/opt/google/chrome/chrome')
+ * ```
+ */
+export function isBrowserExecutable(path: string): boolean {
+	try {
+		if (!statSync(path).isFile()) return false
+		accessSync(path, FS_CONSTANTS.X_OK)
+		return true
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Resolve a launchable Playwright-managed Chromium executable: the pinned revision when installed,
  * otherwise a `chromium` / `chromium.exe` alias or any other `chromium-*`
  * revision under the same Playwright browsers directory. A pinned-revision miss
  * is not Chromium absence — managed containers ship one usable build (often
  * behind a revision-agnostic alias) for many Playwright versions.
+ *
+ * @param pinned - The executable path for Playwright's pinned Chromium revision.
+ * @returns The managed executable path, or `undefined` when none is executable.
+ *
+ * @example
+ * ```ts
+ * resolveManagedBrowser(chromium.executablePath())
+ * ```
  */
-export function resolveChromium(pinned: string): string | undefined {
-	if (existsSync(pinned)) return pinned
+export function resolveManagedBrowser(pinned: string): string | undefined {
+	if (isBrowserExecutable(pinned)) return pinned
 	let revisionRoot = dirname(pinned)
 	for (;;) {
 		if (/^chromium-\d+$/.test(basename(revisionRoot))) break
@@ -49,7 +108,7 @@ export function resolveChromium(pinned: string): string | undefined {
 	const browsersRoot = dirname(revisionRoot)
 	for (const alias of ['chromium', 'chromium.exe']) {
 		const candidate = resolvePath(browsersRoot, alias)
-		if (existsSync(candidate) && statSync(candidate).isFile()) return candidate
+		if (isBrowserExecutable(candidate)) return candidate
 	}
 	let entries: readonly string[]
 	try {
@@ -63,18 +122,89 @@ export function resolveChromium(pinned: string): string | undefined {
 	for (const revision of revisions) {
 		for (const layout of CHROMIUM_LAYOUTS) {
 			const candidate = resolvePath(browsersRoot, revision, layout)
-			if (existsSync(candidate)) return candidate
+			if (isBrowserExecutable(candidate)) return candidate
 		}
 	}
 	return undefined
 }
 
-const chromiumPinned = chromium.executablePath()
-const chromiumPath = resolveChromium(chromiumPinned)
-const chromiumOptions =
-	chromiumPath === undefined || chromiumPath === chromiumPinned
-		? {}
-		: { launchOptions: { executablePath: chromiumPath } }
+/**
+ * Resolve the first installed stable system Chromium channel.
+ *
+ * @param platform - The Node platform whose standard layouts should be probed.
+ * @param environment - The process environment supplying Windows installation roots.
+ * @returns `chrome`, then `msedge`, or `undefined` when neither is executable.
+ *
+ * @example
+ * ```ts
+ * resolveSystemBrowser(process.platform, process.env)
+ * ```
+ */
+export function resolveSystemBrowser(
+	platform: NodeJS.Platform,
+	environment: NodeJS.ProcessEnv,
+): string | undefined {
+	if (platform !== 'linux' && platform !== 'darwin' && platform !== 'win32') return undefined
+	const roots = new Set<string>()
+	if (platform === 'win32') {
+		for (const root of [
+			environment.LOCALAPPDATA,
+			environment.PROGRAMFILES,
+			environment['PROGRAMFILES(X86)'],
+		]) {
+			if (root !== undefined && root.length > 0) roots.add(root)
+		}
+		const homeDrive = environment.HOMEDRIVE
+		if (homeDrive !== undefined && homeDrive.length > 0) {
+			roots.add(join(homeDrive, 'Program Files'))
+			roots.add(join(homeDrive, 'Program Files (x86)'))
+		}
+	}
+	for (const browser of SYSTEM_BROWSER_CHANNELS) {
+		if (platform === 'win32') {
+			for (const root of roots) {
+				if (isBrowserExecutable(join(root, ...browser.layouts.win32))) return browser.channel
+			}
+			continue
+		}
+		if (isBrowserExecutable(browser.layouts[platform])) return browser.channel
+	}
+	return undefined
+}
+
+/**
+ * Resolve launch options for a managed Chromium or stable system browser.
+ *
+ * @param pinned - The executable path for Playwright's pinned Chromium revision.
+ * @param platform - The Node platform whose standard system layouts should be probed.
+ * @param environment - The process environment supplying Windows installation roots.
+ * @returns Provider options for managed Chromium, Chrome, or Edge, or `undefined`.
+ *
+ * @remarks
+ * An installed pinned revision returns an empty object so Playwright retains
+ * its default launch semantics. A different managed executable is selected by
+ * path; a system browser is selected by its stable Playwright channel.
+ *
+ * @example
+ * ```ts
+ * resolveBrowser(chromium.executablePath(), process.platform, process.env)
+ * ```
+ */
+export function resolveBrowser(
+	pinned: string,
+	platform: NodeJS.Platform,
+	environment: NodeJS.ProcessEnv,
+): PlaywrightProviderOptions | undefined {
+	const managed = resolveManagedBrowser(pinned)
+	if (managed !== undefined) {
+		return managed === pinned ? {} : { launchOptions: { executablePath: managed } }
+	}
+	const channel = resolveSystemBrowser(platform, environment)
+	return channel === undefined ? undefined : { launchOptions: { channel } }
+}
+
+const browserPinned = chromium.executablePath()
+const browserOptions = resolveBrowser(browserPinned, process.platform, process.env)
 
 export function resolveWorkspacePath(relativePath: string): string {
 	return fileURLToPath(new URL(relativePath, import.meta.url))
@@ -123,7 +253,9 @@ export function gateBrowserProjects(
 		projects.push(registration.project())
 	}
 	if (gated.length === 0) return { projects }
-	console.warn(`browser projects skipped: Chromium absent (${gated.join(', ')})`)
+	console.warn(
+		`browser projects skipped: no Playwright Chromium, Chrome, or Edge found (${gated.join(', ')})`,
+	)
 	const filters: string[] = []
 	let readable = true
 	for (let index = 0; index < argv.length; index += 1) {
@@ -1051,7 +1183,7 @@ export const srcBrowser = (config?: UserConfig): UserConfig =>
 							}),
 					browser: {
 						enabled: true,
-						provider: playwright(chromiumOptions),
+						provider: playwright(browserOptions),
 						instances: [{ browser: 'chromium', headless: true }],
 					},
 					fileParallelism: false,
@@ -1075,6 +1207,7 @@ export const srcServer = (config?: UserConfig): UserConfig =>
 					outDir: 'dist/src/server',
 					target: 'node22',
 					rolldownOptions: {
+						platform: 'node',
 						external: (id: string) =>
 							id === '@src/core' || id.startsWith('node:') || id.startsWith('@orkestrel/'),
 						output: [
@@ -1143,7 +1276,7 @@ export default defineConfig({
 			{ project: policy },
 			{ project: guides },
 		],
-		chromiumPath !== undefined,
+		browserOptions !== undefined,
 		process.argv,
 	),
 })

@@ -1,9 +1,9 @@
-import { globSync, accessSync, constants as FS_CONSTANTS, readFileSync, statSync } from 'node:fs'
+import { globSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { isBrowserVuePath } from './setup.js'
 import { inspectCodingWorkspace } from './setupPolicy.js'
 import { chromium } from 'playwright'
-import { resolveChromium } from '../vite.config.js'
+import { isBrowserExecutable, resolveBrowser, SYSTEM_BROWSER_CHANNELS } from '../vite.config.js'
 
 describe('repository coding law', () => {
 	it('keeps Vue single-file components exclusively in browser environments', () => {
@@ -27,11 +27,16 @@ describe('repository coding law', () => {
 		expect(occurrences).toEqual([])
 	})
 
-	it('resolves Chromium only to a real executable file', () => {
-		const chromiumPath = resolveChromium(chromium.executablePath())
-		if (chromiumPath === undefined) return
-
-		expect(statSync(chromiumPath).isFile()).toBe(true)
-		expect(() => accessSync(chromiumPath, FS_CONSTANTS.X_OK)).not.toThrow()
+	it('resolves only a real managed executable or stable system browser channel', () => {
+		const options = resolveBrowser(chromium.executablePath(), process.platform, process.env)
+		let valid = options === undefined
+		if (options !== undefined) {
+			const channel = options.launchOptions?.channel
+			valid =
+				channel === undefined
+					? isBrowserExecutable(options.launchOptions?.executablePath ?? chromium.executablePath())
+					: SYSTEM_BROWSER_CHANNELS.some((browser) => browser.channel === channel)
+		}
+		expect(valid).toBe(true)
 	})
 })

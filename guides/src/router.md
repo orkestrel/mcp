@@ -323,8 +323,11 @@ await` loop over the `IncomingMessage` enqueueing each chunk, with
     `duplex: 'half'` set as Node's fetch implementation requires for a
     streamed request body; `sendResponse` streams a non-`null` `Response`
     body back to the `ServerResponse` chunk by chunk, ending the target when
-    the stream completes (or stopping cleanly, without throwing, if the
-    target was destroyed mid-stream by a client disconnect).
+    the stream completes. When a write reports backpressure, it waits for
+    `drain` before pulling the next body chunk, raced against target
+    close/error/destruction so a client disconnect stops the pump promptly;
+    every race listener is removed when that wait settles. A target destroyed
+    mid-stream stops cleanly without throwing.
 23. **Header fidelity.** `buildRequest` copies every incoming header
     (multi-value headers comma-joined, except `set-cookie`, appended
     individually); `sendResponse` writes every outgoing header and re-derives

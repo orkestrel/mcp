@@ -21,23 +21,37 @@ function message(n: number): JSONRPCMessage {
 }
 
 // A REAL recording StreamInterface (single-use to this file, so local — AGENTS §16.1): its
-// `write` records each SSEMessage into a recorder; the other methods are inert. NOT a mock of
+// `write` records each SSEMessage into an unbounded sink, so it reports available capacity;
 // behaviour — a genuine sink standing in for an open GET-SSE stream so `push`'s fan-out is
-// observable without a socket. `writes()` is a function (not a getter), so a caller reads the LIVE
-// recorded list after each push rather than a stale snapshot.
-function recordingStream(): {
-	readonly stream: StreamInterface
-	readonly writes: () => readonly SSEMessage[]
-} {
-	const recorder = createRecorder<readonly [SSEMessage]>()
-	const stream: StreamInterface = {
-		response: new Response(null),
-		closed: false,
-		write: (event) => recorder.handler(event),
-		comment: () => {},
-		end: () => {},
+// `drain` resolves immediately, `end` closes the sink, and callers read the live `writes` getter.
+class RecordingStream implements StreamInterface {
+	readonly response = new Response(null)
+	readonly #recorder = createRecorder<readonly [SSEMessage]>()
+	#closed = false
+
+	get closed(): boolean {
+		return this.#closed
 	}
-	return { stream, writes: () => recorder.calls.map(([event]) => event) }
+
+	get writes(): readonly SSEMessage[] {
+		return this.#recorder.calls.map(([event]) => event)
+	}
+
+	write(event: SSEMessage): boolean {
+		if (this.#closed) return false
+		this.#recorder.handler(event)
+		return true
+	}
+
+	comment(): void {}
+
+	drain(): Promise<void> {
+		return Promise.resolve()
+	}
+
+	end(): void {
+		this.#closed = true
+	}
 }
 
 describe('MCPSession — id', () => {
@@ -66,12 +80,12 @@ describe('MCPSession — push appends to the folded log with monotone ids', () =
 describe('MCPSession — push fans out to attached streams', () => {
 	it('push writes the message to an attached stream as an id-tagged SSE event', () => {
 		const session = new MCPSession('s')
-		const { stream, writes } = recordingStream()
+		const stream = new RecordingStream()
 		session.attach(stream)
 		const sent = message(1)
 		const id = session.push(sent)
-		expect(writes()).toHaveLength(1)
-		const event = writes()[0]
+		expect(stream.writes).toHaveLength(1)
+		const event = stream.writes[0]
 		// The fanned-out event carries the SAME id `push` returned, and the message as `data`.
 		expect(event?.data).toBe(JSON.stringify(sent))
 		expect(event?.id).toBe(id)
@@ -79,24 +93,24 @@ describe('MCPSession — push fans out to attached streams', () => {
 
 	it('push fans out to EVERY attached stream (the same id reaches both)', () => {
 		const session = new MCPSession('s')
-		const a = recordingStream()
-		const b = recordingStream()
-		session.attach(a.stream)
-		session.attach(b.stream)
+		const a = new RecordingStream()
+		const b = new RecordingStream()
+		session.attach(a)
+		session.attach(b)
 		session.push(message(1))
-		expect(a.writes()).toHaveLength(1)
-		expect(b.writes()).toHaveLength(1)
-		expect(a.writes()[0]?.id).toBe(b.writes()[0]?.id)
+		expect(a.writes).toHaveLength(1)
+		expect(b.writes).toHaveLength(1)
+		expect(a.writes[0]?.id).toBe(b.writes[0]?.id)
 	})
 
 	it('a detached stream stops receiving pushes (but the message is still logged)', () => {
 		const session = new MCPSession('s')
-		const { stream, writes } = recordingStream()
+		const stream = new RecordingStream()
 		session.attach(stream)
 		const first = session.push(message(1))
 		session.detach(stream)
 		session.push(message(2)) // not delivered to the detached stream
-		expect(writes()).toHaveLength(1) // only the pre-detach push reached the stream
+		expect(stream.writes).toHaveLength(1) // only the pre-detach push reached the stream
 		// BOTH are logged — a later reconnect can replay #2.
 		expect(session.replay(first).map((entry) => entry.message)).toEqual([message(2)])
 	})
@@ -195,13 +209,13 @@ describe('MCPSession — lazy TTL eviction (injected clock)', () => {
 describe('MCPSession — push return id round-trips with the fanned-out event', () => {
 	it('the id push returns equals the attached stream event id and is replayable', () => {
 		const session = new MCPSession('s')
-		const { stream, writes } = recordingStream()
+		const stream = new RecordingStream()
 		session.attach(stream)
 		session.push(message(1))
 		const id = session.push(message(2))
 		// The 2nd push's returned id matches the 2nd fanned-out event, and replaying strictly after
 		// the FIRST event's id surfaces exactly the 2nd message (proving the log + fan-out agree).
-		const events: readonly SSEMessage[] = writes()
+		const events = stream.writes
 		expect(events[1]?.id).toBe(id)
 		const firstId = events[0]?.id ?? ''
 		expect(session.replay(firstId).map((entry) => entry.message)).toEqual([message(2)])
