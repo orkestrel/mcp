@@ -662,6 +662,46 @@ describe('MCPServer — dual-era dispatch', () => {
 })
 
 describe('MCPServer — multi-round-trip form elicitation', () => {
+	it('passes the in-scope dispatch options to the principal handler', async () => {
+		const seen: MCPDispatchOptions[] = []
+		const caller = Object.freeze({ subject: 'principal-user' })
+		const mcp = createMCPServer({
+			identity: { name: 'test-server', version: '1.2.3' },
+			tools: tools(),
+			input: {
+				secret: 'secret',
+				ttl: 1_000,
+				principal: (_request, options) => {
+					seen.push(options)
+					return 'operator-1'
+				},
+				elicit: () => ({
+					request: {
+						message: 'Approve?',
+						requestedSchema: { type: 'object', properties: {} },
+					},
+				}),
+			},
+		})
+
+		await mcp.dispatch(
+			createJSONRPCRequest({
+				id: 'principal-options',
+				method: 'tools/call',
+				params: {
+					name: 'echo',
+					_meta: {
+						[MCP_META_VERSION]: '2026-07-28',
+						[MCP_META_CAPABILITIES]: { elicitation: {} },
+					},
+				},
+			}),
+			{ caller },
+		)
+
+		expect(seen).toEqual([{ caller }])
+	})
+
 	it('returns one keyed ElicitRequest and resumes under a new id from top-level echo fields', async () => {
 		const seen: MCPInputContext[] = []
 		const mcp = createMCPServer({
@@ -1133,6 +1173,33 @@ describe('MCPServer — the modern method seam', () => {
 
 		expect(seen).toEqual([{}])
 		expect(seen[0]?.signal).toBeUndefined()
+		expect(seen[0]?.caller).toBeUndefined()
+	})
+
+	it('passes direct dispatch caller context to the registered handler', async () => {
+		const mcp = server()
+		const caller = Object.freeze({ subject: 'dispatch-user' })
+		const seen: unknown[] = []
+		mcp.methods.add('demo/probe', async (request, options) => {
+			seen.push(options.caller)
+			return buildJSONRPCResult(request.id ?? null, {})
+		})
+		await mcp.dispatch(modernRequest('demo/probe'), { caller })
+
+		expect(seen).toEqual([caller])
+	})
+
+	it('passes direct handle caller context to the registered handler', async () => {
+		const mcp = server()
+		const caller = Object.freeze({ subject: 'handle-user' })
+		const seen: unknown[] = []
+		mcp.methods.add('demo/probe', async (request, options) => {
+			seen.push(options.caller)
+			return buildJSONRPCResult(request.id ?? null, {})
+		})
+		await mcp.handle(JSON.stringify(modernRequest('demo/probe')), { caller })
+
+		expect(seen).toEqual([caller])
 	})
 
 	it('passes the caller’s abort signal through dispatch to the handler', async () => {
@@ -1419,6 +1486,42 @@ describe('MCPServer — tools/list', () => {
 })
 
 describe('MCPServer — tools/call', () => {
+	it('forwards caller context to real tool bodies in both eras and preserves absence', async () => {
+		const observed: unknown[] = []
+		const manager = createToolManager()
+		manager.add(
+			createTool({
+				name: 'caller',
+				execute: (_args, caller) => {
+					observed.push(caller)
+					return caller === undefined ? 'absent' : caller
+				},
+			}),
+		)
+		const mcp = createMCPServer({
+			identity: { name: 'caller-server', version: '1.0.0' },
+			tools: manager,
+		})
+		const caller = Object.freeze({ subject: 'tool-user' })
+		const legacy = createJSONRPCRequest({
+			method: 'tools/call',
+			id: 'legacy-caller',
+			params: { name: 'caller' },
+		})
+		const modern = createJSONRPCRequest({
+			method: 'tools/call',
+			id: 'modern-caller',
+			params: { name: 'caller', _meta: MODERN_METADATA },
+		})
+
+		await mcp.dispatch(modern, { caller })
+		await mcp.dispatch(legacy, { caller })
+		await mcp.dispatch(modern)
+		await mcp.dispatch(legacy)
+
+		expect(observed).toEqual([caller, caller, undefined, undefined])
+	})
+
 	it('executes a tool and carries its value as structured content and JSON text', async () => {
 		const response = responseOf(
 			await server().dispatch(

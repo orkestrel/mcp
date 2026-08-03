@@ -64,7 +64,7 @@ import { WebSocketServerTransport } from './transports/WebSocketServerTransport.
  * @typeParam TState - The consumer's opaque per-request state type
  * @param mcp - The transport-agnostic {@link MCPServerInterface} to expose over HTTP
  * @param options - Optional `path` (default {@link DEFAULT_MCP_PATH}) and `streaming`
- *   (default `true`), plus the shared `origin` validation options; see
+ *   (default `true`), plus shared origin, keepalive, and synchronous caller-extraction options; see
  *   {@link HTTPTransportOptions}
  * @returns The {@link RouteInput}s to register with the router
  *
@@ -79,14 +79,14 @@ import { WebSocketServerTransport } from './transports/WebSocketServerTransport.
  */
 export function createMCPRoutes<TState = unknown>(
 	mcp: MCPServerInterface,
-	options?: HTTPTransportOptions,
+	options?: HTTPTransportOptions<TState>,
 ): readonly RouteInput<string, TState>[] {
 	const path = options?.path ?? DEFAULT_MCP_PATH
 	const post: RouteInput<string, TState> = {
 		method: 'POST',
 		path,
 		name: 'mcp',
-		handler: createMCPPostHandler(mcp, options),
+		handler: createMCPPostHandler<TState>(mcp, options),
 	}
 	return [post]
 }

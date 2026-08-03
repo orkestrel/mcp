@@ -52,7 +52,9 @@ import { createTeardown, startServer } from '../../setupServer.js'
 
 // The consumer TState this suite threads through the spine — extends MCPSessionState so
 // createMCPSession can set `context.state.session`.
-interface AppState extends MCPSessionState {}
+interface AppState extends MCPSessionState {
+	readonly caller?: unknown
+}
 
 const { track } = createTeardown<StartedServerInterface<AppState>>((handle) => handle.stop())
 
@@ -68,6 +70,15 @@ function pushTrigger(payload: JSONRPCMessage): MiddlewareHandler<AppState> {
 				session.push(payload)
 				return new Response(null, { status: 202 })
 			}
+		}
+		return next()
+	}
+}
+
+function authenticateCaller(caller: unknown): MiddlewareHandler<AppState> {
+	return (_input, context, next) => {
+		if (!Reflect.set(context.state, 'caller', caller)) {
+			throw new Error('MCP caller state is not writable')
 		}
 		return next()
 	}
@@ -282,6 +293,47 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		expect(response.status).toBe(200)
 		expect(response.headers.get(MCP_SESSION_HEADER)).toBeNull()
 		expect((await response.json()).result.supportedVersions).toContain(MCP_PROTOCOL_VERSION)
+	})
+
+	it('preserves middleware-resolved caller context across its rebuilt POST request', async () => {
+		const caller = Object.freeze({ subject: 'session-user' })
+		const seen: unknown[] = []
+		const mcp = createCalculatorServer()
+		mcp.methods.add('demo/caller', async (rpcRequest, options) => {
+			seen.push(options.caller)
+			return { jsonrpc: '2.0', id: rpcRequest.id ?? null, result: {} }
+		})
+		const dispatcher = createDispatcher<AppState>()
+		dispatcher.add(
+			createMCPRoutes<AppState>(mcp, {
+				caller: (_request, context) => context?.state.caller,
+			}),
+		)
+		const server = createServer<AppState>({ dispatcher, state: () => ({}) })
+		server.use(authenticateCaller(caller))
+		server.use(createMCPSession<AppState>())
+		const handle = track(await startServer(server))
+		const response = await postJSON(
+			handle.base,
+			createJSONRPCRequest({
+				method: 'demo/caller',
+				params: {
+					_meta: {
+						[MCP_META_VERSION]: '2026-07-28',
+						[MCP_META_CAPABILITIES]: {},
+					},
+				},
+			}),
+			{
+				headers: {
+					[MCP_PROTOCOL_VERSION_HEADER]: '2026-07-28',
+					[MCP_METHOD_HEADER]: 'demo/caller',
+				},
+			},
+		)
+
+		expect(response.status).toBe(200)
+		expect(seen).toEqual([caller])
 	})
 
 	it('a malformed body on a VALID session still gets the route -32700 (not pre-empted)', async () => {

@@ -162,7 +162,7 @@ export class MCPServer implements MCPServerInterface {
 				'Invalid params: `_meta` exceeds the configured limit or contains an unsafe value',
 			)
 		}
-		return modern ? this.#modern(request, id, options) : this.#legacy(request, id)
+		return modern ? this.#modern(request, id, options) : this.#legacy(request, id, options)
 	}
 
 	async handle(
@@ -190,7 +190,11 @@ export class MCPServer implements MCPServerInterface {
 		return Symbol.asyncIterator in answer ? serializeStream(answer) : JSON.stringify(answer)
 	}
 
-	async #legacy(request: JSONRPCRequest, id: string | number | null): Promise<JSONRPCResponse> {
+	async #legacy(
+		request: JSONRPCRequest,
+		id: string | number | null,
+		options: MCPDispatchOptions,
+	): Promise<JSONRPCResponse> {
 		switch (request.method) {
 			case 'initialize': {
 				const requested = request.params?.['protocolVersion']
@@ -210,7 +214,7 @@ export class MCPServer implements MCPServerInterface {
 					tools: buildToolDescriptors(this.#options.tools),
 				})
 			case 'tools/call': {
-				const result = await this.#runTool(request, id)
+				const result = await this.#runTool(request, id, options)
 				return 'jsonrpc' in result ? result : buildJSONRPCResult(id, result)
 			}
 			default:
@@ -287,7 +291,7 @@ export class MCPServer implements MCPServerInterface {
 		const id = request.id ?? null
 		const input = await this.#input(request, options)
 		if (input !== undefined) return input
-		const result = await this.#runTool(request, id)
+		const result = await this.#runTool(request, id, options)
 		return 'jsonrpc' in result
 			? result
 			: buildJSONRPCResult(id, buildModernResult(result, this.#options.identity))
@@ -313,7 +317,7 @@ export class MCPServer implements MCPServerInterface {
 		if (requestState === undefined && inputResponses === undefined) {
 			const elicitation = await configured.elicit({ request, name, arguments: args }, options)
 			if (elicitation === undefined) return undefined
-			const principal = await configured.principal(request)
+			const principal = await configured.principal(request, options)
 			return this.#required(request, name, elicitation, principal)
 		}
 		if (!isBoundedString(requestState, this.#limits.state) || !isRecord(inputResponses)) {
@@ -325,7 +329,7 @@ export class MCPServer implements MCPServerInterface {
 		}
 		const verified = await verifyToken(requestState, configured.secret)
 		const state = parseMCPInputState(verified)
-		const principal = await configured.principal(request)
+		const principal = await configured.principal(request, options)
 		if (
 			state === undefined ||
 			state.principal !== principal ||
@@ -503,11 +507,13 @@ export class MCPServer implements MCPServerInterface {
 
 	// Run a `tools/call`: narrow `params.name` (string) + `params.arguments` (record,
 	// default `{}`) with no `as`, execute the tool (the manager isolates a throw into
-	// `success: false`), and map the result to an MCP tool-call result. Shared by both
-	// eras — only the result STAMPING differs between them.
+	// `success: false`), conditionally carry asserted caller context on the ToolCall,
+	// and map the result to an MCP tool-call result. Shared by both eras — only the result
+	// STAMPING differs between them.
 	async #runTool(
 		request: JSONRPCRequest,
 		id: string | number | null,
+		options: MCPDispatchOptions,
 	): Promise<MCPCallResult | JSONRPCResponse> {
 		const params = request.params
 		const name = params?.['name']
@@ -521,7 +527,12 @@ export class MCPServer implements MCPServerInterface {
 		const rawArguments = params?.['arguments']
 		const args = isRecord(rawArguments) ? rawArguments : {}
 		const callId = request.id === undefined ? crypto.randomUUID() : String(request.id)
-		const result = await this.#options.tools.execute({ id: callId, name, arguments: args })
+		const result = await this.#options.tools.execute({
+			id: callId,
+			name,
+			arguments: args,
+			...(options.caller === undefined ? {} : { caller: options.caller }),
+		})
 		if (!result.success && !isBoundedString(result.error, this.#limits.content)) {
 			return buildJSONRPCError(
 				id,

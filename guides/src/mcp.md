@@ -195,11 +195,12 @@ server.methods.add('demo/probe', async (request) =>
 // how a consumer overrides a built-in — no precedence rule to remember.
 ```
 
-A handler receives the request plus an `MCPDispatchOptions` bag whose
-`signal` aborts when the bound transport can observe that the caller's request
-has ended. Both `dispatch` and `handle` take that bag as an
-OPTIONAL second argument, so a caller that cannot abort simply never
-supplies one and a handler always receives an object:
+A handler receives the request plus an `MCPDispatchOptions` bag. Its `signal`
+aborts when the bound transport can observe that the caller's request has ended;
+its optional `caller` is consumer-asserted context carried opaquely from the
+dispatch site. Both `dispatch` and `handle` take that bag as an OPTIONAL second
+argument, so a caller with neither value simply never supplies one and a handler
+always receives an object:
 
 ```ts
 server.methods.add('demo/slow', async (request, options) => {
@@ -210,6 +211,12 @@ server.methods.add('demo/slow', async (request, options) => {
 const controller = new AbortController()
 await server.dispatch({ jsonrpc: '2.0', method: 'demo/slow', id: 1 }, { signal: controller.signal })
 ```
+
+`caller` is **ASSERTED, NEVER VERIFIED**. Sessions mint transport identity, not
+caller identity; nothing in MCP authenticates this value, and this package never
+inspects, validates, or serializes it. Narrow it with your own total guard and
+treat absence as unauthenticated. It remains `unknown`, rather than a threaded
+generic that would falsely promise protocol verification.
 
 A handler that must HOLD the request open returns an `MCPStream` instead of
 a response: each `yield` is a notification, and the generator's `return`
@@ -618,7 +625,7 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 | `MCPInputContext`                     | interface | Call-in-hand context given to the input hook, including a verified elicitation response/state on retry.                                                                                                                    |
 | `MCPElicitation`                      | interface | Consumer-requested form params plus optional opaque consumer state, before MCP assigns a key and signs it.                                                                                                                 |
 | `MCPInputHandler`                     | type      | `(context, options) => MCPElicitation \| undefined` (or a promise) — request operator input or continue to tool execution.                                                                                                 |
-| `MCPPrincipalHandler`                 | type      | `(request) => string` (or a promise) — derives the authenticated principal bound into protected state.                                                                                                                     |
+| `MCPPrincipalHandler`                 | type      | `(request, options: MCPDispatchOptions) => string` (or a promise) — derives the authenticated principal bound into protected state.                                                                                        |
 | `MCPInputOptions`                     | interface | `{ secret; ttl; principal; elicit }` — consumer policy for signed MRTR production and verification.                                                                                                                        |
 | `MCPListResult`                       | interface | `{ tools; resultType?; ttlMs?; cacheScope?; _meta? }` — a legacy or modern `tools/list` result.                                                                                                                            |
 | `MCPToolDescriptor`                   | interface | `{ name: string; description?: string; inputSchema: Record<string, unknown> }` — one `tools/list` entry.                                                                                                                   |
@@ -628,7 +635,7 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 | `SubscriptionFilter`                  | interface | Optional tool, prompt, resource-list, and resource-URI notification families for `subscriptions/listen`.                                                                                                                   |
 | `SubscriptionsListenResultMetaObject` | interface | Required graceful-close metadata carrying the reserved subscription id.                                                                                                                                                    |
 | `SubscriptionsListenResult`           | interface | `{ resultType: 'complete'; _meta: SubscriptionsListenResultMetaObject }` — a graceful subscription closure.                                                                                                                |
-| `MCPDispatchOptions`                  | interface | `{ signal?: AbortSignal }` — the per-request execution options every dispatched handler receives; the signal aborts when the bound transport observes that the caller's request ended.                                     |
+| `MCPDispatchOptions`                  | interface | `{ signal?: AbortSignal; caller?: unknown }` — per-request execution options; `caller` is consumer-asserted and never protocol-verified, inspected, validated, or serialized by this package.                              |
 | `MCPSubscriptionHandler`              | type      | `(notifications, options) => AsyncIterable<JSONRPCRequest>` (or a promise of one) — an event-driven notification producer.                                                                                                 |
 | `MCPSubscriptionOptions`              | interface | `{ notifications; listen }` — the supported filter and producer for the built-in subscription method.                                                                                                                      |
 | `MCPStream`                           | type      | `AsyncGenerator<JSONRPCRequest, JSONRPCResponse>` — a held-open result: each `yield` is a notification, the `return` value is the terminating response.                                                                    |
@@ -681,6 +688,40 @@ const mcp = createMCPServer({
 })
 const routes = createMCPRoutes(mcp) // POST /mcp dispatches JSON-RPC (JSON or SSE per Accept)
 ```
+
+#### Carry asserted caller context from HTTP middleware
+
+`HTTPHandlerOptions<TState>` names the POST handler's `streaming`, `origin`,
+`keepalive`, and `caller` options; `HTTPTransportOptions<TState>` extends that
+shape with `path`. The caller extractor is the synchronous
+`MCPCallerHandler<TState>`:
+
+```ts
+type MCPCallerHandler<TState> = (
+	request: Request,
+	context: RouteContext<string, TState> | undefined,
+) => unknown
+```
+
+Authentication belongs to ordinary middleware composed in front. The extractor
+only reads identity or policy state that middleware already resolved; direct
+`createMCPPostHandler` invocation may supply no route context. Returning
+`undefined` supplies no caller, while a throw propagates exactly like a route
+handler throw.
+
+Extraction runs only after origin, body, JSON-RPC, modern metadata-shape, and
+HTTP header validation have all passed, immediately before `mcp.dispatch`. With no
+extractor, or when it returns `undefined`, `caller` is omitted through the
+package's conditional-spread idiom, preserving the former dispatch-options shape
+exactly. A present value flows through both modern and legacy `tools/call` onto
+`ToolCall.caller`; the tool manager then supplies it to the real tool body's
+caller parameter.
+
+This remains an asserted seam, never protocol authentication. A session id names
+an HTTP transport session, not a caller, and the session middleware preserves
+front-middleware state across its rebuilt `Request`. WebSocket and stdio ingress
+use `bindServer`, which still invokes `handle` without dispatch options; those
+transports therefore carry neither an abort signal nor caller context.
 
 `createMCPRoutes` is **stateless**: a single `POST {path}` route pumps each
 request body through `mcp.dispatch`. For a streamed response,
@@ -752,12 +793,12 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 
 #### Factories
 
-| API                         | Kind     | Summary                                                                                                                                                                          |
-| --------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createMCPRoutes`           | function | Mount an `MCPServerInterface` on the router spine — returns the `RouteInput[]` for `router.add(...)` (a single STATELESS `POST` route).                                          |
-| `createMCPPostHandler`      | function | Create the stateless Streamable-HTTP POST handler directly for a custom route integration.                                                                                       |
-| `createHTTPClientTransport` | function | Create a `ClientTransportInterface` over `fetch` that drives a REMOTE Streamable-HTTP MCP server (the egress mirror).                                                            |
-| `createMCPSession`          | function | Create the opt-in native session `MiddlewareHandler` — closure store + mint-on-`initialize` + require-404 + the resumable `GET` SSE stream; mount in front of `createMCPRoutes`. |
+| API                         | Kind     | Summary                                                                                                                                                                                 |
+| --------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createMCPRoutes`           | function | Mount an `MCPServerInterface` on the router spine — returns the `RouteInput[]` for `router.add(...)`, passing the named transport options through to its single stateless POST handler. |
+| `createMCPPostHandler`      | function | Create the stateless Streamable-HTTP POST handler directly, optionally extracting asserted caller context after validation.                                                             |
+| `createHTTPClientTransport` | function | Create a `ClientTransportInterface` over `fetch` that drives a REMOTE Streamable-HTTP MCP server (the egress mirror).                                                                   |
+| `createMCPSession`          | function | Create the opt-in native session `MiddlewareHandler` — closure store + mint-on-`initialize` + require-404 + the resumable `GET` SSE stream; mount in front of `createMCPRoutes`.        |
 
 #### Entities
 
@@ -809,7 +850,9 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | ---------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `MCPOriginOptions`           | interface | `{ enabled?: boolean; origins?: readonly string[] }` — shared default-on validation with a loopback-literal default; `enabled: false` delegates upstream and ignores `origins`.                                                          |
 | `MCPKeepaliveOptions`        | interface | `{ interval?: number }` — the held-open SSE comment interval, defaulting to `DEFAULT_MCP_KEEPALIVE_INTERVAL`.                                                                                                                            |
-| `HTTPTransportOptions`       | interface | `{ path?; streaming?; origin?; keepalive? }` — mount path, unary SSE choice, shared origin options, and held-open keepalive options for `createMCPRoutes`.                                                                               |
+| `MCPCallerHandler`           | type      | Synchronous `(request, context?) => unknown` extractor for front-middleware-resolved caller context; `undefined` omits it and a throw propagates.                                                                                        |
+| `HTTPHandlerOptions`         | interface | `{ streaming?; origin?; keepalive?; caller? }` — the named options shared by `createMCPPostHandler` and `createMCPRoutes`.                                                                                                               |
+| `HTTPTransportOptions`       | interface | `HTTPHandlerOptions<TState> & { path? }` — the shared handler options plus the route mount path for `createMCPRoutes`.                                                                                                                   |
 | `HTTPClientTransportOptions` | interface | `{ url: string; headers?: Record<string, string>; fetch?: typeof fetch; timeout?: number }` — the remote endpoint, extra headers, an injectable `fetch`, and an optional `AbortSignal.timeout` deadline for `createHTTPClientTransport`. |
 | `MCPSessionOptions`          | interface | `{ path?; ttl?; capacity?; clock?; origin?; keepalive? }` — the owned path, session TTL, replay bound, deterministic clock, shared origin options, and held-open keepalive options for `createMCPSession`.                               |
 | `MCPSessionInterface`        | interface | `id` data member + `attach` / `detach` / `push` / `replay` methods — one session + its resumable server→client push channel (the `MCPSession` entity).                                                                                   |
@@ -1096,7 +1139,8 @@ readonly data member.
 response, a held-open `MCPStream`, or `undefined` for a notification);
 `handle` is the string boundary that wraps it with parse / serialize and the
 parse / invalid-request error mapping. Both take an optional
-`MCPDispatchOptions` bag, so every existing caller compiles unchanged.
+`MCPDispatchOptions` bag carrying `signal` and asserted `caller`, so every
+existing caller compiles unchanged.
 
 | Method     | Returns                                              | Behavior                                                                                                                                                                                           |
 | ---------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1111,9 +1155,11 @@ const server = createMCPServer({
 	identity: { name: 'docs', version: '1.0.0' },
 	tools: createToolManager(),
 })
+const authenticatedPrincipal = { subject: 'user-42' }
 const response = await server.dispatch({ jsonrpc: '2.0', method: 'tools/list', id: 1 })
 const reply = await server.handle('{"jsonrpc":"2.0","method":"ping","id":2}', {
 	signal: controller.signal,
+	caller: authenticatedPrincipal,
 })
 ```
 
@@ -1769,7 +1815,8 @@ client→server notifications over HTTP, leaving `notifications/cancelled` as th
 message-based cancellation path for the transports that still have one — stdio,
 WebSocket, and `MessagePort`. This package does not implement it: the method name is
 recognized nowhere, and `bindServer` calls `handle(message)` with no
-`MCPDispatchOptions`, so no signal exists to abort on those transports at all. An
+`MCPDispatchOptions`, so neither a signal nor caller context exists on those ingress
+transports. An
 inbound `notifications/cancelled` is accepted as an ordinary notification — it fires the
 `request` event and is answered with nothing — while the call it names keeps running.
 **What it costs:** a stdio, WebSocket, or `MessagePort` client cannot cancel an
@@ -1823,7 +1870,9 @@ tools: {} }, serverInfo: { name, version } }`, the version NEGOTIATED over the
    `params.name` (a string) + `params.arguments` (a record, default `{}`),
    narrowed via `@orkestrel/contract`'s guards (no `as`); a missing /
    non-string `name` → a `-32602` invalid-params error. Otherwise it runs
-   `tools.execute({ id, name, arguments })` — and because the `ToolManager`
+   `tools.execute({ id, name, arguments, ...(options.caller === undefined ? {} : { caller: options.caller }) })`
+   under both wire eras, so a present asserted caller reaches the real tool body while
+   absence preserves the former `ToolCall` shape exactly. Because the `ToolManager`
    (`@orkestrel/tool`) ALREADY isolates a thrown tool (and an unknown name)
    into a `success: false` result, the server adds NO try/catch: that branch's
    `error` maps to `{ content: [{ type: 'text', text: <error> }], isError: true }`;
@@ -1942,8 +1991,11 @@ in request`, no `as`) — is HTTP **400** with a JSON-RPC error BODY (id
     held-open dispatch result always uses that SSE seam: yields are written in
     order, the generator's returned response is written last, and the response
     ends after it. The route supplies a signal composed from `request.signal` and
-    response-stream cancellation to `mcp.dispatch`, while the session middleware
-    preserves the incoming signal across each forwarded `Request`; the pump awaits
+    response-stream cancellation to `mcp.dispatch`. After origin/body/JSON-RPC/modern-metadata-shape/header
+    validation, and only for a request that will dispatch, it synchronously calls the optional
+    `MCPCallerHandler` immediately before dispatch; a defined result is added as asserted
+    `caller`, while absence is omitted. The session middleware preserves the incoming signal,
+    headers, and route state across each forwarded `Request`; the pump awaits
     the async iterator and never polls. An SSE comment is written every configured
     `keepalive.interval` (default `DEFAULT_MCP_KEEPALIVE_INTERVAL`), so an idle
     streamed response notices a dead client within one interval; this is transport
@@ -2110,7 +2162,8 @@ number; version: MCPVersion }>` — NO dependency on `@orkestrel/middleware` and
     `context.state.session`; neither → `rejectUnknownSession()` (`404`). It
     then FORWARDS a fresh `Request` carrying the buffered text
     (`next(forwarded)`) — never the already-consumed original — so the route
-    re-reads the same body, injects that pinned revision when a live-session POST
+    re-reads the same body, retains front-middleware state for caller extraction,
+    injects that pinned revision when a live-session POST
     is headerless, and stamps the response with `MCP_SESSION_HEADER`. A
     live-session POST whose `MCP-Protocol-Version` header names a DIFFERENT
     revision than the session pinned is `400` + `-32020` — a session negotiates its

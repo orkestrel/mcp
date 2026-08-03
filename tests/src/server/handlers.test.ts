@@ -1,10 +1,11 @@
-import type { JSONRPCRequest, MCPServerInterface } from '@src/core'
+import type { JSONRPCRequest, MCPDispatchOptions, MCPServerInterface, MCPStream } from '@src/core'
 import type { HTTPTransportOptions } from '@src/server'
 import type { StartedServerInterface } from '../../setupServer.js'
 import { request as httpRequest } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import {
 	createMCPServer,
+	buildJSONRPCResult,
 	MCP_META_CAPABILITIES,
 	MCP_META_SERVER,
 	MCP_META_SUBSCRIPTION,
@@ -26,6 +27,7 @@ import {
 	createCalculatorServer,
 	createJSONRPCNotification,
 	createJSONRPCRequest,
+	readSSEStream,
 } from '../../setup.js'
 import { createTeardown, startServer } from '../../setupServer.js'
 
@@ -46,6 +48,27 @@ async function* disconnectEvents(
 	// remains idle and cannot use a producer write to trigger its own cancellation.
 	yield { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }
 	throw new Error('subscription client disconnected')
+}
+
+async function* callerEvents(
+	options: MCPDispatchOptions,
+	id: string | number | null,
+	first: Promise<void>,
+	second: Promise<void>,
+): MCPStream {
+	await first
+	yield {
+		jsonrpc: '2.0',
+		method: 'notifications/caller',
+		params: { caller: options.caller, step: 1 },
+	}
+	await second
+	yield {
+		jsonrpc: '2.0',
+		method: 'notifications/caller',
+		params: { caller: options.caller, step: 2 },
+	}
+	return buildJSONRPCResult(id, { caller: options.caller })
 }
 
 const { track } = createTeardown<StartedServerInterface<undefined>>((handle) => handle.stop())
@@ -87,6 +110,138 @@ function disconnectHTTP(
 }
 
 describe('createMCPPostHandler', () => {
+	it('extracts caller context for a registered method immediately before dispatch', async () => {
+		const mcp = createCalculatorServer()
+		const caller = Object.freeze({ subject: 'http-user' })
+		const seen: unknown[] = []
+		mcp.methods.add('demo/caller', async (request, options) => {
+			seen.push(options.caller)
+			return buildJSONRPCResult(request.id ?? null, {})
+		})
+		const handler = createMCPPostHandler(mcp, {
+			streaming: false,
+			caller: () => caller,
+		})
+		const response = await handler(
+			new Request('http://localhost/mcp', {
+				method: 'POST',
+				headers: {
+					[MCP_PROTOCOL_VERSION_HEADER]: '2026-07-28',
+					[MCP_METHOD_HEADER]: 'demo/caller',
+				},
+				body: JSON.stringify(
+					createJSONRPCRequest({
+						method: 'demo/caller',
+						params: {
+							_meta: {
+								[MCP_META_VERSION]: '2026-07-28',
+								[MCP_META_CAPABILITIES]: {},
+							},
+						},
+					}),
+				),
+			}),
+		)
+
+		expect(response.status).toBe(200)
+		expect(seen).toEqual([caller])
+	})
+
+	it('omits caller exactly when the extractor is absent or returns undefined', async () => {
+		const mcp = createCalculatorServer()
+		const seen: MCPDispatchOptions[] = []
+		mcp.methods.add('demo/options', async (request, options) => {
+			seen.push(options)
+			return buildJSONRPCResult(request.id ?? null, {})
+		})
+		const body = JSON.stringify(
+			createJSONRPCRequest({
+				method: 'demo/options',
+				params: {
+					_meta: {
+						[MCP_META_VERSION]: '2026-07-28',
+						[MCP_META_CAPABILITIES]: {},
+					},
+				},
+			}),
+		)
+		const headers = {
+			[MCP_PROTOCOL_VERSION_HEADER]: '2026-07-28',
+			[MCP_METHOD_HEADER]: 'demo/options',
+		}
+		await createMCPPostHandler(mcp, { streaming: false })(
+			new Request('http://localhost/mcp', { method: 'POST', headers, body }),
+		)
+		await createMCPPostHandler(mcp, { streaming: false, caller: () => undefined })(
+			new Request('http://localhost/mcp', { method: 'POST', headers, body }),
+		)
+
+		expect(seen).toHaveLength(2)
+		for (const options of seen) {
+			expect(options.caller).toBeUndefined()
+			expect(Object.keys(options)).toEqual(['signal'])
+			expect(options.signal).toBeInstanceOf(AbortSignal)
+		}
+	})
+
+	it('never invokes the caller extractor for rejected origin or protocol headers', async () => {
+		const mcp = createCalculatorServer()
+		let calls = 0
+		const handler = createMCPPostHandler(mcp, {
+			streaming: false,
+			caller: () => {
+				calls += 1
+				return 'unreachable'
+			},
+		})
+		const denied = await handler(
+			new Request('http://localhost/mcp', {
+				method: 'POST',
+				headers: { origin: 'https://denied.example' },
+				body: JSON.stringify(createJSONRPCRequest()),
+			}),
+		)
+		const mismatched = await handler(
+			new Request('http://localhost/mcp', {
+				method: 'POST',
+				headers: {
+					[MCP_PROTOCOL_VERSION_HEADER]: '2026-07-28',
+					[MCP_METHOD_HEADER]: 'tools/list',
+				},
+				body: JSON.stringify(
+					createJSONRPCRequest({
+						method: 'server/discover',
+						params: {
+							_meta: {
+								[MCP_META_VERSION]: '2026-07-28',
+								[MCP_META_CAPABILITIES]: {},
+							},
+						},
+					}),
+				),
+			}),
+		)
+
+		expect(denied.status).toBe(403)
+		expect(mismatched.status).toBe(400)
+		expect(calls).toBe(0)
+	})
+
+	it('propagates a synchronous caller extractor throw', async () => {
+		const handler = createMCPPostHandler(createCalculatorServer(), {
+			streaming: false,
+			caller: () => {
+				throw new Error('caller extraction failed')
+			},
+		})
+		const request = new Request('http://localhost/mcp', {
+			method: 'POST',
+			body: JSON.stringify(createJSONRPCRequest()),
+		})
+
+		await expect(handler(request)).rejects.toThrow('caller extraction failed')
+	})
+
 	it('returns a JSON response for an id-bearing request', async () => {
 		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const response = await handler(
@@ -256,6 +411,67 @@ describe('createMCPPostHandler', () => {
 				},
 			},
 		])
+	})
+
+	it('retains captured caller context across two stream resumptions after returning', async () => {
+		let resumeFirst: (() => void) | undefined
+		let resumeSecond: (() => void) | undefined
+		const first = new Promise<void>((resolve) => {
+			resumeFirst = resolve
+		})
+		const second = new Promise<void>((resolve) => {
+			resumeSecond = resolve
+		})
+		const caller = Object.freeze({ subject: 'stream-user' })
+		const mcp = createCalculatorServer()
+		mcp.methods.add('demo/caller-stream', async (request, options) =>
+			callerEvents(options, request.id ?? null, first, second),
+		)
+		const handler = createMCPPostHandler(mcp, { caller: () => caller })
+		const response = await handler(
+			new Request('http://localhost/mcp', {
+				method: 'POST',
+				headers: {
+					[MCP_PROTOCOL_VERSION_HEADER]: '2026-07-28',
+					[MCP_METHOD_HEADER]: 'demo/caller-stream',
+				},
+				body: JSON.stringify(
+					createJSONRPCRequest({
+						id: 'caller-stream',
+						method: 'demo/caller-stream',
+						params: {
+							_meta: {
+								[MCP_META_VERSION]: '2026-07-28',
+								[MCP_META_CAPABILITIES]: {},
+							},
+						},
+					}),
+				),
+			}),
+		)
+		const events = readSSEStream(response)
+		const iterator = events[Symbol.asyncIterator]()
+		if (resumeFirst === undefined || resumeSecond === undefined) {
+			throw new Error('stream controls were not initialized')
+		}
+
+		resumeFirst()
+		const firstEvent = await iterator.next()
+		resumeSecond()
+		const secondEvent = await iterator.next()
+		const finalEvent = await iterator.next()
+		const closed = await iterator.next()
+
+		expect(firstEvent.value?.data).toBe(
+			'{"jsonrpc":"2.0","method":"notifications/caller","params":{"caller":{"subject":"stream-user"},"step":1}}',
+		)
+		expect(secondEvent.value?.data).toBe(
+			'{"jsonrpc":"2.0","method":"notifications/caller","params":{"caller":{"subject":"stream-user"},"step":2}}',
+		)
+		expect(finalEvent.value?.data).toBe(
+			'{"jsonrpc":"2.0","id":"caller-stream","result":{"caller":{"subject":"stream-user"}}}',
+		)
+		expect(closed.done).toBe(true)
 	})
 
 	it('aborts an A4 subscription handler when a real HTTP client disconnects', async () => {

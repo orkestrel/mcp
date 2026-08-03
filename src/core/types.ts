@@ -286,8 +286,17 @@ export type MCPInputHandler = (
 	options: MCPDispatchOptions,
 ) => MCPElicitation | undefined | Promise<MCPElicitation | undefined>
 
-/** Derive the deployment-authenticated principal bound into signed request state. */
-export type MCPPrincipalHandler = (request: JSONRPCRequest) => string | Promise<string>
+/**
+ * Derive the deployment-authenticated principal bound into signed request state.
+ *
+ * @param request - The parsed `tools/call` request
+ * @param options - The per-request execution options
+ * @returns The authenticated principal to bind into protected state
+ */
+export type MCPPrincipalHandler = (
+	request: JSONRPCRequest,
+	options: MCPDispatchOptions,
+) => string | Promise<string>
 
 /** Consumer policy for the server's multi-round-trip input mechanism. */
 export interface MCPInputOptions {
@@ -395,10 +404,20 @@ export interface SubscriptionsListenResult {
 // dispatch branch runs every method through. The legacy branch keeps its own
 // fixed switch: its method set is frozen by a shipped revision and never grows.
 
-/** Per-request execution options every dispatched handler receives. */
+/**
+ * Per-request execution options every dispatched handler receives.
+ *
+ * @remarks
+ * `caller` is consumer-ASSERTED and NEVER VERIFIED. Sessions mint transport identity, not
+ * caller identity, and nothing in MCP authenticates this value. This package carries it
+ * opaquely without inspecting, validating, or serializing it. A consumer must narrow it with
+ * its own total guard and treat absence as unauthenticated.
+ */
 export interface MCPDispatchOptions {
 	/** Aborts when the bound transport can observe that the caller's request has ended. */
 	readonly signal?: AbortSignal
+	/** Consumer-asserted caller context, forwarded opaquely and never protocol-verified. */
+	readonly caller?: unknown
 }
 
 /**
@@ -448,7 +467,8 @@ export type MCPTextStream = AsyncGenerator<string, string>
  * @remarks
  * `undefined` answers nothing (the notification arm); an {@link MCPStream} holds the
  * request open. `options.signal` aborts when the caller's request ends — what a handler
- * does with it is the handler's decision, never this package's.
+ * does with it is the handler's decision, never this package's. `options.caller` is
+ * consumer-asserted and never verified by this package.
  *
  * @param request - The parsed modern request being dispatched
  * @param options - The per-request execution options (see {@link MCPDispatchOptions})

@@ -90,7 +90,7 @@
 		"@orkestrel/contract": "^0.0.9",
 		"@orkestrel/emitter": "^0.0.5",
 		"@orkestrel/sse": "^0.0.4",
-		"@orkestrel/tool": "^0.0.8",
+		"@orkestrel/tool": ">=0.0.9 <0.1.0",
 		"@orkestrel/websocket": "^0.0.7"
 	},
 	"devDependencies": {
@@ -110,8 +110,8 @@
 		"vitest": "^4.1.10"
 	},
 	"peerDependencies": {
-		"@orkestrel/router": "^0.0.6",
-		"@orkestrel/server": "^0.0.7"
+		"@orkestrel/router": ">=0.0.7 <0.1.0",
+		"@orkestrel/server": ">=0.0.7 <0.1.0"
 	},
 	"engines": {
 		"node": ">=22.12.0"

@@ -1,5 +1,6 @@
 import type { MCPServerInterface } from '@src/core'
-import type { MCPKeepaliveOptions, MCPOriginOptions } from './types.js'
+import type { RouteContext } from '@orkestrel/router'
+import type { HTTPHandlerOptions } from './types.js'
 import {
 	JSONRPC_INVALID_REQUEST,
 	JSONRPC_INVALID_PARAMS,
@@ -35,10 +36,13 @@ import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
  * explicitly delegated upstream. Modern dispatch errors use their protocol status map; legacy
  * errors remain in-band at HTTP `200`. A streamed response composes the fetch-standard request
  * signal with response-body cancellation and supplies the result to every dispatched modern
- * handler through `MCPDispatchOptions.signal`.
+ * handler through `MCPDispatchOptions.signal`. After every transport validation and immediately
+ * before dispatch, the optional synchronous `caller` extractor reads front-middleware state; a
+ * defined value is added to `MCPDispatchOptions`, while `undefined` is omitted.
  *
+ * @typeParam TState - The consumer's opaque per-request route state type
  * @param mcp - The transport-agnostic MCP server to dispatch through
- * @param options - Optional streaming, origin-validation, and SSE keepalive options
+ * @param options - Optional streaming, origin-validation, SSE keepalive, and caller-extraction options
  * @returns A request handler for the stateless MCP POST route
  *
  * @example
@@ -55,17 +59,13 @@ import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
  * }))
  * ```
  */
-export function createMCPPostHandler(
+export function createMCPPostHandler<TState = unknown>(
 	mcp: MCPServerInterface,
-	options?: {
-		readonly streaming?: boolean
-		readonly origin?: MCPOriginOptions
-		readonly keepalive?: MCPKeepaliveOptions
-	},
-): (request: Request) => Promise<Response> {
+	options?: HTTPHandlerOptions<TState>,
+): (request: Request, context?: RouteContext<string, TState>) => Promise<Response> {
 	const streaming = options?.streaming ?? true
 	const origin = options?.origin
-	return async (request): Promise<Response> => {
+	return async (request, context): Promise<Response> => {
 		if (!allowsOrigin(request, origin)) return new Response(null, { status: 403 })
 		let text: string
 		try {
@@ -137,7 +137,11 @@ export function createMCPPostHandler(
 			}
 		}
 		const disconnect = new HTTPDisconnect(request.signal, options?.keepalive)
-		const response = await mcp.dispatch(rpcRequest, { signal: disconnect.signal })
+		const caller = options?.caller?.(request, context)
+		const response = await mcp.dispatch(rpcRequest, {
+			signal: disconnect.signal,
+			...(caller === undefined ? {} : { caller }),
+		})
 		if (response !== undefined && Symbol.asyncIterator in response) {
 			const stream = openStream()
 			stream.response.headers.set(SSE_BUFFERING_HEADER, SSE_BUFFERING_DISABLED)

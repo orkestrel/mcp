@@ -31,6 +31,7 @@
 // core does not.
 
 import type { JSONRPCMessage, MCPVersion } from '@src/core'
+import type { RouteContext } from '@orkestrel/router'
 import type { StreamInterface } from '@orkestrel/server'
 import type { MCPSession } from './MCPSession.js'
 
@@ -64,16 +65,29 @@ export interface MCPKeepaliveOptions {
 }
 
 /**
- * Options for `createMCPRoutes` — the path the transport is mounted at and whether an SSE
- * response is allowed. `createMCPRoutes` is STATELESS; sessions are a separate middleware
- * ({@link import('./middlewares.js').createMCPSession}), composed via `server.use`.
+ * Synchronously extract consumer-asserted caller context from an HTTP request after the
+ * transport has validated it for dispatch.
  *
  * @remarks
- * - `path` — the request path the single `POST` route answers; defaults to
- *   {@link import('./constants.js').DEFAULT_MCP_PATH} (`'/mcp'`). `GET` / `DELETE` to this
- *   path get the spine's automatic `405` unless a {@link
- *   import('./middlewares.js').createMCPSession} middleware (which owns the same `path`) is
- *   mounted IN FRONT to serve them.
+ * Authentication belongs to middleware composed in front of the MCP route. This handler only
+ * reads what that middleware already resolved. Returning `undefined` supplies no caller; a
+ * throw propagates as a route-handler throw. The result remains `unknown` because this package
+ * cannot verify caller identity.
+ *
+ * @typeParam TState - The consumer's opaque per-request route state type
+ * @param request - The validated Fetch request that will dispatch
+ * @param context - The router context, or `undefined` for direct handler invocation
+ * @returns Consumer-asserted caller context, or `undefined` for no caller
+ */
+export type MCPCallerHandler<TState = unknown> = (
+	request: Request,
+	context: RouteContext<string, TState> | undefined,
+) => unknown
+
+/**
+ * Options shared by the MCP Streamable-HTTP POST handler and route factory.
+ *
+ * @remarks
  * - `streaming` — when `true` (the DEFAULT) the transport MAY answer with a
  *   Server-Sent-Events response (one `data:` event carrying the JSON-RPC reply, then
  *   the stream ends) whenever the client's `Accept` header includes
@@ -89,13 +103,32 @@ export interface MCPKeepaliveOptions {
  * - `keepalive` — the SSE liveness options for held-open responses. `interval` defaults to
  *   {@link import('./constants.js').DEFAULT_MCP_KEEPALIVE_INTERVAL}. Keepalives never apply
  *   to unary responses.
+ * - `caller` — the synchronous extractor for consumer-asserted caller context already resolved
+ *   by front middleware. It runs only for a validated request that will dispatch. Returning
+ *   `undefined` omits caller context; a throw propagates.
  */
-export interface HTTPTransportOptions {
-	readonly path?: string
+export interface HTTPHandlerOptions<TState = unknown> {
 	readonly streaming?: boolean
 	/** Must match the session layer's value; `origins` is ignored when `enabled` is `false`. */
 	readonly origin?: MCPOriginOptions
 	readonly keepalive?: MCPKeepaliveOptions
+	readonly caller?: MCPCallerHandler<TState>
+}
+
+/**
+ * Options for `createMCPRoutes` — the mount path plus the shared POST-handler options.
+ * `createMCPRoutes` is STATELESS; sessions are a separate middleware ({@link
+ * import('./middlewares.js').createMCPSession}), composed via `server.use`.
+ *
+ * @remarks
+ * `path` is the request path the single `POST` route answers; it defaults to {@link
+ * import('./constants.js').DEFAULT_MCP_PATH} (`'/mcp'`). `GET` / `DELETE` to this path get
+ * the spine's automatic `405` unless a {@link import('./middlewares.js').createMCPSession}
+ * middleware owning the same path is mounted in front. The remaining options are inherited
+ * from {@link HTTPHandlerOptions}.
+ */
+export interface HTTPTransportOptions<TState = unknown> extends HTTPHandlerOptions<TState> {
+	readonly path?: string
 }
 
 /**
