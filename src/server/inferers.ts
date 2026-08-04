@@ -1,15 +1,123 @@
 import type { JSONRPCRequest, JSONRPCResponse, MCPEra, MCPVersion } from '@src/core'
+import type { MCPHeaderIssue } from './types.js'
 import {
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_METHOD_NOT_FOUND,
 	MCP_HEADER_MISMATCH,
+	MCP_META_VERSION,
 	MCP_MISSING_CAPABILITY,
 	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
 	inferEra,
 	inferVersion,
+	isInitializeRequest,
+	isModernRequest,
 } from '@src/core'
-import { isString } from '@orkestrel/contract'
+import { isRecord, isString } from '@orkestrel/contract'
+import { MCP_METHOD_HEADER, MCP_NAME_HEADER, MCP_PROTOCOL_VERSION_HEADER } from './constants.js'
+
+/**
+ * Infer the first required MCP HTTP header that is missing or mismatched.
+ *
+ * @remarks
+ * A modern request derives its protocol, method, and tools/call-only name expectations from
+ * the JSON-RPC body. A legacy request body requires a protocol header after initialization,
+ * while a supplied legacy session version additionally diagnoses a header that disagrees with
+ * the active session. Messages name the expected value but never echo the client-supplied one.
+ *
+ * @param request - The HTTP request carrying the headers
+ * @param reference - The parsed request body, or the active legacy session version
+ * @returns The first header issue, or `undefined` when the applicable headers agree
+ *
+ * @example
+ * ```ts
+ * const issue = inferHeaderIssue(request, rpcRequest)
+ * issue?.header // 'Mcp-Method' when that field is absent or mismatched
+ * ```
+ */
+export function inferHeaderIssue(
+	request: Request,
+	reference: JSONRPCRequest | MCPVersion,
+): MCPHeaderIssue | undefined {
+	const protocol = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
+	if (isString(reference)) {
+		if (protocol === null) {
+			return {
+				header: 'MCP-Protocol-Version',
+				reason: 'missing',
+				message: `Required MCP-Protocol-Version header is missing; the active session uses '${reference}'.`,
+			}
+		}
+		if (protocol !== reference) {
+			return {
+				header: 'MCP-Protocol-Version',
+				reason: 'mismatched',
+				message: `MCP-Protocol-Version header does not match the active session version '${reference}'.`,
+			}
+		}
+		return undefined
+	}
+	if (!isModernRequest(reference)) {
+		if (isInitializeRequest(reference) || protocol !== null) return undefined
+		return {
+			header: 'MCP-Protocol-Version',
+			reason: 'missing',
+			message: `Required MCP-Protocol-Version header is missing; this server offers '${MCP_PROTOCOL_VERSION}'.`,
+		}
+	}
+	const message = reference
+	const metadata = isRecord(message.params?.['_meta']) ? message.params['_meta'] : undefined
+	const version = metadata?.[MCP_META_VERSION]
+	if (!isString(version)) return undefined
+	if (protocol === null) {
+		return {
+			header: 'MCP-Protocol-Version',
+			reason: 'missing',
+			message: `Required MCP-Protocol-Version header is missing; the request body version is '${version}'.`,
+		}
+	}
+	if (protocol !== version) {
+		return {
+			header: 'MCP-Protocol-Version',
+			reason: 'mismatched',
+			message: `MCP-Protocol-Version header does not match the request body version '${version}'.`,
+		}
+	}
+	const method = request.headers.get(MCP_METHOD_HEADER)
+	if (method === null) {
+		return {
+			header: 'Mcp-Method',
+			reason: 'missing',
+			message: `Required Mcp-Method header is missing; the request body method is '${message.method}'.`,
+		}
+	}
+	if (method !== message.method) {
+		return {
+			header: 'Mcp-Method',
+			reason: 'mismatched',
+			message: `Mcp-Method header does not match the request body method '${message.method}'.`,
+		}
+	}
+	if (message.method !== 'tools/call') return undefined
+	const name = message.params?.['name']
+	if (!isString(name)) return undefined
+	const header = request.headers.get(MCP_NAME_HEADER)
+	if (header === null) {
+		return {
+			header: 'Mcp-Name',
+			reason: 'missing',
+			message: `Required Mcp-Name header is missing; the request body tool name is '${name}'.`,
+		}
+	}
+	if (header !== name) {
+		return {
+			header: 'Mcp-Name',
+			reason: 'mismatched',
+			message: `Mcp-Name header does not match the request body tool name '${name}'.`,
+		}
+	}
+	return undefined
+}
 
 /**
  * Infer the legacy revision an `initialize` request negotiates.

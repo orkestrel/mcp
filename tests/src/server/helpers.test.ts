@@ -4,6 +4,7 @@ import {
 	JSONRPC_INVALID_REQUEST,
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
+	MCP_MODERN_VERSION,
 	MCP_PROTOCOL_VERSION,
 	buildJSONRPCError,
 	parseJSONRPCMessage,
@@ -12,7 +13,7 @@ import {
 	acceptsEventStream,
 	allowsOrigin,
 	decodeEvent,
-	matchesModernHeaders,
+	inferHeaderIssue,
 	MCP_METHOD_HEADER,
 	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
@@ -167,58 +168,208 @@ describe('allowsOrigin — loopback default, explicit validation, and upstream d
 	})
 })
 
-describe('matchesModernHeaders — modern standard-header parity', () => {
-	it('returns false for a valid legacy request because the predicate is modern-only', () => {
-		const message = createJSONRPCRequest({ method: 'tools/list' })
-		const request = requestWithHeaders({
-			[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
-		})
-
-		expect(matchesModernHeaders(request, message)).toBe(false)
+describe('inferHeaderIssue — one diagnosis across modern and legacy headers', () => {
+	it('is undefined for legacy initialize and a header-bearing legacy request', () => {
+		expect(inferHeaderIssue(requestWithHeaders(), createJSONRPCRequest())).toBeUndefined()
+		expect(
+			inferHeaderIssue(
+				requestWithHeaders({ [MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION }),
+				createJSONRPCRequest({ method: 'tools/list' }),
+			),
+		).toBeUndefined()
 	})
 
-	it('matches protocol and method without requiring a name for tools/list', () => {
+	it('diagnoses a missing protocol header on a stateless legacy request', () => {
+		expect(
+			inferHeaderIssue(requestWithHeaders(), createJSONRPCRequest({ method: 'tools/list' })),
+		).toEqual({
+			header: 'MCP-Protocol-Version',
+			reason: 'missing',
+			message: "Required MCP-Protocol-Version header is missing; this server offers '2025-11-25'.",
+		})
+	})
+
+	it('is undefined when the modern protocol and method headers match tools/list', () => {
 		const message = createJSONRPCRequest({
 			method: 'tools/list',
 			params: {
 				_meta: {
-					[MCP_META_VERSION]: MCP_PROTOCOL_VERSION,
+					[MCP_META_VERSION]: MCP_MODERN_VERSION,
 					[MCP_META_CAPABILITIES]: {},
 				},
 			},
 		})
 		const request = requestWithHeaders({
-			[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
+			[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
 			[MCP_METHOD_HEADER]: 'tools/list',
 		})
 
-		expect(matchesModernHeaders(request, message)).toBe(true)
+		expect(inferHeaderIssue(request, message)).toBeUndefined()
 	})
 
-	it('requires tools/call name parity and rejects a mismatched method', () => {
+	it('diagnoses a missing modern protocol header', () => {
+		const message = createJSONRPCRequest({
+			method: 'tools/list',
+			params: {
+				_meta: {
+					[MCP_META_VERSION]: MCP_MODERN_VERSION,
+					[MCP_META_CAPABILITIES]: {},
+				},
+			},
+		})
+
+		expect(
+			inferHeaderIssue(requestWithHeaders({ [MCP_METHOD_HEADER]: 'tools/list' }), message),
+		).toEqual({
+			header: 'MCP-Protocol-Version',
+			reason: 'missing',
+			message:
+				"Required MCP-Protocol-Version header is missing; the request body version is '2026-07-28'.",
+		})
+	})
+
+	it('diagnoses a mismatched modern protocol header without echoing its value', () => {
+		const message = createJSONRPCRequest({
+			method: 'tools/list',
+			params: {
+				_meta: {
+					[MCP_META_VERSION]: MCP_MODERN_VERSION,
+					[MCP_META_CAPABILITIES]: {},
+				},
+			},
+		})
+		const issue = inferHeaderIssue(
+			requestWithHeaders({
+				[MCP_PROTOCOL_VERSION_HEADER]: 'client-supplied-version',
+				[MCP_METHOD_HEADER]: 'tools/list',
+			}),
+			message,
+		)
+
+		expect(issue).toEqual({
+			header: 'MCP-Protocol-Version',
+			reason: 'mismatched',
+			message: "MCP-Protocol-Version header does not match the request body version '2026-07-28'.",
+		})
+		expect(issue?.message).not.toContain('client-supplied-version')
+	})
+
+	it('diagnoses a missing modern method header', () => {
+		const message = createJSONRPCRequest({
+			method: 'tools/list',
+			params: {
+				_meta: {
+					[MCP_META_VERSION]: MCP_MODERN_VERSION,
+					[MCP_META_CAPABILITIES]: {},
+				},
+			},
+		})
+
+		expect(
+			inferHeaderIssue(
+				requestWithHeaders({ [MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION }),
+				message,
+			),
+		).toEqual({
+			header: 'Mcp-Method',
+			reason: 'missing',
+			message: "Required Mcp-Method header is missing; the request body method is 'tools/list'.",
+		})
+	})
+
+	it('diagnoses a mismatched modern method header without echoing its value', () => {
+		const message = createJSONRPCRequest({
+			method: 'tools/list',
+			params: {
+				_meta: {
+					[MCP_META_VERSION]: MCP_MODERN_VERSION,
+					[MCP_META_CAPABILITIES]: {},
+				},
+			},
+		})
+		const issue = inferHeaderIssue(
+			requestWithHeaders({
+				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+				[MCP_METHOD_HEADER]: 'client-supplied-method',
+			}),
+			message,
+		)
+
+		expect(issue).toEqual({
+			header: 'Mcp-Method',
+			reason: 'mismatched',
+			message: "Mcp-Method header does not match the request body method 'tools/list'.",
+		})
+		expect(issue?.message).not.toContain('client-supplied-method')
+	})
+
+	it('diagnoses a missing modern tools/call name header', () => {
 		const message = createJSONRPCRequest({
 			method: 'tools/call',
 			params: {
 				name: 'add',
 				_meta: {
-					[MCP_META_VERSION]: MCP_PROTOCOL_VERSION,
+					[MCP_META_VERSION]: MCP_MODERN_VERSION,
 					[MCP_META_CAPABILITIES]: {},
 				},
 			},
 		})
-		const matching = requestWithHeaders({
-			[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
-			[MCP_METHOD_HEADER]: 'tools/call',
-			[MCP_NAME_HEADER]: 'add',
-		})
-		const mismatched = requestWithHeaders({
-			[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
-			[MCP_METHOD_HEADER]: 'tools/list',
-			[MCP_NAME_HEADER]: 'add',
-		})
 
-		expect(matchesModernHeaders(matching, message)).toBe(true)
-		expect(matchesModernHeaders(mismatched, message)).toBe(false)
+		expect(
+			inferHeaderIssue(
+				requestWithHeaders({
+					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+					[MCP_METHOD_HEADER]: 'tools/call',
+				}),
+				message,
+			),
+		).toEqual({
+			header: 'Mcp-Name',
+			reason: 'missing',
+			message: "Required Mcp-Name header is missing; the request body tool name is 'add'.",
+		})
+	})
+
+	it('diagnoses a mismatched modern tools/call name header without echoing its value', () => {
+		const message = createJSONRPCRequest({
+			method: 'tools/call',
+			params: {
+				name: 'add',
+				_meta: {
+					[MCP_META_VERSION]: MCP_MODERN_VERSION,
+					[MCP_META_CAPABILITIES]: {},
+				},
+			},
+		})
+		const issue = inferHeaderIssue(
+			requestWithHeaders({
+				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+				[MCP_METHOD_HEADER]: 'tools/call',
+				[MCP_NAME_HEADER]: 'client-supplied-name',
+			}),
+			message,
+		)
+
+		expect(issue).toEqual({
+			header: 'Mcp-Name',
+			reason: 'mismatched',
+			message: "Mcp-Name header does not match the request body tool name 'add'.",
+		})
+		expect(issue?.message).not.toContain('client-supplied-name')
+	})
+
+	it('diagnoses a mismatched legacy session protocol header', () => {
+		expect(
+			inferHeaderIssue(
+				requestWithHeaders({ [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' }),
+				MCP_PROTOCOL_VERSION,
+			),
+		).toEqual({
+			header: 'MCP-Protocol-Version',
+			reason: 'mismatched',
+			message:
+				"MCP-Protocol-Version header does not match the active session version '2025-11-25'.",
+		})
 	})
 })
 

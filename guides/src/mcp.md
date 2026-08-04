@@ -104,7 +104,56 @@ argued field by field.
 equal to its `_meta` version and `Mcp-Method` equal to its body method. `Mcp-Name` is
 required on `tools/call` alone, where it must equal `params.name`, and MUST NOT be
 required on `server/discover` or `tools/list` — neither carries anything to derive a
-name from. Any mismatch is HTTP `400` + `-32020`, with no `data`.
+name from. The first missing or mismatched field is named in the refusal, together with
+the server-derived expected value; the client-supplied header value is never echoed. The
+result remains HTTP `400` + `-32020`, with no `data`.
+
+Use the client and HTTP transport together and none of that wire anatomy reaches the
+call site — the transport derives all reserved metadata and headers:
+
+```ts
+import { createMCPClient } from '@orkestrel/mcp'
+import { createHTTPClientTransport } from '@orkestrel/mcp/server'
+
+const transport = createHTTPClientTransport({ url: 'https://mcp.example/rpc' })
+const client = createMCPClient({ transport })
+```
+
+The equivalent raw modern `tools/call` carries all three reserved request metadata keys
+and their three HTTP projections side by side:
+
+```ts
+const body = {
+	jsonrpc: '2.0',
+	id: 1,
+	method: 'tools/call',
+	params: {
+		name: 'search',
+		arguments: { query: 'header anatomy' },
+		_meta: {
+			'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+			'io.modelcontextprotocol/clientCapabilities': {},
+			'io.modelcontextprotocol/clientInfo': { name: 'raw-client', version: '1.0.0' },
+		},
+	},
+}
+
+await fetch('https://mcp.example/rpc', {
+	method: 'POST',
+	headers: {
+		'content-type': 'application/json',
+		accept: 'application/json, text/event-stream',
+		'MCP-Protocol-Version': '2026-07-28',
+		'Mcp-Method': 'tools/call',
+		'Mcp-Name': 'search',
+	},
+	body: JSON.stringify(body),
+})
+```
+
+`Mcp-Name` applies only to `tools/call`; omit it for `server/discover` and
+`tools/list`. The reserved client capability and identity metadata remain in `_meta` and
+have no separate standard headers.
 
 **A headerless legacy POST has exactly three cases.** The library infers no revision
 from an absent header. Defaulting one is licensed only for a server that still serves
@@ -748,7 +797,8 @@ unary response has no such moment — see
 A modern POST requires `MCP-Protocol-Version` equal to its reserved `_meta`
 version and `Mcp-Method` equal to its body method. `Mcp-Name` is required only
 for `tools/call`, equal to `params.name`; `server/discover` and `tools/list`
-carry no name. Any mismatch is HTTP `400` + `-32020` with no `data`. Headerless
+carry no name. A refusal names the first missing or mismatched field and the expected
+value without echoing the supplied value; it is HTTP `400` + `-32020` with no `data`. Headerless
 legacy `initialize` is accepted; a headerless post-initialize legacy request is
 accepted only through a live session, whose pinned negotiated version the session
 middleware supplies; every other headerless request is HTTP `400` + `-32020`.
@@ -831,7 +881,7 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | `acceptsEventStream`     | function | Whether the request's `Accept` header contains `text/event-stream`.                                                                                                                                                 |
 | `createReadableStream`   | function | Build a `ReadableStream` from its `pull` and `cancel` behaviours, supplied as arguments rather than an inline source object.                                                                                        |
 | `allowsOrigin`           | function | Allow an absent or canonical loopback-literal Origin; require every other present serialized Origin in the explicit list unless validation is delegated upstream.                                                   |
-| `matchesModernHeaders`   | function | Validate the modern protocol/method headers and the tools/call-only name header against the body.                                                                                                                   |
+| `inferHeaderIssue`       | function | Derive the first missing or mismatched modern, stateless-legacy, or active-session header issue; `undefined` when the applicable fields agree.                                                                      |
 | `inferLegacyVersion`     | function | Pin a supported requested legacy revision, otherwise select the newest supported legacy revision.                                                                                                                   |
 | `inferStatus`            | function | Map a dispatch outcome to its era-aware HTTP status while preserving legacy in-band `200` errors.                                                                                                                   |
 | `readSessionHeader`      | function | Read the request's `mcp-session-id` header for the stateful transport, or `undefined`.                                                                                                                              |
@@ -848,6 +898,7 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 
 | Type                         | Kind      | Shape                                                                                                                                                                                                                                    |
 | ---------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MCPHeaderIssue`             | interface | `{ header; reason; message }` — a safely-worded `missing` or `mismatched` required-header diagnosis that never echoes the client-supplied value.                                                                                         |
 | `MCPOriginOptions`           | interface | `{ enabled?: boolean; origins?: readonly string[] }` — shared default-on validation with a loopback-literal default; `enabled: false` delegates upstream and ignores `origins`.                                                          |
 | `MCPKeepaliveOptions`        | interface | `{ interval?: number }` — the held-open SSE comment interval, defaulting to `DEFAULT_MCP_KEEPALIVE_INTERVAL`.                                                                                                                            |
 | `MCPCallerHandler`           | type      | Synchronous `(request, context?) => unknown` extractor for front-middleware-resolved caller context; `undefined` omits it and a throw propagates.                                                                                        |
@@ -1515,7 +1566,7 @@ import {
 	createMCPPostHandler,
 	createReadableStream,
 	decodeEvent,
-	matchesModernHeaders,
+	inferHeaderIssue,
 	readEventStream,
 	readLastEventId,
 	readSessionHeader,
@@ -1565,8 +1616,9 @@ const call = {
 	method: 'tools/call',
 	params: { name: 'search', _meta: { 'io.modelcontextprotocol/protocolVersion': '2026-07-28' } },
 }
-matchesModernHeaders(posted, call) // true — protocol, method, and the tools/call name agree
-matchesModernHeaders(posted, { ...call, method: 'tools/list' }) // false — Mcp-Method disagrees
+inferHeaderIssue(posted, call) // undefined — every tools/call header agrees
+inferHeaderIssue(posted, { ...call, method: 'tools/list' })?.message
+// "Mcp-Method header does not match the request body method 'tools/list'."
 
 const reply = await fetch('http://localhost:3000/mcp')
 const messages = await readEventStream(reply)
@@ -1976,7 +2028,9 @@ in request`, no `as`) — is HTTP **400** with a JSON-RPC error BODY (id
     / `-32602`, **404** for `-32601`, and **200** otherwise; every notification
     is **202** with no body. Modern `MCP_PROTOCOL_VERSION_HEADER` and
     `MCP_METHOD_HEADER` values must equal the body; `MCP_NAME_HEADER` is required
-    only for `tools/call`. A mismatch is **400** + `-32020` with no `data`.
+    only for `tools/call`. The first missing or mismatched field is named with its
+    derived expectation, never its client-supplied value; the result is **400** +
+    `-32020` with no `data`.
     Headerless `initialize` is accepted; a live-session legacy request uses its
     pinned negotiated revision; every other headerless request is **400** +
     `-32020`. A request without `Origin` is allowed; a canonical `localhost`, `[::1]`,

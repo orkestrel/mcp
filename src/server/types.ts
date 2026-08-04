@@ -36,6 +36,21 @@ import type { StreamInterface } from '@orkestrel/server'
 import type { MCPSession } from './MCPSession.js'
 
 /**
+ * One required MCP HTTP header that is absent or disagrees with its server-derived value.
+ *
+ * @remarks
+ * - `header` — the canonical HTTP field name safe to show to an integrator.
+ * - `reason` — whether the field is absent or carries a mismatched value.
+ * - `message` — the refusal message naming the expected body, session, or server value without
+ *   echoing the client-supplied header value.
+ */
+export interface MCPHeaderIssue {
+	readonly header: 'MCP-Protocol-Version' | 'Mcp-Method' | 'Mcp-Name'
+	readonly reason: 'missing' | 'mismatched'
+	readonly message: string
+}
+
+/**
  * Shared options for the protocol-required HTTP `Origin` validation at the route and session
  * enforcement sites.
  *

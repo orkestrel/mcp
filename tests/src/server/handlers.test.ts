@@ -10,6 +10,7 @@ import {
 	MCP_META_SERVER,
 	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
+	MCP_MODERN_VERSION,
 	MCP_PROTOCOL_VERSION,
 } from '@src/core'
 import { createToolManager } from '@orkestrel/tool'
@@ -584,7 +585,7 @@ describe('createMCPPostHandler', () => {
 		expect((await response.json()).result.protocolVersion).toBe('2025-11-25')
 	})
 
-	it('rejects every other headerless request with -32020 and no data member', async () => {
+	it('names the missing protocol header on a headerless legacy request with no data member', async () => {
 		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
@@ -597,7 +598,7 @@ describe('createMCPPostHandler', () => {
 		expect(response.status).toBe(400)
 		expect(body.error).toEqual({
 			code: -32020,
-			message: 'MCP request headers do not match the request body',
+			message: "Required MCP-Protocol-Version header is missing; this server offers '2025-11-25'.",
 		})
 		expect(body.error).not.toHaveProperty('data')
 	})
@@ -657,21 +658,79 @@ describe('createMCPPostHandler', () => {
 		expect(response.status).toBe(200)
 	})
 
-	it('returns -32020 when a required modern header disagrees with the body', async () => {
+	it.each([
+		{
+			branch: 'names a missing modern protocol header',
+			method: 'tools/list',
+			params: {},
+			headers: { [MCP_METHOD_HEADER]: 'tools/list' },
+			message:
+				"Required MCP-Protocol-Version header is missing; the request body version is '2026-07-28'.",
+		},
+		{
+			branch: 'names a mismatched modern protocol header',
+			method: 'tools/list',
+			params: {},
+			headers: {
+				[MCP_PROTOCOL_VERSION_HEADER]: 'client-supplied-version',
+				[MCP_METHOD_HEADER]: 'tools/list',
+			},
+			message: "MCP-Protocol-Version header does not match the request body version '2026-07-28'.",
+			supplied: 'client-supplied-version',
+		},
+		{
+			branch: 'names a missing modern method header',
+			method: 'tools/list',
+			params: {},
+			headers: { [MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION },
+			message: "Required Mcp-Method header is missing; the request body method is 'tools/list'.",
+		},
+		{
+			branch: 'names a mismatched modern method header',
+			method: 'tools/list',
+			params: {},
+			headers: {
+				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+				[MCP_METHOD_HEADER]: 'client-supplied-method',
+			},
+			message: "Mcp-Method header does not match the request body method 'tools/list'.",
+			supplied: 'client-supplied-method',
+		},
+		{
+			branch: 'names a missing modern tools/call name header',
+			method: 'tools/call',
+			params: { name: 'add', arguments: {} },
+			headers: {
+				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+				[MCP_METHOD_HEADER]: 'tools/call',
+			},
+			message: "Required Mcp-Name header is missing; the request body tool name is 'add'.",
+		},
+		{
+			branch: 'names a mismatched modern tools/call name header',
+			method: 'tools/call',
+			params: { name: 'add', arguments: {} },
+			headers: {
+				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+				[MCP_METHOD_HEADER]: 'tools/call',
+				[MCP_NAME_HEADER]: 'client-supplied-name',
+			},
+			message: "Mcp-Name header does not match the request body tool name 'add'.",
+			supplied: 'client-supplied-name',
+		},
+	])('$branch with HTTP 400, -32020, and no data member', async (test) => {
 		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
-				headers: {
-					[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
-					[MCP_METHOD_HEADER]: 'tools/list',
-				},
+				headers: test.headers,
 				body: JSON.stringify(
 					createJSONRPCRequest({
-						method: 'server/discover',
+						method: test.method,
 						params: {
+							...test.params,
 							_meta: {
-								[MCP_META_VERSION]: MCP_PROTOCOL_VERSION,
+								[MCP_META_VERSION]: MCP_MODERN_VERSION,
 								[MCP_META_CAPABILITIES]: {},
 							},
 						},
@@ -679,12 +738,12 @@ describe('createMCPPostHandler', () => {
 				),
 			}),
 		)
+		const body = await response.json()
 
 		expect(response.status).toBe(400)
-		expect((await response.json()).error).toEqual({
-			code: -32020,
-			message: 'MCP request headers do not match the request body',
-		})
+		expect(body.error).toEqual({ code: -32020, message: test.message })
+		expect(body.error).not.toHaveProperty('data')
+		expect(test.message).not.toContain(test.supplied ?? 'client-supplied-value')
 	})
 
 	it('returns -32602 when the modern metadata version is present but not a string', async () => {

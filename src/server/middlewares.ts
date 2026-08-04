@@ -22,7 +22,7 @@ import {
 	readSessionHeader,
 	rejectUnknownSession,
 } from './helpers.js'
-import { inferLegacyVersion } from './inferers.js'
+import { inferHeaderIssue, inferLegacyVersion } from './inferers.js'
 import { MCPSession } from './MCPSession.js'
 import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
 
@@ -187,19 +187,14 @@ export function createMCPSession<TState extends MCPSessionState>(
 		}
 		const headers = new Headers(request.headers)
 		if (parsed === undefined || !isInitializeRequest(parsed)) {
-			const protocol = headers.get(MCP_PROTOCOL_VERSION_HEADER)
-			if (protocol === null) {
+			const issue = inferHeaderIssue(request, entry.version)
+			if (issue?.reason === 'missing') {
 				headers.set(MCP_PROTOCOL_VERSION_HEADER, entry.version)
-			} else if (protocol !== entry.version) {
+			} else if (issue !== undefined) {
 				const requestId = parsed !== undefined && 'method' in parsed ? (parsed.id ?? null) : null
-				return Response.json(
-					buildJSONRPCError(
-						requestId,
-						MCP_HEADER_MISMATCH,
-						'MCP protocol version does not match the active session',
-					),
-					{ status: 400 },
-				)
+				return Response.json(buildJSONRPCError(requestId, MCP_HEADER_MISMATCH, issue.message), {
+					status: 400,
+				})
 			}
 		}
 		const forwarded = new Request(context.url, {

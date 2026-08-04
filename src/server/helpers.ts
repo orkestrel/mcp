@@ -2,7 +2,6 @@ import type {
 	ClientTransportEventMap,
 	ClientTransportInterface,
 	JSONRPCMessage,
-	JSONRPCRequest,
 	MCPTransportInterface,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
@@ -12,19 +11,12 @@ import type { LineExtraction, MCPOriginOptions } from './types.js'
 import { createSSEParser } from '@orkestrel/sse'
 import {
 	isJSONRPCRequest,
-	isModernRequest,
 	JSONRPC_INVALID_REQUEST,
-	MCP_META_VERSION,
 	buildJSONRPCError,
 	parseJSONRPCMessage,
 } from '@src/core'
-import { isRecord, isString } from '@orkestrel/contract'
-import {
-	MCP_METHOD_HEADER,
-	MCP_NAME_HEADER,
-	MCP_PROTOCOL_VERSION_HEADER,
-	MCP_SESSION_HEADER,
-} from './constants.js'
+import { isString } from '@orkestrel/contract'
+import { MCP_SESSION_HEADER } from './constants.js'
 
 /**
  * Create a readable stream from its pull and cancellation behaviours.
@@ -105,35 +97,6 @@ export function allowsOrigin(request: Request, options?: MCPOriginOptions): bool
 		return true
 	}
 	return options?.origins?.includes(parsed.origin) ?? false
-}
-
-/**
- * Whether a modern HTTP request's required standard headers match its JSON-RPC body.
- *
- * @remarks
- * Requires `MCP-Protocol-Version` to equal the reserved `_meta` version and `Mcp-Method`
- * to equal `method`. `Mcp-Name` is required only for `tools/call`, where it must equal
- * `params.name`; discovery and listing requests need no name because none is derivable.
- * Legacy requests return `false` because this predicate models the modern contract only.
- *
- * @param request - The HTTP request carrying the headers
- * @param message - The parsed JSON-RPC request body
- * @returns `true` only when every method-applicable modern header matches
- */
-export function matchesModernHeaders(request: Request, message: JSONRPCRequest): boolean {
-	if (!isModernRequest(message)) return false
-	const metadata = isRecord(message.params?.['_meta']) ? message.params['_meta'] : undefined
-	const version = metadata?.[MCP_META_VERSION]
-	if (
-		!isString(version) ||
-		request.headers.get(MCP_PROTOCOL_VERSION_HEADER) !== version ||
-		request.headers.get(MCP_METHOD_HEADER) !== message.method
-	) {
-		return false
-	}
-	if (message.method !== 'tools/call') return true
-	const name = message.params?.['name']
-	return isString(name) && request.headers.get(MCP_NAME_HEADER) === name
 }
 
 /**

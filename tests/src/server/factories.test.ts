@@ -324,7 +324,7 @@ describe('createMCPRoutes — the stateless default (no session middleware)', ()
 		expect(response.headers.get(MCP_SESSION_HEADER)).toBeNull()
 	})
 
-	it('a headerless non-initialize POST is rejected without inferring a legacy version', async () => {
+	it('names the missing protocol header on a headerless legacy tools/list round trip', async () => {
 		const handle = await startMCP()
 		const response = await postJSON(
 			handle.base,
@@ -333,7 +333,7 @@ describe('createMCPRoutes — the stateless default (no session middleware)', ()
 		expect(response.status).toBe(400)
 		expect((await response.json()).error).toEqual({
 			code: -32020,
-			message: 'MCP request headers do not match the request body',
+			message: "Required MCP-Protocol-Version header is missing; this server offers '2025-11-25'.",
 		})
 	})
 

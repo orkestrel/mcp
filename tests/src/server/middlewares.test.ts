@@ -197,7 +197,8 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 			id: 8,
 			error: {
 				code: -32020,
-				message: 'MCP protocol version does not match the active session',
+				message:
+					"MCP-Protocol-Version header does not match the active session version '2025-11-25'.",
 			},
 		})
 	})
@@ -219,7 +220,8 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 			id: 8,
 			error: {
 				code: -32020,
-				message: 'MCP protocol version does not match the active session',
+				message:
+					"MCP-Protocol-Version header does not match the active session version '2025-11-25'.",
 			},
 		})
 	})

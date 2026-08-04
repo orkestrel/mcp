@@ -9,7 +9,6 @@ import {
 	MCP_UNSUPPORTED_VERSION,
 	SUPPORTED_PROTOCOL_VERSIONS,
 	buildJSONRPCError,
-	isInitializeRequest,
 	isMCPVersion,
 	isModernRequest,
 	parseRequestContext,
@@ -21,8 +20,8 @@ import {
 	SSE_BUFFERING_DISABLED,
 	SSE_BUFFERING_HEADER,
 } from './constants.js'
-import { acceptsEventStream, allowsOrigin, matchesModernHeaders } from './helpers.js'
-import { inferStatus } from './inferers.js'
+import { acceptsEventStream, allowsOrigin } from './helpers.js'
+import { inferHeaderIssue, inferStatus } from './inferers.js'
 import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
 
 /**
@@ -103,27 +102,14 @@ export function createMCPPostHandler<TState = unknown>(
 					{ status: 400 },
 				)
 			}
-			if (!matchesModernHeaders(request, rpcRequest)) {
-				return Response.json(
-					buildJSONRPCError(
-						id,
-						MCP_HEADER_MISMATCH,
-						'MCP request headers do not match the request body',
-					),
-					{ status: 400 },
-				)
-			}
-		} else {
-			if (protocol === null && !isInitializeRequest(rpcRequest)) {
-				return Response.json(
-					buildJSONRPCError(
-						id,
-						MCP_HEADER_MISMATCH,
-						'MCP request headers do not match the request body',
-					),
-					{ status: 400 },
-				)
-			}
+		}
+		const issue = inferHeaderIssue(request, rpcRequest)
+		if (issue !== undefined) {
+			return Response.json(buildJSONRPCError(id, MCP_HEADER_MISMATCH, issue.message), {
+				status: 400,
+			})
+		}
+		if (era === 'legacy') {
 			if (protocol !== null && !isMCPVersion(protocol)) {
 				return Response.json(
 					buildJSONRPCError(
