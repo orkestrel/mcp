@@ -97,8 +97,8 @@
 		"@microsoft/api-extractor": "^7.58.12",
 		"@orkestrel/guide": "^0.0.8",
 		"@orkestrel/router": "^0.0.8",
-		"@orkestrel/scaffold": "^0.0.18",
-		"@orkestrel/server": "^0.0.9",
+		"@orkestrel/scaffold": "^0.0.20",
+		"@orkestrel/server": "^0.0.10",
 		"@types/node": "^26.1.2",
 		"@vitest/browser-playwright": "^4.1.10",
 		"oxfmt": "^0.62.0",
@@ -110,8 +110,8 @@
 		"vitest": "^4.1.10"
 	},
 	"peerDependencies": {
-		"@orkestrel/router": ">=0.0.8",
-		"@orkestrel/server": ">=0.0.9"
+		"@orkestrel/router": "^0.0.8",
+		"@orkestrel/server": "^0.0.10"
 	},
 	"engines": {
 		"node": ">=22.12.0"

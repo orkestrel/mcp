@@ -23,10 +23,11 @@ paths:
 
 ## Ecosystem reuse
 
-- Inspect declared `@orkestrel/*` packages before implementing overlapping infrastructure.
-- Prefer an exact originating primitive when semantics match; test semantic differences when they do not.
+The root laws on inspecting declared `@orkestrel/*` capabilities, reusing a matching primitive, and updating every consumer without shims bind here without restatement. They leave this file the judgment calls:
+
+- Prove the semantic difference before keeping a local variant; similar names are not evidence of different behavior.
 - Downstream friction is valid evidence of a reusable upstream defect, not automatic proof. Fix the lowest package that owns the general mechanism and keep product policy downstream.
-- Update affected consumers atomically. Never add compatibility shims or dependency re-exports.
+- Never re-export a dependency's symbol to soften a consumer's import.
 
 ## Production hardening
 
@@ -35,11 +36,12 @@ paths:
 - Use dedicated real-service projects for external model/service behavior. Require readiness and tune each request to the smallest robust proof.
 - Audit test discovery, counts, skipped/todo tests, cleanup, and assertion adequacy; passing discovered tests alone is insufficient.
 - Inspect public exports, declarations, supported runtime targets, and generated outputs.
+- A claim that a surface works with an external client stays unproven until one representative real client of that class has driven it end to end. Protocol tests prove the protocol, not the integration.
 - Add an independent adversarial review for security, destructive paths, concurrency, protocols, or untrusted external input.
 
 ## Completion
 
-- Run the applicable repository skill for comprehensive hardening, structural cleanup, contract adoption, or multi-package alignment.
-- Finish every in-scope capability and required finding now. Do not leave TODOs, deferred rows, empty branches, skipped proof, or hidden follow-up work.
+The root completion law — finish every in-scope capability now, leave no TODO, deferral, or hidden follow-up, and run the applicable repository skill for comprehensive work — binds here without restatement. It leaves this file two obligations:
+
 - Perform a final centralization/wrapper/test-helper/text-integrity sweep after implementation and before gates.
 - Local quality gates and relevant output inspection are required evidence.

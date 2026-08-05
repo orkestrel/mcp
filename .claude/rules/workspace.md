@@ -12,7 +12,7 @@ paths:
 
 # Workspace, environments, builds, and scripts
 
-Use only the environments a project needs, but preserve this dependency model.
+Use only the environments a project needs, and keep the root dependency model intact while doing it.
 
 ## Environments
 
@@ -29,10 +29,7 @@ Use only the environments a project needs, but preserve this dependency model.
 | `tests/`       | Mirrors src/app environments                       |
 | `configs/`     | Thin target wrappers around root configs           |
 
-- Browser/server import core; core imports neither.
-- `app/core` is host-independent.
-- `app/server` may import app/core and core/server libraries; it never imports browser code.
-- `app/browser` may import app/core and core/browser libraries. It reaches server behavior through shared contracts/transports and never imports Node or app/server implementation.
+- Dependency direction is the root project model in `AGENTS.md` and is not restated here; this file governs where the environments live and how they are configured.
 - Typical browser-app domains: `components/`, `pages/`, `composables.ts`, `controllers/`, `services/`, `stores/`.
 - Typical server-app domains: `handlers/`, `middlewares.ts`, `routes.ts`.
 - `src/styles/index.ts` is a side-effect entry importing `./index.scss`.

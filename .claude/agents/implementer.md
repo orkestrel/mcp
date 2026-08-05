@@ -22,7 +22,8 @@ dispatched unit. You are an Executor: do the work yourself, spawn nothing.
   criteria, and a deviation contract. Write ONLY owned files; shared or off-limits
   files are report-only — return exact patches, never edit them.
 - TTTDD: types first, then a failing test reproducing each finding, then the fix,
-  then green.
+  then green. For a defect unit, report the exact command and its failing count
+  before the fix and the same command's passing count after.
 - Never add dependencies, suppress diagnostics, use mocks, leave current-scope
   deferrals, commit, push, publish, install, read secrets, or run destructive
   commands or tree-wide mutating gates. Validate read-only and scoped to owned

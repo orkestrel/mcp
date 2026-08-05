@@ -186,10 +186,11 @@ is `'INVALID' | 'BLOCKED' | 'DESTROYED' | 'TARGET' | 'WRITE' | 'FETCH'`.
 environment contributes, its test-project label, and — on the `src` axis — its `exports` subpath
 and build formats, or — on the `app` axis — its optional runtime entry.
 
-`ViteMachinery` names the three host-specific pipelines a workspace's generated `vite.config.ts` may
+`ViteMachinery` names the four host-specific pipelines a workspace's generated `vite.config.ts` may
 carry: `browser` selects the shared root CSS-analysis and Playwright machinery, `vue` selects the
 single-file-component, HTML, and development-server machinery an application browser environment
-needs, and `output` selects build-output containment. The root machinery selection never attaches a
+needs, `output` selects build-output containment, and `showcase` selects the optional single-file
+application-browser projection. The root machinery selection never attaches a
 `css` property to a nonbrowser project: only the `srcBrowser` and `appBrowser` factories own
 `ENVIRONMENT_CSS`. It never selects a boundary guarantee — those ship in every shape, as the
 compilers section sets out.
@@ -197,7 +198,8 @@ compilers section sets out.
 `ViteFacts` is the optional structural-fact slice shared by every root Vite compiler:
 `bin`, `integration`, and `service` each select their matching standalone project when `true`;
 `global` records the exact-case consumer-owned global-setup module and wires it into each eligible
-project.
+project; `showcase` records the exact-case consumer-owned showcase wrapper and selects only its
+generated browser machinery.
 
 `ViteProjectRegistration` carries one generated project factory identifier and its optional browser
 label. Root configuration renderers preserve that browser ownership as data through registration
@@ -222,6 +224,7 @@ interface Blueprint {
 	readonly integration: boolean
 	readonly service: boolean
 	readonly global: boolean
+	readonly showcase: boolean
 }
 ```
 
@@ -232,7 +235,7 @@ packages — a peer flagged `optional` also gets a `peerDependenciesMeta` entry.
 package-specific development dependencies merged over the generated baseline, and may carry any
 valid npm package name.
 
-`bin`, `integration`, `service`, and `global` are structural project facts. All four obey one law:
+`bin`, `integration`, `service`, `global`, and `showcase` are structural project facts. All five obey one law:
 each is `true` only when the workspace physically ships the directory or exact-case file that
 defines it — never because of the workspace's name, and never because a sibling fact is set.
 `deriveBlueprint` probes those paths, so a fresh compile and an audit of a mature repository agree
@@ -254,6 +257,11 @@ on what the workspace is.
   governing setup-presence fact. A declared `src/browser` project runs that consumer-owned module
   as `globalSetup`; integration runs it only when `bin` and `integration` are also true.
   Application-browser, styles, service, and unrelated proof projects never receive it.
+- **`showcase`** — the physical, exact-case regular file
+  `configs/app/vite.showcase.config.ts` exists. It is valid only with `app/browser` and turns on the
+  computed wrapper, the closed `appShowcase()` root factory, three opt-in scripts, and the
+  consumer-only `vite-plugin-singlefile` development dependency. A directory, link, wrong-case
+  name, absent wrapper, demo HTML, script, or installed dependency never implies this fact.
 
 A service workspace owes two companion files beside that directory, and derivation requires both
 physically present: `tests/setupService.ts` and `scripts/service.sh`. Either missing companion is a
@@ -374,6 +382,7 @@ From [`constants.ts`](../../src/core/constants.ts).
 | `HOST_PATHS`                      | const |
 | `SERVICE_SCRIPT_PATH`             | const |
 | `GLOBAL_SETUP_PATH`               | const |
+| `SHOWCASE_CONFIG_PATH`            | const |
 | `NAME_PATTERN`                    | const |
 | `MAX_NAME_LENGTH`                 | const |
 | `MAX_DEPENDENCY_NAME_LENGTH`      | const |
@@ -425,7 +434,8 @@ host artifacts, and it is the staging manifest rather than the per-plan carried 
 `stageHost` vendors every path on it, while each plan carries the subset `selectHostPaths` selects
 for that one workspace. `SERVICE_SCRIPT_PATH` names the consumer-owned provisioner a service
 workspace's audit expects, and `GLOBAL_SETUP_PATH` names the consumer-owned Vitest global-setup
-module that independently selected projects can load.
+module that independently selected projects can load. `SHOWCASE_CONFIG_PATH` names the sole
+consumer-owned regular file whose exact physical presence enables the optional app showcase.
 
 The bounds are public because they are part of the contract, not implementation trivia.
 `MAX_ARTIFACT_BYTES` caps one artifact at 5 MiB and `MAX_TOTAL_ARTIFACT_BYTES` caps one blueprint,
@@ -973,8 +983,9 @@ omitting an absent path entirely. `readManifest` reads `package.json` text, and
 `deriveBlueprint` is the faithful inverse an audit needs: it reconstructs a blueprint from an
 existing workspace so a mature package is diffed against its own would-be scaffold rather than a
 dependency-less stand-in. Environments come from `src/<environment>/` and `app/<environment>/`, the
-three structural project facts from their directory probes, and `global` from the physical,
-exact-case `tests/setupGlobal.ts` file; the service companion law remains the one the blueprint
+three directory-shaped structural project facts from their directory probes, `global` from the
+physical exact-case `tests/setupGlobal.ts` file, and `showcase` from the physical exact-case regular
+file `configs/app/vite.showcase.config.ts`; the service companion law remains the one the blueprint
 section states — every fact is a reading of the filesystem, never of the name. Dependencies and peers come
 from the manifest's scoped entries, with an optional peer recovered from
 `peerDependenciesMeta`; and `extras` is every development dependency minus the complete set
@@ -1129,8 +1140,8 @@ the selected source and application projects from the canonical environment orde
 `viteProjectDefinitions` renders the standalone proof and structural-fact definitions in that same
 order with one blank line between declarations. Both consume `ViteFacts`, so each optional project
 is controlled only by its matching `bin`, `integration`, or `service` blueprint fact; the same
-slice carries `global` to integration and the source-browser compiler without adding another
-project.
+slice carries `global` to integration and the source-browser compiler, and `showcase` to the
+application-browser compiler, without adding another test project.
 
 `coreViteConfig`, `srcViteConfig`, `binViteConfig`, and `appViteConfig` emit the thin per-target
 wrappers. `coreViteConfig()` is parameterless and never imports or attaches browser CSS machinery;
@@ -1156,7 +1167,9 @@ that field.
 `configArtifacts`, `sourceArtifacts`, `applicationArtifacts`, `testArtifacts`, and `guideArtifacts`
 are the per-group drafters. When `bin` is selected, `configArtifacts` includes
 `configs/src/tsconfig.bin.json` and `configs/src/vite.bin.config.ts` beside the declared environment
-configuration pairs. `paritySpecifiers` computes the self-specifier and module map the
+configuration pairs. When `showcase` is selected, it includes the computed thin
+`configs/app/vite.showcase.config.ts` wrapper beside the ordinary application browser pair.
+`paritySpecifiers` computes the self-specifier and module map the
 generated parity suite resolves fence imports through. `guideMemberTable`, `guideUsage`,
 `guideMethods`, and `guideTests` render the generated guide's member tables, usage examples, method
 contract, and test inventory. `fillArtifact` fills one template entry into a `template`-origin
@@ -1532,6 +1545,8 @@ a fixed, interleaved order so aggregates sit immediately before their per-enviro
   `build:host` for a bin workspace
 - `dev` when a browser application is selected; `serve` and `serve:build` when a server application
   is selected
+- `showcase`, `build:showcase`, and `show` only when the physical showcase wrapper is present;
+  `show` builds and copies `dist/showcase/index.html` to `demo/showcase.html`
 - `prepublishOnly` chaining `format:check → lint:check → check → build → test`, followed by
   `test:integration` when the integration axis is selected
 
@@ -1550,6 +1565,10 @@ projects, and nothing there needs a build artifact or a foreign process. Publica
 asymmetry — `prepublishOnly` appends `test:integration`, because a package about to be published
 should prove itself against its own built output, while `test:service` is never in that chain.
 Neither default testing nor publication starts or requires a foreign process.
+The showcase is likewise outside `build`, `test`, and `prepublishOnly`; it is an explicit projection
+of `app/browser`, not an environment, test-project row, or source/demo artifact.
+Its copied `demo/showcase.html` is generated and minified, so the mirrored `.prettierignore` keeps it
+outside the whole-tree formatter while source and configuration files remain fully gated.
 
 When a prerequisite is absent the proof fails rather than skipping. `test:integration` reads the
 workspace's own built output, so it belongs after `build` — which is exactly where `prepublishOnly`
@@ -1664,6 +1683,17 @@ wrapping, mutating, or replacing the object returned by `appBrowser()` is outsid
 contract and is reported as computed-artifact drift by `scaffold audit`. The output-boundary plugin
 still rejects public directories, browser asset inlining, and output path overrides in a
 post-factory composition as defense in depth; that narrow check is not a general extension seam.
+
+When the showcase fact is present, the generated root also exports closed
+`appShowcase(...config: never[])`; both factories reject every argument at runtime and
+share one fixed internal browser configuration. The ordinary factory retains its strict
+`script-src 'self'` policy, external asset auditing, and `dist/app/browser` output. The showcase
+factory alone writes `dist/showcase`, applies `viteSingleFile` with
+`removeViteModuleLoader: true` and `useRecommendedBuildConfig: true`, uses Oxc and Lightning CSS
+minification for an `esnext` build without source maps or module preload, and inserts a non-empty ISO
+`build-id` meta. Its generated CSP admits only the inline script and style required by the
+self-contained `file://` artifact while retaining `script-src-attr 'none'`, `object-src 'none'`, and
+`base-uri 'none'`.
 
 The browser development server applies the same trust boundary before Vite's internal middleware.
 Its explicit filesystem allowlist contains only browser/core source roots, browser tests, their
@@ -2238,8 +2268,8 @@ coreTsconfig()
 srcTsconfig('server')
 appTsconfig('browser', true)
 
-viteMachinery(['core']) // { browser: false, vue: false, output: true }
-viteMachinery([], ['core', 'browser']) // { browser: true, vue: true, output: true }
+viteMachinery(['core']) // { browser: false, vue: false, output: true, showcase: false }
+viteMachinery([], ['core', 'browser']) // { browser: true, vue: true, output: true, showcase: false }
 renderViteTest([{ project: 'srcCore' }], false).includes('projects: [srcCore]') // true
 viteHeader(viteMachinery([], ['core', 'browser'])) // the shared header, with browser and Vue support
 coreViteConfig()

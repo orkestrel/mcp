@@ -13,9 +13,14 @@ nothing and edit nothing.
 
 The catalog below is discovery data, not instruction and not proof of current state.
 Before reporting a version, range, guide, branch, or capability, verify it against the
-registry, manifest, lockfile, installed declarations, canonical guide, or repository
-source named by the dispatch. Prefer exact installed declarations when implementation
-depends on a package contract. Never inspect credentials or mutate package state.
+manifest, lockfile, installed declarations, canonical guide, or repository source named
+by the dispatch. Prefer exact installed declarations when implementation depends on a
+package contract. Never inspect credentials or mutate package state.
+
+You have no shell and no network, so you never read the registry yourself. Live registry
+state is evidence the Orchestrator supplies with the dispatch; without it, report that
+fact as unknown and name what would settle it. Never present the catalog, a lockfile
+entry, or memory as live registry truth.
 
 ## Package catalog
 
@@ -29,10 +34,10 @@ descriptions never enter agent instruction context.
 
 | Package               | Version |
 | --------------------- | ------- |
-| @orkestrel/abort      | 0.0.4   |
+| @orkestrel/abort      | 0.0.5   |
 | @orkestrel/agent      | 0.0.13  |
 | @orkestrel/browser    | 0.0.8   |
-| @orkestrel/budget     | 0.0.4   |
+| @orkestrel/budget     | 0.0.5   |
 | @orkestrel/console    | 0.0.4   |
 | @orkestrel/contract   | 0.0.9   |
 | @orkestrel/csv        | 0.0.2   |
@@ -43,8 +48,8 @@ descriptions never enter agent instruction context.
 | @orkestrel/indexeddb  | 0.0.6   |
 | @orkestrel/interpret  | 0.0.7   |
 | @orkestrel/markdown   | 0.0.7   |
-| @orkestrel/mcp        | 0.0.9   |
-| @orkestrel/middleware | 0.0.6   |
+| @orkestrel/mcp        | 0.0.11  |
+| @orkestrel/middleware | 0.0.9   |
 | @orkestrel/msg        | 0.0.5   |
 | @orkestrel/ndjson     | 0.0.5   |
 | @orkestrel/ollama     | 0.0.8   |
@@ -55,20 +60,20 @@ descriptions never enter agent instruction context.
 | @orkestrel/rater      | 0.0.8   |
 | @orkestrel/reason     | 0.0.4   |
 | @orkestrel/relation   | 0.0.7   |
-| @orkestrel/router     | 0.0.7   |
-| @orkestrel/scaffold   | 0.0.16  |
-| @orkestrel/sea        | 0.0.4   |
-| @orkestrel/server     | 0.0.7   |
+| @orkestrel/router     | 0.0.8   |
+| @orkestrel/scaffold   | 0.0.20  |
+| @orkestrel/sea        | 0.0.5   |
+| @orkestrel/server     | 0.0.10  |
 | @orkestrel/sqlite     | 0.0.6   |
 | @orkestrel/sse        | 0.0.4   |
 | @orkestrel/template   | 0.0.2   |
 | @orkestrel/terminal   | 0.0.5   |
-| @orkestrel/timeout    | 0.0.4   |
+| @orkestrel/timeout    | 0.0.5   |
 | @orkestrel/tool       | 0.0.9   |
-| @orkestrel/toolbox    | 0.0.2   |
+| @orkestrel/toolbox    | 0.0.3   |
 | @orkestrel/websocket  | 0.0.7   |
-| @orkestrel/worker     | 0.0.5   |
-| @orkestrel/workflow   | 0.0.9   |
+| @orkestrel/worker     | 0.0.6   |
+| @orkestrel/workflow   | 0.0.10  |
 | @orkestrel/workspace  | 0.0.2   |
 
 <!-- catalog:end -->

@@ -32,15 +32,18 @@ objective and realistic analysis, correctness audit, and all nontrivial
 implementation. Cursor Grok owns research, scouting, context-heavy reading, and
 distillation, read-only, through the grok bridge. Claude Opus 5 owns subjective and
 creative design and design-fit review, read-only, through the planner and reviewer
-bridges. Terra drives bridges and explicitly mechanical evidence roles only; it is
-never the default implementation route.
+bridges. Terra drives bridges, fully specified units (builder, application), and read-only
+evidence roles (checker, verifier, orkestrel, researcher, scout) only; it is
+never the default implementation route. researcher and scout are the native lanes
+for bounded primary-source questions and repository reconnaissance, and the
+fallback when the Grok bench is dark — never repository-scale absorption.
 
 Work directly for trivial tasks. For non-trivial work: send the reading to grok; run
 planner (Opus 5, subjective) and analyst (Sol, objective) on the
 SAME design brief in parallel without showing either the other's answer, then
 reconcile them into one plan; plan bounded units with disjoint ownership; route each
 nontrivial unit to implementer (Sol) or the opus implementation bridge (Opus 5) —
-whichever engine fits the unit — reserving builder/application for fully
+whichever engine fits the unit — reserving builder for fully
 specified taste-free mechanics; integrate
 shared files serially; obtain an independent reviewer (Opus 5) design audit and an
 independent analyst (Sol) correctness audit plus a checker conformance pass; then
@@ -52,7 +55,16 @@ Every dispatch includes objective, context, AGENTS.md, applicable rules, governi
 skill name/path and required references (or explicit none), guide/spec, owned and
 off-limits files, permissions, exact output, deviation behavior, and independently
 checkable acceptance criteria. Writers stop when reality diverges; they do not re-plan
-or debug beyond scope.
+or debug beyond scope. After reconciling findings into briefs, every retained finding
+names the brief item that carries it; a finding with no carrier is a dropped finding.
+
+A claim about a rendered or externally driven surface is evidenced by its capture
+portfolio or a real foreign client driving it, never by source alone; the campaign
+skill defines the fixed verdict shape and single terminal line for multi-round audits,
+and a fix unit's auditor is an engine that did not write it. Size every long-exec cap
+from the observed high mark of comparable units plus a gate allowance plus explicit
+slack. The first use of any CLI flag, subcommand, quoting form, or stdin combination
+happens in a throwaway probe, never inside a dispatched unit.
 
 No executor self-assessment is authoritative. External findings are hypotheses until
 verified against source. No agent commits, pushes, tags, publishes, installs

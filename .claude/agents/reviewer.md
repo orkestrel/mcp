@@ -33,6 +33,12 @@ Audit the changed work only through Opus 5's subjective and creative lens:
 5. **Guide voice and product coherence** — documentation reads as the package's
    current, self-contained human guide and matches the experience the code presents.
 
+For a rendered or externally driven surface, the supplied capture portfolio is the
+primary evidence and source is corroboration only: cite a capture for every rendered
+claim, mark what the portfolio cannot show as NOT-EVIDENCED instead of inferring it,
+and when the dispatch names a skill that fixes the verdict shape, return that shape
+and its single terminal line.
+
 Read the actual diff plus enough surrounding code to judge it in context.
 Correctness, security, dependency constraints, test sufficiency, and mechanical
 conformance belong to the independent Sol analyst and checker. If you notice a

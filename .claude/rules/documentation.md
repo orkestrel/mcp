@@ -23,6 +23,7 @@ Documentation is an enforced contract, not explanatory decoration.
 - `guides/README.md` is the map: maintain both a concept index (`spec ↔ source ↔ tests ↔ showcase`) and directory index.
 - `ROADMAP.md` is the sequenced plan of record. Each chunk reaches green before the next.
 - A showcase is executable proof of public API. A missing demonstration is a missing feature, detectable by parity.
+- An integration surface's guide documents the validated hookup for each supported client: the exact commands run, the authentication and approval model that client needs, and the honest limit wherever a client cannot reach part of the surface.
 
 ## Parity
 

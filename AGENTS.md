@@ -83,6 +83,8 @@ configs/  thin target wrappers around root Vite/TypeScript configuration
 
 If the user changes a type mid-task, treat it as immediately authoritative. Type failures identify implementation that has not caught up.
 
+A defect fix inserts a failing proof before its implementation: record the exact command and its failing count, implement, then record the same command green. A test that never ran red does not bind to the defect it claims.
+
 For comprehensive hardening, research, centralization, contract adoption, real-service integration, or cross-package alignment, follow the applicable repository skill. No current-scope requirement may end as a TODO, skipped test, deferred row, or hidden follow-up.
 
 ## Work process
@@ -96,10 +98,10 @@ For comprehensive hardening, research, centralization, contract adoption, real-s
 7. **Document:** update the guide, examples, and parity contract.
 8. **Verify:** audit discovery/deferrals/package contents as applicable, run the required gates, and read their actual output before claiming success.
 
-Quality gates before commit, in order:
+Quality gates before commit, in order (the acceptance gate is the non-mutating variant; run the mutating `format`/`lint` first only to converge, then prove with the checks):
 
 ```text
-npm run format → npm run lint → npm run check → npm run build → npm test
+npm run format:check → npm run lint:check → npm run check → npm run build → npm test
 ```
 
 - Use scoped checks/tests during development; do not run the whole suite casually.

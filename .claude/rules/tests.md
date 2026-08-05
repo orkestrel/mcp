@@ -20,6 +20,7 @@ paths:
 - Prefer inert customizable data/input stubs. A scripted boundary stub is allowed only when it implements the real interface/protocol minimally to drive the system under test; it never reimplements project-owned behavior or stands in for the integration being claimed.
 - Cover happy paths, error paths, empty input, boundary values, `NaN`, positive/negative zero, cycles, and Map/Set order where relevant.
 - Test observable behavior, not implementation details.
+- A regression test records the exact command and its failing count before the fix, and the same command's passing count after.
 - Use `it.todo()` only for explicitly out-of-scope roadmap work, never to complete the current request. Every `.skip` or conditional skip has a narrow verifiable applicability reason.
 - Do not create test files solely for `constants.ts`, barrels, error definitions, or `types.ts`.
 - Run the narrowest relevant Vitest project during development; do not run the entire suite casually.

@@ -21,30 +21,37 @@ never implement directly, and never treat Sol's response as authoritative.
   `tmp/codex/<unit>.session` — an interrupted MCP call whose id was never written
   to disk is unrecoverable, and that whole exchange is then treated as failed.
 - **Long-running work** (audits, implementation units, anything multi-minute):
-  the journaled CLI is MANDATORY and the MCP tools are forbidden. A long MCP call
-  is one interruption away from losing the session invisibly; the journal is not.
+  the journaled CLI is MANDATORY, the MCP tools are forbidden, and YOU DO NOT
+  LAUNCH IT. A long MCP call is one interruption away from losing the session
+  invisibly; a backgrounded exec you start and walk away from has no owner, no
+  completion signal, and no death notice. Prepare it and hand it back.
 
-## Journaled CLI protocol
+## Prepare the journaled CLI launch
+
+Your two jobs are drafting the brief and short MCP exchanges. For long work you
+prepare the launch and return it; the Orchestrator runs it as a harness-tracked
+background command under a hard cap.
 
 Create `tmp/codex/` first. Write the full brief to `tmp/codex/<unit>-brief.md` —
-briefs never travel as shell arguments — and pass a pointer prompt instead:
+briefs never travel as shell arguments — then return the exact resolved command
+with a pointer prompt:
 
-`codex exec --json --sandbox <route-sandbox> --model gpt-5.6-sol -c "model_reasoning_effort=\"high\"" --output-last-message tmp/codex/<unit>-last.md "Read and execute the brief at tmp/codex/<unit>-brief.md exactly. Your final message must be the report it specifies." > tmp/codex/<unit>.jsonl`
+`timeout <cap> codex exec --json -C <working-directory> --sandbox <route-sandbox> --model gpt-5.6-sol -c "model_reasoning_effort=\"high\"" --output-last-message tmp/codex/<unit>-last.md "Read and execute the brief at tmp/codex/<unit>-brief.md exactly. Your final message must be the report it specifies." < /dev/null > tmp/codex/<unit>.jsonl`
 
-- Run it foreground with a generous timeout when it will finish inside the shell's
-  foreground cap. When it may exceed that cap, launch it in the background and END
-  YOUR TURN — the harness re-invokes you when the exec exits. Ending the turn IS
-  the wait; a "final" message that only promises to wait is a deviation.
-- Never sleep-loop, never poll the journal, never spawn placeholder wait loops or
-  keep-alive commands, never restart or kill a running exec.
+- Return four things: the brief path, that resolved command, the journal path,
+  and a cap recommendation with its basis — the observed duration high-mark for
+  this work class, plus an independently budgeted gate allowance, plus explicit
+  slack. Never launch, background, poll, sleep-loop, restart, or kill an exec.
+- Keep `< /dev/null`: a background-launched exec that inherits an open stdin pipe
+  wedges before its first event and only the cap ever surfaces it. Add
+  `--skip-git-repo-check` when the working directory is outside a trusted git
+  repository, and `--output-schema <file>` when the Orchestrator supplies one.
 - The journal at `tmp/codex/<unit>.jsonl` is the live progress record (the user
   tails it) and its mtime is the liveness signal the Orchestrator watches. Never
   re-print the stream into your report.
-- Read Sol's answer from the `--output-last-message` file, not from stdout.
-- Record the session id (`thread_id` in the journal's opening events) in every
-  report.
-- When the Orchestrator supplies a JSON Schema for the return shape, pass it with
-  `--output-schema <file>`.
+- When the Orchestrator hands back a finished exec, read Sol's answer from the
+  `--output-last-message` file, not from stdout, and record the session id
+  (`thread_id` in the journal's opening events) in every report.
 
 ## Recovery ladder
 
@@ -53,8 +60,8 @@ On any interruption or missing result, in order:
 1. Interrupted MCP call WITH a persisted thread id → `mcp__codex__codex-reply`
    asking Sol to re-emit the complete final report (the reasoning may have
    finished server-side).
-2. No persisted id, or the reply fails → fresh journaled CLI session with the
-   same brief file.
+2. No persisted id, or the reply fails → prepare a fresh journaled CLI launch
+   with the same brief file and return it.
 3. Interrupted CLI exec → the journal survives; report the thread id and the last
    journal events as a deviation and let the Orchestrator choose resume or fresh.
 
@@ -74,12 +81,12 @@ unsupported claims as dropped.
 
 Sandbox `workspace-write`, main checkout, sole serial writer from a clean
 committed baseline with owned files, off-limits files, and a deviation contract.
-When the exec returns, verify the result with direct evidence (git status, diff,
-scoped validation) and report once, completely. The brief forbids dependency
-installation, commits, pushes, publishing, credentials, destructive commands,
-shared-file edits, and tree-wide mutating gates. Return the touched files,
-diffstat, scoped validation, and deviation state for independent integration and
-review.
+When the Orchestrator hands the finished exec back, verify the result with direct
+evidence (git status, diff, scoped validation) and report once, completely. The
+brief forbids dependency installation, commits, pushes, publishing, credentials,
+destructive commands, shared-file edits, and tree-wide mutating gates. Return the
+touched files, diffstat, scoped validation, and deviation state for independent
+integration and review.
 
 ## Routing exclusion — defensive negative-test units
 

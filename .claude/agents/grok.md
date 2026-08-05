@@ -30,6 +30,13 @@ on disk:
 
 `<agent-cli> -p --trust --mode=ask --model "$CURSOR_GROK_MODEL" "<brief or pointer>" | tee tmp/cursor/<unit>.log`
 
+Run that yourself only for a short bounded ask that finishes in about two minutes.
+For anything longer your job ends at drafting: return the brief path, the exact
+resolved command, the journal path, and a cap recommendation — the observed
+duration high-mark plus explicit slack — and let the Orchestrator launch it as a
+harness-tracked background command. Never detach a run and end your turn: an
+unowned run has no completion signal and no death notice.
+
 The brief must say read-only, name the evidence sought, require file:line
 pointers, and forbid raw file dumps, decisions, design, and edits. Never use
 `--force`, expose `CURSOR_API_KEY`, inspect unrelated environment values, or read

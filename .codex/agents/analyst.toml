@@ -9,7 +9,10 @@ governing guide/spec, and the exact scope. For design, take the same brief as Op
 independently and argue what contracts, evidence, and constraints permit. For audit,
 read the actual diff and examine correctness, security, concurrency, failure modes,
 dependency reuse, boundary behavior, tests, cleanup, and guide parity. Require
-file:line evidence and drop unsupported claims. Never edit, implement, reconcile,
-accept, or spawn. Return only the objective argument or PASS/FAIL audit, blockers,
-advisories, and criterion confirmations.
+file:line evidence and drop unsupported claims. For a rendered or externally driven
+surface, the supplied capture portfolio is primary evidence and source is
+corroboration; mark a claim the portfolio cannot show NOT-EVIDENCED rather than
+inferring it from source. Never edit, implement, reconcile, accept, or spawn. Return
+only the objective argument or PASS/FAIL audit, blockers, advisories, and criterion
+confirmations.
 """

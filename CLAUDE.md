@@ -37,9 +37,12 @@ One workflow runs across both providers. Each engine has one job, and no engine 
 - **After implementation Opus 5 and Sol audit independently** — Opus on design fit, Sol on
   correctness and constraint satisfaction — and the orchestrator reconciles their evidence
   into one verdict.
-- **Lower-cost native agents (Sonnet, Terra) do fully specified mechanical units and gate
-  evidence only.** A specified rename, a scaffold expansion, a conformance checklist, a gate
-  run. They never substitute for Grok, Opus 5, or Sol.
+- **Lower-cost native agents (Sonnet, Terra) do fully specified units and read-only
+  evidence only.** A specified rename, an app-layer expansion, a conformance checklist, a
+  gate run, a bounded primary-source question, a reconnaissance sweep. They never
+  substitute for Grok, Opus 5, or Sol: `researcher` and `scout` are the native evidence
+  lanes for bounded questions and the fallback when the Grok bench is dark, never the
+  route for repository-scale absorption or judgment.
 
 The orchestrator reconciles; no external engine reconciles itself or accepts its own work.
 In Claude Code the orchestrator is the top-level Fable session. When Codex is primary, the
@@ -69,6 +72,8 @@ dispatch, even when the role file pins it.
 | Nontrivial implementation (subjective)   | `implementer`                   | `implementer` route `opus`    | Opus 5 (native / bridge)      |
 | Fully specified mechanical unit          | `builder`                       | `builder`                     | Sonnet / Terra                |
 | Fully specified app-layer unit           | `application`                   | `application`                 | Sonnet / Terra                |
+| Bounded primary-source research          | `researcher`                    | `researcher`                  | Sonnet / Terra                |
+| Repository reconnaissance                | `scout`                         | `scout`                       | Sonnet / Terra                |
 | Mechanical conformance evidence          | `checker`                       | `checker`                     | Sonnet / Terra                |
 | Gate evidence                            | `verifier`                      | `verifier`                    | Sonnet / Terra                |
 | Ecosystem evidence                       | `orkestrel`                     | `orkestrel`                   | Sonnet / Terra                |
@@ -83,7 +88,7 @@ dispatch, even when the role file pins it.
   otherwise its Orchestrator duties are unchanged.
 - Opus roles use high effort; Sonnet and Terra roles use low or medium; bridge drivers use the
   cheapest tier that can run a CLI.
-- Role files pin engine, effort, tools, permissions, turn budget, and charter. Claude Code
+- Role files pin engine, effort, tools, permissions, and charter. Claude Code
   hot-reloads edits to existing role files.
 
 ## Permission and safety floor
@@ -150,16 +155,18 @@ absorbed.
    AND engine. A unit whose work class belongs to a bench (reading-heavy → Grok; objective
    audit or objective implementation → Sol) that is routed to a Claude-native agent without a
    recorded bench-dark deviation is a dispatch deviation.
-3. **Implement.** Route each nontrivial unit to `implementer` (Sol, main checkout, sole
-   writer). Route a fully
-   specified, taste-free unit to `builder` or `application`. Never route implementation to an
-   engine the unit's judgment load exceeds.
+3. **Implement.** Route each nontrivial objective unit to the Sol `implementer` and each
+   nontrivial subjective unit to the Opus `implementer` — main checkout, one sole writer at a
+   time. Route a fully specified, taste-free unit to `builder`. Never route implementation to
+   an engine the unit's judgment load exceeds.
 4. **Integrate.** Evaluate each distillate against its acceptance criteria; apply shared-file
    patches serially; route cross-cutting findings.
 5. **Audit adversarially.** Every nontrivial implementation gets `reviewer` (Opus 5, design
    fit) and `analyst` (Sol, correctness and constraints) independently, plus `checker` for
-   mechanical conformance. Reconcile their evidence; a finding neither engine can substantiate
-   against source is dropped on the record.
+   mechanical conformance. In a fix round the unit's auditor is an engine that did not write
+   it. Multi-round audits use one fixed verdict shape with a single terminal line, defined by
+   the campaign skill. Reconcile their evidence; a finding neither engine can substantiate
+   against the evidence is dropped on the record.
 6. **Verify.** One independent `verifier` runs the authoritative gates.
 7. **Accept.** The Orchestrator decides and reports concise outcomes, decisions, evidence, and
    remaining risk.
@@ -202,7 +209,11 @@ Every dispatch contains:
 - **Deviation contract** — required stop/report behaviour for writers.
 - **Acceptance criteria** — independently checkable completion conditions.
 - **Review evidence** — for `reviewer` and `checker`, the actual diff and status output;
-  omitting either is a dispatch deviation.
+  omitting either is a dispatch deviation. For any claim about a rendered or externally
+  driven surface, the capture portfolio is the review input and source is corroboration.
+
+After reconciling findings into briefs, walk the retained finding list once: every finding
+names the brief item that carries it. A finding with no carrier is a dropped finding.
 
 ## Bench mechanics
 
@@ -241,7 +252,11 @@ under a hard time cap, never detached from inside a bridge agent: the harness ow
 lifecycle, completion re-invokes the session, and the cap kills a wedged bench loudly instead
 of trusting the bridge to report its own failure. A wedged bridge is silent, and silence must
 never read as progress. A stalled journal or a cap-killed exec follows the deviation ladder,
-with the session id from the journal head as the recovery handle.
+with the session id from the journal head as the recovery handle. Size the cap from the
+observed high mark of comparable units plus an independently budgeted gate allowance plus
+explicit slack, never from the estimate alone. The first use of any CLI flag, subcommand,
+quoting form, or stdin combination happens in a throwaway probe, never inside a dispatched
+unit.
 
 ### Cursor Grok
 
@@ -372,4 +387,7 @@ CODEX_IMPLEMENTER_EFFORT=high
   before both have returned.
 - Do not accept unreviewed implementation, unverified hypotheses, shared-tree writing races,
   implicit engines, fixed Claude IDs, or verbose completed-work residue.
+- A claim about a rendered or externally driven surface is evidenced by its capture or a real
+  foreign client driving it, never by source alone; where no such surface exists this law is
+  inert.
 - Final acceptance belongs only to the Orchestrator, after independent audit and gate evidence.

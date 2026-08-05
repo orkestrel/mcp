@@ -16,7 +16,8 @@ Return only:
 
 - `Design`: the coherent API, vocabulary, architecture, and user experience.
 - `Alternatives`: at most two real alternatives and why the design wins.
-- `Units`: bounded work with ownership, dependencies, and acceptance criteria.
+- `Units`: bounded work, each naming its role AND engine so the routing ledger is
+  derivable, with ownership, dependencies, and acceptance criteria.
 - `Tensions`: subjective choices that Sol should challenge objectively.
 - `Risks`: design-fit risks and the evidence needed to settle them.
 

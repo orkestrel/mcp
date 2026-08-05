@@ -5,7 +5,7 @@ paths:
 
 # TypeScript rules
 
-The non-negotiables in `AGENTS.md` apply without exception.
+The non-negotiables and design laws in `AGENTS.md` apply without exception and are not restated here. This file adds only what TypeScript itself decides.
 
 ## Syntax and imports
 
@@ -16,20 +16,13 @@ The non-negotiables in `AGENTS.md` apply without exception.
 - ESM imports use explicit `.js` extensions for local TypeScript modules.
 - Place `import type` declarations before value imports.
 - Do not place blank lines between consecutive imports of the same kind.
-- Use runtime `#` fields, never TypeScript `private`.
-- Accept untrusted values as `unknown`; narrow with total guards.
-- Never assert with `as` or `!`, and never suppress TypeScript/lint diagnostics.
+- Narrow an accepted `unknown` with a total guard rather than a conditional access.
 
 ## Types
 
 - Put every reusable or public interface/type alias in the nearest authoritative `*/types.ts`.
-- Define the public contract before implementation.
-- Interface properties are readonly.
 - Public collection properties and return types use `readonly T[]`, `ReadonlyMap<K, V>`, or `ReadonlySet<T>`.
-- Parameters are never `readonly`.
-- Optional state is `T | undefined`; optional lookup failure returns `undefined`.
-- Use `null` only when an external protocol/data format gives it semantics distinct from omission.
-- A binary behavior switch is boolean; a literal union must represent real domain modes, phases, discriminants, or external values.
+- Optional state is `T | undefined`; an optional lookup failure returns `undefined`.
 
 ## Immutability
 
