@@ -174,12 +174,13 @@ For `_` bindings:
 
 ## Files and folders
 
-| Kind           | Pattern                                      |
-| -------------- | -------------------------------------------- |
-| Domain folder  | lowercase plural entity: `agents/`, `tools/` |
-| Implementation | PascalCase entity: `Agent.ts`                |
-| Test           | PascalCase entity + `.test`: `Agent.test.ts` |
-| Guide          | lowercase domain: `agents.md`                |
+| Kind            | Pattern                                                                          |
+| --------------- | -------------------------------------------------------------------------------- |
+| Domain folder   | lowercase plural entity: `agents/`, `tools/`                                     |
+| Implementation  | PascalCase entity: `Agent.ts`                                                    |
+| Function module | camelCase function: `renderGrid.ts`                                              |
+| Test            | source filename without extension + `.test`: `Agent.test.ts`, `useTheme.test.ts` |
+| Guide           | lowercase domain: `agents.md`                                                    |
 
 ## Fixed lifecycle vocabulary
 

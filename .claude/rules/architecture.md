@@ -13,26 +13,27 @@ paths:
 
 ## Centralized-file pattern
 
-| Content                   | Sole location                                |
-| ------------------------- | -------------------------------------------- |
-| Interfaces/types          | `*/types.ts`                                 |
-| Constants/data            | `*/constants.ts`                             |
-| Pure helpers              | `*/helpers.ts`                               |
-| Guards                    | `*/validators.ts`                            |
-| Guard combinators         | `*/combinators.ts`                           |
-| Owned snapshots           | `*/cloners.ts`                               |
-| Coercers                  | `*/parsers.ts`                               |
-| Shape values              | `*/shapers.ts`                               |
-| Value inferers            | `*/inferers.ts`                              |
-| Shape/algorithm compilers | `*/compilers.ts`                             |
-| Entity/value factories    | `*/factories.ts`                             |
-| Middleware factories      | `*/middlewares.ts`                           |
-| Seeders                   | `*/seeders.ts`                               |
-| Schemas                   | `*/schemas.ts`                               |
-| Relations                 | `*/relations.ts`                             |
-| Error classes/guards      | `*/errors.ts`                                |
-| Public exports            | `*/index.ts`                                 |
-| Implementations           | `*/[domain]/[Entity].ts`, one class per file |
+| Content                   | Sole location                                                |
+| ------------------------- | ------------------------------------------------------------ |
+| Interfaces/types          | `*/types.ts`                                                 |
+| Constants/data            | `*/constants.ts`                                             |
+| Pure helpers              | `*/helpers.ts`                                               |
+| Guards                    | `*/validators.ts`                                            |
+| Guard combinators         | `*/combinators.ts`                                           |
+| Owned snapshots           | `*/cloners.ts`                                               |
+| Coercers                  | `*/parsers.ts`                                               |
+| Shape values              | `*/shapers.ts`                                               |
+| Value inferers            | `*/inferers.ts`                                              |
+| Shape/algorithm compilers | `*/compilers.ts`                                             |
+| Entity/value factories    | `*/factories.ts`                                             |
+| Middleware factories      | `*/middlewares.ts`                                           |
+| Seeders                   | `*/seeders.ts`                                               |
+| Schemas                   | `*/schemas.ts`                                               |
+| Relations                 | `*/relations.ts`                                             |
+| Error classes/guards      | `*/errors.ts`                                                |
+| Public exports            | `*/index.ts`                                                 |
+| Implementations           | `*/[domain]/[Entity].ts`, one class per file                 |
+| Function modules          | a designated folder's `[function].ts`, one function per file |
 
 Use only the centralized files an environment needs.
 
@@ -40,6 +41,7 @@ Use only the centralized files an environment needs.
 
 - An implementation file contains imports and exactly one class implementation with `#` fields.
 - It contains no module-scope interface, type, constant, or free function—even when private to that file.
+- A function module contains imports and exactly one exported function named for its file. Everything else extracts by kind exactly as it does from a class module.
 - Extract local declarations by kind. “Only used here” and “not exported” are not exemptions.
 - Every declaration in a centralized file is exported. Fold away a trivial single-use declaration or export/test it; never leave it hidden.
 - The only permitted non-exported module-scope declarations are in a runtime entrypoint that must be self-contained and cannot import siblings, such as raw source loaded in a worker. Explain that necessity in a comment.
@@ -119,6 +121,15 @@ Store child managers in `#` fields and expose readonly getters typed as their in
 - When one entity grows a family (entity + manager or sibling implementations), nest only its class files in a lowercase plural folder.
 - Keep its interfaces in module-root `types.ts`, factories in module-root `factories.ts`, and exports in the module barrel.
 - Entity subfolders never grow their own centralized files.
+
+### Kind or folder
+
+- A word is either a centralized kind or a domain folder, never both.
+- A folder named for a centralized kind—`helpers/`, `validators/`, `handlers/`—is that kind's file, not a folder.
+- A function domain is designated in the fleet-canon register (`tests/setupPolicy.ts`,
+  `FUNCTION_DOMAIN_FOLDERS`), not inferred from a folder's name: a camelCase module inside an
+  undesignated folder is misplaced. A workspace requests a new domain through a fleet-canon change;
+  there is no workspace-local registration path.
 
 ### Extension categories
 

@@ -1,6 +1,6 @@
 ---
 name: codex
-description: 'GPT-5.6 Sol dispatcher: analyst is read-only objective reasoning and audit; implementer writes one bounded unit in the main checkout as the sole serial writer. Never accepts its own output.'
+description: 'GPT-5.6 Sol transport contract and the implementer route: writes one bounded unit in the main checkout as the sole serial writer. The analyst route has its own named role in `analyst`; this file remains the transport contract both routes follow. Never accepts its own output.'
 tools: Bash, Read, Grep, Glob, mcp__codex__codex, mcp__codex__codex-reply
 model: sonnet
 effort: low
@@ -76,6 +76,13 @@ Sandbox `read-only`, current checkout. Use for objective/realistic design
 argument, diagnosis, correctness/security audit, and constraint review. Capture
 repository status before and after. Require evidence for every claim and return
 unsupported claims as dropped.
+
+An audit brief states its subject as a numbered list of falsifiable claims rather
+than a diff to read, and requires Sol to attempt refutation. The Falsification
+section of `.claude/rules/quality.md` owns the method and the evidence each verdict
+carries; when the dispatch names a skill that fixes the verdict shape, that skill
+owns the value set and the terminal line. Point the brief at both instead of
+restating either.
 
 ## Implementer
 

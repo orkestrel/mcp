@@ -30,8 +30,8 @@ Use only the environments a project needs, and keep the root dependency model in
 | `configs/`     | Thin target wrappers around root configs           |
 
 - Dependency direction is the root project model in `AGENTS.md` and is not restated here; this file governs where the environments live and how they are configured.
-- Typical browser-app domains: `components/`, `pages/`, `composables.ts`, `controllers/`, `services/`, `stores/`.
-- Typical server-app domains: `handlers/`, `middlewares.ts`, `routes.ts`.
+- Typical browser-app domains: `components/`, `pages/`, `composables/`, `controllers/`, `services/`, `stores/`.
+- Typical server-app domains: `handlers.ts`, `middlewares.ts`, `routes.ts`.
 - `src/styles/index.ts` is a side-effect entry importing `./index.scss`.
 
 ## Aliases

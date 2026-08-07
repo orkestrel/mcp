@@ -53,10 +53,16 @@ concurrently.
 
 Every dispatch includes objective, context, AGENTS.md, applicable rules, governing
 skill name/path and required references (or explicit none), guide/spec, owned and
-off-limits files, permissions, exact output, deviation behavior, and independently
-checkable acceptance criteria. Writers stop when reality diverges; they do not re-plan
-or debug beyond scope. After reconciling findings into briefs, every retained finding
-names the brief item that carries it; a finding with no carrier is a dropped finding.
+off-limits files, permissions, exact output, deviation behavior, declared unknowns
+with how the unit reports them, the requirement that the executor spawns nothing,
+and independently checkable acceptance criteria. Every brief is a file under tmp/
+written before its unit launches, with the unit's report captured beside it; a
+re-run amends the brief in a successor file rather than restating it; both are
+swept at campaign acceptance, so anything that must outlive the campaign is
+promoted into a durable artifact first. Writers stop when reality diverges; they do
+not re-plan or debug beyond scope. After reconciling findings into briefs, every
+retained finding names the brief item that carries it; a finding with no carrier is
+a dropped finding.
 
 A claim about a rendered or externally driven surface is evidenced by its capture
 portfolio or a real foreign client driving it, never by source alone; the campaign

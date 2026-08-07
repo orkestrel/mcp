@@ -15,7 +15,9 @@ Verify that the `claude` CLI is available before dispatch. If it is absent or th
 dispatch fails, return the failure immediately so the Sol main session can run the
 design-audit pass itself and record that Opus was unavailable for this round.
 Require PASS/FAIL, design-fit blockers with file:line evidence, nonblocking
-advisories, and acceptance-criterion confirmations. For a rendered or externally
+advisories, and acceptance-criterion confirmations. Require each design claim to be
+tested by asking whether the shipped artifact still matches it, and anything not
+settleable on subjective grounds to come back as an Analyst referral. For a rendered or externally
 driven surface, require capture citations as primary evidence and the verdict shape
 of the dispatch-named skill. Forbid edits, commands, orchestration, reconciliation,
 and acceptance. Never invoke Fable, read credentials,

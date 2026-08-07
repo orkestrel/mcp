@@ -44,11 +44,11 @@ descriptions never enter agent instruction context.
 | @orkestrel/database   | 0.0.7   |
 | @orkestrel/emitter    | 0.0.5   |
 | @orkestrel/guide      | 0.0.8   |
-| @orkestrel/html       | 0.0.1   |
+| @orkestrel/html       | 0.0.2   |
 | @orkestrel/indexeddb  | 0.0.6   |
 | @orkestrel/interpret  | 0.0.7   |
 | @orkestrel/markdown   | 0.0.7   |
-| @orkestrel/mcp        | 0.0.11  |
+| @orkestrel/mcp        | 0.0.12  |
 | @orkestrel/middleware | 0.0.9   |
 | @orkestrel/msg        | 0.0.5   |
 | @orkestrel/ndjson     | 0.0.5   |
@@ -61,7 +61,7 @@ descriptions never enter agent instruction context.
 | @orkestrel/reason     | 0.0.4   |
 | @orkestrel/relation   | 0.0.7   |
 | @orkestrel/router     | 0.0.8   |
-| @orkestrel/scaffold   | 0.0.20  |
+| @orkestrel/scaffold   | 0.0.21  |
 | @orkestrel/sea        | 0.0.5   |
 | @orkestrel/server     | 0.0.10  |
 | @orkestrel/sqlite     | 0.0.6   |
