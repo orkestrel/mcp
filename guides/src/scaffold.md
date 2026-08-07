@@ -67,11 +67,41 @@ than aspirational:
 - `app/browser` reaches server behavior only through shared `app/core` contracts and transports,
   never through a server implementation import.
 
-A generated `app/server` owns strict `APP_HOST`, `APP_PORT`, and `APP_START_TIMEOUT` parsing, a
-repeat-safe HTTP lifecycle, bounded connection behavior, and process signal cleanup. Its exported
+A generated `app/server` owns strict grouped `server.host`, `server.port`, and `server.timeout`
+options plus the `APP_HOST`, `APP_PORT`, and `APP_START_TIMEOUT` environment boundaries. It
+composes the installed router, server, and boundary/security/deadline middleware substrates around
+a fresh `GET /health` dispatcher from `createApplicationDispatcher`, supports repeated start/stop
+cycles and terminal destroy of both the server and its owned dispatcher, and writes exactly one
+`[READY] <name> <url>` diagnostic after process-owned readiness. The process runner owns an emitter
+whose `ApplicationServerRunnerEventMap` publishes `ready(url)` and `fail(error)`; initial
+`ApplicationServerRunnerOptions.on` hooks run before the runner's own announcement and reporting
+listeners; a synchronous fail hook sees an otherwise-unset `process.exitCode` as `undefined` before
+the default reporter sets it to `1`. Concurrent stops join one substrate shutdown. In-process tests park on those events,
+while child-process tests still observe the readiness line across the process boundary. Its exported
 `reportApplicationServerError` handler writes only a stable configuration, lifecycle, or unknown
-failure code; process-owned diagnostics never serialize a rejected value, nested cause, stack, or
-other error context.
+failure code; process-owned failures never serialize a rejected value, nested cause, stack,
+secret, or other error context. `ApplicationState` extends middleware's `IdentifierState` and adds
+only the connection fact. `ApplicationServer.url` is `undefined` until a real port is bound and
+again after stop or destroy; the redundant `listening` projection is not part of the generated
+interface. The runner narrows the post-start URL before writing `[READY]`, so it never announces a
+stale or unbound address, and it stops the server as part of failing that narrowing rather than
+leaving a bound listener without a shutdown owner. It also serializes every start and stop on one
+lifecycle queue, so a stop waits for the startup it aborted to settle before closing the server,
+and a restart issued during that shutdown is honoured after it rather than lost.
+
+The health contract belongs to whichever layer both hosts can reach. While the server alone reads
+it, `ApplicationRecord`, `APP_HEALTH_METHOD`, and `APP_HEALTH_PATH` stay declared in `app/server`.
+The moment a blueprint declares `app/browser` beside `app/server` — a combination that already
+requires `app/core` — those three declarations move to `app/core` and gain `APP_HEALTH_TIMEOUT`,
+the `isApplicationRecord` guard, and `readApplicationHealth`. That one asynchronous read is the
+whole browser/server boundary: it fetches the running server's health route, reads the body as
+`unknown`, narrows it with the shared guard, and returns the shared `Application` identity or
+`undefined` for an unreachable, slow, or off-contract answer. Nothing is duplicated by the move —
+`app/server` imports the relocated contract from `@app/core`, and `app/browser` still never imports
+a server module. The generated browser entry then mounts `mountBrowserApplication`, which performs
+that single read before mounting and falls back to the locally configured identity when the
+boundary yields `undefined`. A rejected mount reports the context-free
+`[ERROR] Browser application failed`, the browser twin of that server-side discipline.
 
 Every environment barrel is an export-star barrel: `index.ts` contains only `export * from './x.js'`
 rows and nothing else. Named, default, namespace, and type-only barrel rows are absent by design,
@@ -196,7 +226,8 @@ application-browser projection. The root machinery selection never attaches a
 compilers section sets out.
 
 `ViteFacts` is the optional structural-fact slice shared by every root Vite compiler:
-`bin`, `integration`, and `service` each select their matching standalone project when `true`;
+`bin` and `integration` each select their matching standalone project when `true`, while `services`
+selects one standalone project for every listed vendor;
 `global` records the exact-case consumer-owned global-setup module and wires it into each eligible
 project; `showcase` records the exact-case consumer-owned showcase wrapper and selects only its
 generated browser machinery.
@@ -222,7 +253,7 @@ interface Blueprint {
 	readonly overrides: readonly Override[]
 	readonly bin: boolean
 	readonly integration: boolean
-	readonly service: boolean
+	readonly services: readonly string[]
 	readonly global: boolean
 	readonly showcase: boolean
 }
@@ -235,9 +266,10 @@ packages — a peer flagged `optional` also gets a `peerDependenciesMeta` entry.
 package-specific development dependencies merged over the generated baseline, and may carry any
 valid npm package name.
 
-`bin`, `integration`, `service`, `global`, and `showcase` are structural project facts. All five obey one law:
-each is `true` only when the workspace physically ships the directory or exact-case file that
-defines it — never because of the workspace's name, and never because a sibling fact is set.
+`bin`, `integration`, `services`, `global`, and `showcase` are structural project facts. They obey
+one law: each boolean is `true`, and each service name is present, only when the workspace physically
+ships the directory or exact-case file that defines it — never because of the workspace's name, and
+never because a sibling fact is set.
 `deriveBlueprint` probes those paths, so a fresh compile and an audit of a mature repository agree
 on what the workspace is.
 
@@ -249,10 +281,11 @@ on what the workspace is.
   workspace's own built output, outside the default run: the generated root configuration registers
   a standalone `integration` project including `tests/integration/**/*.test.ts`, and the manifest
   emits `test:integration`.
-- **`service`** — `tests/service/` exists. It records a slow, opt-in proof project against a foreign
-  running process, outside the default run: a standalone `service` project including
-  `tests/service/**/*.test.ts`, with `tests/setupService.ts` after the shared setup, and the
-  isolated `test:service` script.
+- **`services`** — each direct `tests/service/<vendor>/` directory that contains a `*.test.ts` at
+  any depth contributes its directory name to the sorted list. Each vendor gets a slow, opt-in
+  `service:<vendor>` proof project against its foreign process, including
+  `tests/service/<vendor>/**/*.test.ts`, and an isolated `test:service:<vendor>` script. The
+  aggregate `test:service` runs all vendor projects in one invocation.
 - **`global`** — the physical, exact-case `tests/setupGlobal.ts` file exists. It is the single
   governing setup-presence fact. A declared `src/browser` project runs that consumer-owned module
   as `globalSetup`; integration runs it only when `bin` and `integration` are also true.
@@ -263,12 +296,20 @@ on what the workspace is.
   consumer-only `vite-plugin-singlefile` development dependency. A directory, link, wrong-case
   name, absent wrapper, demo HTML, script, or installed dependency never implies this fact.
 
-A service workspace owes two companion files beside that directory, and derivation requires both
-physically present: `tests/setupService.ts` and `scripts/service.sh`. Either missing companion is a
-coded `TARGET` failure naming the missing path rather than a silent `service: false`. This package
-emits neither: both are consumer-owned seams, and the generated-workspace section sets out what
-each owes its workspace and which proof runs in which gate. Nothing here is inferred — the
-executable axis turns on neither proof project, and neither proof project turns on the other.
+Each service vendor owes `tests/service/<vendor>/setup.ts`, whose module-load readiness check probes
+and warms only that vendor. A service workspace also owes the shared `scripts/service.sh`
+provisioner. Derivation fails with a coded `INVALID` question when a vendor's readiness module is
+missing, when a vendor directory contains no test, or when a test uses the former flat
+`tests/service/*.test.ts` layout. An absent shared provisioner is instead a repairable missing
+artifact, so declaring the vendor directory does not deadlock the tool that supplies the skeleton.
+The migration is to move each flat test into `tests/service/<vendor>/`, add that vendor's `setup.ts`,
+and customize the repaired provisioner skeleton. Nothing here is inferred from a source or
+application axis: a vendor serves both.
+
+This is a published breaking change: `Blueprint.service` and `ViteFacts.service` were replaced by
+their sorted `services` collections, the single `service` project became one project per vendor,
+and the global `tests/setupService.ts` readiness seam was removed. There is no compatibility
+boolean or declaration file.
 
 `Override` replaces a rendered artifact's content at a path, never partially merges it. `Member` is
 one declared public export of the scaffolded workspace, derived rather than authored.
@@ -286,7 +327,8 @@ by artifact-relative path.
 self-describing. `PlanSummary` is the dry-run tally by origin and carries both selections. `Finding` is one
 drift verdict with an optional bounded `observed` byte hex for a stale destination, and `Audit` is
 the whole diff plus its `clean` and `complete` flags, `questions`, and `drifted` / `missing` /
-`foreign` counts. `Question` is one validation issue; `blocking: true` fails the gate closed while
+`foreign` counts.
+`Question` is one validation issue; `blocking: true` fails the gate closed while
 `false` rides a complete result as an advisory. `Validation` is the semantic pass result and never
 throws.
 
@@ -344,8 +386,11 @@ instead of through the manifest.
 
 `ManifestEntry` is one vendored-host file record — its un-dotted `storage` name, its `destination`
 relative to a target, and an `executable` bit. `HostManifest` pairs the sorted file `entries` with
-the complete sorted directory `roots` inventory, so a destructive consumer can tell a
-declared-empty root from a truncated manifest.
+the complete sorted directory `roots` inventory and a SHA-256 `digest` of that exact membership.
+The independently persisted digest detects an entry/root membership edit that did not update the
+digest, while roots distinguish a declared-empty directory. A self-consistent replacement manifest
+remains structurally valid and defines its own smaller membership; authenticity of that complete
+membership is outside the digest's checksum-only contract.
 
 The write-transaction shapes are the fail-closed mutation vocabulary. `WriteExpectation` is one
 destination snapshot captured before mutation (`absent`, `file`, or `directory`, with device,
@@ -383,6 +428,7 @@ From [`constants.ts`](../../src/core/constants.ts).
 | `SERVICE_SCRIPT_PATH`             | const |
 | `GLOBAL_SETUP_PATH`               | const |
 | `SHOWCASE_CONFIG_PATH`            | const |
+| `CATALOG_AGENT_PATH`              | const |
 | `NAME_PATTERN`                    | const |
 | `MAX_NAME_LENGTH`                 | const |
 | `MAX_DEPENDENCY_NAME_LENGTH`      | const |
@@ -416,7 +462,9 @@ From [`constants.ts`](../../src/core/constants.ts).
 | `SCAFFOLD_RANGE`                  | const |
 | `BASE_DEV_DEPENDENCIES`           | const |
 | `SOURCE_BROWSER_DEV_DEPENDENCIES` | const |
+| `APP_DEV_DEPENDENCIES`            | const |
 | `APP_BROWSER_DEV_DEPENDENCIES`    | const |
+| `APP_SERVER_DEV_DEPENDENCIES`     | const |
 | `CHECKOUT_ACTION_SHA`             | const |
 | `SETUP_NODE_ACTION_SHA`           | const |
 | `COMPILER_ID`                     | const |
@@ -432,10 +480,35 @@ produces one (`app/browser/index.html`, `app/server/main.ts`). `BIN_CONFIGS` is 
 axis's computed `tsconfig` and Vite wrapper pair. `HOST_PATHS` is the ordered list of byte-copied
 host artifacts, and it is the staging manifest rather than the per-plan carried set:
 `stageHost` vendors every path on it, while each plan carries the subset `selectHostPaths` selects
-for that one workspace. `SERVICE_SCRIPT_PATH` names the consumer-owned provisioner a service
-workspace's audit expects, and `GLOBAL_SETUP_PATH` names the consumer-owned Vitest global-setup
+for that one workspace. `SERVICE_SCRIPT_PATH` names the generated provisioner skeleton a service
+workspace must replace with its idempotent vendor provisioning. It is birth-only while present and
+repairable while absent. `GLOBAL_SETUP_PATH` names the consumer-owned Vitest global-setup
 module that independently selected projects can load. `SHOWCASE_CONFIG_PATH` names the sole
 consumer-owned regular file whose exact physical presence enables the optional app showcase.
+`CATALOG_AGENT_PATH` names the one artifact `diffPlan` compares by presence even after hydration,
+so a consumer can name the file the catalog operation owns rather than rediscovering it from a
+finding:
+
+```ts
+import type { Plan } from '@orkestrel/scaffold'
+import { blueprint, CATALOG_AGENT_PATH, contentToHex, diffPlan } from '@orkestrel/scaffold'
+
+const plan: Plan = {
+	blueprint: blueprint('router', { src: ['core'] }),
+	groups: ['orchestration'],
+	artifacts: [
+		{
+			path: CATALOG_AGENT_PATH,
+			group: 'orchestration',
+			origin: 'host',
+			hex: contentToHex('vendored catalog\n'),
+		},
+	],
+}
+
+diffPlan(plan, { [CATALOG_AGENT_PATH]: contentToHex('a newer fleet table\n') }).clean // true
+diffPlan(plan, {}).missing // 1 — restorable while absent, never replaced while present
+```
 
 The bounds are public because they are part of the contract, not implementation trivia.
 `MAX_ARTIFACT_BYTES` caps one artifact at 5 MiB and `MAX_TOTAL_ARTIFACT_BYTES` caps one blueprint,
@@ -464,8 +537,11 @@ form. `HEX_PATTERN` requires whole lowercase byte pairs, and `SYNC_BASELINE_PATT
 `MINIMUM_NODE_VERSION` is `22.12.0`, `DEFAULT_ENGINES` derives from it, and `DEFAULT_VERSION` is
 `0.0.1`. `BASE_DEV_DEPENDENCIES` is the host-neutral tooling baseline every generated workspace
 gets; `SOURCE_BROWSER_DEV_DEPENDENCIES` adds the real browser providers a published browser environment
-needs, and `APP_BROWSER_DEV_DEPENDENCIES` extends that with the Vue toolchain a private browser
-application needs. Vite is minor-pinned at `~8.2.0`: the generated boundary consumes the reviewed
+needs; `APP_DEV_DEPENDENCIES` is the baseline every private application environment gets;
+`APP_BROWSER_DEV_DEPENDENCIES` adds the Vue toolchain and `@orkestrel/html` start-tag parser a
+private browser application needs;
+and `APP_SERVER_DEV_DEPENDENCIES` adds the emitter, middleware, router, and server packages a private
+server application needs. Vite is minor-pinned at `~8.2.0`: the generated boundary consumes the reviewed
 8.2 `CSSOptions`, `preprocessCSS`, and `isCSSRequest` surface, while the selected
 `css.transformer` / `lightningcss` path is experimental and must not float into an unreviewed minor.
 `SCAFFOLD_RANGE` is the range generated workspaces pin this package at.
@@ -788,6 +864,8 @@ From [`helpers.ts`](../../src/core/helpers.ts).
 | `pascalCase`                | function |
 | `escapeHtmlText`            | function |
 | `serializeTypeScriptString` | function |
+| `hasApplicationBoundary`    | function |
+| `hasApplicationShowcase`    | function |
 | `blueprintToMembers`        | function |
 | `catalogNames`              | function |
 | `alignTable`                | function |
@@ -824,6 +902,7 @@ From [`helpers.ts`](../../src/core/helpers.ts).
 | `renderArray`               | function |
 | `renderObject`              | function |
 | `renderValue`               | function |
+| `renderStringArray`         | function |
 | `formatJson`                | function |
 | `pinPlan`                   | function |
 
@@ -836,7 +915,9 @@ guard. `blueprint` fills the defaults: `version` and `engines` from their consta
 derives the entity name from a lowercase-hyphen package name, and `blueprintToMembers` derives the
 declared public `Member[]` — a full entity, options type, interface, and factory per published
 environment, plus the exact declaration inventory each selected application environment
-contributes.
+contributes. `hasApplicationBoundary` recognizes exactly app/core + app/browser + app/server,
+while `hasApplicationShowcase` requires showcase intent beside app/browser; plan assembly, tests,
+guides, and member inventory share those predicates.
 
 `escapeHtmlText` and `serializeTypeScriptString` are the two escaping leaves used when a
 caller-supplied name reaches generated HTML or generated TypeScript source; the latter preserves
@@ -859,6 +940,12 @@ that block enters agent instruction context. `isBehind` is the shared freshness 
 report projections count with.
 
 `diffPlan` is the audit engine, and `inferGroup` classifies a target file the plan does not own.
+A host artifact without canonical `hex` is presence-owned: present is `aligned`, absent is
+`missing`. The server face attaches `hex` to every readable vendored source before executable
+audits, except the dependency-guide pointers hydration deliberately marks presence-owned. The
+hydrated `CATALOG_AGENT_PATH` artifact remains presence-owned even with vendored bytes because
+`catalog` owns its bounded marker region. The same engine governs `Materializer.repair`'s preview
+recheck and direct library consumers without a call-site plan rewrite.
 `snapshotOf`, `contentToHex`, `contentToBytes`, `contentByteLength`, `contentCodePoint`, and
 `bytesToHex` are the host-independent byte leaves that make exact comparison possible without a
 host encoder or buffer; an unpaired surrogate encodes as `U+FFFD` rather than throwing.
@@ -888,7 +975,12 @@ id is already registered: an identical plan is idempotent, while a distinct payl
 `formatJson` and its leaves — `renderValue`,
 `renderArray`, `renderObject`, `computeColumnWidth`, and `fitsPrintWidth` — emit JSON that matches the fleet
 formatter byte for byte, collapsing a short array onto one line and breaking a long one, so
-computed configuration JSON is format-stable by construction.
+computed configuration JSON is format-stable by construction. `renderStringArray` applies the same
+inline-or-broken width rule to single-quoted TypeScript string-array literals — with a trailing
+comma on every broken line, matching `oxfmt`'s `trailingComma: "all"` for non-JSON files — so
+generated TypeScript configuration is format-stable too. It serializes every string element through
+`serializeTypeScriptString`, so quotes, backslashes, controls, and line separators remain inert in
+both layouts.
 
 ### Helpers — server
 
@@ -901,6 +993,7 @@ From [`helpers.ts`](../../src/server/helpers.ts).
 | `digestFile`               | function |
 | `digestHex`                | function |
 | `digestText`               | function |
+| `digestHostManifest`       | function |
 | `guideStub`                | function |
 | `packageShortName`         | function |
 | `readGuideReferences`      | function |
@@ -953,7 +1046,9 @@ directory. All three reject malformed paths before filesystem access. Containmen
 realpath-aware rather than merely lexical, so a symlinked subdirectory planted inside an otherwise
 legitimate root cannot smuggle a write or a read outside it.
 
-`digestFile`, `digestHex`, and `digestText` are the three SHA-256 leaves. The file digest is
+`digestFile`, `digestHex`, and `digestText` are the byte and text SHA-256 leaves;
+`digestHostManifest` hashes the canonical entry/root membership independently of the stored digest
+field. The file digest is
 bounded-memory and revalidates device, inode, size, and modification time before and after reading,
 so a file swapped mid-read is a failure rather than a silent wrong digest. `readFileHex` and
 `readFileText` read one contained file under the same revalidation, and the text reader decodes
@@ -985,8 +1080,9 @@ existing workspace so a mature package is diffed against its own would-be scaffo
 dependency-less stand-in. Environments come from `src/<environment>/` and `app/<environment>/`, the
 three directory-shaped structural project facts from their directory probes, `global` from the
 physical exact-case `tests/setupGlobal.ts` file, and `showcase` from the physical exact-case regular
-file `configs/app/vite.showcase.config.ts`; the service companion law remains the one the blueprint
-section states — every fact is a reading of the filesystem, never of the name. Dependencies and peers come
+file `configs/app/vite.showcase.config.ts`; service names come from the direct vendor directories
+under `tests/service/`, subject to the companion law in the blueprint section. Every fact is a
+reading of the filesystem, never of the package name. Dependencies and peers come
 from the manifest's scoped entries, with an optional peer recovered from
 `peerDependenciesMeta`; and `extras` is every development dependency minus the complete set
 `devDependenciesFor` emits for those environments and structural axes, and minus anything already
@@ -1000,7 +1096,8 @@ repository forking the file.
 `hydratePlan` are the vendored-host path. `storagePath` maps a repo-relative path to its un-dotted
 storage name, `stageHost` copies the vendored set into an output directory behind a full preflight
 and an atomic swap, and `readHostManifest` reads and validates the resulting `manifest.json`,
-returning `undefined` when a host has none — the raw-repository-root fallback that maps sources 1:1.
+including its independently stored membership digest, returning `undefined` when a host has none —
+the raw-repository-root fallback that maps sources 1:1.
 `locateHostSource` resolves one source to its storage file, `remapArtifactPath` maps a manifest
 destination back onto an artifact's target prefix, and `hydratePlan` rehydrates a plan's host
 artifacts with their exact bytes, expanding a directory-shaped host artifact into one artifact per
@@ -1049,6 +1146,7 @@ From [`compilers.ts`](../../src/core/compilers.ts).
 | `renderViteTest`           | function |
 | `viteHeader`               | function |
 | `policyViteProject`        | function |
+| `configViteProject`        | function |
 | `guidesViteProject`        | function |
 | `binViteProject`           | function |
 | `integrationViteProject`   | function |
@@ -1136,10 +1234,11 @@ formatter's 100-column fixed point: a complete registration-array line, includin
 its trailing comma, stays collapsed when it fits and expands one entry per line otherwise.
 `viteProjectRegistrations` is the one registration derivation every root shape consumes: it derives
 the selected source and application projects from the canonical environment order, then appends
-`policy`, `guides`, and the optional `srcBin`, `integration`, and `service` projects.
+`policy`, `config`, `guides`, the optional `srcBin` and `integration` projects, and one
+`service<Vendor>` project for every selected service.
 `viteProjectDefinitions` renders the standalone proof and structural-fact definitions in that same
 order with one blank line between declarations. Both consume `ViteFacts`, so each optional project
-is controlled only by its matching `bin`, `integration`, or `service` blueprint fact; the same
+is controlled only by its matching `bin`, `integration`, or `services` blueprint fact; the same
 slice carries `global` to integration and the source-browser compiler, and `showcase` to the
 application-browser compiler, without adding another test project.
 
@@ -1149,15 +1248,17 @@ the root `srcCore` factory and its wrapper stay host-independent even when the w
 browser target. `binTsconfig` emits the executable declaration scope; `rootViteConfig`,
 `singleSrcViteConfig`, and `applicationViteConfig` emit the root configuration for a library-only,
 single non-core `src` environment, and application-bearing workspace respectively; and
-`policyViteProject`, `guidesViteProject`, `integrationViteProject`, and `serviceViteProject` emit
-the standalone Node proof projects, with `binViteProject` the single executable-project emitter. A
+`policyViteProject`, `configViteProject`, `guidesViteProject`, `integrationViteProject`, and
+`serviceViteProject` emit the standalone Node proof projects, with `binViteProject` the single
+executable-project emitter. A
 proof project is structurally derived from the directory holding its tests and never wraps a source
 or application environment project. The guides project therefore uses only `tests/setup.ts`, never
-`setupServer.ts`, `setupBrowser.ts`, or `setupService.ts`; and its `tests/src/**/*.test.ts` and
+`setupServer.ts`, `setupBrowser.ts`, or a vendor readiness module; and its `tests/src/**/*.test.ts` and
 `tests/app/**/*.test.ts` exclude rows are uniform across all root shapes by design, including
 core-only workspaces where one row cannot currently match. Integration and service use 120-second
-test and hook timeouts with file parallelism disabled, and service alone layers
-`tests/setupService.ts` onto the shared setup. The integration project wires
+test and hook timeouts with file parallelism disabled. Each service project layers
+`tests/setupServer.ts` and `tests/service/<vendor>/setup.ts` onto the shared setup, carries the
+server environment boundary, and may exercise either the `src` or `app` axis. The integration project wires
 `tests/setupGlobal.ts` for the shared template-registry harness exactly when `bin`, `integration`,
 and `global` are all true. Independently, a `global` source-browser project places
 `globalSetup: ['./tests/setupGlobal.ts']` immediately before its ordinary `setupFiles` row (and
@@ -1270,7 +1371,10 @@ The public methods of each behavioral interface, one table per type.
 `audit(blueprint, current, groups?)` compiles and then diffs the resulting plan against the
 caller-supplied current content; a gated blueprint returns `complete: false` with the gate's
 blocking questions and zero findings, and a complete one carries the gate's advisories on that same
-`questions` field. `destroy()` is idempotent teardown. The interface also exposes the readonly
+`questions` field. Because this core-only method performs no host I/O, its compiled host artifacts
+have no `hex` and are audited by presence. Callers that need host-byte verdicts hydrate the compiled
+plan through the server face and call `diffPlan`, which is the path every executable audit uses.
+`destroy()` is idempotent teardown. The interface also exposes the readonly
 `emitter`.
 
 #### `PlanManagerInterface`
@@ -1300,13 +1404,14 @@ interface also exposes the readonly `emitter` and `size` properties.
 | `destroy`     | `void`              |
 
 `materialize(plan, target)` is green-field: it refuses any target `isVacant` rejects, then copies
-each host artifact and writes each template and computed artifact. `repair(plan, audit, target)` is
-into-existing: it skips the vacancy check, re-verifies that the target still matches the audit
-preview, and writes only the missing and stale artifacts that audit names, leaving aligned ones
-untouched and reporting them as `skipped`. `prune(target, expected)` deletes exactly the unexpected
-files the vendored host no longer declares under the prune directories, and only after the observed
-bytes still match the `expected` snapshot it was previewed with. `destroy()` is idempotent teardown.
-The interface also exposes the readonly `emitter`.
+each host artifact and writes each template and computed artifact. `repair(plan, audit, target,
+replace?)` is into-existing: it skips the vacancy check, re-verifies that the target still matches
+the audit preview, and writes missing artifacts. Stale artifacts are report-only and returned as
+`skipped` by default; passing `true` for `replace` explicitly replaces their bytes and discards their
+local changes. Aligned artifacts are always `skipped`. `prune(target, expected)` deletes exactly the
+unexpected files the vendored host no longer declares under the prune directories, and only after
+the observed bytes still match the `expected` snapshot it was previewed with. `destroy()` is
+idempotent teardown. The interface also exposes the readonly `emitter`.
 
 #### `SyncInterface`
 
@@ -1396,19 +1501,32 @@ Audit semantics follow directly from that.
   missing, or clean tallies.
 - A **computed** artifact is content-aware canon: `missing`, `aligned`, or `stale`, and it gates the
   audit like any other drift.
-- A **host** artifact is audited by presence alone — `missing` or `aligned`, never `stale` — unless
-  it has been hydrated with its real host bytes, in which case it is content-compared exactly like a
-  computed artifact and can be `stale`. Hydration also expands a directory-shaped host artifact into
-  one artifact per file, so agent configuration and skills are audited file by file.
-- A target file the plan does not own is `foreign`, and `inferGroup` classifies it by its leading
-  path segment.
+- A **host** artifact with canonical `hex` is content-compared exactly like a computed artifact and
+  can be `stale`. Without `hex`, it is presence-owned: present is `aligned`, absent is `missing`.
+  The catalog agent is explicitly presence-owned because `catalog` is its sole content writer.
+  Hydration expands a directory-shaped host artifact into one artifact per declared file and verifies
+  that the manifest digest matches the manifest's current membership before expansion. That detects
+  stale-digest truncation; a self-consistently rewritten manifest defines a smaller valid inventory,
+  so the digest alone cannot authenticate omitted membership.
+- In a caller-supplied snapshot, a path the plan does not own is `foreign`, and `inferGroup`
+  classifies it by its leading path segment. The executable supplies unexpected paths only from
+  `.claude/agents`, `.codex/agents`, and `scripts`, because those prune-owned directories are the
+  only regions scaffold has authority to delete from; unplanned files elsewhere are not reported
+  as foreign.
 
 The same ownership boundary is what makes mutation safe. **`fleet` and default `repair` both scope
-the compiled plan to host origin before hydrating, diffing, or applying.** `--generated` widens that
-scoped plan to generated canon except `package.json`; template artifacts remain birth-only in
-either mode. A mature workspace's hand-written source, tests, guides, and manifest are therefore
-never overwritten with a stub. The generated `.github/workflows/ci.yml` is a **computed** artifact,
-so user-owned CI stands by default but is intentionally restored when `--generated` is passed.
+the compiled plan to host origin before hydrating, diffing, or applying.** Missing files in that
+scope are restored, but stale files are report-only unless `--replace` explicitly authorizes byte
+replacement. `--generated` widens the selected ownership scope to generated canon. It keeps the
+`package.json` publication boundary protected except for the generated service-script keys needed
+when the derived service set changes; it composes with `--replace` and does not itself authorize
+replacement. Template
+artifacts remain birth-only in either scope, except that an absent service provisioner and absent
+service conformance test are promoted to missing-file repair artifacts. A present customized copy
+is never compared or replaced. A mature workspace's hand-written source, tests, and guides are
+therefore never overwritten with a stub. The generated
+`.github/workflows/ci.yml` is a **computed** artifact, so user-owned CI stands by default and is
+restored only when both `--generated` and `--replace` are passed.
 Audit always compares it because computed artifacts are content-aware canon. A legitimate
 difference that the blueprint cannot express is a canon gap: add the missing blueprint axis rather
 than forking the computed file in one repository.
@@ -1430,8 +1548,11 @@ owner: a dependency this package vendors a byte-identical mirror for gets a real
 dependency, so a package depending on `@orkestrel/guide` plans one `guides/src/guide.md` rather than
 two. Any other dependency gets a host-origin _pointer_ artifact plus a non-blocking question, never
 a fabricated mirror; on materialization that pointer degrades to a short stub, and `scaffold pull`
-fetches the real thing. That degrade is scoped exactly to guide pointers: any other missing manifest
-entry means a corrupt or truncated vendored manifest, and fails closed. Selection is the law and
+fetches the real thing. Hydration marks that permanent pointer state presence-owned, so both the
+birth stub and a later pulled guide audit clean while present; `pull` refreshes content but is not a
+remedy for an audit state. That degrade is scoped exactly to guide pointers. A manifest whose
+membership changes without a matching digest is rejected, while any other undeclared or unreadable
+source is rejected with a coded `TARGET` failure. Selection is the law and
 `findFileConflict` is its backstop: two artifacts at one path refuse the plan rather than racing to
 be the last writer.
 
@@ -1442,23 +1563,63 @@ checks one. `readTarget` supplies the snapshot as exact bytes; `diffPlan` return
 `auditToReview` renders them for a human. Nothing in that path writes.
 
 The executable's physical unexpected-file scan treats exactly `scripts/service.sh` as an expected
-consumer-owned seam when the derived blueprint has `service: true`. That exclusion is warranted
-because a service blueprint cannot derive without the physical file: the companion-file law raises
-a `TARGET` failure first, so the scan removes a false positive and can never mask an absent
-provisioner. A non-service workspace still reports the same path as foreign.
+workspace-owned seam when the derived blueprint has at least one service. That exclusion is
+warranted because the promoted plan reports an absent file as missing while a present file is
+consumer-owned. A workspace with no services still reports the same path as foreign.
 
 `repair` turns those findings back into the narrowest possible write. It re-reads the target,
 re-diffs it, and refuses to proceed if the findings changed since the preview it was given — a
 target that moved under the caller is a `TARGET` failure, not a race to win. It then derives a write
 precondition per artifact from the audit itself: a `missing` finding requires the destination to
-still be absent, a `stale` finding requires it to still carry exactly the bytes that were observed.
-Those preconditions are checked again inside the write transaction before any promotion.
-An interactive audit repair hand-off forwards `--generated` into the repair invocation when the
-flag was present on `audit`.
+still be absent. A `stale` finding remains untouched and is reported as skipped unless the caller
+passes `replace`; an authorized stale replacement requires the destination to still carry exactly
+the bytes that were observed. Those preconditions are checked again inside the write transaction
+before any promotion. A skipped stale path keeps the executable at exit `1`, because the selected
+workspace remains drifted; a clean run and a run that fully applies its findings exit `0`. An
+interactive audit repair hand-off forwards both `--generated` and `--replace` when those flags were
+present on `audit`.
+
+That boundary governs the executable's words too. Every drift line states what a command will do
+rather than how a file came to differ: the executable cannot know whether a generated file was
+hand-edited, and a consumer whose blueprint cannot yet express what it needs legitimately edits one.
+Every cost is stated where it can still be declined, and nowhere else: a run with nothing to write
+states no boundary it is not about to act on, because a warning attached to a no-op only trains
+operators to ignore warnings. `repair` states its scope when the audit found something to repair;
+`fleet` states its scope, its repository count, and the same replacement cost once `--apply` has
+authorized a write; neither states it over a dry run. Each run closes on the tally of what it did,
+including a run that writes nothing — and a drifted file left alone is counted apart from an
+aligned one, because `unchanged` is already the audit table's word for a file that matches canon.
+
+**Four paths discard content a consumer may own, and each names its cost before it acts.**
+
+| Path                              | What it discards                                                     | Ownership boundary                                                                                               |
+| --------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `--replace` on repair or fleet    | The local bytes of a drifted file the report named                   | Host-owned artifacts, widened to generated canon by `--generated`; never a present starter, never `package.json` |
+| `--prune --apply`                 | Whole unexpected files, quarantined first and reported by exact path | Only `.claude/agents`, `.codex/agents`, and `scripts`, and only paths the vendored host does not declare         |
+| `catalog --apply`                 | Everything between the two catalog markers, local additions included | Exactly the one bounded marker region of `CATALOG_AGENT_PATH`; the rest of that file is never touched            |
+| `pull --apply` / `mirror --apply` | A locally edited vendored guide mirror, which reads as `behind`      | Only `guides/src/<name>.md` mirrors of other packages; never the guide this workspace owns                       |
+
+`--replace` is the only one of the four that is an opt-in modifier rather than a verb, so it is the
+one whose cost is repeated in every line that offers it: the scope line, the repair verdict, the
+audit's drift guidance, and the hand-off question itself. `--apply` authorizes all four and nothing
+else does — `--yes` only skips a confirmation it can no longer stand in for, and an unexpected-file
+hint that recommended `repair --prune` without it would name a command that deletes nothing. `new`
+is absent from the table on purpose: it refuses any target `isVacant` rejects, so it has no local
+content to discard.
+
+The catalog agent has a narrower ownership exception in `diffPlan` itself.
+`CATALOG_AGENT_PATH` remains presence-owned after host hydration: repair can restore the
+absent file, but audit, repair, fleet, and direct library consumers never compare or replace its
+existing bytes, even under `--replace`. `catalog` is the sole content writer and continues to
+replace only the uniquely bounded marker region. Thus
+`repair` → `catalog` → `repair` converges without restoring a stale embedded catalog snapshot over
+the current fleet table.
 
 `prune` is the deletion arm, and it is deliberately narrow. Its candidate set comes from
-`pruneTargets`, which is also what the executable's audit and preview read, so what is reported and
-what is deleted cannot diverge. Only the three prune directories are in scope; the allowlist must be
+`pruneTargets`, which is also what the executable's merged report and preview read. Repair's
+optimistic-concurrency recheck receives the raw plan audit, while the separate foreign findings
+remain attached to reporting and exit status; after that recheck succeeds, the same preview snapshot
+drives deletion. Only the three prune directories are in scope; the allowlist must be
 positively established from the vendored host, or the call fails closed rather than treating an
 unresolved host as "vendors nothing" and proposing to delete everything. Each candidate is verified
 as a plain physical file whose bytes still match the preview, moved into a private quarantine rather
@@ -1527,11 +1688,14 @@ fleet refresh is never partial. Files outside the discovered guide set remain un
 
 A generated workspace is not a folder of suggestions; it is a working, gated project.
 
-**Manifest and scripts.** A published workspace is scoped and carries an `exports` map, publish
-configuration, and ships `dist/src` plus its README. An application-only workspace is unscoped and
-`private: true`, with no export map and no publish configuration, and ships `dist/app`. A workspace
-that builds its own executable additionally ships `dist/bin` and `dist/host`. Scripts are emitted in
-a fixed, interleaved order so aggregates sit immediately before their per-environment members:
+**Manifest and scripts.** A published workspace is scoped, carries the Orkestrel GitHub homepage,
+issues, and repository identity, carries an `exports` map and publish configuration, and ships
+`dist/src` plus its README. An application-only workspace is unscoped and `private: true`, with no
+export map, publish configuration, or invented GitHub identity, and ships `dist/app`. Both carry
+`license: "MIT"` because every generated workspace receives the same host-owned MIT `LICENSE`.
+A workspace that builds its own executable additionally ships `dist/bin` and `dist/host`. Scripts
+are emitted in a fixed, interleaved order so aggregates sit immediately before their per-environment
+members:
 
 - `clean`, `copy`, `scaffold`, `lint`
 - `check`, then `check:src` with one `check:src:<environment>` per published environment, then
@@ -1539,32 +1703,34 @@ a fixed, interleaved order so aggregates sit immediately before their per-enviro
   Vue typechecker, every other scope uses plain `tsc`
 - `format`, `format:check`, `lint:check`
 - `test`, then `test:src` and its per-environment scopes, the optional `test:integration`,
-  `test:equivalence`, and `test:service` proofs, `test:app` and its per-environment scopes, then
-  `test:policy` and `test:guides`
+  `test:equivalence`, and `test:service` aggregate followed by its sorted per-vendor proofs,
+  `test:app` and its per-environment scopes, then
+  `test:policy`, `test:config`, and `test:guides`
 - `build`, then `build:src` and its per-environment targets, `build:app` and its runtime targets, and
   `build:host` for a bin workspace
 - `dev` when a browser application is selected; `serve` and `serve:build` when a server application
   is selected
 - `showcase`, `build:showcase`, and `show` only when the physical showcase wrapper is present;
-  `show` builds and copies `dist/showcase/index.html` to `demo/showcase.html`
+  `show` formats, then builds, then copies `dist/showcase/index.html` to `demo/showcase.html`
 - `prepublishOnly` chaining `format:check → lint:check → check → build → test`, followed by
-  `test:integration` when the integration axis is selected
+  `test:integration` when selected and finally `test:service` when any service is selected
 
 **Proof gating.** The opt-in proofs are predictable from the axes alone. `test:integration` rides
-the `integration` axis and `test:service` the `service` axis, while `test:equivalence` is emitted
+the `integration` axis and `test:service` a nonempty `services` axis, while `test:equivalence` is emitted
 only where `bin` and `integration` are both set:
 
-| Proof              | `npm test` | `prepublishOnly` | CI                         |
-| ------------------ | ---------- | ---------------- | -------------------------- |
-| `test:integration` | no         | yes, last        | after the standard gates   |
-| `test:equivalence` | no         | no               | no                         |
-| `test:service`     | no         | never            | after `scripts/service.sh` |
+| Proof              | `npm test` | `prepublishOnly`    | CI                         |
+| ------------------ | ---------- | ------------------- | -------------------------- |
+| `test:integration` | no         | yes, before service | after the standard gates   |
+| `test:equivalence` | no         | no                  | no                         |
+| `test:service`     | no         | yes, last           | after `scripts/service.sh` |
 
-No proof joins the default chain: `npm test` runs the source, application, policy, and guide
-projects, and nothing there needs a build artifact or a foreign process. Publication is the one
-asymmetry — `prepublishOnly` appends `test:integration`, because a package about to be published
-should prove itself against its own built output, while `test:service` is never in that chain.
-Neither default testing nor publication starts or requires a foreign process.
+No opt-in proof joins the default chain: `npm test` runs the source, application, policy,
+configuration, and guide projects, and nothing there needs a build artifact or a foreign process.
+Publication is the one asymmetry: `prepublishOnly` appends integration and then service proofs.
+A package that claims to drive a vendor has not proved that claim unless publishing runs against
+it, despite the provisioning cost. Neither default testing nor publication starts a foreign
+process; publication requires the caller to provision one first.
 The showcase is likewise outside `build`, `test`, and `prepublishOnly`; it is an explicit projection
 of `app/browser`, not an environment, test-project row, or source/demo artifact.
 Its copied `demo/showcase.html` is generated and minified, so the mirrored `.prettierignore` keeps it
@@ -1582,22 +1748,29 @@ The equivalence proof is a dual-path re-run rather than a separate suite. Run
 integration project in dual-path mode and proves each programmatic driver verdict against the
 spawned npm-script reference. Ordinary integration runs keep the faster driver-only path.
 
-**Consumer-owned service seams.** The service axis is the one place canon stops at the boundary:
-there is no template for a proof project and neither companion path is on `HOST_PATHS`, so a
-service workspace owns both of its seams outright. They come as a pair.
+**Consumer-owned service seams.** Each vendor owns its readiness module at
+`tests/service/<vendor>/setup.ts`. It probes and warms that vendor at module load, throwing a clear
+error when unavailable so only that vendor project fails readiness. The scaffold never generates
+these modules because an inert readiness check would be a false proof.
 
-- `tests/setupService.ts` is the readiness seam. It probes the foreign process and warms it before
-  any test runs, and throws at module load — naming the `service` project — when that process is
-  unreachable, so an unprovisioned run fails loudly instead of passing an empty suite. Only the
-  `service` project loads it.
-- `scripts/service.sh` is the provisioning seam, named once by `SERVICE_SCRIPT_PATH`. It brings that
-  process up idempotently — a second run against an already-provisioned service is a no-op rather
-  than a second instance — and exits nonzero when it cannot, which is what makes CI's
-  `bash scripts/service.sh` step a gate rather than a hint.
+`scripts/service.sh`, named once by `SERVICE_SCRIPT_PATH`, is shared provisioning for every vendor.
+The scaffold emits a template skeleton that exits nonzero until the workspace replaces it with
+idempotent provisioning; an already-provisioned vendor must be a no-op, and any vendor that cannot
+be prepared must make the script fail. The skeleton is written at birth when services are already
+declared, or by repair when a post-birth vendor declaration makes it newly absent. Once present it
+is consumer-owned and never replaced. CI invokes it once before the aggregate project run.
+
+The configuration conformance test lives in the ordinary `config` project, so `npm test` checks the
+directory names, readiness files, project declarations, scripts, default-test omission, and
+publication suffix without contacting a vendor. Like the provisioner it is repaired only when
+absent, then remains workspace-owned and audit-exempt. Service adoption under `--generated`
+regenerates the Vite and CI canon and merges only `test:service`, the per-vendor service scripts,
+and the `prepublishOnly` service suffix into `package.json`; publication metadata and unrelated
+scripts retain their existing values.
 
 The audit expects the script rather than reporting it foreign, on the derive-time warrant the audit
 section gives. Repair pruning applies the same exclusion, so it never proposes or removes that
-required consumer-owned provisioner.
+required workspace-owned provisioner.
 
 **Environment isolation.** Scoped TypeScript projects remove the wrong host's globals from each
 environment: core scopes carry the WHATWG web-interop surface and no host at all — no DOM, no Node,
@@ -1633,10 +1806,16 @@ comments, text, raw blocks, attributes, adjacent tokens, casing, and user-author
 byte-stable. The trusted preparation hook owns the final pre-parse phase; inline proxy code is
 restored before module analysis, and the first normal post-parse hook restores the original HTML
 spelling. The browser entry begins with a generated, byte-stable security prologue: the doctype,
-document and head opening, and a `Content-Security-Policy` meta element are one required prefix.
-Preparation rejects a missing, moved, or changed prologue before Vite parses the document, and the
-final trusted post-hook verifies that Vite retained the policy. CRLF and LF files are both accepted;
-the prologue's markup and ordering are otherwise exact. Vite's `%ENV%` HTML substitution is rejected
+head opening, and `Content-Security-Policy` meta markup, ordering, and indentation are exact. The
+opening `html` start tag is parsed by `@orkestrel/html`'s fail-closed `parseStartTag` boundary,
+so ASCII case and well-formed attributes such as `lang`, `data-bs-theme`, and `data-bs-core`
+may vary without weakening the position of the following head and policy. A malformed, incomplete,
+duplicate-attribute, wrong-name, or syntactically slashed root still fails closed. Preparation owns
+that positional check while the document is still generated bytes; the final trusted post-hook
+checks only that the exact
+policy survived because Vite may legitimately inject into the head. CRLF and LF files are both
+accepted. Vite's
+`%ENV%` HTML substitution is rejected
 before parsing because Vite performs that expansion after every plugin pre-hook, where it could
 otherwise create a late control attribute. The guard walks the exact left-to-right `%(\S+?)%`
 tokens Vite recognizes instead of performing a substring search, and each preparation plugin owns
@@ -1685,15 +1864,31 @@ still rejects public directories, browser asset inlining, and output path overri
 post-factory composition as defense in depth; that narrow check is not a general extension seam.
 
 When the showcase fact is present, the generated root also exports closed
-`appShowcase(...config: never[])`; both factories reject every argument at runtime and
-share one fixed internal browser configuration. The ordinary factory retains its strict
+`appShowcase(...config: never[])`; both factories reject every argument at runtime. The
+ordinary factory retains its strict
 `script-src 'self'` policy, external asset auditing, and `dist/app/browser` output. The showcase
-factory alone writes `dist/showcase`, applies `viteSingleFile` with
+factory is a standalone configuration with `base: './'`, unlimited asset inlining, and
+`dist/showcase` output. It applies `viteSingleFile` with
 `removeViteModuleLoader: true` and `useRecommendedBuildConfig: true`, uses Oxc and Lightning CSS
-minification for an `esnext` build without source maps or module preload, and inserts a non-empty ISO
-`build-id` meta. Its generated CSP admits only the inline script and style required by the
-self-contained `file://` artifact while retaining `script-src-attr 'none'`, `object-src 'none'`, and
-`base-uri 'none'`.
+minification for an `esnext` build without source maps or module preload, and inserts a SHA-256
+`build-id` derived from the secured, fully inlined document. An unchanged document therefore keeps
+the same id, while any changed byte changes it. The showcase development CSP keeps scripts
+same-origin and permits Vue's injected inline styles. Its built CSP swaps that script permission to
+inline and admits only inline styles plus data images and fonts, while both policies retain
+`default-src 'none'`, `script-src-attr 'none'`, `object-src 'none'`, and `base-uri 'none'`.
+
+The showcase fact also emits its own entry pair, `app/browser/showcase.html` and
+`app/browser/showcase.ts`, beside the application's `index.html` and `main.ts`. Both HTML entries
+open with a generated security prologue: the application carries the ordinary strict policy and the
+showcase carries its development policy. The boundary plugins select and validate the matching
+prologue; the showcase build alone swaps in the self-contained policy before hashing and renames its
+single HTML output to `index.html`, which is what `show` copies to `demo/showcase.html`. The showcase entry
+mounts `mountShowcaseApplication`, and `app/browser/seeders.ts` exports exactly one seeder,
+`seedApplication`, returning a frozen identity of the same shape the shipped root view receives.
+The two mount factories differ in the seed expression alone. Both explicitly pass
+`{ name: seed.name }` to the same `createBrowserApplication` root: the showcase seed comes from
+`seedApplication()`, while the shipped application seed comes from `readApplicationHealth` with
+the configured identity as its fallback.
 
 The browser development server applies the same trust boundary before Vite's internal middleware.
 Its explicit filesystem allowlist contains only browser/core source roots, browser tests, their
@@ -1756,12 +1951,26 @@ it is not a general-purpose source analyzer. Generated workspaces receive the sa
 module as a host-origin file and run it as a dedicated Node-only `policy` test project over
 `tests/policy.test.ts`.
 
+**The configuration suite.** Policy reads source, the `config` project exercises the root
+configuration, and integration builds for real. Every generated workspace therefore receives a
+universal Node-only
+`config` project over `tests/config/**/*.test.ts`. Its base cases execute the root module's physical
+workspace containment and environment-direction helpers; conditional cases exercise output
+containment when the workspace builds, managed/system browser discovery when a browser environment
+exists, and the HTML/CSP boundary only for an application browser. Those cases import the generated
+root `vite.config.ts` itself, so a failure is repaired in the generator rather than patched into a
+consumer. The generated-consumer integration matrix remains the fidelity boundary for real builds;
+the configuration suite supplies deterministic edge coverage without duplicating build orchestration.
+When scaffold changes a generated configuration invariant, an existing consumer's `vite.config.ts`
+is intentionally reported stale until that consumer accepts the regenerated configuration and its
+matching config test.
+
 **Real browser capability.** Browser test projects are gated on one centralized discovery chain:
 Playwright's pinned Chromium executable first, then a managed Chromium alias or cached revision,
 then stable system Chrome, then stable system Edge. Managed candidates must be executable regular
 files. System channels are selected only when their executable exists at Playwright's standard
 Linux, macOS, or Windows installation location; custom installations are not guessed. The generated
-policy test consumes the same discovery helpers and accepts either an executable managed path or the
+configuration test consumes the same discovery helpers and accepts either an executable managed path or the
 stable `chrome` / `msedge` channel, so it does not maintain a second heuristic.
 
 A browser suite runs when any one of those real browser capabilities is available and is skipped
@@ -1821,7 +2030,7 @@ no module API of its own. Seven verbs:
 | `pull`    | refresh vendored guides and versions, report drift       |
 | `mirror`  | refresh every published Orkestrel package guide          |
 | `audit`   | whole-plan conformance report                            |
-| `repair`  | restore host-owned files and optional generated canon    |
+| `repair`  | restore missing canon; optionally replace drifted bytes  |
 | `fleet`   | audit or repair every workspace under the cwd's children |
 | `catalog` | regenerate the fleet package-catalog table               |
 
@@ -1835,8 +2044,10 @@ Orkestrel short name. Other npm packages are not a creation-time flag — add th
 manifest's development dependencies afterwards, and they round-trip through `deriveBlueprint`'s
 extras so the workspace stays audit-clean.
 
-**Other flags.** `--target <path>` selects the directory a verb operates on. `--from <path>` is
-repeatable and points at a local template or catalog source instead of the bundled one.
+**Other flags.** `--target <path>` selects the directory a single-workspace verb operates on;
+`fleet --target` is a usage error because fleet's root is always the current directory.
+`--from <path>` points at a local template source instead of the bundled one and may be passed once
+to those verbs. It is repeatable only for `catalog`, where each occurrence adds one catalog source.
 On `pull`, `--deps x,y` limits refresh to those declared Orkestrel dependencies; without it, every
 declared dependency mirror is considered.
 `mirror` accepts no dependency selection: its exact npm organization discovery is the operation's
@@ -1844,25 +2055,34 @@ scope, and it fetches guides without registry version or packument requests.
 `--groups a,b` scopes an audit to artifact groups. `--live` adds an upstream freshness check to an
 audit. `--strict` makes a pull or mirror throw on a network fault. `--offline` restricts a catalog to local
 sources. `--prune` opts a repair or fleet run into deleting unexpected files under the three prune
-directories. `--generated` opts a repair or fleet run into restoring generated canon except
-`package.json`; on `audit`, it is inherited if the interactive repair hand-off is accepted.
+directories. `--generated` opts a repair or fleet run into including generated canon while
+protecting `package.json` outside its generated service-script keys; on `audit`, it is inherited if
+the interactive repair hand-off is accepted.
+`--replace` authorizes repair to discard local changes in the drifted files named by its report; it
+composes with `--generated`, and is likewise inherited by an accepted audit hand-off.
 `--json` emits one machine-readable value. `--apply` writes, `--yes` skips the confirmation, and
 `-h` or `--help` prints usage.
 
-**Safety model.** Every verb is a dry run by default. On a terminal a write asks for confirmation
-first, defaulting to no; in a script, `--apply` writes and `--yes` skips the question. Every write is
+**Safety model.** Every verb is a dry run by default. `--apply` is the sole write authorization;
+`--yes` only skips a confirmation and never authorizes a write or deletion by itself. On a terminal
+an authorized write asks for confirmation first, defaulting to no; scripts do not prompt. Every write is
 confined to the working directory, so the instruction is to change into it first rather than to pass
 a root. `repair` asks a second, separately defaulted question before deleting anything, and a
-non-interactive session without `--apply` or `--yes` skips pruning rather than guessing. `fleet`
-operates on the immediate children of the working directory and never on the directory itself, and
-it has no root flag at all — `repair` is the single-workspace tool.
+session without `--apply` skips pruning regardless of `--yes`. `fleet` operates on the immediate
+children of the working directory and never on the directory itself. It has no root flag at all:
+passing `--target` is rejected with exit `2` instead of being silently ignored. `repair` is the
+single-workspace tool.
 
-`fleet` and default `repair` are scoped to host-origin artifacts. `repair` states its selected scope
-in the output; `--generated` widens both verbs to generated files while still excluding starter
-files and `package.json`.
+`fleet` and default `repair` are scoped to host-origin artifacts plus absent service-owned starter
+seams. Both state that selected scope in the output before they act — `repair` once its audit found
+something to repair, `fleet` once `--apply` authorized a write, naming the number of repositories
+that write covers. `--generated` widens both verbs to generated
+files and the manifest's generated service-script keys while still excluding present starter files
+and package publication metadata. Within either scope, missing files are safe to restore, stale
+files are report-only by default, and `--replace` is the explicit destructive opt-in.
 
 **Catalog markers.** `catalog` rewrites the block between `<!-- catalog:start -->` and
-`<!-- catalog:end -->` in `.claude/agents/orkestrel.md`. **Ambiguous markers fail before any
+`<!-- catalog:end -->` in `CATALOG_AGENT_PATH`. **Ambiguous markers fail before any
 mutation**: the file must contain exactly one ordered pair. A missing marker, a reversed pair, or a
 repeated marker of either kind is a coded `TARGET` failure raised before the file is touched, and
 the run reports the drift and any row-count shrink rather than rewriting a file it cannot bound.
@@ -1874,10 +2094,16 @@ The check is a feature detection: **earlier supported Node 22 releases simply us
 roots**. It only ever adds trusted issuers — nothing disables verification — and a failure is a
 silent no-op rather than a crash. Custom PEMs are added through the standard environment variable.
 
-**Exit codes.** `0` is clean or successful, `1` is drift or failure, `2` is a usage error. An audit
-exits non-zero on any drift, foreign files included, which makes it usable directly as a CI gate. A
-pull exits non-zero on any drift or failure whether or not `--strict` was passed; `--strict`
-additionally throws on a network fault. Every unknown verb is a usage error and gets a nearest-match
+**Exit codes.** `0` is clean or successful, `1` is drift or failure, `2` is a usage error. Repair
+and fleet use the same dirty-repository predicate: selected-scope drift or any full-plan finding
+outside that scope keeps exit `1`. A repair that skips stale files therefore exits `1`; a repair
+exits `0` only when its selected audit and its reported outside scope are both clean. An audit exits
+non-zero on any drift, foreign files included, which makes it usable directly as a CI gate.
+`repair --json` carries that same terminal audit after any authorized write, while its `result`
+records the files the write copied, wrote, skipped, and removed. A pull exits non-zero on any drift
+or failure whether or not `--strict` was passed, including when
+other entries were applied successfully; `--strict` additionally throws on a network fault. Every
+unknown verb is a usage error and gets a nearest-match
 suggestion when one is sufficiently close.
 
 ## Package contents
@@ -1888,7 +2114,8 @@ files, plus `./package.json`. The `scaffold` binary maps to the built executable
 
 The published file set is exactly `dist/src`, `dist/bin`, `dist/host`, and `README.md`. `dist/host`
 is the vendored data root: the byte-preserved host files plus the `manifest.json` recording their
-storage names, destinations, and executable bits. Storage names are un-dotted, because a leading dot
+storage names, destinations, executable bits, directory roots, and membership digest. Storage names
+are un-dotted, because a leading dot
 does not survive packaging intact; the manifest is what maps a storage name back to its real
 destination. That is also why the default host is resolved from the installed module's own
 location — the package carries its host data with itself, and a caller-supplied raw repository root
@@ -1900,7 +2127,10 @@ renderer behind the table and blockquote work; the template engine behind every 
 artifact; and, consumed only at the executable boundary, the terminal prompt toolkit and the console
 reporter. The core face uses the first four and stays pure; the server face adds only `node:*`
 builtins. Development dependencies are the shared tooling baseline plus the guide-parity toolkit
-that drives [`parity.test.ts`](../../tests/guides/src/parity.test.ts). The engines floor is Node
+that drives [`parity.test.ts`](../../tests/guides/src/parity.test.ts) and `@orkestrel/html`,
+which this package's real emitted-configuration tests execute. Generated manifests keep that HTML
+dependency scoped to `app/browser`; source-only, `app/core`, and `app/server` workspaces do not
+receive it. The engines floor is Node
 `>=22.12.0`, and the build emits ES and CJS for both library faces plus an ES executable.
 
 ## Patterns
@@ -2245,6 +2475,7 @@ import {
 	appViteConfig,
 	applicationViteConfig,
 	binViteProject,
+	configViteProject,
 	coreTsconfig,
 	coreViteConfig,
 	guidesViteProject,
@@ -2276,13 +2507,18 @@ coreViteConfig()
 srcViteConfig('browser')
 appViteConfig('server')
 policyViteProject()
+configViteProject()
 guidesViteProject()
 binViteProject()
 integrationViteProject({ bin: true, integration: true, global: true })
-serviceViteProject()
-viteProjectDefinitions({ integration: true }).includes('export const integration =') // true
-viteProjectRegistrations(['core'], [], { integration: true }).map(({ project }) => project)
-// ['srcCore', 'policy', 'guides', 'integration']
+serviceViteProject('claude')
+viteProjectDefinitions({ integration: true, services: ['claude'] }).includes(
+	'export const serviceClaude =',
+) // true
+viteProjectRegistrations(['core'], [], { integration: true, services: ['claude'] }).map(
+	({ project }) => project,
+)
+// ['srcCore', 'policy', 'config', 'guides', 'integration', 'serviceClaude']
 
 rootViteConfig(['core', 'server'], { bin: true })
 singleSrcViteConfig('server').includes('srcServer') // true
@@ -2322,6 +2558,7 @@ syncReportOf('./packages/router', [], []) // { clean: true, failed: 0, … }
 import { blueprint, blueprintToPlan, diffPlan } from '@orkestrel/scaffold'
 import {
 	createMaterializer,
+	digestHostManifest,
 	hostRoot,
 	hydratePlan,
 	isVacant,
@@ -2335,6 +2572,7 @@ import {
 } from '@orkestrel/scaffold/server'
 
 const host = hostRoot()
+digestHostManifest([], []) // exact empty manifest membership digest
 readHostManifest(host) // the vendored manifest, or undefined for a raw root
 storagePath('.claude/agents/reviewer.md') // 'claude/agents/reviewer.md'
 locateHostSource(undefined, 'package.json', host)
@@ -2354,7 +2592,8 @@ const current = readTarget(
 	'./packages/router',
 	plan.artifacts.map((artifact) => artifact.path),
 )
-materializer.repair(plan, diffPlan(plan, current), './packages/router')
+materializer.repair(plan, diffPlan(plan, current), './packages/router') // missing only; stale is skipped
+materializer.repair(plan, diffPlan(plan, current), './packages/router', true) // replace stale bytes
 materializer.prune('./packages/router', {})
 materializer.destroy()
 
@@ -2549,7 +2788,11 @@ hasOnlyDataProperties({ a: 1 }) // true
 isDenseDataArray(['a'], 10, isPortablePath) // true
 isWritePrecondition({ path: 'package.json', shape: 'absent' }) // true
 isManifestEntry({ storage: 'AGENTS.md', destination: 'AGENTS.md', executable: false }) // true
-isHostManifest({ entries: [], roots: [] }) // true
+isHostManifest({
+	entries: [],
+	roots: [],
+	digest: 'f98e1531d9fd8fab7e301d1cc944249913d93f48c918a11a753048b877211679',
+}) // true
 isSyncEventHooks({ done: () => undefined }) // true
 isMaterializerEventHooks({ done: () => undefined }) // true
 isEmitterErrorHandler(() => undefined) // true
@@ -2576,6 +2819,8 @@ isMissingPathError(caught) // true only for an ENOENT error
   ids, the batch-overload semantics, and all-or-nothing list removal.
 - [`tests/src/core/policy.test.ts`](../../tests/src/core/policy.test.ts) — the repository coding-law
   policy module against this workspace and against deliberately hostile fixtures.
+- [`tests/config/vite.test.ts`](../../tests/config/vite.test.ts) — the executable root Vite
+  invariants for workspace, environment, and output containment.
 - [`tests/src/server/helpers.test.ts`](../../tests/src/server/helpers.test.ts) — containment,
   digests, host staging, hydration, derivation, prune scanning, and the local catalog.
 - [`tests/src/server/validators.test.ts`](../../tests/src/server/validators.test.ts) — the portable
