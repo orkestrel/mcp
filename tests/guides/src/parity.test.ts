@@ -1,10 +1,9 @@
-// The consumer-side guides-parity drop-in (AGENTS §22): runs `@orkestrel/guide`'s checks
-// against this repo's own `guides/README.md` manifest.
+// The consumer-side guides-parity drop-in: runs @orkestrel/guide projections
+// against this repository's own guides/README.md manifest.
 
+import { isRecord } from '@orkestrel/contract'
 import { describe, expect, it } from 'vitest'
-import { readdirSync, readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
 import {
 	createGuide,
 	createSource,
@@ -17,74 +16,427 @@ import {
 	resolveLink,
 	symbolKey,
 } from '@orkestrel/guide'
+import { findMissingNamedImports, readInventory, requireText } from '../../setupServer.js'
 
-const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
-const WALK_DIRS = ['src', 'guides', 'tests']
-const SELF_SPECIFIERS = ['@orkestrel/mcp', '@src/core', '@src/server', '@orkestrel/mcp/browser']
-
-function walk(dir: string, acc: Record<string, string>): void {
-	for (const entry of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
-		const relative = `${dir}/${entry.name}`
-		if (entry.isDirectory()) {
-			walk(relative, acc)
-			continue
-		}
-		if (!entry.name.endsWith('.ts') && !entry.name.endsWith('.md')) continue
-		acc[relative] = readFileSync(join(ROOT, relative), 'utf8')
-	}
-}
-
-const files: Record<string, string> = {}
-for (const dir of WALK_DIRS) walk(dir, files)
-files['AGENTS.md'] = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8')
-
-function readText(relative: string): string {
-	const text = files[relative]
-	if (text === undefined) throw new Error(`Missing file: ${relative}`)
-	return text
-}
-
-const manifest = parseManifest(readText('guides/README.md'), 'guides')
-
-// Cross-face imports are real in this core+server package (a guide fence may import from
-// `@src/core` while its concept lives in the server face) — so the fence-import check
-// resolves each specifier to ITS OWN face's exports rather than only the current manifest
-// entry's, per the specifier → module map below.
-const SPECIFIER_MODULES: Readonly<Record<string, string>> = {
-	'@orkestrel/mcp': 'src/core',
-	'@src/core': 'src/core',
-	'@src/server': 'src/server',
-	'@orkestrel/mcp/browser': 'src/browser',
-}
-const specifierSources = new Map<string, ReturnType<typeof createSource>>()
-function exportsFor(specifier: string): readonly string[] {
-	const module = SPECIFIER_MODULES[specifier]
-	if (module === undefined) return []
-	let source = specifierSources.get(module)
-	if (source === undefined) {
-		source = createSource({ files, module })
-		specifierSources.set(module, source)
-	}
-	return source.exports().map((symbol) => symbol.name)
-}
+const ROOT = new URL('../../../', import.meta.url)
+const files = readInventory(ROOT, ['src', 'guides', 'tests'], ['.ts', '.md'])
+// The three published faces in one table. `SOURCES`, the refusal rows, the live population rows,
+// and the package.json export-key check all read it, so a face's scope and its export key have
+// exactly one place to be stated. No row carries a hand-picked foreign symbol; each row's negative
+// control is derived below from what its neighbours really publish.
+const FACES = Object.freeze([
+	{ specifier: '@orkestrel/mcp', module: 'src/core' },
+	{ specifier: '@orkestrel/mcp/browser', module: 'src/browser' },
+	{ specifier: '@orkestrel/mcp/server', module: 'src/server' },
+])
+const SOURCES: ReadonlyMap<string, ReturnType<typeof createSource>> = new Map(
+	FACES.map((face): [string, ReturnType<typeof createSource>] => [
+		face.specifier,
+		createSource({ files, module: face.module }),
+	]),
+)
+const manifest = parseManifest(requireText(files, 'guides/README.md'), 'guides')
 
 it('manifest lists at least one guide', () => {
 	expect(manifest.length).toBeGreaterThan(0)
 })
 
+// The core-face scope-guard invariant, stated once because it is a property of an expectation and
+// not of a hand-picked set of rows: ANY row whose expectation names `createMCPRoutes` against
+// `@orkestrel/mcp` is a live core-face scope guard, since `createMCPRoutes` is declared only in
+// `src/server` — widen `src/core` to swallow the server module and every such expectation collapses
+// to `[]`. The rows matching it are deliberately NOT enumerated anywhere: an enumeration goes stale
+// the moment a row is added, and a stale one reads as permission to edit every row it omits. Most
+// matching rows carry no comment saying so, and that silence carries no meaning. Changing the
+// specifier or the symbol in a matching row disarms a scope guard, silently.
+describe('public package faces', () => {
+	it('selects each exact face for named imports and rejects unknown true self subpaths', () => {
+		expect(
+			findMissingNamedImports(
+				"import { createMCPServer } from '@orkestrel/mcp'",
+				SOURCES,
+				'@orkestrel/mcp',
+			),
+		).toEqual([])
+		expect(
+			findMissingNamedImports(
+				"import { serveMCP } from '@orkestrel/mcp/browser'",
+				SOURCES,
+				'@orkestrel/mcp',
+			),
+		).toEqual([])
+		expect(
+			findMissingNamedImports(
+				"import { createMCPRoutes } from '@orkestrel/mcp/server'",
+				SOURCES,
+				'@orkestrel/mcp',
+			),
+		).toEqual([])
+		expect(
+			findMissingNamedImports(
+				"import { createMCPRoutes } from '@orkestrel/mcp'",
+				SOURCES,
+				'@orkestrel/mcp',
+			),
+		).toEqual(['createMCPRoutes'])
+		expect(() =>
+			findMissingNamedImports(
+				"import { createMCPServer } from '@orkestrel/mcp/internal'",
+				SOURCES,
+				'@orkestrel/mcp',
+			),
+		).toThrow('Unmapped self specifier: @orkestrel/mcp/internal')
+		expect(
+			findMissingNamedImports(
+				"import { createMCPServer } from '@orkestrel/mcp-extra'",
+				SOURCES,
+				'@orkestrel/mcp',
+			),
+		).toEqual([])
+	})
+
+	// One refusal row per face, bound against BOTH of its neighbours. A row's control is every name
+	// a neighbour publishes and this face does not, read off the neighbour's live Source: a literal
+	// covers one ordered pair out of six and goes stale silently, while the derived difference
+	// covers all six and cannot. Asserting that difference non-empty is the precondition the
+	// refusal needs to mean anything, and it is also what a widened `module` breaks — a face that
+	// swallows its neighbour's module leaves that neighbour nothing of its own to refuse, so the
+	// row reports an empty control instead of passing on a refusal it has stopped making.
+	for (const face of FACES) {
+		const own = createSource({ files, module: face.module })
+			.surface()
+			.map((symbol) => symbol.name)
+		const neighbours = FACES.filter((other) => other !== face).map((other) =>
+			Array.from(
+				new Set(
+					createSource({ files, module: other.module })
+						.surface()
+						.map((symbol) => symbol.name),
+				),
+			).filter((name) => !own.includes(name)),
+		)
+
+		it(`refuses every name a neighbouring face owns on ${face.specifier}`, () => {
+			for (const foreign of neighbours) {
+				expect(foreign.length).toBeGreaterThan(0)
+				expect(
+					findMissingNamedImports(
+						`import { ${foreign.join(', ')} } from '${face.specifier}'`,
+						SOURCES,
+						'@orkestrel/mcp',
+					),
+				).toEqual(foreign)
+			}
+		})
+	}
+
+	// Both brace shapes, single-line and multiline, since the multiline one is the shape a real
+	// guide example reaches for as soon as it imports more than a name or two.
+	it('rejects a repository alias specifier in a named-brace import', () => {
+		for (const specifier of ['@src/core', '@src/browser', '@src/server', '@app/server']) {
+			for (const fence of [
+				`import { createMCPServer } from '${specifier}'`,
+				`import {\n\tcreateMCPServer,\n} from '${specifier}'`,
+			]) {
+				expect(() => findMissingNamedImports(fence, SOURCES, '@orkestrel/mcp')).toThrow(
+					`Repository alias specifier: ${specifier}`,
+				)
+			}
+		}
+	})
+
+	// An intentional recorded limit, not a guarantee: this row asserts what the check does NOT do,
+	// so it goes red only if someone IMPROVES the refusal, and that is deliberate. Both refusals —
+	// unmapped self subpath and repository alias — see exactly what `fenceImports` surfaces, and
+	// what it surfaces is decided by its grammar, stated in full in the `findMissingNamedImports`
+	// TSDoc: `import`, whitespace, optionally `type` AND its own trailing whitespace, then the
+	// brace, and so on to the quoted specifier. The fences below are EXAMPLES of statements that
+	// grammar excludes, never the list of them — a form nobody enumerated is settled by reading the
+	// grammar sentence, not by its absence here. The mixed default-and-named form is the one that
+	// surprises: those are named bindings Guide is meant to surface and does not, so it is an
+	// upstream `fenceImports` limit rather than a boundary chosen here, and no fence in `guides/`
+	// uses it today. Closing any of these locally would mean a second import reader beside Guide's,
+	// which the roadmap's finding 2 forbids; the remedy that remains is to record the gap where a
+	// reader meets it, here and in that TSDoc. When one of these forms starts being reached, move
+	// that fence to a row asserting the behaviour it now has — the other fences are independent
+	// pins and do not travel with it.
+	it('records example import forms no refusal reaches', () => {
+		for (const fence of [
+			"import * as MCP from '@orkestrel/mcp/internal'",
+			"import MCP from '@orkestrel/mcp/internal'",
+			"import '@orkestrel/mcp/internal'",
+			"import MCP, { createMCPServer } from '@orkestrel/mcp/internal'",
+			"import * as MCP from '@src/core'",
+			"import MCP from '@src/core'",
+			"import '@src/core'",
+			"import MCP, { createMCPServer } from '@src/core'",
+			"import MCP, * as NS from '@src/core'",
+			"import{createMCPServer}from'@src/core'",
+			"import type{createMCPServer}from'@src/core'",
+			"const loaded = await import('@src/core')",
+			"export { createMCPServer } from '@src/core'",
+			"export * from '@src/core'",
+		]) {
+			expect(findMissingNamedImports(fence, SOURCES, '@orkestrel/mcp')).toEqual([])
+		}
+	})
+
+	it('retains a block-commented named binding', () => {
+		expect(
+			findMissingNamedImports(
+				"import { createMCPRoutes /* server face */ } from '@orkestrel/mcp'",
+				SOURCES,
+				'@orkestrel/mcp',
+			),
+		).toEqual(['createMCPRoutes'])
+	})
+
+	// A comment carrying its own `}` terminates Guide's raw `{([^}]*)}` scan there, so the raw
+	// reading matches no import at all rather than losing one binding. Erasing the comment, and
+	// with it that brace, is what makes the statement visible, so this row binds the projection
+	// itself rather than a trivia position.
+	it('retains a named binding whose block comment carries a brace', () => {
+		expect(
+			findMissingNamedImports(
+				"import { createMCPRoutes /* } */ } from '@orkestrel/mcp'",
+				SOURCES,
+				'@orkestrel/mcp',
+			),
+		).toEqual(['createMCPRoutes'])
+	})
+
+	// Two jobs, and the second constrains what may be edited here. FIRST, this is the sole place
+	// Guide's own trivia handling is asserted, so a dependency upgrade is caught here instead of
+	// quietly changing what `findMissingNamedImports` covers: the row characterizes the FAMILY —
+	// every trivia position that costs the raw reading a binding, inside the brace and outside it
+	// — and pairs each with the projected reading that recovers it. The raw and projected columns
+	// differing is what makes the projection load-bearing rather than decorative, and a position
+	// that stops being dropped raw, or stops being recovered projected, belongs in this table on
+	// the day it changes. SECOND, the recovery loop's expectations name `createMCPRoutes` against
+	// `@orkestrel/mcp`, so the core-face invariant stated above this describe applies to them
+	// unchanged. Change a specifier or a symbol here only with that second job in mind.
+	it('characterizes what Guide drops raw and recovers projected, and checks the face', () => {
+		// Inside the brace: the statement is still matched, and the binding alone is lost.
+		expect(
+			fenceImports("import { createMCPRoutes /* server face */ } from '@orkestrel/mcp'"),
+		).toEqual([{ specifier: '@orkestrel/mcp', names: [] }])
+		// Inside the brace, carrying its own `}`, and outside it in three positions the raw
+		// reading admits only as whitespace: the whole statement is lost, not just the binding.
+		for (const fence of [
+			"import { createMCPRoutes /* } */ } from '@orkestrel/mcp'",
+			"import /* server face */ { createMCPRoutes } from '@orkestrel/mcp'",
+			"import { createMCPRoutes } /* server face */ from '@orkestrel/mcp'",
+			"import { createMCPRoutes } from /* server face */ '@orkestrel/mcp'",
+		]) {
+			expect(fenceImports(fence)).toEqual([])
+		}
+		for (const fence of [
+			"import { createMCPRoutes /* server face */ } from '@orkestrel/mcp'",
+			"import { createMCPRoutes /* } */ } from '@orkestrel/mcp'",
+			"import /* server face */ { createMCPRoutes } from '@orkestrel/mcp'",
+			"import { createMCPRoutes } /* server face */ from '@orkestrel/mcp'",
+			"import { createMCPRoutes } from /* server face */ '@orkestrel/mcp'",
+		]) {
+			expect(findMissingNamedImports(fence, SOURCES, '@orkestrel/mcp')).toEqual(['createMCPRoutes'])
+		}
+	})
+
+	it('retains a line-commented named binding', () => {
+		expect(
+			findMissingNamedImports(
+				"import { createMCPRoutes // server face\n} from '@orkestrel/mcp'",
+				SOURCES,
+				'@orkestrel/mcp',
+			),
+		).toEqual(['createMCPRoutes'])
+	})
+
+	it('retains aliased and type-prefixed bindings across a commented multiline brace', () => {
+		const fence = [
+			'import {',
+			'\tcreateMCPRoutes as routes, /* server face */',
+			'\ttype HTTPTransportOptions,',
+			"} from '@orkestrel/mcp'",
+		].join('\n')
+		expect(findMissingNamedImports(fence, SOURCES, '@orkestrel/mcp')).toEqual([
+			'createMCPRoutes',
+			'HTTPTransportOptions',
+		])
+	})
+
+	it('reads no import out of a comment', () => {
+		const fence = [
+			"// import { createMCPRoutes } from '@orkestrel/mcp'",
+			"/* import { serveMCP } from '@orkestrel/mcp' */",
+		].join('\n')
+		expect(findMissingNamedImports(fence, SOURCES, '@orkestrel/mcp')).toEqual([])
+	})
+
+	it('reads no import out of a template literal', () => {
+		expect(
+			findMissingNamedImports(
+				"const snippet = `import { createMCPRoutes } from '@orkestrel/mcp'`",
+				SOURCES,
+				'@orkestrel/mcp',
+			),
+		).toEqual([])
+	})
+
+	// Two jobs. FIRST, it characterizes Guide: `extractSourceLines` keeps quoted text verbatim, so
+	// for a fence whose import lives inside an ordinary string the projection is the identity, and
+	// an upgrade that started masking string payloads would fail here and take the
+	// `findMissingNamedImports` @remarks with it. SECOND, the expectation names `createMCPRoutes`
+	// against `@orkestrel/mcp`, so the core-face invariant stated above this describe applies to it
+	// unchanged. Change the specifier or the symbol here only with that second job in mind.
+	it('reads an import out of an ordinary string literal and still checks it against the face', () => {
+		for (const fence of [
+			'const snippet = "import { createMCPRoutes } from \'@orkestrel/mcp\'"',
+			'const snippet = \'import { createMCPRoutes } from "@orkestrel/mcp"\'',
+		]) {
+			expect(findMissingNamedImports(fence, SOURCES, '@orkestrel/mcp')).toEqual(['createMCPRoutes'])
+		}
+	})
+
+	// The population control for the row above, and what binds the corrected `@remarks` clause in
+	// both directions. That row pins the MAPPED specifier `@orkestrel/mcp`, so every fence in it is
+	// drawn from inside the instrument's own membership rule — `SOURCES` key membership. It can show
+	// that a string-embedded import ENTERS the check; it can never show what entering amounts to
+	// when `sources.get` misses, so on its own it reads as a promise of a face. This fence sits
+	// outside that rule: an unmapped foreign specifier, kept verbatim by the projection exactly as
+	// the sibling row proves, surfaced by `fenceImports` as the first expectation records, reached
+	// by neither refusal, and therefore compared against NO face. The `[]` is that absence, not a
+	// clean bill. The sibling row is what catches a projection that started masking ordinary-string
+	// payloads — its `['createMCPRoutes']` collapses to `[]` if that ever happens, and this row would
+	// not, since `fenceImports` reads the raw fence and never consults the projection. What the
+	// surfaced-statement expectation records here is narrower and still worth pinning: that Guide's
+	// grammar surfaces a string-embedded statement at all, without which the `[]` beside it would go
+	// vacuous. Do not re-specifier this row onto a mapped face: the sibling row already owns
+	// that population, and merging the two leaves the boundary uncontrolled again.
+	it('checks a string-embedded unmapped foreign import against no face', () => {
+		const fence = 'const snippet = "import { createMCPServer } from \'@orkestrel/mcp-extra\'"'
+		expect(fenceImports(fence)).toEqual([
+			{ specifier: '@orkestrel/mcp-extra', names: ['createMCPServer'] },
+		])
+		expect(findMissingNamedImports(fence, SOURCES, '@orkestrel/mcp')).toEqual([])
+	})
+
+	// A second recorded limit, and the `hazard` expectation is the gap rather than a guarantee: it
+	// asserts `[]` for a fence whose real import has disappeared, so this row goes red only if
+	// someone IMPROVES the projection. Guide's reader is lexical rather than a TypeScript parse,
+	// so a slash after a bare `}` reads as division and swallows the rest of the fence; `guarded`
+	// proves an explicit `;` restores it, which is the workaround a guide author needs. This row
+	// does two jobs, so when the limit moves, RE-PIN `hazard` to the behaviour Guide then has —
+	// never delete the row. `guarded` names `createMCPRoutes` against `@orkestrel/mcp`, so the
+	// core-face invariant stated above this describe applies to it, and deleting the row to retire
+	// the limit would retire that binding with it.
+	it('follows the documented division reading of a slash after a bare brace', () => {
+		const guarded = [
+			'const config = {};',
+			"/[/*]/.test('x')",
+			"import { createMCPRoutes } from '@orkestrel/mcp'",
+		].join('\n')
+		const hazard = [
+			'const config = {}',
+			"/[/*]/.test('x')",
+			"import { createMCPRoutes } from '@orkestrel/mcp'",
+		].join('\n')
+		expect(findMissingNamedImports(guarded, SOURCES, '@orkestrel/mcp')).toEqual(['createMCPRoutes'])
+		expect(findMissingNamedImports(hazard, SOURCES, '@orkestrel/mcp')).toEqual([])
+	})
+
+	it('derives the exact package export keys from the same face map', () => {
+		const parsed: unknown = JSON.parse(
+			readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'),
+		)
+		if (!isRecord(parsed) || !('exports' in parsed) || !isRecord(parsed['exports'])) {
+			throw new Error('Package manifest must declare object exports')
+		}
+		const expected = FACES.map((face) =>
+			face.specifier === '@orkestrel/mcp'
+				? '.'
+				: `.${face.specifier.slice('@orkestrel/mcp'.length)}`,
+		)
+		expect(Object.keys(parsed['exports']).sort()).toEqual(expected.concat('./package.json').sort())
+		expect(parsed['exports']['./package.json']).toBe('./package.json')
+	})
+})
+
+// Two faces declaring the same class, where only the browser barrel re-exports it: the server
+// face strands `HTTPClientTransport`, and reading both faces as one scope hides that.
+const FIXTURE_FILES: Readonly<Record<string, string>> = Object.freeze({
+	'browser/index.ts': "export * from './HTTPClientTransport.js'\n",
+	'browser/HTTPClientTransport.ts': 'export class HTTPClientTransport {}\n',
+	'server/index.ts': "export * from './HTTPServerTransport.js'\n",
+	'server/HTTPServerTransport.ts': 'export class HTTPServerTransport {}\n',
+	'server/HTTPClientTransport.ts': 'export class HTTPClientTransport {}\n',
+})
+
+// The live faces and that fixture run through one carrier, so the negative control shares the
+// live gate's instrument instead of standing beside it. The two kinds of row prove different
+// things, and only one of them is a scope guard. The FIXTURE rows are the instrument's negative
+// control: `stranded server face` forces it to report a non-empty answer, and reading browser and
+// server as one scope makes that same answer disappear — the masking a widened scope causes. The
+// LIVE rows cannot show that, because a union of internally-complete barrels is itself internally
+// complete: their `stranded`/`phantom` expectations stay `[]` under every union of the real faces,
+// so a widened `module` passes them unremarked. What binds each live face's scope is that face's
+// own neighbour-refusal row above, not these rows; what these rows catch is a real declaration
+// going stranded or phantom inside one barrel. The population sizes stay asserted because a
+// mistyped module path yields two empty populations, and two empty populations differ by nothing.
+const POPULATIONS = Object.freeze([
+	...FACES.map((face) => ({
+		name: `${face.specifier} barrel`,
+		files,
+		module: face.module,
+		stranded: [],
+		phantom: [],
+	})),
+	{
+		name: 'stranded server face',
+		files: FIXTURE_FILES,
+		module: 'server',
+		stranded: ['class HTTPClientTransport'],
+		phantom: [],
+	},
+	{
+		name: 'browser and server faces read as one scope',
+		files: FIXTURE_FILES,
+		module: ['browser', 'server'],
+		stranded: [],
+		phantom: [],
+	},
+])
+
+for (const entry of POPULATIONS) {
+	const source = createSource({ files: entry.files, module: entry.module })
+
+	describe(`${entry.name}`, () => {
+		it('has non-empty direct and barrel populations', () => {
+			expect(source.exports().length).toBeGreaterThan(0)
+			expect(source.surface().length).toBeGreaterThan(0)
+		})
+		it('strands exactly its expected declarations', () => {
+			expect(missingSymbols(source.exports(), source.surface())).toEqual(entry.stranded)
+		})
+		it('re-exports exactly its expected phantom symbols', () => {
+			expect(missingSymbols(source.surface(), source.exports())).toEqual(entry.phantom)
+		})
+	})
+}
+
 for (const entry of manifest) {
-	const guide = createGuide(readText(entry.spec))
+	const guide = createGuide(requireText(files, entry.spec))
 	const source = createSource({ files, module: entry.source })
 
 	describe(`${entry.concept}`, () => {
-		it('extracts a non-empty documented surface', () => {
+		it('extracts non-empty aggregate barrel and documented surfaces', () => {
+			expect(source.surface().length).toBeGreaterThan(0)
 			expect(guide.surface().length).toBeGreaterThan(0)
 		})
-		it('documents every source export', () => {
-			expect(missingSymbols(source.exports(), guide.surface())).toEqual([])
+		it('documents every barrel export', () => {
+			expect(missingSymbols(source.surface(), guide.surface())).toEqual([])
 		})
-		it('documents only real exports', () => {
-			expect(missingSymbols(guide.surface(), source.exports())).toEqual([])
+		it('documents only barrel exports', () => {
+			expect(missingSymbols(guide.surface(), source.surface())).toEqual([])
 		})
 
 		it('exposes no hidden module-scope declarations', () => {
@@ -135,12 +487,9 @@ for (const entry of manifest) {
 			})
 		}
 
-		it('imports only real exports in every ```ts fence', () => {
+		it('named imports reference only real exports in every ```ts fence', () => {
 			for (const fence of guide.patterns()) {
-				for (const { specifier, names } of fenceImports(fence)) {
-					if (!SELF_SPECIFIERS.includes(specifier)) continue
-					expect(findMissing(names, exportsFor(specifier))).toEqual([])
-				}
+				expect(findMissingNamedImports(fence, SOURCES, '@orkestrel/mcp')).toEqual([])
 			}
 		})
 

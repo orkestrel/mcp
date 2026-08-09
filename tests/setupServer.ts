@@ -2,13 +2,242 @@
 // (and `src:server`) projects. `node:*` imports belong here, never in `setup.ts`
 // (AGENTS §16.1).
 
-import type { IncomingMessage } from 'node:http'
-import type { ServerInterface } from '@orkestrel/server'
+import type { IncomingMessage, Server } from 'node:http'
+import type { SourceInterface } from '@orkestrel/guide'
+import type { MiddlewareHandler, ServerInterface, StreamInterface } from '@orkestrel/server'
 import type { WebSocketFrame } from '@orkestrel/websocket'
-import { request as httpRequest } from 'node:http'
+import type { ManualClockInterface } from './setup.js'
+import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
+import { createServer as createHTTPServer, request as httpRequest } from 'node:http'
+import { fileURLToPath } from 'node:url'
+import {
+	isAbsolute,
+	relative as relativePath,
+	resolve as resolveFilesystemPath,
+	sep,
+} from 'node:path'
 import { Duplex, PassThrough } from 'node:stream'
 import { afterEach } from 'vitest'
-import { parseWebSocketFrame } from '@orkestrel/websocket'
+import { isRecord } from '@orkestrel/contract'
+import { extractSourceLines, fenceImports, findMissing } from '@orkestrel/guide'
+import { waitForDelay } from './setup.js'
+import {
+	computeWebSocketAccept,
+	encodeWebSocketFrame,
+	parseWebSocketFrame,
+	WEBSOCKET_OPCODE_TEXT,
+} from '@orkestrel/websocket'
+
+/**
+ * Read a deterministic text inventory rooted beneath one real workspace directory.
+ *
+ * @param root - The workspace root URL
+ * @param directories - Root-relative directories to traverse without following symbolic links
+ * @param extensions - Optional filename suffixes to retain
+ * @returns A root-relative path-to-text inventory ordered by path
+ *
+ * @example
+ * ```ts
+ * readInventory(new URL('../', import.meta.url), ['src'], ['.ts'])
+ * ```
+ */
+export function readInventory(
+	root: URL,
+	directories: readonly string[],
+	extensions: readonly string[] = [],
+): Readonly<Record<string, string>> {
+	if (directories.length === 0) return {}
+	const supplied = fileURLToPath(root)
+	const rootStatus = lstatSync(supplied)
+	if (rootStatus.isSymbolicLink()) throw new Error('Root is a symbolic link')
+	if (!rootStatus.isDirectory()) throw new Error('Root is not a directory')
+	const base = realpathSync.native(supplied)
+	const pending: string[] = []
+	const queued = new Set<string>()
+	const contents = new Map<string, string>()
+
+	for (const directory of directories) {
+		const candidate = directory === '.' ? base : resolveFilesystemPath(base, directory)
+		const requested = relativePath(base, candidate)
+		if (requested === '..' || requested.startsWith(`..${sep}`) || isAbsolute(requested)) {
+			throw new Error(`Directory outside root: ${directory}`)
+		}
+		const status = lstatSync(candidate)
+		if (status.isSymbolicLink()) throw new Error(`Directory is a symbolic link: ${directory}`)
+		if (!status.isDirectory()) throw new Error(`Not a directory: ${directory}`)
+		const physical = realpathSync.native(candidate)
+		const resolved = relativePath(base, physical)
+		if (resolved === '..' || resolved.startsWith(`..${sep}`) || isAbsolute(resolved)) {
+			throw new Error(`Directory outside root: ${directory}`)
+		}
+		if (queued.has(physical)) continue
+		queued.add(physical)
+		pending.push(physical)
+	}
+
+	while (pending.length > 0) {
+		const directory = pending.pop()
+		if (directory === undefined) continue
+		for (const entry of readdirSync(directory, { withFileTypes: true })) {
+			const path = resolveFilesystemPath(directory, entry.name)
+			const status = lstatSync(path)
+			if (status.isSymbolicLink()) continue
+			if (status.isDirectory()) {
+				const physical = realpathSync.native(path)
+				const resolved = relativePath(base, physical)
+				if (
+					resolved === '..' ||
+					resolved.startsWith(`..${sep}`) ||
+					isAbsolute(resolved) ||
+					queued.has(physical)
+				) {
+					continue
+				}
+				queued.add(physical)
+				pending.push(physical)
+				continue
+			}
+			if (
+				!status.isFile() ||
+				(extensions.length > 0 && !extensions.some((value) => entry.name.endsWith(value)))
+			) {
+				continue
+			}
+			const key = relativePath(base, path).split(sep).join('/')
+			if (!contents.has(key)) contents.set(key, readFileSync(path, 'utf8'))
+		}
+	}
+
+	const files: Record<string, string> = {}
+	for (const key of Array.from(contents.keys()).sort()) {
+		const value = contents.get(key)
+		if (value !== undefined) files[key] = value
+	}
+	return files
+}
+
+/**
+ * Require one root-relative text entry from an inventory.
+ *
+ * @param files - The workspace text inventory
+ * @param relative - The required root-relative path
+ * @returns The file text
+ * @throws When the exact inventory key is absent
+ *
+ * @example
+ * ```ts
+ * requireText(files, 'guides/README.md')
+ * ```
+ */
+export function requireText(files: Readonly<Record<string, string>>, relative: string): string {
+	if (Object.hasOwn(files, relative)) {
+		const text = files[relative]
+		if (text !== undefined) return text
+	}
+	throw new Error(`Missing file: ${relative}`)
+}
+
+/**
+ * Find the imports Guide surfaces from a projected fence that are absent from their exact public
+ * face.
+ *
+ * The fence is read through Guide's own comment-aware source projection — `extractSourceLines`
+ * replaces every comment and template span with aligned spaces and keeps quoted text verbatim —
+ * and the projected text is then handed to `fenceImports`. What this helper owns is a boundary,
+ * not a grammar: every statement `fenceImports` surfaces is checked, and nothing else is. A
+ * mapped specifier's named bindings compare against that Source's barrel surface; an unmapped
+ * true subpath of `root` and a repository alias (`@src/*`, `@app/*`) are refused, the latter
+ * because a public guide example must import through a published specifier; a similarly
+ * prefixed sibling package stays external.
+ *
+ * The membership rule is therefore `fenceImports`'s own grammar rather than "named-brace
+ * imports", and that grammar is one sentence, read literally rather than paraphrased: the letters
+ * `import`, at least one whitespace character, optionally `type` followed by at least one further
+ * whitespace character, then `{`, a body containing no `}`, a closing `}`, optional whitespace,
+ * `from`, optional whitespace again, and a quoted specifier. That sentence is the rule. Every list
+ * of forms below is an illustration of it and never a closed catalogue — the sentence, not the
+ * list, decides a form nobody thought to enumerate.
+ *
+ * The set the sentence matches therefore *overlaps* the braces a reader would call named imports
+ * rather than sitting inside them. It misses some, among them a mixed default-and-named import
+ * (`import MCPServer, { createMCPRoutes } from …`), a `type` import whose `type` carries no
+ * trailing whitespace (`import type{X}from'…'`), a brace with no whitespace after `import`, a
+ * dynamic `import()`, and the namespace, default, side-effect, and `export … from` statements
+ * that carry no brace at all; each of those is checked against no face and refused by nothing.
+ * And because `import` carries no word boundary, the sentence also admits text that is no import
+ * at all: an ordinary string whose payload reads `…reimport { X } from '@src/core'` satisfies
+ * every clause, so it is checked like any other statement and its alias specifier throws.
+ *
+ * The mixed form is an upstream limit and not a choice made here: those named bindings are
+ * exactly what `fenceImports` exists to surface, and it does not surface them, so a guide example
+ * written that way against `@src/*` passes unremarked. No fence in `guides/` uses it, so the gap
+ * is recorded rather than closed — closing it here would mean a second import reader beside
+ * Guide's, which the roadmap forbids. The parity suite's `records example import forms no refusal
+ * reaches` row pins examples of the forms named above; it is not the whole of what the sentence
+ * leaves out.
+ *
+ * @remarks
+ * Projecting first moves that boundary in both directions relative to reading the fence
+ * verbatim, and which exact trivia positions move it is Guide's business rather than this
+ * helper's. The parity suite pins them in fences rather than asserting them as universals here:
+ * the raw-versus-projected comparison lives in one row, and the projected-side single-line,
+ * multiline, and alias controls live in their own rows, so a Guide upgrade surfaces in whichever
+ * of them it touches instead of quietly changing what this check covers. In outline: comment
+ * trivia around a named binding no longer costs the binding, while aliases still reduce to the
+ * original exported name and `type` prefixes still strip. An `import` written inside a comment or
+ * a template literal is masked to spaces and is checked against no face, so a commented-out or
+ * backtick-quoted example is exempt; one written inside an ordinary `'…'` or `"…"` string is kept
+ * verbatim and still enters the check. The projection is lexical rather than a TypeScript parse,
+ * and inherits Guide's documented limit that a slash after a bare `}` reads as division: a fence
+ * whose slash-leading statement follows a semicolonless declaration needs an explicit `;`, or the
+ * rest of that fence — real imports included — is read as comment payload and disappears from
+ * this check.
+ *
+ * @param fence - The TypeScript fence body
+ * @param sources - Exact public package specifiers mapped to their Source projections
+ * @param root - The true self-package root specifier
+ * @returns A frozen list of missing named imports
+ * @throws When a statement `fenceImports` surfaces from the projected fence uses an unmapped root
+ *   or true self-package subpath, or a repository alias specifier. Nothing outside the grammar
+ *   sentence above reaches either refusal; a statement satisfying it enters the check — including
+ *   text that is not an import — where a mapped specifier is compared against its face and an
+ *   unmapped foreign one against none, and it reaches a refusal only when its specifier is an
+ *   unmapped self specifier or a repository alias.
+ *
+ * @example
+ * ```ts
+ * findMissingNamedImports("import { X } from '@scope/pkg'", sources, '@scope/pkg')
+ * ```
+ */
+export function findMissingNamedImports(
+	fence: string,
+	sources: ReadonlyMap<string, SourceInterface>,
+	root: string,
+): readonly string[] {
+	const missing: string[] = []
+	const projected = extractSourceLines(fence)
+		.map((line) => line.code)
+		.join('\n')
+	for (const { specifier, names } of fenceImports(projected)) {
+		const source = sources.get(specifier)
+		if (source === undefined) {
+			if (specifier === root || specifier.startsWith(`${root}/`)) {
+				throw new Error(`Unmapped self specifier: ${specifier}`)
+			}
+			if (specifier.startsWith('@src/') || specifier.startsWith('@app/')) {
+				throw new Error(`Repository alias specifier: ${specifier}`)
+			}
+			continue
+		}
+		missing.push(
+			...findMissing(
+				names,
+				source.surface().map((symbol) => symbol.name),
+			),
+		)
+	}
+	return Object.freeze(missing)
+}
 
 // ── HTTP request stub (the §14 boundary-narrowing pattern) ───────────────────
 //
@@ -53,6 +282,95 @@ export function createRequestStub(fields?: {
 	}
 	if (!isIncomingMessage(stub)) throw new Error('unreachable: request stub shape')
 	return stub
+}
+
+// ── Fault-injectable SSE stream (a REAL StreamInterface, not a mock) ─────────
+//
+// `openStream` is the real seam and is used wherever the happy path is the claim. Two
+// terminals it cannot be driven into from outside are exactly the ones the ownership and
+// disconnect rows are about: a `write` that throws mid-stream, and a response body that
+// raises while it is being forwarded. This is a minimal real implementation of the same
+// interface with those two faults as data (AGENTS §16.1 — an inert, customizable stub).
+
+/** Which fault a {@link createStreamStub} stream raises, if any. */
+export interface TestStreamOptions {
+	/** Thrown by `write` on every event. */
+	readonly write?: Error
+	/** Raised by the response body on its first read. */
+	readonly body?: Error
+	/**
+	 * A response body that never settles — a held-open exchange nobody has completed.
+	 *
+	 * @remarks
+	 * The default body closes on its first read, which releases any bridge reading it. Set this
+	 * to keep a consumer parked indefinitely, so what the bridge does WHILE it waits — its
+	 * keepalive timer above all — is observable instead of already torn down.
+	 */
+	readonly pending?: boolean
+}
+
+/** A real {@link StreamInterface} that also reports what was written and whether it ended. */
+export interface TestStreamInterface extends StreamInterface {
+	/** Each event's `data`, in write order. */
+	readonly events: readonly string[]
+	/** Each comment's text, in write order (the keepalive record). */
+	readonly comments: readonly string[]
+	/** Whether `end()` has been called. */
+	readonly ended: boolean
+}
+
+/**
+ * Build a real SSE {@link StreamInterface} whose write or body fault is supplied as data.
+ *
+ * @param options - The fault to raise or the `pending` body; omit for an inert recording stream
+ * @returns The stream, plus the events and comments it accepted and whether it ended
+ *
+ * @example
+ * ```ts
+ * const sse = createStreamStub({ write: new Error('socket gone') })
+ * await sendEventStream(stream, sse) // total: the fault never escapes
+ * ```
+ */
+export function createStreamStub(options?: TestStreamOptions): TestStreamInterface {
+	const events: string[] = []
+	const comments: string[] = []
+	const failure = options?.body
+	let ended = false
+	const body = new ReadableStream<Uint8Array>({
+		pull(controller) {
+			if (failure !== undefined) controller.error(failure)
+			else if (options?.pending !== true) controller.close()
+			// A `pending` body returns without settling the controller, so the reader parks.
+		},
+	})
+	const response = new Response(body, { status: 200 })
+	return {
+		response,
+		get closed() {
+			return ended
+		},
+		get events() {
+			return events
+		},
+		get comments() {
+			return comments
+		},
+		get ended() {
+			return ended
+		},
+		write(message) {
+			if (options?.write !== undefined) throw options.write
+			events.push(message.data)
+			return true
+		},
+		comment(text) {
+			comments.push(text)
+		},
+		async drain() {},
+		end() {
+			ended = true
+		},
+	}
 }
 
 // ── In-memory WebSocket Duplex pair (the RFC 6455 wire + transport tests) ────
@@ -316,4 +634,174 @@ export function upgradeRequest(
 		})
 		request.end()
 	})
+}
+
+// ── Clock time that passes INSIDE a live request ─────────────────────────────
+//
+// A claim that a timestamp is "the instant of the LAST access" is only falsifiable when
+// clock time passes WHILE a request is in flight: a fixture whose handlers are all
+// instantaneous cannot tell "re-read after the await" from "read at request start". This
+// middleware is that seam. Composed BEHIND the middleware under test, it advances the
+// INJECTED manual clock before delegating, so the layer in front really does suspend
+// across a measurable span. The host clock is never replaced (AGENTS §16).
+
+/**
+ * Create a middleware that advances a manual clock before delegating downstream.
+ *
+ * @typeParam TState - The consumer's route state type
+ * @param clock - The manual clock this request consumes time from
+ * @param ms - The milliseconds of clock time every handled request consumes
+ * @returns A `MiddlewareHandler` that elapses `ms` inside each request it handles
+ *
+ * @example
+ * ```ts
+ * server.use(createMCPSession({ ttl: 50, clock: clock.now }))
+ * server.use(createClockMiddleware(clock, 60)) // every request outlasts the ttl
+ * ```
+ */
+export function createClockMiddleware<TState>(
+	clock: ManualClockInterface,
+	ms: number,
+): MiddlewareHandler<TState> {
+	return (_request, _context, next) => {
+		clock.advance(ms)
+		return next()
+	}
+}
+
+/**
+ * Create a middleware that holds every request open for `ms` of REAL time before delegating.
+ *
+ * @remarks
+ * The seam for interleaving: while one request is parked here, the middleware in front of it
+ * is genuinely suspended, so a second request can reach the same state and the test can pin
+ * which of the two wins. A short real delay, never a replaced clock (AGENTS §16).
+ *
+ * @typeParam TState - The consumer's route state type
+ * @param ms - How long each request is held before it continues downstream
+ * @returns A `MiddlewareHandler` that parks each request it handles
+ */
+export function createDelayMiddleware<TState>(ms: number): MiddlewareHandler<TState> {
+	return async (_request, _context, next) => {
+		await waitForDelay(ms)
+		return next()
+	}
+}
+
+// ── Raw WebSocket handshake recorder (the client transport's D2 seam) ────────
+//
+// The WebSocket CLIENT transport suspends `start()` across a real TCP connect and HTTP
+// upgrade, so every claim about what it does with an ARRIVING socket needs a peer that
+// can hold the handshake open and then report what became of each socket it upgraded.
+// `createWebSocketServer` is a whole MCP server and reports neither, so this is a
+// protocol-faithful fixture instead (AGENTS §16): it writes a REAL RFC 6455 `101` with a
+// correctly computed `Sec-WebSocket-Accept`, optionally after a delay and optionally with
+// one unmasked text frame appended, and it counts the sockets it upgraded against the
+// sockets that are still open.
+
+/** A raw upgrade peer — how many sockets it accepted, and how many are still open. */
+export interface TestUpgradeInterface {
+	/** The bound `http://…` base URL. */
+	readonly base: string
+	/** How many upgrades this peer answered with a `101`. */
+	readonly count: number
+	/** How many of those sockets are still open (an orphan never reaches zero). */
+	readonly open: number
+	stop(): Promise<void>
+}
+
+/** How a {@link startUpgradeServer} peer answers each upgrade. */
+export interface TestUpgradeOptions {
+	/** Milliseconds the handshake is held open before the `101` is written. */
+	readonly delay?: number
+	/** A text frame written together with the handshake, so a bound socket re-emits it. */
+	readonly frame?: string
+}
+
+/**
+ * Start a raw `node:http` peer that completes real WebSocket handshakes and records them.
+ *
+ * @remarks
+ * Each upgrade is answered with a structurally valid `101` whose `Sec-WebSocket-Accept` is
+ * the real {@link computeWebSocketAccept} of the client's key, so the client's own accept
+ * validation passes and the socket becomes a live WebSocket. `delay` holds the handshake
+ * open long enough for a caller to act while `start()` is still suspended; `frame` appends
+ * one unmasked text frame to the same write, so a socket the client BOUND re-emits it and a
+ * socket the client destroyed does not. `count` and `open` are read after the fact: an
+ * upgraded socket the client never closes keeps `open` above zero forever, which is exactly
+ * what an orphan is.
+ *
+ * @param options - Optional handshake `delay` and trailing `frame`; see {@link TestUpgradeOptions}
+ * @returns The bound peer plus its upgrade tallies
+ *
+ * @example
+ * ```ts
+ * const peer = await startUpgradeServer({ delay: 30 })
+ * const transport = createWebSocketClientTransport({ url: `${peer.base}/mcp` })
+ * ```
+ */
+export async function startUpgradeServer(
+	options?: TestUpgradeOptions,
+): Promise<TestUpgradeInterface> {
+	const server: Server = createHTTPServer()
+	const sockets: Duplex[] = []
+	let count = 0
+	let closed = 0
+	server.on('upgrade', (request, socket) => {
+		const key = request.headers['sec-websocket-key']
+		if (typeof key !== 'string') {
+			socket.destroy()
+			return
+		}
+		sockets.push(socket)
+		count += 1
+		// A client that destroys its half leaves this end reading an ECONNRESET — an expected
+		// outcome of the very path under test, never an uncaught 'error'.
+		socket.on('error', () => {})
+		socket.on('close', () => {
+			closed += 1
+		})
+		// An upgraded socket nobody reads stays PAUSED, and a paused socket never emits 'end', so
+		// the peer would never observe a client that closed or destroyed its half. Reading (and
+		// discarding) is what makes "still open" a fact about the connection rather than about
+		// this fixture's back pressure. A peer that half-closes gets its connection torn down,
+		// the way a real WebSocket server answers a close — so a socket that stays open is one
+		// NOBODY closed, which is the only thing an orphan can be.
+		socket.resume()
+		socket.on('end', () => socket.destroy())
+		const handshake = Buffer.from(
+			'HTTP/1.1 101 Switching Protocols\r\n' +
+				'Upgrade: websocket\r\n' +
+				'Connection: Upgrade\r\n' +
+				`Sec-WebSocket-Accept: ${computeWebSocketAccept(key)}\r\n\r\n`,
+		)
+		const frame = options?.frame
+		// One write, so the handshake and the frame reach the client together: whether the
+		// bytes land in the upgrade `head` or in a later 'data' event is the kernel's choice,
+		// and a bound socket must re-emit the frame either way.
+		const payload =
+			frame === undefined
+				? handshake
+				: Buffer.concat([handshake, encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, frame)])
+		if (options?.delay === undefined) socket.write(payload)
+		else setTimeout(() => socket.write(payload), options.delay)
+	})
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+	const address: unknown = server.address()
+	const port = isRecord(address) && typeof address.port === 'number' ? address.port : 0
+	return {
+		base: `http://127.0.0.1:${port}`,
+		get count() {
+			return count
+		},
+		get open() {
+			return count - closed
+		},
+		stop() {
+			return new Promise<void>((resolve) => {
+				for (const socket of sockets) socket.destroy()
+				server.close(() => resolve())
+			})
+		},
+	}
 }

@@ -1,4 +1,8 @@
-import type { ClientTransportEventMap, ClientTransportInterface, JSONRPCMessage } from '@src/core'
+import type {
+	MCPClientTransportEventMap,
+	MCPClientTransportInterface,
+	JSONRPCMessage,
+} from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { WebSocketClientTransportOptions } from '../types.js'
@@ -19,7 +23,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
 
 /**
  * The WebSocket CLIENT transport for the Model Context Protocol — a
- * {@link ClientTransportInterface} that drives a REMOTE MCP server over a WebSocket, the
+ * {@link MCPClientTransportInterface} that drives a REMOTE MCP server over a WebSocket, the
  * egress mirror of {@link import('./factories.js').createWebSocketServer} and the WebSocket
  * sibling of {@link import('./HTTPClientTransport.js').HTTPClientTransport}.
  *
@@ -32,6 +36,12 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   — a mismatch (or a non-`101` response, or a request error) REJECTS `start()` and the socket
  *   is destroyed. On success it wraps the raw upgraded socket in `createNodeWebSocket({ socket,
  *   head })` (CLIENT mode — no key → frames are MASKED per §5.3) and bridges its `message`.
+ * - **The arriving socket is RE-ASKED for, never assumed.** `start()` suspends across that
+ *   connect and upgrade, so it re-checks the transport's state before installing anything: a
+ *   concurrent `start()` that already installed a socket, or a {@link close} that ended the
+ *   transport while the handshake was on the wire, both WIN — the socket that arrives late is
+ *   DESTROYED and never bound, so no orphan is left re-emitting frames at nobody. Both
+ *   `start()` calls still resolve; exactly one socket is ever bound.
  * - **Inbound (`message`).** Each decoded text frame is `JSON.parse`d (guarded) and narrowed
  *   with `parseJSONRPCMessage` — a {@link JSONRPCMessage} re-emits on this transport's `message`
  *   event (the reply the {@link import('@src/core').MCPClientInterface} correlates by `id`); a
@@ -42,7 +52,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  * - **URL scheme.** `options.url` accepts a `ws://` / `wss://` URL or an `http://` / `https://`
  *   one; a `ws(s)` scheme is converted to `http(s)` for the underlying upgrade request (`wss`
  *   → TLS via `node:https`). Either reaches the same endpoint.
- * - **Observable (§13).** Owns the `emitter` ({@link ClientTransportEventMap}); every emit
+ * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); every emit
  *   the emitter isolates a listener throw (a buggy observer never corrupts the transport);
  *   `error` is a DOMAIN event (a transport-level fault).
  *
@@ -53,25 +63,31 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  * await client.connect() // start() handshakes, then the MCP initialize runs over WS frames
  * ```
  */
-export class WebSocketClientTransport implements ClientTransportInterface {
-	readonly #emitter: Emitter<ClientTransportEventMap>
+export class WebSocketClientTransport implements MCPClientTransportInterface {
+	readonly #emitter: Emitter<MCPClientTransportEventMap>
 	readonly #url: string
 	readonly #headers: Readonly<Record<string, string>>
 	#socket: NodeWebSocketInterface | undefined = undefined
 	#closed = false
 
 	constructor(options: WebSocketClientTransportOptions) {
-		this.#emitter = new Emitter<ClientTransportEventMap>()
+		this.#emitter = new Emitter<MCPClientTransportEventMap>()
 		this.#url = options.url
 		this.#headers = options.headers ?? {}
 	}
 
-	get emitter(): EmitterInterface<ClientTransportEventMap> {
+	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
 		return this.#emitter
 	}
 
 	get session(): string | undefined {
 		return undefined
+	}
+
+	get duplex(): boolean {
+		// A socket is bidirectional for its whole life: either side writes a frame whenever it
+		// has one, with no request to attach it to.
+		return true
 	}
 
 	async start(): Promise<void> {
@@ -106,6 +122,18 @@ export class WebSocketClientTransport implements ClientTransportInterface {
 				if (!isString(accept) || accept !== computeWebSocketAccept(key)) {
 					socket.destroy()
 					reject(new Error('WebSocket handshake failed: Sec-WebSocket-Accept mismatch'))
+					return
+				}
+				// RE-ASK. Every state the guard at the top of `start()` read is stale by now: this
+				// handshake suspended across a real TCP connect and HTTP upgrade, during which a
+				// second `start()` may have installed its own socket or `close()` may have ended the
+				// transport. Nobody wants this one, so DESTROY it rather than binding a second,
+				// never-closed peer that keeps re-emitting frames at a transport that has moved on.
+				// `start()` still resolves: the winner (or the close) is the outcome the caller asked
+				// for, not a failure.
+				if (this.#closed || this.#socket !== undefined) {
+					socket.destroy()
+					resolve()
 					return
 				}
 				const ws = createNodeWebSocket({ socket, head })
@@ -146,7 +174,7 @@ export class WebSocketClientTransport implements ClientTransportInterface {
 	// (decoded + narrowed), the socket close → `close`, a socket fault → `error`.
 	#bind(ws: NodeWebSocketInterface): void {
 		ws.emitter.on('message', (text) => this.#receive(text))
-		ws.emitter.on('close', () => this.#onClose())
+		ws.emitter.on('close', () => this.#onClose(ws))
 		ws.emitter.on('error', (error) => this.#emitter.emit('error', error))
 	}
 
@@ -169,10 +197,11 @@ export class WebSocketClientTransport implements ClientTransportInterface {
 		this.#emitter.emit('message', message)
 	}
 
-	// The socket closed underneath us — fire `close` once (a `close()` call already flipped
-	// `#closed`, so it does not double-emit).
-	#onClose(): void {
-		if (this.#closed) return
+	// The current socket closed underneath us — fire `close` once. A socket an explicit close
+	// superseded may report its own close after `start()` has installed a replacement; peer
+	// identity keeps that old event from clearing the live socket or emitting a second close.
+	#onClose(socket: NodeWebSocketInterface): void {
+		if (this.#closed || this.#socket !== socket) return
 		this.#closed = true
 		this.#socket = undefined
 		this.#emitter.emit('close')

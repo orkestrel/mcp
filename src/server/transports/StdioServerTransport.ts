@@ -1,4 +1,8 @@
-import type { ClientTransportEventMap, ClientTransportInterface, JSONRPCMessage } from '@src/core'
+import type {
+	MCPClientTransportEventMap,
+	MCPClientTransportInterface,
+	JSONRPCMessage,
+} from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { Emitter } from '@orkestrel/emitter'
 import { dispatchLines, extractLines } from '../helpers.js'
@@ -6,13 +10,13 @@ import { dispatchLines, extractLines } from '../helpers.js'
 /**
  * The stdio SERVER transport for the Model Context Protocol — wraps an injectable
  * readable/writable stream pair (`process.stdin`/`process.stdout` in production, a
- * test double in tests) as a {@link ClientTransportInterface}, the newline-delimited
+ * test double in tests) as a {@link MCPClientTransportInterface}, the newline-delimited
  * JSON-RPC channel {@link import('../factories.js').createStdioServer} pumps
  * `mcp.dispatch` over, the stdio mirror of {@link
  * import('./WebSocketServerTransport.js').WebSocketServerTransport}.
  *
  * @remarks
- * - **Reuses `ClientTransportInterface` (§21).** The same generic carrier the HTTP
+ * - **Reuses `MCPClientTransportInterface` (§21).** The same generic carrier the HTTP
  *   and WebSocket server transports implement — `emitter` (`message` / `close` /
  *   `error`), `start`, `send`, `close`. `session` is `undefined` (the stateless v1).
  * - **Inbound (`message`).** `start()` subscribes to `input`'s `data` event; each
@@ -27,12 +31,12 @@ import { dispatchLines, extractLines } from '../helpers.js'
  * - **`close()`** fires this transport's `close` (idempotent) — the injected streams
  *   are owned by the caller (typically `process.stdin`/`process.stdout`, which must
  *   never be closed out from under the process) and are not torn down here.
- * - **Observable (§13).** Owns the `emitter` ({@link ClientTransportEventMap}); the
+ * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
  *   fault), distinct from the emitter's own listener-error channel.
  */
-export class StdioServerTransport implements ClientTransportInterface {
-	readonly #emitter: Emitter<ClientTransportEventMap>
+export class StdioServerTransport implements MCPClientTransportInterface {
+	readonly #emitter: Emitter<MCPClientTransportEventMap>
 	readonly #input: NodeJS.ReadableStream
 	readonly #output: NodeJS.WritableStream
 	#buffer = ''
@@ -40,18 +44,24 @@ export class StdioServerTransport implements ClientTransportInterface {
 	#closed = false
 
 	constructor(input: NodeJS.ReadableStream, output: NodeJS.WritableStream) {
-		this.#emitter = new Emitter<ClientTransportEventMap>()
+		this.#emitter = new Emitter<MCPClientTransportEventMap>()
 		this.#input = input
 		this.#output = output
 	}
 
-	get emitter(): EmitterInterface<ClientTransportEventMap> {
+	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
 		return this.#emitter
 	}
 
 	get session(): string | undefined {
 		// The stateless v1 holds no session — a server-assigned id is the deferred tier.
 		return undefined
+	}
+
+	get duplex(): boolean {
+		// The output stream stays writable for the process's life, so a frame written at any
+		// moment reaches the peer — stdio is the transport MCP defines cancellation on.
+		return true
 	}
 
 	async start(): Promise<void> {
@@ -84,9 +94,9 @@ export class StdioServerTransport implements ClientTransportInterface {
 		dispatchLines(this.#emitter, lines)
 	}
 
-	// The input stream closed (EOF, peer teardown) — fire this transport's `close` once. A
-	// `close()` call already flipped `#closed`, so a stream-driven close after an explicit one
-	// does not double-emit.
+	// The input stream closed (EOF, peer teardown) — fire this transport's `close` once. No peer
+	// identity check is needed: the input is constructor-fixed and `start()` is idempotent, so no
+	// superseded stream can report a close against a replacement.
 	#onClose(): void {
 		if (this.#closed) return
 		this.#closed = true

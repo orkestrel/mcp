@@ -97,10 +97,26 @@ Brainstorm privately; show higher-confidence directions.
 
 1. **Mobile first** — smallest screen first, then `sm` / `md` / `lg` / `xl` / `xxl`
 2. **Semantic HTML** — `nav`, `main`, `section`, heading order
-3. **Combine utilities** — spacing/flex/display before custom CSS
-4. **Don't override** — utilities/components before bespoke styles; extend via component `--bs-*` variables or the utilities API, not high-specificity rules
-5. **Test responsiveness** — every breakpoint you claim
-6. **Verify against the shipped cascade** — resolve every treatment in the CSS actually loaded (Bootstrap plus every skin and dependency stylesheet the page pulls in), never against docs memory. A class with no rule of its own may still inherit one, and a token pair that passes in stock Bootstrap can fail under a compatible skin. Measure, don't assume — including the `*-subtle` / `*-emphasis` recipes, once per theme.
+3. **Work down the styling ladder below** — component classes, then utilities, then Bootstrap's own extension points
+4. **Test responsiveness** — every breakpoint you claim
+5. **Verify against the shipped cascade** — resolve every treatment in the CSS actually loaded (Bootstrap plus every skin and dependency stylesheet the page pulls in), never against docs memory. A class with no rule of its own may still inherit one, and a token pair that passes in stock Bootstrap can fail under a compatible skin. Measure, don't assume — including the `*-subtle` / `*-emphasis` recipes, once per theme.
+
+### The styling ladder
+
+Work down these rungs in order. Reach a lower rung only when the one above genuinely cannot express the need.
+
+1. **The component's own classes, in its documented structure.** Build the element the way Bootstrap defines it: the right elements, the right nesting, the right class names, the required ARIA. A card is `.card` wrapping `.card-body` wrapping `.card-title` — not a `div` with borrowed padding. The best result is an element styled entirely by correct component classes, because variants, states, colour modes, and responsive behaviour all hang off that structure.
+2. **Bootstrap utilities, for refinement.** Spacing, flex, display, sizing, text, borders, colour. This is where the creative range is — compose utilities rather than reaching past them. Use only classes that exist in [utilities.md](references/utilities.md); an invented one ships a silent no-op.
+3. **Bootstrap's own extension points.** Component `--bs-{component}-*` variables and the utilities API, when a real gap remains after rungs 1 and 2.
+4. **Anything beyond Bootstrap's conventions is the developer's call, not yours.** Stop at rung 3, and say plainly what rung 4 would require. Leaving that decision with the developer keeps the surface conventional, reviewable, and themeable.
+
+Never open at rung 4. Specifically, do not reach first for:
+
+- a `style="..."` attribute;
+- a `<style>` block in a page or component;
+- a new stylesheet rule for something a utility already does.
+
+Each of those ends the cascade for that element: it outranks the utilities, it ignores `--bs-*` retheming, and it does not change across breakpoints or colour modes. Fighting utilities with high-specificity custom rules is the usual source of padding and margin cancel bugs.
 
 ### Hierarchy & actions
 
@@ -182,14 +198,15 @@ Markup: [components.md](references/components.md). Fine layout: [utilities.md](r
 
 ### When custom CSS is justified
 
-Only if Bootstrap cannot express the need — and check the extension points first: component `--bs-{component}-*` variables for restyling, the utilities API for missing utility steps ([bootstrap-reference.md](references/bootstrap-reference.md) → Theming). Then:
+This is rung 4 of the styling ladder, so it is the developer's decision. Propose it, name what it buys, and do not take it unprompted. Exhaust rungs 1–3 first: correct component structure, then utilities, then the extension points — component `--bs-{component}-*` variables for restyling, the utilities API for missing utility steps ([bootstrap-reference.md](references/bootstrap-reference.md) → Theming).
+
+When the developer does authorize it:
 
 - Name in Bootstrap vocabulary
 - Colors from `var(--bs-…)` / theme tokens so light and dark both work
 - Logical properties (`margin-inline-start`, not `margin-left`) so RTL works
 - Minimal surface area; document why
-
-Avoid fighting utilities with high-specificity custom rules (common padding/margin cancel bugs).
+- A stylesheet rule, never a `style` attribute or a `<style>` block — those cannot be themed, overridden, or made responsive
 
 ### Anti-patterns
 
@@ -242,6 +259,7 @@ Progress:
 - [ ] Subject, audience, single job stated
 - [ ] Design plan: palette, type, layout, one signature (critiqued vs AI defaults)
 - [ ] Bootstrap shell from components.md; utilities from utilities.md (no invented classes)
+- [ ] Styling ladder held: component structure, then utilities, then extension points — no `style` attribute, no `<style>` block, no custom rule doing a utility's job
 - [ ] Plan tokens mapped to theme / --bs-* (no hex scatter); light/dark if both ship
 - [ ] Copy: user language, consistent verbs, useful empty/error/loading
 - [ ] Five states per data surface: ideal / empty / loading / partial / error

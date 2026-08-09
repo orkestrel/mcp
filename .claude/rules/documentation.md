@@ -14,7 +14,8 @@ paths:
 
 # Documentation and parity rules
 
-Documentation is an enforced contract, not explanatory decoration.
+Documentation is an enforced contract, not explanatory decoration. The Writing rules in
+`AGENTS.md` govern its prose and are not restated here.
 
 ## Authority and workflow
 

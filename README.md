@@ -68,7 +68,51 @@ usage patterns — see [`guides/src/mcp.md`](guides/src/mcp.md).
 
 Published with two entry points per the `exports` field in `package.json`:
 the environment-agnostic core (`.`) and the Node-only server surface
-(`./server`).
+(`./server`). The browser face (`./browser`) is ESM only. The tarball is
+623.4 kB packed across 18 files, 2.5 MB unpacked.
+
+[`CHANGELOG.md`](CHANGELOG.md) lives in the repository and is not in the
+tarball, because `files` is `["dist/src", "README.md"]`.
+
+## Proven
+
+`npm run build && node scripts/conformance.mjs` starts the real Streamable
+HTTP server from this package's built output and runs
+`@modelcontextprotocol/conformance@0.2.0-alpha.10` against MCP revision
+`2026-07-28`. The recorded result is **23 passed / 0 failed**. That is a
+genuine foreign MCP client driving this server end to end, and it is
+evidence about the wire.
+
+**IDE integration is not claimed.** No IDE, editor, or agent host has driven
+this server. A claim about an external client stays unproven here until one
+representative real client of that class drives it end to end, and no client
+of the IDE class has.
+
+## Declared limits
+
+Four publication facts, each with its number. Full detail, plus every
+protocol-level gap and non-goal, is in
+[`guides/src/mcp.md`](guides/src/mcp.md#declared-packaging-limits).
+
+- **No IDE evidence.** See above. The conformance number is about the wire
+  and does not transfer to a host application.
+- **No top-level `types` field.** Every `exports` subpath carries a `types`
+  condition, so `node16`, `nodenext`, and `bundler` resolution find
+  declarations. A consumer on legacy `moduleResolution: node` does not read
+  `exports` and sees an untyped package.
+- **A build-time version notice, three times.** API Extractor bundles
+  TypeScript 5.9.3 through a transitive pin and this project compiles with
+  6.0.3, so `build` prints one notice per built face. It is informational:
+  `build` exits 0 and every declaration is emitted.
+- **Source maps ship.** Five `.map` files are 1,130 kB of the 2.5 MB
+  unpacked, about 45 percent. They are kept so a consumer debugging a
+  protocol library steps into real source.
+
+The notice, verbatim:
+
+```text
+*** The target project appears to use TypeScript 6.0.3 which is newer than the bundled compiler engine; consider upgrading API Extractor.
+```
 
 ## License
 

@@ -1,10 +1,17 @@
-import type { JSONRPCRequest, MCPDispatchOptions, MCPServerInterface, MCPStream } from '@src/core'
+import type {
+	JSONRPCId,
+	JSONRPCNotification,
+	MCPMethodOptions,
+	MCPServerInterface,
+	MCPStream,
+} from '@src/core'
 import type { HTTPTransportOptions } from '@src/server'
 import type { StartedServerInterface } from '../../setupServer.js'
 import { request as httpRequest } from 'node:http'
 import { describe, expect, it } from 'vitest'
 import {
 	createMCPServer,
+	createMCPLegacy,
 	buildJSONRPCResult,
 	MCP_META_CAPABILITIES,
 	MCP_META_SERVER,
@@ -17,7 +24,7 @@ import { createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import {
-	createMCPPostHandler,
+	createMCPPostHandler as createPostHandler,
 	createMCPRoutes,
 	MCP_METHOD_HEADER,
 	MCP_NAME_HEADER,
@@ -32,14 +39,14 @@ import {
 } from '../../setup.js'
 import { createTeardown, startServer } from '../../setupServer.js'
 
-async function* subscriptionEvents(): AsyncGenerator<JSONRPCRequest> {
+async function* subscriptionEvents(): AsyncGenerator<JSONRPCNotification> {
 	yield { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }
 }
 
 async function* disconnectEvents(
 	signal: AbortSignal,
 	observe: () => void,
-): AsyncGenerator<JSONRPCRequest> {
+): AsyncGenerator<JSONRPCNotification> {
 	await new Promise<void>((resolve) => {
 		if (signal.aborted) resolve()
 		else signal.addEventListener('abort', () => resolve(), { once: true })
@@ -52,8 +59,8 @@ async function* disconnectEvents(
 }
 
 async function* callerEvents(
-	options: MCPDispatchOptions,
-	id: string | number | null,
+	options: MCPMethodOptions,
+	id: JSONRPCId,
 	first: Promise<void>,
 	second: Promise<void>,
 ): MCPStream {
@@ -74,12 +81,19 @@ async function* callerEvents(
 
 const { track } = createTeardown<StartedServerInterface<undefined>>((handle) => handle.stop())
 
+function createMCPPostHandler<TState = unknown>(
+	mcp: MCPServerInterface,
+	options?: HTTPTransportOptions<TState>,
+): ReturnType<typeof createPostHandler<TState>> {
+	return createPostHandler(createMCPLegacy(mcp), options)
+}
+
 async function startHTTP(
 	mcp: MCPServerInterface,
 	options?: HTTPTransportOptions,
 ): Promise<StartedServerInterface<undefined>> {
 	const dispatcher = createDispatcher<undefined>()
-	dispatcher.add(createMCPRoutes<undefined>(mcp, options))
+	dispatcher.add(createMCPRoutes<undefined>(createMCPLegacy(mcp), options))
 	return track(await startServer(createServer({ dispatcher, state: () => undefined })))
 }
 
@@ -117,7 +131,7 @@ describe('createMCPPostHandler', () => {
 		const seen: unknown[] = []
 		mcp.methods.add('demo/caller', async (request, options) => {
 			seen.push(options.caller)
-			return buildJSONRPCResult(request.id ?? null, {})
+			return buildJSONRPCResult(request.id, { resultType: 'complete' })
 		})
 		const handler = createMCPPostHandler(mcp, {
 			streaming: false,
@@ -150,10 +164,10 @@ describe('createMCPPostHandler', () => {
 
 	it('omits caller exactly when the extractor is absent or returns undefined', async () => {
 		const mcp = createCalculatorServer()
-		const seen: MCPDispatchOptions[] = []
+		const seen: MCPMethodOptions[] = []
 		mcp.methods.add('demo/options', async (request, options) => {
 			seen.push(options)
-			return buildJSONRPCResult(request.id ?? null, {})
+			return buildJSONRPCResult(request.id, { resultType: 'complete' })
 		})
 		const body = JSON.stringify(
 			createJSONRPCRequest({
@@ -311,7 +325,6 @@ describe('createMCPPostHandler', () => {
 		expect(response.status).toBe(400)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
-			id: null,
 			error: { code: -32700, message: 'Parse error' },
 		})
 	})
@@ -426,7 +439,7 @@ describe('createMCPPostHandler', () => {
 		const caller = Object.freeze({ subject: 'stream-user' })
 		const mcp = createCalculatorServer()
 		mcp.methods.add('demo/caller-stream', async (request, options) =>
-			callerEvents(options, request.id ?? null, first, second),
+			callerEvents(options, request.id, first, second),
 		)
 		const handler = createMCPPostHandler(mcp, { caller: () => caller })
 		const response = await handler(
@@ -537,9 +550,9 @@ describe('createMCPPostHandler', () => {
 			observed = options.signal
 			startedResolve?.()
 			await new Promise<void>((resolve) => {
-				options.signal?.addEventListener('abort', () => resolve(), { once: true })
+				options.signal.addEventListener('abort', () => resolve(), { once: true })
 			})
-			return { jsonrpc: '2.0', id: request.id ?? null, result: {} }
+			return buildJSONRPCResult(request.id, { resultType: 'complete' })
 		})
 		const controller = new AbortController()
 		const request = new Request('http://localhost/mcp', {
@@ -569,7 +582,11 @@ describe('createMCPPostHandler', () => {
 		expect(observed).not.toBe(request.signal)
 		expect(observed?.aborted).toBe(true)
 		expect(response.status).toBe(200)
-		expect(await response.json()).toEqual({ jsonrpc: '2.0', id: 1, result: {} })
+		expect(await response.json()).toEqual({
+			jsonrpc: '2.0',
+			id: 1,
+			result: { resultType: 'complete' },
+		})
 	})
 
 	it('accepts a headerless legacy initialize request', async () => {

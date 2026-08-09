@@ -1,12 +1,16 @@
-import type { ClientTransportEventMap, ClientTransportInterface, JSONRPCMessage } from '@src/core'
+import type {
+	MCPClientTransportEventMap,
+	MCPClientTransportInterface,
+	JSONRPCMessage,
+} from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { HTTPClientTransportOptions } from '../types.js'
 import {
+	inferRequestVersion,
 	isJSONRPCResponse,
 	isMCPVersion,
 	isModernRequest,
 	parseJSONRPCMessage,
-	parseRequestContext,
 } from '@src/core'
 import { isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
@@ -20,7 +24,7 @@ import { readEventStream } from '../helpers.js'
 
 /**
  * The browser-face HTTP CLIENT transport for the Model Context Protocol — a
- * {@link ClientTransportInterface} that drives a REMOTE Streamable-HTTP MCP server
+ * {@link MCPClientTransportInterface} that drives a REMOTE Streamable-HTTP MCP server
  * over the native `fetch`, the browser sibling of the Node face's
  * {@link import('@src/server').HTTPClientTransport}, honoring the SAME
  * `mcp-session-id` semantics so it interoperates with an `MCPSession`-based server
@@ -56,7 +60,7 @@ import { readEventStream } from '../helpers.js'
  * - **Total at the boundary (§14).** Every reply is narrowed (`parseJSONRPCMessage`,
  *   the SSE decoder) — a non-message reply is dropped, never asserted; a `fetch` /
  *   decode failure surfaces on the `error` event rather than escaping `send`.
- * - **Observable (§13).** Owns the `emitter` ({@link ClientTransportEventMap}); fires
+ * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); fires
  *   `message` per decoded reply, `error` on a fault, and `close` on `close()`.
  *
  * @example
@@ -66,8 +70,8 @@ import { readEventStream } from '../helpers.js'
  * await client.connect()
  * ```
  */
-export class HTTPClientTransport implements ClientTransportInterface {
-	readonly #emitter: Emitter<ClientTransportEventMap>
+export class HTTPClientTransport implements MCPClientTransportInterface {
+	readonly #emitter: Emitter<MCPClientTransportEventMap>
 	readonly #url: string
 	readonly #headers: Readonly<Record<string, string>>
 	readonly #fetch: typeof fetch
@@ -76,19 +80,25 @@ export class HTTPClientTransport implements ClientTransportInterface {
 	#protocol: string | undefined = undefined
 
 	constructor(options: HTTPClientTransportOptions) {
-		this.#emitter = new Emitter<ClientTransportEventMap>()
+		this.#emitter = new Emitter<MCPClientTransportEventMap>()
 		this.#url = options.url
 		this.#headers = options.headers ?? {}
 		this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis)
 		this.#timeout = options.timeout
 	}
 
-	get emitter(): EmitterInterface<ClientTransportEventMap> {
+	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
 		return this.#emitter
 	}
 
 	get session(): string | undefined {
 		return this.#session
+	}
+
+	get duplex(): boolean {
+		// Streamable HTTP carries no client-initiated notification: the dated revision defines
+		// none over it, and closing the response stream is the cancellation signal instead.
+		return false
 	}
 
 	async start(): Promise<void> {
@@ -134,12 +144,16 @@ export class HTTPClientTransport implements ClientTransportInterface {
 		this.#emitter.emit('close')
 	}
 
+	// Modern requests announce their own protocol version, so the header is projected from the
+	// message through the SHARED `inferRequestVersion` — the same read the server's own
+	// expectation performs, and the same read the Node face performs. Legacy requests carry
+	// the version captured from the `initialize` handshake instead.
 	#buildHeaders(message: JSONRPCMessage): Readonly<Record<string, string>> {
 		if (isModernRequest(message)) {
-			const context = parseRequestContext(message)
+			const version = inferRequestVersion(message)
 			const name = message.params?.['name']
 			return {
-				...(context === undefined ? {} : { [MCP_PROTOCOL_VERSION_HEADER]: context.version }),
+				...(version === undefined ? {} : { [MCP_PROTOCOL_VERSION_HEADER]: version }),
 				[MCP_METHOD_HEADER]: message.method,
 				...(message.method === 'tools/call' && isString(name) ? { [MCP_NAME_HEADER]: name } : {}),
 			}

@@ -425,6 +425,8 @@ From [`constants.ts`](../../src/core/constants.ts).
 | `BIN_CONFIGS`                     | const |
 | `APP_MATRIX`                      | const |
 | `HOST_PATHS`                      | const |
+| `ORCHESTRATION_PATH_PREFIXES`     | const |
+| `ORCHESTRATION_PATH_NAMES`        | const |
 | `SERVICE_SCRIPT_PATH`             | const |
 | `GLOBAL_SETUP_PATH`               | const |
 | `SHOWCASE_CONFIG_PATH`            | const |
@@ -480,7 +482,10 @@ produces one (`app/browser/index.html`, `app/server/main.ts`). `BIN_CONFIGS` is 
 axis's computed `tsconfig` and Vite wrapper pair. `HOST_PATHS` is the ordered list of byte-copied
 host artifacts, and it is the staging manifest rather than the per-plan carried set:
 `stageHost` vendors every path on it, while each plan carries the subset `selectHostPaths` selects
-for that one workspace. `SERVICE_SCRIPT_PATH` names the generated provisioner skeleton a service
+for that one workspace. `ORCHESTRATION_PATH_PREFIXES` and `ORCHESTRATION_PATH_NAMES` are the one
+membership rule behind both group classifiers: `inferGroup` reads them for a foreign target path and
+`hostGroup` for a `HOST_PATHS` entry, so a new harness directory is admitted once rather than twice.
+`SERVICE_SCRIPT_PATH` names the generated provisioner skeleton a service
 workspace must replace with its idempotent vendor provisioning. It is birth-only while present and
 repairable while absent. `GLOBAL_SETUP_PATH` names the consumer-owned Vitest global-setup
 module that independently selected projects can load. `SHOWCASE_CONFIG_PATH` names the sole
@@ -589,6 +594,14 @@ From [`constants.ts`](../../src/server/constants.ts).
 `PRUNE_DIRECTORIES` is the closed set of prune-owned directories — `.claude/agents`,
 `.codex/agents`, and `scripts`. Nothing outside those roots is ever a deletion candidate, which is
 why project-owned skills under `.agents/skills` and `.claude/skills` are structurally safe.
+`.cursor/rules` is vendored but deliberately not pruned, for the same reason: a workspace owns
+project-specific Cursor rules beside the vendored bridge, and pruning would delete them. That
+choice has a cost, and it is accepted rather than avoided: a rule file dropped from `HOST_PATHS`
+stays in every consumer that already received it, no `audit` run reports it — the executable audit
+reads only planned paths, and nothing outside `PRUNE_DIRECTORIES` is ever a `foreign` finding — and
+a Cursor rule carrying `alwaysApply: true` keeps instructing agents there indefinitely. Retiring a
+vendored rule therefore needs a deliberate consumer-side removal, not a scaffold run.
+`.claude/rules` and `.claude/skills` carry the identical exposure for the identical reason.
 `HOST_MANIFEST_PATH` is the reserved `manifest.json` written at the root of every staged host.
 `SENSITIVE_HOST_PATH_PATTERN` rejects credential-like, key-store, certificate-key, and
 local-configuration paths at the staging boundary. `RESERVED_TARGET_PATH_PATTERN` protects `.git`
@@ -879,6 +892,7 @@ From [`helpers.ts`](../../src/core/helpers.ts).
 | `syncToReview`              | function |
 | `catalogToBlock`            | function |
 | `inferGroup`                | function |
+| `matchesOrchestrationPath`  | function |
 | `diffPlan`                  | function |
 | `bytesToHex`                | function |
 | `contentCodePoint`          | function |
@@ -940,6 +954,8 @@ that block enters agent instruction context. `isBehind` is the shared freshness 
 report projections count with.
 
 `diffPlan` is the audit engine, and `inferGroup` classifies a target file the plan does not own.
+`matchesOrchestrationPath` is the shared membership test both classifiers use to decide whether a
+path instructs or wires an agent rather than configuring the toolchain.
 A host artifact without canonical `hex` is presence-owned: present is `aligned`, absent is
 `missing`. The server face attaches `hex` to every readable vendored source before executable
 audits, except the dependency-guide pointers hydration deliberately marks presence-owned. The
@@ -1275,7 +1291,9 @@ generated parity suite resolves fence imports through. `guideMemberTable`, `guid
 `guideMethods`, and `guideTests` render the generated guide's member tables, usage examples, method
 contract, and test inventory. `fillArtifact` fills one template entry into a `template`-origin
 artifact with missing placeholders treated as an error, and `hostGroup` resolves which group a
-byte-copied host path belongs to. `applyOverrides` replaces a matching artifact's content in place
+byte-copied host path belongs to — splitting by what a path governs rather than where it sits, so
+that both MCP registrations (`.mcp.json` and `.cursor/mcp.json`) group with the harness bridges as
+`orchestration` rather than with the root dotfiles they sit beside. `applyOverrides` replaces a matching artifact's content in place
 and deliberately leaves an unmatched, host-owned, or `package.json` override unapplied, because the
 gate reports it as a blocking question. `ciWorkflow` renders the generated workflow.
 
@@ -1482,10 +1500,11 @@ produce the same digest — and a `PlanManager` id is that digest.
 how it is audited, and whether it may ever be overwritten.
 
 - **`host`** — byte-copied from the vendored data root. These are the shared files a whole fleet
-  keeps identical: the root instruction documents and licence, the agent, rule, and skill
-  directories, the session scripts, the repository coding-law policy module, the byte-identical root
-  dotfiles, and the two line guide mirrors a workspace carries for contracts other than its own.
-  `HOST_PATHS` is the exact vendored list; what a given plan carries is `selectHostPaths` of it.
+  keeps identical: the root instruction documents and licence, the canonical orchestration contract
+  and the three harness bridges that point at it, the agent, rule, and skill directories, the
+  session scripts, the repository coding-law policy module, the byte-identical root dotfiles, and
+  the two line guide mirrors a workspace carries for contracts other than its own. `HOST_PATHS` is
+  the exact vendored list; what a given plan carries is `selectHostPaths` of it.
 - **`template`** — filled from a frozen template definition by a pure fill engine. These are
   starter files: source stubs, test stubs, the starter guide, the README.
 - **`computed`** — derived by this package's own combination logic. These are the structural files:
@@ -2006,8 +2025,13 @@ the proof-gating table gives them.
 dependency, model, and external-tool readiness scripts at session start. The **`Stop` hook runs only
 `git diff --check`** — a whitespace and conflict-marker check over the working tree, nothing more.
 Bash invocation and sensitive reads are controlled by the **settings permission list, not by a guard
-script**: every Bash command requires explicit approval, including commands Claude Code otherwise
-classifies as read-only. Read-only reviewer, checker, and ecosystem roles carry no Bash tool; the
+script**. The allow list is closed and holds exactly two entries — `Bash(codex --version)` and
+`Bash(codex login *)` — because the orchestration contract requires a bench-liveness probe and a
+device-login recovery at session start, and prompting for those would stall every session before
+planning. Every other Bash command requires explicit approval, including commands Claude Code
+otherwise classifies as read-only. That list is inherited by every workspace in the line, so a
+machine-local grant belongs in `settings.local.json`, which `SENSITIVE_HOST_PATH_PATTERN` keeps out
+of every vendored host. Read-only reviewer, checker, and ecosystem roles carry no Bash tool; the
 orchestrator supplies their diff and status evidence. Bridge, writer, and verifier roles request
 approval when their bounded shell work is needed. Read patterns covering environment files,
 package-manager credentials, credential stores, private keys, key stores, SSH, cloud credentials,

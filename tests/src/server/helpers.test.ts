@@ -1,4 +1,4 @@
-import type { JSONRPCMessage } from '@src/core'
+import type { JSONRPCNotification, JSONRPCMessage, JSONRPCResponse, MCPStream } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
 	JSONRPC_INVALID_REQUEST,
@@ -7,6 +7,7 @@ import {
 	MCP_MODERN_VERSION,
 	MCP_PROTOCOL_VERSION,
 	buildJSONRPCError,
+	MCPStreamController,
 	parseJSONRPCMessage,
 } from '@src/core'
 import {
@@ -22,10 +23,33 @@ import {
 	readLastEventId,
 	readSessionHeader,
 	rejectUnknownSession,
+	sendEventStream,
 	upgradeRequestPath,
 } from '@src/server'
-import { createJSONRPCRequest } from '../../setup.js'
-import { createRequestStub } from '../../setupServer.js'
+import { createJSONRPCRequest, probeOwnership } from '../../setup.js'
+import { createRequestStub, createStreamStub } from '../../setupServer.js'
+
+// The two held-open fixtures these pump tests replay: one notification then a terminal, and a
+// producer that fails before it ever reaches one.
+const STREAM_NOTIFICATION: JSONRPCNotification = Object.freeze({
+	jsonrpc: '2.0',
+	method: 'notifications/progress',
+})
+const STREAM_TERMINAL: JSONRPCResponse = Object.freeze({
+	jsonrpc: '2.0',
+	id: 1,
+	result: { done: true },
+})
+
+async function* replayStream(): MCPStream {
+	yield STREAM_NOTIFICATION
+	return STREAM_TERMINAL
+}
+
+async function* failingStream(): MCPStream {
+	yield STREAM_NOTIFICATION
+	throw new Error('producer boom')
+}
 
 // One SSE `data:` event carrying `payload` as its JSON-serialized data, terminated by the
 // blank line that dispatches it — the exact wire framing the server's `openStream` seam
@@ -414,7 +438,7 @@ describe('rejectUnknownSession — the 404 + JSON-RPC "Session not found" body',
 		const response = rejectUnknownSession()
 		expect(response.status).toBe(404)
 		expect(await response.json()).toEqual(
-			buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not found'),
+			buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Session not found'),
 		)
 	})
 })
@@ -506,5 +530,65 @@ describe('upgradeRequestPath — the upgrade request path (no query)', () => {
 	it('is / for an absent target (no url) — total, never throws', () => {
 		// A `node:http` request with no `url` reads as `'/'` rather than throwing.
 		expect(upgradeRequestPath(createRequestStub())).toBe('/')
+	})
+})
+
+// ── sendEventStream — the Streamable-HTTP pump, now a named leaf ─────────────
+//
+// It used to be an anonymous `queueMicrotask` body inside `createMCPPostHandler`, reachable
+// only by driving a whole `Request` through the route. As a leaf it is driven directly, and
+// the ownership claim it shares with `sendStream` is measured by the SAME instrument the core
+// pump is measured by — including the outside-population control, a hand-written consumer
+// that reads one message and walks away, which that instrument must report as leaking.
+
+describe('sendEventStream — writes the exchange out and always ends it', () => {
+	it('writes every notification in order, the terminal last, and ends the SSE body', async () => {
+		const sse = createStreamStub()
+		const closure = new AbortController()
+		const stream = new MCPStreamController(replayStream(), closure.signal, closure)
+
+		await sendEventStream(stream, sse)
+
+		expect(sse.events).toEqual([
+			JSON.stringify(STREAM_NOTIFICATION),
+			JSON.stringify(STREAM_TERMINAL),
+		])
+		expect(sse.ended).toBe(true)
+		expect(closure.signal.aborted).toBe(true)
+	})
+
+	it('releases the exchange when a write throws mid-stream, and never rejects', async () => {
+		const failure = new Error('socket gone')
+		const outcome = await probeOwnership(async (stream) => {
+			await sendEventStream(stream, createStreamStub({ write: failure }))
+		})
+
+		// Total (§14): the write fault is contained, so the consumer sees no failure at all —
+		// which is exactly why the released slot is the only evidence that it ended.
+		expect(outcome.failure).toBeUndefined()
+		expect(outcome.released).toBe(true)
+	})
+
+	it('releases a parked producer when the request signal aborts underneath the pump', async () => {
+		const sse = createStreamStub()
+		const outcome = await probeOwnership(async (stream) => {
+			const pump = sendEventStream(stream, sse)
+			stream.stop()
+			await pump
+		})
+
+		expect(outcome.released).toBe(true)
+		expect(sse.ended).toBe(true)
+	})
+
+	it('ends the SSE body even when the producer itself fails', async () => {
+		const sse = createStreamStub()
+		const closure = new AbortController()
+		const stream = new MCPStreamController(failingStream(), closure.signal, closure)
+
+		await sendEventStream(stream, sse)
+
+		expect(sse.ended).toBe(true)
+		expect(closure.signal.aborted).toBe(true)
 	})
 })

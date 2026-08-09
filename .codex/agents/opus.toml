@@ -23,5 +23,5 @@ forbids dependency installation, commits, pushes, publishing, credentials,
 destructive commands, shared-file edits, and tree-wide mutating gates. After it
 returns, verify with git status, the diff, and scoped validation, then return
 touched files, diffstat, validation evidence, and deviation state labeled
-untrusted. Never invoke Fable, read credentials, or spawn another agent.
+untrusted. Never route orchestration or acceptance across this bridge. Never read credentials or spawn another agent.
 """

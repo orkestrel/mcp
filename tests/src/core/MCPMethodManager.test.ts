@@ -1,18 +1,27 @@
-import type { JSONRPCRequest } from '@src/core'
+import type {
+	JSONRPCNotification,
+	JSONRPCRequest,
+	JSONRPCResponse,
+	MCPMethodHandler,
+	MCPStream,
+} from '@src/core'
 import { buildJSONRPCResult, MCPMethodManager } from '@src/core'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 
 // MCPMethodManager is the modern method registry MCPServer dispatches through — a
 // name-keyed store of real handlers (AGENTS §16: real functions, no mocks). Covers
 // registration, resolution, the unregistered lookup, replacement under an existing name,
 // and the fact that resolution hands back the EXACT function that was registered.
+//
+// The seam carries the REQUEST arm alone, so neither handler narrows anything: a
+// notification never reaches this registry, and answering is not optional.
 
-async function ok(request: JSONRPCRequest) {
-	return buildJSONRPCResult(request.id ?? null, { from: 'ok' })
+async function ok(request: JSONRPCRequest): Promise<JSONRPCResponse> {
+	return buildJSONRPCResult(request.id, { from: 'ok' })
 }
 
-async function other(request: JSONRPCRequest) {
-	return buildJSONRPCResult(request.id ?? null, { from: 'other' })
+async function other(request: JSONRPCRequest): Promise<JSONRPCResponse> {
+	return buildJSONRPCResult(request.id, { from: 'other' })
 }
 
 describe('MCPMethodManager', () => {
@@ -60,10 +69,23 @@ describe('MCPMethodManager', () => {
 		const handler = methods.method('tools/call')
 		if (handler === undefined) throw new Error('expected a registered handler')
 
-		expect(await handler({ jsonrpc: '2.0', method: 'tools/call', id: 7 }, {})).toEqual({
+		const options = { signal: new AbortController().signal }
+
+		expect(await handler({ jsonrpc: '2.0', method: 'tools/call', id: 7 }, options)).toEqual({
 			jsonrpc: '2.0',
 			id: 7,
 			result: { from: 'ok' },
 		})
+	})
+
+	it('keeps the registered-method contract on the response or raw-stream arms', () => {
+		expectTypeOf<Awaited<ReturnType<MCPMethodHandler>>>().toEqualTypeOf<
+			JSONRPCResponse | MCPStream
+		>()
+	})
+
+	it('narrows the registered-method parameter to the request arm', () => {
+		expectTypeOf<Parameters<MCPMethodHandler>[0]>().toEqualTypeOf<JSONRPCRequest>()
+		expectTypeOf<JSONRPCNotification>().not.toExtend<Parameters<MCPMethodHandler>[0]>()
 	})
 })

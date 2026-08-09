@@ -10,11 +10,11 @@ inventory, how to classify, and what must be proven before acceptance.
 Inspect every touched implementation and centralized file, then sweep the full affected
 environments.
 
-| Where               | Inventory                                                                                                                                                                                                          |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Implementation file | Interfaces and type aliases, module constants and data, free functions/guards/parsers/factories/schemas, function declarations or assignments inside bodies, extra classes, imports and exports stranded by a move |
-| Centralized file    | Every module declaration: does it match that file's kind, is it exported, is it reachable from the sole public barrel when public, does it carry direct behavioral coverage when it carries logic                  |
-| Environment root    | Every declaration promoted there: at least two consuming modules, or it belongs to the owning module's centralized file                                                                                            |
+| Where               | Inventory                                                                                                                                                                                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Implementation file | Interfaces and type aliases, module constants and data, free functions/guards/parsers/factories/schemas, function declarations or assignments inside bodies, extra classes, imports and exports stranded by a move                                            |
+| Centralized file    | Every module declaration: does it match that file's kind, is it exported, is every intentional top-level export reachable from the correct environment barrel regardless of current consumers, does it carry direct behavioral coverage when it carries logic |
+| Environment root    | Every declaration promoted there: at least two consuming modules, or it belongs to the owning module's centralized file                                                                                                                                       |
 
 The rare runtime-self-contained entrypoint exception must be literally required for
 execution and must explain why sibling imports cannot work.

@@ -18,9 +18,9 @@ Read the current files in this order:
    pass of an agent-facing surface.
 4. `guides/README.md`, the governing guides for what the campaign built, and `ROADMAP.md`.
 
-The user's current instruction wins. The debrief judges the artifact AND the process that
-produced it; neither is exempt, and successes are captured as deliberately as mistakes —
-a practice that worked is codified so it repeats, not merely survived.
+The user's current instruction wins. The debrief judges the artifact and the process that
+produced it; neither is exempt. Capture successes as deliberately as mistakes, and codify
+a practice that worked so it repeats.
 
 ## The debrief laws
 

@@ -1,4 +1,8 @@
-import type { ClientTransportEventMap, ClientTransportInterface, JSONRPCMessage } from '@src/core'
+import type {
+	MCPClientTransportEventMap,
+	MCPClientTransportInterface,
+	JSONRPCMessage,
+} from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import { parseJSONRPCMessage } from '@src/core'
@@ -7,12 +11,12 @@ import { Emitter } from '@orkestrel/emitter'
 /**
  * The per-connection JSON-RPC-over-WebSocket SERVER bridge — wraps a
  * {@link NodeWebSocketInterface} (the RFC 6455 wire wrapper) as a
- * {@link ClientTransportInterface}, the bidirectional JSON-RPC message channel
+ * {@link MCPClientTransportInterface}, the bidirectional JSON-RPC message channel
  * `createWebSocketServer` pumps `mcp.dispatch` over and the egress mirror's
  * {@link import('./WebSocketClientTransport.js').WebSocketClientTransport} reuses.
  *
  * @remarks
- * - **Reuses `ClientTransportInterface` (§21).** It IS the same generic carrier the HTTP
+ * - **Reuses `MCPClientTransportInterface` (§21).** It IS the same generic carrier the HTTP
  *   client transport implements — `emitter` (`message` / `close` / `error`), `start`,
  *   `send`, `close` — so the WebSocket server and client both speak ONE transport contract,
  *   no near-duplicate sibling interface. `session` is `undefined` (the stateless v1; a
@@ -30,28 +34,34 @@ import { Emitter } from '@orkestrel/emitter'
  * - **`close()`** closes the underlying socket (the RFC 6455 close handshake) and fires the
  *   transport's `close` event (idempotent — a second `close`, or a socket-driven close, emits
  *   once).
- * - **Observable (§13).** Owns the `emitter` ({@link ClientTransportEventMap}); the emitter
+ * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); the emitter
  *   isolates a listener throw (a buggy observer never corrupts the bridge). `error` is a
  *   DOMAIN event (a transport-level fault), distinct from the emitter's listener-error channel.
  */
-export class WebSocketServerTransport implements ClientTransportInterface {
-	readonly #emitter: Emitter<ClientTransportEventMap>
+export class WebSocketServerTransport implements MCPClientTransportInterface {
+	readonly #emitter: Emitter<MCPClientTransportEventMap>
 	readonly #socket: NodeWebSocketInterface
 	#started = false
 	#closed = false
 
 	constructor(socket: NodeWebSocketInterface) {
-		this.#emitter = new Emitter<ClientTransportEventMap>()
+		this.#emitter = new Emitter<MCPClientTransportEventMap>()
 		this.#socket = socket
 	}
 
-	get emitter(): EmitterInterface<ClientTransportEventMap> {
+	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
 		return this.#emitter
 	}
 
 	get session(): string | undefined {
 		// The stateless v1 holds no session — a server-assigned id is the deferred tier.
 		return undefined
+	}
+
+	get duplex(): boolean {
+		// A socket is bidirectional for its whole life: either side writes a frame whenever it
+		// has one, with no request to attach it to.
+		return true
 	}
 
 	async start(): Promise<void> {
@@ -97,9 +107,9 @@ export class WebSocketServerTransport implements ClientTransportInterface {
 		this.#emitter.emit('message', message)
 	}
 
-	// The socket closed (peer close frame, transport teardown) — fire this transport's
-	// `close` once. A `close()` call already flipped `#closed`, so a socket-driven close
-	// after an explicit one does not double-emit.
+	// The socket closed (peer close frame, transport teardown) — fire this transport's `close`
+	// once. No peer identity check is needed: the socket is constructor-fixed and `start()` is
+	// idempotent, so no superseded socket can report a close against a replacement.
 	#onClose(): void {
 		if (this.#closed) return
 		this.#closed = true

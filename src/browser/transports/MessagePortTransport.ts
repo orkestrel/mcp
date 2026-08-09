@@ -10,7 +10,7 @@ import { isString } from '@orkestrel/contract'
  * @remarks
  * - **Symmetric.** Unlike {@link import('./WebSocketClientTransport.js').WebSocketClientTransport}
  *   / {@link import('./HTTPClientTransport.js').HTTPClientTransport} (CLIENT-only
- *   carriers of `@src/core`'s `ClientTransportInterface`), a `MessagePort` is a
+ *   carriers of `@src/core`'s `MCPClientTransportInterface`), a `MessagePort` is a
  *   plain duplex channel — the SAME class implements `@src/core`'s
  *   `MCPTransportInterface` and is handed to EITHER `bindServer` or
  *   `bindClient`/`createDuplexClientTransport`; which role it plays comes entirely
@@ -33,7 +33,7 @@ import { isString } from '@orkestrel/contract'
  *   non-string `event.data` (a host or a misbehaving peer posting a structured
  *   object) is IGNORED — dropped silently, never forwarded, never thrown (§14) —
  *   because `MCPTransportInterface` carries no `error` channel for this port to
- *   surface a non-string frame on (unlike `ClientTransportInterface`'s `emitter`);
+ *   surface a non-string frame on (unlike `MCPClientTransportInterface`'s `emitter`);
  *   silently ignoring is the total, contract-shaped choice.
  * - **`messageerror` is IGNORED, not routed to `closed`.** A `messageerror` event
  *   (the structured-clone deserialization of an inbound message threw) reports one

@@ -1,37 +1,20 @@
-import type { MCPTransportInterface } from '@src/core'
-import { createDuplexClientTransport, createMCPServer } from '@src/core'
+import {
+	createDuplexClientTransport,
+	createMCPServer,
+	MCP_META_CAPABILITIES,
+	MCP_META_SERVER,
+	MCP_META_VERSION,
+	MCP_MODERN_VERSION,
+} from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
+import { createMemoryTransport } from '../../setup.js'
 
 // A minimal in-memory MCPTransportInterface double (AGENTS §16 — real, not a mock):
 // `send` records every outbound string, `close` counts calls; `listen`/`closed` are
 // unused by these adapter-only tests (they exercise createDuplexClientTransport's
 // OWN send/start/close forwarding, not inbound delivery — that is bindClient's job,
 // covered in helpers.test.ts).
-function createMemoryTransport(): MCPTransportInterface & {
-	readonly sent: readonly string[]
-	readonly closedCalls: number
-} {
-	const sent: string[] = []
-	let closedCalls = 0
-	return {
-		async send(message) {
-			sent.push(message)
-		},
-		listen() {},
-		closed() {},
-		async close() {
-			closedCalls += 1
-		},
-		get sent() {
-			return sent
-		},
-		get closedCalls() {
-			return closedCalls
-		},
-	}
-}
-
 // createMCPServer returns a working MCPServerInterface over a live ToolManager
 // (AGENTS §16 — a real registry, no mocks). The behavioral coverage of dispatch /
 // handle lives in MCPServer.test.ts; this asserts the factory wires identity, the
@@ -57,7 +40,14 @@ describe('createMCPServer', () => {
 			jsonrpc: '2.0',
 			method: 'tools/call',
 			id: 1,
-			params: { name: 'add', arguments: { x: 4, y: 6 } },
+			params: {
+				name: 'add',
+				arguments: { x: 4, y: 6 },
+				_meta: {
+					[MCP_META_VERSION]: MCP_MODERN_VERSION,
+					[MCP_META_CAPABILITIES]: {},
+				},
+			},
 		})
 		// A legacy `tools/call` is unary — narrow off the held-open arm before asserting.
 		if (answer === undefined || Symbol.asyncIterator in answer) {
@@ -65,13 +55,15 @@ describe('createMCPServer', () => {
 		}
 
 		expect(answer.result).toEqual({
+			resultType: 'complete',
 			content: [{ type: 'text', text: '10' }],
 			structuredContent: 10,
+			_meta: { [MCP_META_SERVER]: { name: 'demo', version: '1.0.0' } },
 		})
 	})
 
 	it('wires the on hooks (the §8 reserved key) to the emitter', async () => {
-		const seen: (readonly [string, string | number | null])[] = []
+		const seen: (readonly [string, string | number | undefined])[] = []
 		const server = createMCPServer({
 			identity: { name: 'demo', version: '1.0.0' },
 			tools: createToolManager(),

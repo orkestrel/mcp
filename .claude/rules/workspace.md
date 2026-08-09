@@ -127,7 +127,10 @@ then runs the configured scoped checks that prove environment isolation.
 | `src:server`, `app:server`   | `["ESNext"]`                      | `["node"]`        | Node; no DOM                                                                                                                             |
 | `src:styles`                 | `["ESNext"]`                      | `["vite/client"]` | Vite SCSS module declaration only                                                                                                        |
 
-Strict core is load-bearing. A host-dependent helper belongs in its host environment; for example, a `generateId` reading `node:crypto` belongs in server, not core. The worker-only globals — `name`, `onrtctransform`, `close`, `postMessage`, `dispatchEvent`, `location`, `onerror`, `onlanguagechange`, `onoffline`, `ononline`, `onrejectionhandled`, `onunhandledrejection`, `self`, `importScripts`, `fonts`, `caches`, `crossOriginIsolated`, `indexedDB`, `isSecureContext`, `origin`, `scheduler`, `createImageBitmap`, `reportError`, `cancelAnimationFrame`, `requestAnimationFrame`, `onmessage`, `onmessageerror`, `addEventListener`, and `removeEventListener` — are policy-fenced out of core sources, so the `WebWorker` declarations widen the interop surface without admitting a worker host.
+Strict core is load-bearing:
+
+- Put a host-dependent helper in its host environment. A `generateId` reading `node:crypto` belongs in server, not core.
+- Core declares `WebWorker` to widen the WHATWG interop surface, not to admit a worker host. Policy fences these worker-only globals out of core sources: `name`, `onrtctransform`, `close`, `postMessage`, `dispatchEvent`, `location`, `onerror`, `onlanguagechange`, `onoffline`, `ononline`, `onrejectionhandled`, `onunhandledrejection`, `self`, `importScripts`, `fonts`, `caches`, `crossOriginIsolated`, `indexedDB`, `isSecureContext`, `origin`, `scheduler`, `createImageBitmap`, `reportError`, `cancelAnimationFrame`, `requestAnimationFrame`, `onmessage`, `onmessageerror`, `addEventListener`, `removeEventListener`.
 
 Build/check config alignment:
 

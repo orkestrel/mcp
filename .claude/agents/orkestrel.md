@@ -35,15 +35,15 @@ descriptions never enter agent instruction context.
 | Package               | Version |
 | --------------------- | ------- |
 | @orkestrel/abort      | 0.0.5   |
-| @orkestrel/agent      | 0.0.13  |
+| @orkestrel/agent      | 0.0.14  |
 | @orkestrel/browser    | 0.0.8   |
 | @orkestrel/budget     | 0.0.5   |
 | @orkestrel/console    | 0.0.4   |
-| @orkestrel/contract   | 0.0.9   |
+| @orkestrel/contract   | 0.0.10  |
 | @orkestrel/csv        | 0.0.2   |
 | @orkestrel/database   | 0.0.7   |
 | @orkestrel/emitter    | 0.0.5   |
-| @orkestrel/guide      | 0.0.8   |
+| @orkestrel/guide      | 0.0.9   |
 | @orkestrel/html       | 0.0.2   |
 | @orkestrel/indexeddb  | 0.0.6   |
 | @orkestrel/interpret  | 0.0.7   |
@@ -61,7 +61,7 @@ descriptions never enter agent instruction context.
 | @orkestrel/reason     | 0.0.4   |
 | @orkestrel/relation   | 0.0.7   |
 | @orkestrel/router     | 0.0.8   |
-| @orkestrel/scaffold   | 0.0.21  |
+| @orkestrel/scaffold   | 0.0.22  |
 | @orkestrel/sea        | 0.0.5   |
 | @orkestrel/server     | 0.0.10  |
 | @orkestrel/sqlite     | 0.0.6   |
@@ -74,7 +74,7 @@ descriptions never enter agent instruction context.
 | @orkestrel/websocket  | 0.0.7   |
 | @orkestrel/worker     | 0.0.6   |
 | @orkestrel/workflow   | 0.0.10  |
-| @orkestrel/workspace  | 0.0.2   |
+| @orkestrel/workspace  | 0.0.3   |
 
 <!-- catalog:end -->
 

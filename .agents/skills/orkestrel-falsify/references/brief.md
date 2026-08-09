@@ -24,7 +24,10 @@ evidence and source is corroboration.
 
 **Numbered falsifiable claims.** Each is a property some concrete input, state, or interleaving
 could show false. Assign the primary lane where auditors differ in strength, but do not let an
-auditor skip a claim because it assumes the other covers it better.
+auditor skip a claim because it assumes the other covers it better. The claim set is the round's
+scope: write it to cover what the subject owns, then hold it closed. An attack the round invents
+against something no claim names enters the verdict only when it is substantiated to the `BROKEN`
+standard; otherwise it is a claim for the successor brief, not a finding.
 
 **Unknowns, named as unknowns.** What the orchestrator does not know that the round needs, and how
 the auditor reports back on it. A brief that cannot be fully specified says so; the alternative is

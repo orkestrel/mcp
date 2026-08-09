@@ -1,15 +1,27 @@
+import type { MCPDispatcherInterface } from '@src/core'
 import type { MiddlewareHandler } from '@orkestrel/server'
 import type { StartedServerInterface } from '../../setupServer.js'
+import { spawn } from 'node:child_process'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
-import { createMCPClient } from '@src/core'
+import {
+	buildCancelledNotification,
+	createMCPClient,
+	createMCPLegacy,
+	createMCPServer,
+	MCP_META_SERVER,
+	MCP_MODERN_VERSION,
+} from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
+import { createTool, createToolManager } from '@orkestrel/tool'
 import { createServer } from '@orkestrel/server'
 import {
+	createMCPContinuation,
 	createMCPRoutes,
 	createStdioServer,
 	createWebSocketClientTransport,
 	createWebSocketServer,
+	MCP_METHOD_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
 } from '@src/server'
@@ -18,7 +30,9 @@ import {
 	createCalculatorServer,
 	createJSONRPCNotification,
 	createJSONRPCRequest,
+	MODERN_METADATA,
 	postJSON,
+	waitForAbort,
 	waitForDelay,
 } from '../../setup.js'
 import { createTeardown, startServer, upgradeRequest } from '../../setupServer.js'
@@ -39,6 +53,18 @@ import { createTeardown, startServer, upgradeRequest } from '../../setupServer.j
 // `createMCPRoutes` is stateless-only.
 
 const { track } = createTeardown((handle: StartedServerInterface) => handle.stop())
+
+describe('createMCPContinuation', () => {
+	it('adapts the installed token primitives into the host-neutral seal/open port', async () => {
+		const continuation = createMCPContinuation(['current-secret', 'older-secret'])
+		const value = '{"bound":true}'
+		const carrier = await continuation.seal(value)
+
+		expect(carrier).not.toBe(value)
+		expect(await continuation.open(carrier)).toBe(value)
+		expect(await continuation.open(`${carrier}x`)).toBeUndefined()
+	})
+})
 
 // A minimal bearer-token check middleware, hand-rolled locally (no @orkestrel/middleware
 // dependency) — just enough to prove the transport composes auth IN FRONT rather than
@@ -62,7 +88,7 @@ async function startMCP(options?: {
 }): Promise<StartedServerInterface> {
 	const dispatcher = createDispatcher<unknown>()
 	dispatcher.add(
-		createMCPRoutes(createCalculatorServer(), {
+		createMCPRoutes(createMCPLegacy(createCalculatorServer()), {
 			...(options?.streaming !== undefined ? { streaming: options.streaming } : {}),
 			...(options?.path !== undefined ? { path: options.path } : {}),
 		}),
@@ -73,6 +99,31 @@ async function startMCP(options?: {
 }
 
 describe('createMCPRoutes — dispatch the four MCP methods', () => {
+	it('exposes a raw server as modern-only and a decorated server as both eras', async () => {
+		const dispatcher = createDispatcher<unknown>()
+		dispatcher.add(createMCPRoutes(createCalculatorServer(), { streaming: false }))
+		const server = createServer<unknown>({ dispatcher, state: () => undefined })
+		const handle = track(await startServer(server))
+		const response = await postJSON(
+			handle.base,
+			createJSONRPCRequest({ method: 'ping', params: { _meta: MODERN_METADATA } }),
+			{
+				headers: {
+					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+					[MCP_METHOD_HEADER]: 'ping',
+				},
+			},
+		)
+		const body = await response.json()
+
+		expect(response.status).toBe(200)
+		expect(body.result.resultType).toBe('complete')
+		expect(body.result['_meta'][MCP_META_SERVER]).toEqual({
+			name: 'calculator',
+			version: '1.0.0',
+		})
+	})
+
 	it('POST initialize → 200 + the negotiated handshake result', async () => {
 		const handle = await startMCP()
 		const response = await postJSON(
@@ -197,7 +248,6 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 		const body = await response.json()
 		expect(body).toEqual({
 			jsonrpc: '2.0',
-			id: null,
 			error: { code: -32700, message: 'Parse error' },
 		})
 	})
@@ -209,7 +259,6 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 		expect(response.status).toBe(400)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
-			id: null,
 			error: { code: -32600, message: 'Invalid Request' },
 		})
 	})
@@ -364,14 +413,54 @@ describe('createMCPRoutes — the stateless default (no session middleware)', ()
 // Stand up a server exposing the stub-tool MCPServer over WebSocket on an ephemeral port. The
 // WS client transport accepts the `http://` base directly (it converts `ws(s)`→`http(s)`
 // internally; an `http://` URL passes through to the same upgrade endpoint).
-async function startWsMCP(): Promise<StartedServerInterface> {
+async function startWsMCP(
+	mcp: MCPDispatcherInterface = createCalculatorServer(),
+): Promise<StartedServerInterface> {
 	const dispatcher = createDispatcher<unknown>()
 	const server = createServer<unknown>({ dispatcher, state: () => undefined })
-	server.upgrade(createWebSocketServer(createCalculatorServer())) // ingress over the spine upgrade seam
+	server.upgrade(createWebSocketServer(mcp)) // ingress over the spine upgrade seam
 	return track(await startServer(server))
 }
 
 describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-transports WS e2e', () => {
+	it('serves a legacy initialize and tools/call through the decorator over a real socket', async () => {
+		const handle = await startWsMCP(createMCPLegacy(createCalculatorServer()))
+		const client = createMCPClient({
+			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
+			version: '2025-06-18',
+		})
+
+		await client.connect()
+		expect(client.version).toBe('2025-06-18')
+		expect(await client.call('add', {})).toEqual({ resultType: 'complete', value: 5 })
+		await client.disconnect()
+	})
+
+	it('CONTROL — a bare server answers modern-shaped initialize with -32601 over a real socket', async () => {
+		const handle = await startWsMCP()
+		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
+
+		await transport.start()
+		const legacy = new Promise<unknown>((resolve) => transport.emitter.on('message', resolve))
+		await transport.send(
+			createJSONRPCRequest({
+				method: 'initialize',
+				params: { protocolVersion: '2025-06-18' },
+			}),
+		)
+		await expect(legacy).resolves.toMatchObject({ error: { code: -32602 } })
+
+		const modern = new Promise<unknown>((resolve) => transport.emitter.on('message', resolve))
+		await transport.send(
+			createJSONRPCRequest({
+				method: 'initialize',
+				params: { _meta: MODERN_METADATA },
+			}),
+		)
+		await expect(modern).resolves.toMatchObject({ error: { code: -32601 } })
+		await transport.close()
+	})
+
 	it('connect → tools/list → tools/call(add): a value round-trips over real WebSocket frames', async () => {
 		const handle = await startWsMCP()
 		const client = createMCPClient({
@@ -388,7 +477,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 
 		// tools/call(add) — the stub returns 5, round-tripped back across the wire.
 		const value = await client.call('add', {})
-		expect(value).toBe(5)
+		expect(value).toEqual({ resultType: 'complete', value: 5 })
 
 		await client.disconnect()
 		expect(client.connected).toBe(false)
@@ -440,6 +529,94 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 	})
 })
 
+async function driveStdioChild(
+	mcp: MCPDispatcherInterface,
+	mode: 'legacy' | 'bare',
+): Promise<number | null> {
+	const child = spawn(
+		process.execPath,
+		[
+			'-e',
+			`
+const mode = process.argv[1]
+let buffer = ''
+let stage = 'initialize'
+
+function fail(message) {
+	process.stderr.write(message + '\\n')
+	process.exit(1)
+}
+
+function send(message) {
+	process.stdout.write(JSON.stringify(message) + '\\n')
+}
+
+function receive(message) {
+	if (stage === 'initialize') {
+		if (mode === 'bare') {
+			if (message.error?.code !== -32602) fail('bare legacy-shaped initialize was accepted')
+			stage = 'control'
+			send({
+				jsonrpc: '2.0',
+				id: 2,
+				method: 'initialize',
+				params: {
+					_meta: {
+						'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+						'io.modelcontextprotocol/clientCapabilities': {},
+					},
+				},
+			})
+			return
+		}
+		if (message.result?.protocolVersion !== '2025-06-18') fail('legacy initialize failed')
+		stage = 'call'
+		send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+		send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'add', arguments: {} } })
+		return
+	}
+	if (stage === 'control') {
+		if (message.error?.code !== -32601) fail('bare modern-shaped initialize did not answer -32601')
+		process.exit(0)
+	}
+	if (message.result?.content?.[0]?.text !== '5') fail('legacy tools/call failed')
+	process.exit(0)
+}
+
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+	buffer += chunk
+	let newline = buffer.indexOf('\\n')
+	while (newline !== -1) {
+		const line = buffer.slice(0, newline)
+		buffer = buffer.slice(newline + 1)
+		if (line.length > 0) receive(JSON.parse(line))
+		newline = buffer.indexOf('\\n')
+	}
+})
+
+send({
+	jsonrpc: '2.0',
+	id: 1,
+	method: 'initialize',
+	params: { protocolVersion: '2025-06-18' },
+})
+`,
+			mode,
+		],
+		{ stdio: ['pipe', 'pipe', 'inherit'] },
+	)
+	const handle = createStdioServer(mcp, { input: child.stdout, output: child.stdin })
+	handle.start()
+	return new Promise<number | null>((resolve, reject) => {
+		child.once('error', reject)
+		child.once('exit', (code) => {
+			handle.stop()
+			resolve(code)
+		})
+	})
+}
+
 // createStdioServer — the new seam: it now pipes its transport through the core
 // bindServer port (via bridgeMessageTransport) rather than a hand-rolled pump. Proven
 // over REAL PassThrough streams + a REAL MCPServer (AGENTS §16) — the request → reply
@@ -447,6 +624,14 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 // method reply, the in-band case; the transport-fault case is pinned at the core
 // binder level in tests/src/core/helpers.test.ts) all behave exactly as before.
 describe('createStdioServer — pipes stdio through the core bindServer port', () => {
+	it('serves a legacy initialize and tools/call through the decorator over a spawned child', async () => {
+		expect(await driveStdioChild(createMCPLegacy(createCalculatorServer()), 'legacy')).toBe(0)
+	})
+
+	it('CONTROL — a bare server answers modern-shaped initialize with -32601 over a spawned child', async () => {
+		expect(await driveStdioChild(createCalculatorServer(), 'bare')).toBe(0)
+	})
+
 	function stdio() {
 		const input = new PassThrough()
 		const output = new PassThrough()
@@ -470,9 +655,19 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 		handle.start()
 
 		const reply = readLine(output)
-		input.write(`${JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 1 }))}\n`)
+		input.write(
+			`${JSON.stringify(
+				createJSONRPCRequest({ method: 'ping', id: 1, params: { _meta: MODERN_METADATA } }),
+			)}\n`,
+		)
+		const response = JSON.parse(await reply)
 
-		expect(JSON.parse(await reply)).toEqual({ jsonrpc: '2.0', id: 1, result: {} })
+		expect(response.id).toBe(1)
+		expect(response.result.resultType).toBe('complete')
+		expect(response.result['_meta'][MCP_META_SERVER]).toEqual({
+			name: 'calculator',
+			version: '1.0.0',
+		})
 		handle.stop()
 	})
 
@@ -487,6 +682,48 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 		await waitForDelay(20)
 
 		expect(chunks).toEqual([])
+		handle.stop()
+	})
+
+	// Row 15/16 over a REAL carrier: an inbound `notifications/cancelled` on a transport that
+	// has one (stdio) aborts the named request, the TOOL observes it through the execution
+	// handler's own signal, and the cancelled request writes no line back.
+	it('honours an inbound cancellation: the tool sees the abort and no reply line is written', async () => {
+		const { input, output } = stdio()
+		const observed: string[] = []
+		const tools = createToolManager()
+		tools.add(createTool({ name: 'slow', execute: () => 0 }))
+		const mcp = createMCPServer({
+			identity: { name: 'stdio-cancel', version: '1.0.0' },
+			tools,
+			async execution(context) {
+				await waitForAbort(context.signal)
+				observed.push('aborted')
+				return { id: context.call.id, name: context.call.name, success: true, value: 0 }
+			},
+		})
+		const handle = createStdioServer(mcp, { input, output })
+		handle.start()
+		const lines: string[] = []
+		output.on('data', (chunk: Buffer) => lines.push(chunk.toString()))
+
+		input.write(
+			`${JSON.stringify(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					id: 'call-1',
+					params: { name: 'slow', arguments: {}, _meta: MODERN_METADATA },
+				}),
+			)}\n`,
+		)
+		await waitForDelay(20)
+		expect(observed).toEqual([])
+
+		input.write(`${JSON.stringify(buildCancelledNotification('call-1'))}\n`)
+		await waitForDelay(20)
+
+		expect(observed).toEqual(['aborted'])
+		expect(lines).toEqual([])
 		handle.stop()
 	})
 

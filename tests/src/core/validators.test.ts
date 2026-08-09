@@ -1,30 +1,122 @@
+import type {
+	JSONRPCId,
+	JSONRPCErrorResponse,
+	JSONRPCInvocation,
+	JSONRPCNotification,
+	JSONRPCRequest,
+	JSONRPCResponse,
+	JSONRPCResultResponse,
+	MCPCallResult,
+	MCPDiscoverResult,
+	MCPElicitForm,
+	MCPElicitParams,
+	MCPElicitRequest,
+	MCPElicitSchema,
+	MCPElicitURL,
+	MCPInputRequest,
+	MCPInputRequestMap,
+	MCPInputResult,
+	MCPLegacyResult,
+	MCPListResult,
+	MCPResult,
+	MCPToolDescriptor,
+	MCPUnstampedCallResult,
+	SubscriptionsListenResult,
+} from '@src/core'
+import * as core from '@src/core'
 import {
+	buildJSONRPCResult,
+	isMCPError,
+	isMCPInputRequest,
+	isAbsoluteURI,
 	isBoundedJSON,
 	isBoundedString,
-	isElicitRequest,
-	isElicitPrimitiveSchema,
-	isElicitResult,
+	isElicitContent,
+	isMCPElicitRequest,
+	isMCPElicitForm,
+	isMCPElicitURL,
+	isMCPElicitFieldSchema,
+	isMCPElicitResult,
+	isMCPElicitSchema,
 	isFormElicitationSupported,
 	isInitializeRequest,
-	isInputRequests,
-	isInputRequiredResult,
+	isMCPInputRequestMap,
+	isMCPInputResult,
+	isJSONObject,
+	isJSONRPCErrorResponse,
+	isJSONRPCId,
+	isJSONRPCInvocation,
 	isJSONRPCMessage,
+	isJSONRPCNotification,
 	isJSONRPCRequest,
 	isJSONRPCResponse,
+	isJSONRPCResultResponse,
+	isMCPAnnotations,
+	isMCPBlobResource,
+	isMCPCallResult,
+	isMCPClientCapabilities,
+	isMCPCompletion,
+	isMCPCompletionParams,
+	isMCPCompletionReference,
+	isMCPCompletionResult,
+	isMCPContent,
+	isMCPIcon,
+	isMCPIdentity,
+	isMCPLegacyResult,
+	isMCPLoggingLevel,
+	isMCPMetaKey,
+	isMCPMetaObject,
+	isMCPProgress,
+	isMCPPaginationParams,
+	isMCPPrompt,
+	isMCPPromptArgument,
+	isMCPPromptGetResult,
+	isMCPPromptMessage,
+	isMCPPromptPage,
+	isMCPResource,
+	isMCPResourceContents,
+	isMCPResourcePage,
+	isMCPResourceTemplate,
+	isMCPResourceTemplatePage,
+	isMCPResult,
+	isMCPResultMetaObject,
+	isMCPServerCapabilities,
+	isMCPStringArguments,
+	isJSONRPCError,
+	isMCPTaskDetail,
+	isMCPTaskResult,
+	isMCPTaskStatus,
+	isMCPTextResource,
 	isMCPVersion,
 	isModernRequest,
-	isRequestId,
-	isSubscriptionFilter,
+	isMCPSubscriptionFilter,
+	isRFC3339Date,
+	isRFC3339DateTime,
+	isStandardBase64,
+	isTaskSupported,
+	MCP_EXTENSION_TASKS,
+	MCP_HEADER_MISMATCH,
+	MCP_MISSING_CAPABILITY,
 	MCP_META_CAPABILITIES,
+	MCP_META_SERVER,
 	MCP_META_VERSION,
+	MCP_UNSUPPORTED_VERSION,
+	MCPError,
 	SUPPORTED_PROTOCOL_VERSIONS,
 } from '@src/core'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
+import {
+	createHostileCorpus,
+	createJSONRPCNotification,
+	createJSONRPCRequest,
+	createThrowingKeys,
+	GUARD_KEY_NAMES,
+} from '../../setup.js'
 
 // The JSON-RPC 2.0 wire guards (AGENTS §14 — total functions over an already-parsed
-// `unknown`; adversarial input returns `false`, never throws). A request without an
-// `id` is a valid notification shape; a response carries an `id` (string / number /
-// null) and EXACTLY ONE of result / error.
+// `unknown`; adversarial input returns `false`, never throws). A request REQUIRES an
+// `id` and a notification forbids one; a response carries EXACTLY ONE of result / error,
+// and only the error arm may omit its `id`.
 
 describe('bounded hostile values', () => {
 	it('counts UTF-8 string bytes at the exact boundary', () => {
@@ -38,13 +130,11 @@ describe('bounded hostile values', () => {
 	it('bounds serialized JSON bytes, object keys, and depth', () => {
 		const value = { ok: true }
 		const bytes = JSON.stringify(value).length
-		// `undefined` is the one value `JSON.stringify` cannot write, so it is rejected;
-		// a non-finite number IS written, as `null`, so it costs four bytes and passes.
-		// A tool returning NaN reached the wire as `null` before the bounds existed and
-		// must keep doing so.
+		// Exact JSON rejects `undefined` and non-finite numbers instead of silently
+		// normalizing domain values to a different wire value.
 		expect(isBoundedJSON(undefined, { bytes: 0, depth: 0 })).toBe(false)
-		expect(isBoundedJSON(Number.NaN, { bytes: 4, depth: 0 })).toBe(true)
-		expect(isBoundedJSON(Number.POSITIVE_INFINITY, { bytes: 4, depth: 0 })).toBe(true)
+		expect(isBoundedJSON(Number.NaN, { bytes: 4, depth: 0 })).toBe(false)
+		expect(isBoundedJSON(Number.POSITIVE_INFINITY, { bytes: 4, depth: 0 })).toBe(false)
 		expect(isBoundedJSON(Number.NaN, { bytes: 3, depth: 0 })).toBe(false)
 		expect(isBoundedJSON(value, { bytes, keys: 1, depth: 1 })).toBe(true)
 		expect(isBoundedJSON(value, { bytes: bytes - 1, keys: 1, depth: 1 })).toBe(false)
@@ -59,13 +149,15 @@ describe('bounded hostile values', () => {
 		expect(isBoundedJSON({}, { bytes: Number.NaN, depth: Number.NaN })).toBe(false)
 	})
 
-	it('returns false for cycles and every prototype-pollution key', () => {
+	it('rejects cycles while accepting hostile-looking own data keys', () => {
 		const cycle: Record<string, unknown> = {}
 		cycle['self'] = cycle
-		const proto: unknown = JSON.parse('{"__proto__":true}')
-		for (const value of [cycle, proto, { constructor: true }, { nested: { prototype: true } }]) {
-			expect(isBoundedJSON(value, { bytes: 128, keys: 8, depth: 8 })).toBe(false)
-		}
+		const hostile = Object.create(null)
+		hostile['__proto__'] = true
+		hostile['constructor'] = { prototype: true }
+
+		expect(isBoundedJSON(cycle, { bytes: 128, keys: 8, depth: 8 })).toBe(false)
+		expect(isBoundedJSON(hostile, { bytes: 128, keys: 8, depth: 8 })).toBe(true)
 	})
 
 	it('rejects Map and Set regardless of insertion order', () => {
@@ -85,6 +177,19 @@ describe('bounded hostile values', () => {
 		}
 	})
 
+	it('rejects non-exact primitive, record, and exotic populations', () => {
+		const symbol = { ok: true }
+		Object.defineProperty(symbol, Symbol('hidden'), { enumerable: true, value: true })
+		const hidden = Object.defineProperty({}, 'value', { enumerable: false, value: true })
+		const instance = new (class {
+			readonly value = true
+		})()
+
+		for (const value of [{ value: undefined }, { value: BigInt(1) }, symbol, hidden, instance]) {
+			expect(isBoundedJSON(value, { bytes: 128, keys: 8, depth: 8 })).toBe(false)
+		}
+	})
+
 	it('contains accessors and hostile proxies without throwing', () => {
 		const accessor = Object.defineProperty({}, 'value', {
 			enumerable: true,
@@ -98,28 +203,437 @@ describe('bounded hostile values', () => {
 		expect(isBoundedJSON(accessor, { bytes: 128, depth: 8 })).toBe(false)
 		expect(isBoundedJSON(proxy, { bytes: 128, depth: 8 })).toBe(false)
 	})
+
+	it('rejects exhausted budgets before retrieving child descriptors', () => {
+		let descriptors = 0
+		const value = new Proxy(
+			{ child: true },
+			{
+				getOwnPropertyDescriptor(target, property) {
+					descriptors += 1
+					return Reflect.getOwnPropertyDescriptor(target, property)
+				},
+			},
+		)
+
+		expect(isBoundedJSON(value, { bytes: 1, keys: 0, depth: 0 })).toBe(false)
+		expect(descriptors).toBe(0)
+	})
+
+	it('counts array indices as keys and accepts a shared acyclic graph', () => {
+		const shared = { ok: true }
+
+		expect(isBoundedJSON([1, 2], { bytes: 5, keys: 2, depth: 1 })).toBe(true)
+		expect(isBoundedJSON([1, 2], { bytes: 5, keys: 1, depth: 1 })).toBe(false)
+		expect(isBoundedJSON({ left: shared, right: shared }, { bytes: 64, keys: 4, depth: 2 })).toBe(
+			true,
+		)
+	})
 })
 
-describe('isRequestId', () => {
+describe('rich MCP content validators', () => {
+	it('exposes total format and progress guards for their exact public contracts', () => {
+		for (const value of ['', 'YQ==', 'YWI=', 'YWJj']) expect(isStandardBase64(value)).toBe(true)
+		for (const value of ['$', 'A', 'AA-_', null]) expect(isStandardBase64(value)).toBe(false)
+		for (const value of ['resource:', 'https://example.test', 'data:text/plain,x', 'urn:test:id']) {
+			expect(isAbsoluteURI(value)).toBe(true)
+		}
+		for (const value of ['', 'relative', ' https://example.test', null]) {
+			expect(isAbsoluteURI(value)).toBe(false)
+		}
+		expect(isMCPProgress({ progress: 1, total: 2, message: 'halfway' })).toBe(true)
+		for (const value of [
+			{ progress: Number.NaN },
+			{ progress: 1, total: Number.POSITIVE_INFINITY },
+			{ progress: 1, message: 7 },
+			null,
+		]) {
+			expect(isMCPProgress(value)).toBe(false)
+		}
+	})
+
+	it('accepts every exact dated-schema content block and complete array-valued output', () => {
+		const content = [
+			{
+				type: 'text',
+				text: 'hello',
+				annotations: { audience: ['user'], lastModified: '2026-08-07T00:00:00Z' },
+			},
+			{ type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' },
+			{ type: 'audio', data: 'YXVkaW8=', mimeType: 'audio/mpeg' },
+			{
+				type: 'resource_link',
+				name: 'guide',
+				title: 'Guide',
+				icons: [
+					{ src: 'resource://icon', mimeType: 'image/png', sizes: ['16x16'], theme: 'light' },
+				],
+				uri: 'resource://guide',
+				size: 42,
+			},
+			{ type: 'resource', resource: { uri: 'resource://text', text: 'body' } },
+			{ type: 'resource', resource: { uri: 'resource://blob', blob: 'YmxvYg==' } },
+		]
+
+		expect(content.every((entry) => isMCPContent(entry))).toBe(true)
+		expect(
+			isMCPCallResult({
+				resultType: 'complete',
+				content,
+				structuredContent: ['array', 1, true, null],
+			}),
+		).toBe(true)
+	})
+
+	it('rejects unstamped, non-JSON, and malformed rich results', () => {
+		expect(isMCPCallResult({ content: [{ type: 'text', text: 'legacy' }] })).toBe(false)
+		expect(
+			isMCPCallResult({
+				resultType: 'complete',
+				content: [{ type: 'text', text: 'bad' }],
+				structuredContent: Number.NaN,
+			}),
+		).toBe(false)
+		expect(isMCPContent({ type: 'image', data: 'missing-mime' })).toBe(false)
+		expect(
+			isMCPContent({
+				type: 'resource',
+				resource: { uri: 'resource://both', text: 'x', blob: 'eA==' },
+			}),
+		).toBe(true)
+		expect(isMCPContent({ type: 'text', text: 'bad', annotations: { priority: 2 } })).toBe(false)
+		expect(isMCPContent({ type: 'text', text: 'bad', _meta: { value: Number.NaN } })).toBe(false)
+		expect(isMCPContent({ type: 'text', text: 'bad', _meta: { 'bad key': true } })).toBe(false)
+		expect(
+			isMCPCallResult({ resultType: 'complete', content: [], _meta: { value: undefined } }),
+		).toBe(false)
+
+		const audience = new Array(1)
+		expect(isMCPContent({ type: 'text', text: 'bad', annotations: { audience } })).toBe(false)
+		const accessor = Object.defineProperty({}, 'type', {
+			enumerable: true,
+			get() {
+				throw new Error('must not escape')
+			},
+		})
+		expect(isMCPContent(accessor)).toBe(false)
+	})
+
+	it('enforces standard base64, absolute URI, and integer resource-size schema formats', () => {
+		for (const data of ['$', 'A', 'AAA', 'AA=A', 'AA-_', 'AAAA=']) {
+			expect(isMCPContent({ type: 'image', data, mimeType: 'image/png' })).toBe(false)
+			expect(isMCPContent({ type: 'audio', data, mimeType: 'audio/mpeg' })).toBe(false)
+			expect(
+				isMCPContent({ type: 'resource', resource: { uri: 'resource:blob', blob: data } }),
+			).toBe(false)
+		}
+		for (const uri of ['', 'relative/path', '://missing-scheme']) {
+			expect(isMCPContent({ type: 'resource', resource: { uri, text: 'body' } })).toBe(false)
+			expect(isMCPContent({ type: 'resource_link', name: 'link', uri })).toBe(false)
+			expect(
+				isMCPContent({
+					type: 'resource_link',
+					name: 'icon-link',
+					uri: 'resource:link',
+					icons: [{ src: uri }],
+				}),
+			).toBe(false)
+		}
+		expect(isMCPContent({ type: 'image', data: '', mimeType: 'image/png' })).toBe(true)
+		expect(isMCPContent({ type: 'image', data: 'YQ==', mimeType: 'image/png' })).toBe(true)
+		expect(isMCPContent({ type: 'image', data: 'YWI=', mimeType: 'image/png' })).toBe(true)
+		expect(isMCPContent({ type: 'image', data: 'YWJj', mimeType: 'image/png' })).toBe(true)
+		for (const uri of [
+			'resource:',
+			'https://example.test/path',
+			'data:text/plain,x',
+			'urn:test:id',
+		]) {
+			expect(isMCPContent({ type: 'resource', resource: { uri, text: 'body' } })).toBe(true)
+		}
+		expect(
+			isMCPContent({ type: 'resource_link', name: 'fractional', uri: 'resource:item', size: 1.5 }),
+		).toBe(false)
+		expect(
+			isMCPContent({ type: 'resource_link', name: 'negative', uri: 'resource:item', size: -1 }),
+		).toBe(false)
+	})
+
+	it('keeps every rich-content leaf guard total over hostile values', () => {
+		const accessor = Object.defineProperty({}, 'uri', {
+			enumerable: true,
+			get() {
+				throw new Error('must not escape')
+			},
+		})
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		for (const value of [accessor, proxy]) {
+			expect(isMCPAnnotations(value)).toBe(false)
+			expect(isMCPIcon(value)).toBe(false)
+			expect(isMCPTextResource(value)).toBe(false)
+			expect(isMCPBlobResource(value)).toBe(false)
+			expect(isMCPContent(value)).toBe(false)
+			expect(isMCPCallResult(value)).toBe(false)
+			expect(isMCPElicitForm(value)).toBe(false)
+			expect(isMCPElicitURL(value)).toBe(false)
+			expect(isMCPElicitResult(value)).toBe(false)
+		}
+		const requestAccessor = Object.defineProperty({}, 'method', {
+			enumerable: true,
+			get() {
+				throw new Error('must not escape')
+			},
+		})
+		expect(isMCPElicitRequest(requestAccessor)).toBe(false)
+	})
+})
+
+describe('RFC 3986 absolute URI validation', () => {
+	it('accepts hierarchical, non-hierarchical, IP-literal, percent-encoded, and empty components', () => {
+		for (const value of [
+			'urn:example:animal:ferret:nose',
+			'mailto:user@example.test',
+			'https://[2001:db8::1]/a%20b?x=1#part',
+			'https://[::]/',
+			'https://[::ffff:192.0.2.1]/',
+			'https://[1:2:3:4:5:6:7:8]/',
+			'https://[v1.fe80::a]/',
+			'custom:',
+			'custom:?',
+			'custom:#',
+			'file:///tmp/item',
+			'http://192.0.2.1:8080/path',
+			'http://',
+			'custom://',
+			'foo:///path',
+			'foo://:80/path',
+			'http://1.2.3/',
+			'https://256.1.1.1/',
+			'foo://01.2.3.4/',
+		]) {
+			expect(isAbsoluteURI(value)).toBe(true)
+		}
+	})
+
+	it('rejects relative, whitespace, escapes, authorities, ports, and IP literals outside the RFC', () => {
+		for (const value of [
+			'relative/path',
+			'https://example.test/a b',
+			'https://example.test/%GG',
+			'https://example.test:port/path',
+			'https://[2001:db8:::1]/',
+			'https://[:1::]/',
+			'https://[1::2:]/',
+			'https://[:1:2:3:4:5:6:7::]/',
+			'https://[v.fe80]/',
+			'https://user@@example.test/',
+			'1scheme:value',
+			'https://example.test/\u0000',
+		]) {
+			expect(isAbsoluteURI(value)).toBe(false)
+		}
+	})
+})
+
+describe('dated metadata, identity, and capability guards', () => {
+	it('validates exact metadata key grammar and finite JSON values', () => {
+		for (const key of ['', 'name', 'vendor.example/', 'vendor.example/name_value.part']) {
+			expect(isMCPMetaKey(key)).toBe(true)
+		}
+		for (const key of ['-name', 'vendor-.example/name', 'vendor//name']) {
+			expect(isMCPMetaKey(key)).toBe(false)
+		}
+		expect(isJSONObject({ nested: [1, true, null] })).toBe(true)
+		expect(isJSONObject({ value: Number.NaN })).toBe(false)
+		const hidden = Object.defineProperty({}, 'value', { enumerable: false, value: true })
+		const accessor = Object.defineProperty({}, 'value', { enumerable: true, get: () => true })
+		expect(isJSONObject(hidden)).toBe(false)
+		expect(isJSONObject(accessor)).toBe(false)
+		expect(
+			isMCPMetaObject({
+				'': null,
+				name: true,
+				'vendor.example/': {},
+				'vendor.example/name_value.part': [1, 'two'],
+			}),
+		).toBe(true)
+		for (const value of [
+			{ '-name': true },
+			{ 'vendor-.example/name': true },
+			{ 'vendor//name': true },
+			{ 'vendor.example/name/extra': true },
+			{ valid: Number.NaN },
+			{ valid: undefined },
+		]) {
+			expect(isMCPMetaObject(value)).toBe(false)
+		}
+	})
+
+	it('applies the reserved server identity only to result metadata populations', () => {
+		const valid = {
+			[MCP_META_SERVER]: { name: 'server', version: '1.0.0', extension: true },
+			'vendor.example/trace': { id: 'trace-1' },
+		}
+		const invalid = { [MCP_META_SERVER]: 7 }
+
+		expect(isMCPResultMetaObject(valid)).toBe(true)
+		expect(isMCPResultMetaObject(invalid)).toBe(false)
+		expect(isMCPMetaObject(invalid)).toBe(true)
+		expect(isMCPCallResult({ resultType: 'complete', content: [], _meta: invalid })).toBe(false)
+		expect(
+			isMCPInputResult({
+				resultType: 'input_required',
+				requestState: 'opaque',
+				_meta: invalid,
+			}),
+		).toBe(false)
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(isMCPResultMetaObject(proxy)).toBe(false)
+	})
+
+	it('accepts only the dated logging-level literals', () => {
+		for (const level of [
+			'debug',
+			'info',
+			'notice',
+			'warning',
+			'error',
+			'critical',
+			'alert',
+			'emergency',
+		]) {
+			expect(isMCPLoggingLevel(level)).toBe(true)
+		}
+		for (const level of ['warn', 'fatal', 1, undefined]) {
+			expect(isMCPLoggingLevel(level)).toBe(false)
+		}
+	})
+
+	it('validates complete identities and contains hostile identity values', () => {
+		expect(
+			isMCPIdentity({
+				name: 'agent',
+				version: '1.0.0',
+				title: 'Agent',
+				description: 'Operator agent',
+				websiteUrl: 'https://example.test/about',
+				icons: [{ src: 'data:image/png;base64,' }],
+			}),
+		).toBe(true)
+		expect(isMCPIdentity({ name: 'agent', version: '1', websiteUrl: 'relative' })).toBe(false)
+		expect(isMCPIcon({ src: 'resource:icon', sizes: ['16x16', 'any'], theme: 'dark' })).toBe(true)
+
+		const accessor = Object.defineProperty({}, 'name', {
+			enumerable: true,
+			get() {
+				throw new Error('must not escape')
+			},
+		})
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(isMCPIdentity(accessor)).toBe(false)
+		expect(isMCPIdentity(proxy)).toBe(false)
+	})
+
+	it('accepts exact open client capabilities and rejects malformed known declarations', () => {
+		expect(
+			isMCPClientCapabilities({
+				custom: { enabled: true },
+				experimental: { feature: { limit: 2 } },
+				roots: {},
+				sampling: { context: {}, tools: {}, extension: true },
+				elicitation: {},
+				extensions: { 'vendor.example/feature': { enabled: true } },
+			}),
+		).toBe(true)
+		expect(isMCPClientCapabilities({ elicitation: { url: {}, future: true } })).toBe(true)
+		for (const value of [
+			{ custom: true },
+			{ sampling: { context: true } },
+			{ elicitation: { future: {} } },
+			{ extensions: { feature: {} } },
+			{ extensions: { 'vendor.example/feature': true } },
+		]) {
+			expect(isMCPClientCapabilities(value)).toBe(false)
+		}
+	})
+
+	it('accepts exact open server capabilities and rejects malformed known declarations', () => {
+		expect(
+			isMCPServerCapabilities({
+				custom: { enabled: true },
+				logging: {},
+				completions: {},
+				prompts: { listChanged: true },
+				resources: { subscribe: true, listChanged: false },
+				tools: { listChanged: false },
+				extensions: { 'vendor.example/feature': { enabled: true } },
+			}),
+		).toBe(true)
+		for (const value of [
+			{ custom: false },
+			{ tools: { listChanged: 'yes' } },
+			{ resources: { subscribe: 1 } },
+			{ extensions: { feature: {} } },
+			{ extensions: { 'vendor.example/feature': Number.NaN } },
+		]) {
+			expect(isMCPServerCapabilities(value)).toBe(false)
+		}
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(isMCPClientCapabilities(proxy)).toBe(false)
+		expect(isMCPServerCapabilities(proxy)).toBe(false)
+	})
+})
+
+describe('isJSONRPCId', () => {
 	it('accepts a string id', () => {
-		expect(isRequestId('abc')).toBe(true)
+		expect(isJSONRPCId('abc')).toBe(true)
 	})
 
-	it('accepts a numeric id', () => {
-		expect(isRequestId(1)).toBe(true)
+	it('accepts an empty string, which the dated schema does not forbid', () => {
+		expect(isJSONRPCId('')).toBe(true)
 	})
 
-	it('accepts an absent id (undefined ⇒ a notification)', () => {
-		expect(isRequestId(undefined)).toBe(true)
+	it('accepts a finite integer id, including zero and a negative one', () => {
+		expect(isJSONRPCId(1)).toBe(true)
+		expect(isJSONRPCId(0)).toBe(true)
+		expect(isJSONRPCId(-0)).toBe(true)
+		expect(isJSONRPCId(-7)).toBe(true)
 	})
 
-	it('rejects a null id (valid only on a response)', () => {
-		expect(isRequestId(null)).toBe(false)
+	it('rejects an absent id, because absence is not an id', () => {
+		expect(isJSONRPCId(undefined)).toBe(false)
 	})
 
-	it('rejects an object, an array, and a boolean', () => {
-		for (const value of [{}, { id: 1 }, [], [1], true, false]) {
-			expect(isRequestId(value)).toBe(false)
+	it('rejects a null id, which MCP omits rather than sends', () => {
+		expect(isJSONRPCId(null)).toBe(false)
+	})
+
+	it('rejects an object, an array, a boolean, and a non-integer number', () => {
+		for (const value of [
+			{},
+			{ id: 1 },
+			[],
+			[1],
+			true,
+			false,
+			1.5,
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+		]) {
+			expect(isJSONRPCId(value)).toBe(false)
+		}
+	})
+
+	// Totality is "answers, never throws". The corpus deliberately contains legal ids
+	// (`''`, `0`, `-0`) alongside hostile shapes, so the assertion here is that every one
+	// gets a boolean answer — the membership assertions above are what pin which answer.
+	it('answers every value in the shared adversarial corpus without throwing', () => {
+		for (const value of createHostileCorpus()) {
+			expect(typeof isJSONRPCId(value)).toBe('boolean')
 		}
 	})
 })
@@ -140,11 +654,11 @@ describe('isMCPVersion', () => {
 	})
 })
 
-describe('isSubscriptionFilter', () => {
+describe('isMCPSubscriptionFilter', () => {
 	it('accepts empty, complete, and extension-bearing filters', () => {
-		expect(isSubscriptionFilter({})).toBe(true)
+		expect(isMCPSubscriptionFilter({})).toBe(true)
 		expect(
-			isSubscriptionFilter({
+			isMCPSubscriptionFilter({
 				toolsListChanged: true,
 				promptsListChanged: false,
 				resourcesListChanged: true,
@@ -163,11 +677,11 @@ describe('isSubscriptionFilter', () => {
 			null,
 			[],
 		]) {
-			expect(isSubscriptionFilter(value)).toBe(false)
+			expect(isMCPSubscriptionFilter(value)).toBe(false)
 		}
 		const { proxy, revoke } = Proxy.revocable({}, {})
 		revoke()
-		expect(isSubscriptionFilter(proxy)).toBe(false)
+		expect(isMCPSubscriptionFilter(proxy)).toBe(false)
 	})
 })
 
@@ -185,23 +699,76 @@ describe('multi-round-trip validators', () => {
 		for (const schema of [
 			{ type: 'boolean', default: true },
 			{ type: 'number', minimum: 0, maximum: 5, default: 2 },
-			{ type: 'integer', minimum: 1 },
+			{ type: 'integer', minimum: 5, maximum: 1, default: 1.5 },
 			{ type: 'string', format: 'email', minLength: 3 },
+			{ type: 'string', enum: ['yes', 'no'], default: 'yes' },
+			{ type: 'string', enum: ['yes'], enumNames: ['Yes'] },
 			{ type: 'string', oneOf: [{ const: 'yes', title: 'Yes' }] },
 			{ type: 'array', items: { type: 'string', enum: ['one'] }, default: ['one'] },
 			{ type: 'array', items: { anyOf: [{ const: 'one', title: 'One' }] } },
 		]) {
-			expect(isElicitPrimitiveSchema(schema)).toBe(true)
+			expect(isMCPElicitFieldSchema(schema)).toBe(true)
 		}
-		expect(isElicitPrimitiveSchema({ type: 'object' })).toBe(false)
-		expect(isElicitPrimitiveSchema({ type: 'string', format: 'phone' })).toBe(false)
-		expect(isElicitPrimitiveSchema({ type: 'array', items: { type: 'string' } })).toBe(false)
-		expect(isElicitPrimitiveSchema({ type: 'array', items: { anyOf: [{ const: 1 }] } })).toBe(false)
+		expect(isMCPElicitFieldSchema({ type: 'object' })).toBe(false)
+		expect(isMCPElicitFieldSchema({ type: 'string', format: 'phone' })).toBe(false)
+		expect(isMCPElicitFieldSchema({ type: 'number', minimum: Number.NaN })).toBe(false)
+		expect(isMCPElicitFieldSchema({ type: 'integer', default: Number.POSITIVE_INFINITY })).toBe(
+			false,
+		)
+		expect(isMCPElicitFieldSchema({ type: 'string', minLength: -1 })).toBe(false)
+		expect(isMCPElicitFieldSchema({ type: 'string', maxLength: 1.5 })).toBe(false)
+		expect(isMCPElicitFieldSchema({ type: 'string', enumNames: ['orphan'] })).toBe(false)
+		expect(
+			isMCPElicitFieldSchema({
+				type: 'string',
+				enum: ['one'],
+				enumNames: ['One'],
+				minLength: 1,
+				format: 'email',
+				extension: { enabled: true },
+			}),
+		).toBe(true)
+		for (const schema of [
+			{ type: 'string', enum: ['one', 2] },
+			{ type: 'string', enum: ['one'], enumNames: ['One', 2] },
+			{ type: 'string', oneOf: [{ const: 'one', title: 1 }] },
+			{ type: 'array', items: { type: 'number', enum: ['one'] } },
+			{ type: 'array', items: { enum: ['one'] } },
+			{ type: 'array', items: { type: 'string', enum: ['one', 2] } },
+			{ type: 'array', items: { anyOf: [{ const: 'one', title: 1 }] } },
+		]) {
+			expect(isMCPElicitFieldSchema(schema)).toBe(false)
+		}
+		expect(
+			isMCPElicitFieldSchema({
+				type: 'string',
+				enum: ['one'],
+				oneOf: [{ const: 'one', title: 'One' }],
+				extension: true,
+			}),
+		).toBe(true)
+		expect(
+			isMCPElicitFieldSchema({
+				type: 'array',
+				items: {
+					type: 'string',
+					enum: ['one'],
+					anyOf: [{ const: 'two', title: 'Two' }],
+					extension: true,
+				},
+				default: ['outside'],
+			}),
+		).toBe(true)
+		expect(isMCPElicitFieldSchema({ type: 'array', items: { type: 'string' } })).toBe(false)
+		expect(isMCPElicitFieldSchema({ type: 'array', items: { anyOf: [{ const: 1 }] } })).toBe(false)
+		expect(
+			isMCPElicitFieldSchema({ type: 'array', minItems: -1, items: { type: 'string', enum: [] } }),
+		).toBe(false)
 	})
 
 	it('validates both elicitation modes while retaining deprecated legal input union members', () => {
 		expect(
-			isElicitRequest({
+			isMCPElicitRequest({
 				method: 'elicitation/create',
 				params: {
 					message: 'Approve?',
@@ -214,7 +781,7 @@ describe('multi-round-trip validators', () => {
 			}),
 		).toBe(true)
 		expect(
-			isElicitRequest({
+			isMCPElicitRequest({
 				method: 'elicitation/create',
 				params: {
 					message: 'Approve?',
@@ -226,13 +793,19 @@ describe('multi-round-trip validators', () => {
 			}),
 		).toBe(false)
 		expect(
-			isElicitRequest({
+			isMCPElicitRequest({
 				method: 'elicitation/create',
 				params: { mode: 'url', message: 'Authenticate', url: 'https://example.test' },
 			}),
 		).toBe(true)
 		expect(
-			isInputRequests({
+			isMCPElicitRequest({
+				method: 'elicitation/create',
+				params: { mode: 'url', message: 'Authenticate', url: 'relative' },
+			}),
+		).toBe(false)
+		expect(
+			isMCPInputRequestMap({
 				sample: { method: 'sampling/createMessage', params: {} },
 				roots: { method: 'roots/list' },
 			}),
@@ -251,43 +824,270 @@ describe('multi-round-trip validators', () => {
 			},
 		}
 
-		expect(isInputRequests(requests)).toBe(true)
-		expect(isInputRequests([requests.confirm])).toBe(false)
-		expect(isInputRequiredResult({ resultType: 'input_required', inputRequests: requests })).toBe(
-			true,
-		)
+		expect(isMCPInputRequestMap(requests)).toBe(true)
+		expect(isMCPInputRequestMap([requests.confirm])).toBe(false)
+		expect(isMCPInputResult({ resultType: 'input_required', inputRequests: requests })).toBe(true)
 		expect(
-			isInputRequiredResult({
+			isMCPInputResult({
 				resultType: 'input_required',
 				inputRequests: requests,
 				requestState: 'opaque',
 			}),
 		).toBe(true)
-		expect(isInputRequiredResult({ resultType: 'input_required', requestState: 'opaque' })).toBe(
-			true,
-		)
-		expect(isInputRequiredResult({ resultType: 'input_required' })).toBe(false)
+		expect(isMCPInputResult({ resultType: 'input_required', requestState: 'opaque' })).toBe(true)
+		expect(isMCPInputResult({ resultType: 'input_required' })).toBe(false)
 		expect(
-			isInputRequiredResult({ resultType: 'input_required', inputRequests: [requests.confirm] }),
+			isMCPInputResult({ resultType: 'input_required', inputRequests: [requests.confirm] }),
 		).toBe(false)
 	})
 
 	it('validates elicitation result values and remains total over hostile input', () => {
 		expect(
-			isElicitResult({
+			isMCPElicitResult({
 				action: 'accept',
 				content: { approved: true, count: 2, tags: ['one', 'two'] },
 			}),
 		).toBe(true)
-		expect(isElicitResult({ action: 'decline' })).toBe(true)
-		expect(isElicitResult({ action: 'accept', content: { nested: {} } })).toBe(false)
-		expect(isElicitResult({ action: 'unknown' })).toBe(false)
+		expect(isMCPElicitResult({ action: 'decline' })).toBe(true)
+		expect(isMCPElicitResult({ action: 'accept' })).toBe(true)
+		expect(isMCPElicitResult({ action: 'decline', content: {} })).toBe(false)
+		expect(isMCPElicitResult({ action: 'cancel', content: {} })).toBe(false)
+		expect(isMCPElicitResult({ action: 'accept', content: { nested: {} } })).toBe(false)
+		expect(isMCPElicitResult({ action: 'accept', content: { ratio: 0.5 } })).toBe(true)
+		expect(isMCPElicitResult({ action: 'accept', content: { count: Number.NaN } })).toBe(false)
+		expect(
+			isMCPElicitResult({ action: 'accept', content: { count: Number.POSITIVE_INFINITY } }),
+		).toBe(false)
+		expect(isMCPElicitResult({ action: 'accept', content: { tags: ['one', 2] } })).toBe(false)
+		expect(isMCPElicitResult({ action: 'unknown' })).toBe(false)
 
 		const { proxy, revoke } = Proxy.revocable({}, {})
 		revoke()
 		expect(isFormElicitationSupported(proxy)).toBe(false)
-		expect(isInputRequests(proxy)).toBe(false)
-		expect(isInputRequiredResult(proxy)).toBe(false)
+		expect(isMCPInputRequestMap(proxy)).toBe(false)
+		expect(isMCPInputResult(proxy)).toBe(false)
+	})
+
+	it('validates the issued object schema on its own, open to unrecognized annotations', () => {
+		expect(isMCPElicitSchema({ type: 'object', properties: {} })).toBe(true)
+		expect(
+			isMCPElicitSchema({
+				$schema: 'https://json-schema.org/draft/2020-12/schema',
+				type: 'object',
+				properties: { approved: { type: 'boolean' } },
+				required: ['approved'],
+				title: 'anything else is data',
+			}),
+		).toBe(true)
+		expect(isMCPElicitSchema({ type: 'array', properties: {} })).toBe(false)
+		expect(isMCPElicitSchema({ type: 'object' })).toBe(false)
+		expect(isMCPElicitSchema({ type: 'object', properties: [] })).toBe(false)
+		expect(isMCPElicitSchema({ type: 'object', properties: {}, required: 'approved' })).toBe(false)
+		expect(isMCPElicitSchema({ type: 'object', properties: {}, required: [1] })).toBe(false)
+		expect(isMCPElicitSchema({ type: 'object', properties: {}, $schema: 1 })).toBe(false)
+		expect(isMCPElicitSchema({ type: 'object', properties: { bad: { type: 'object' } } })).toBe(
+			false,
+		)
+		for (const value of createHostileCorpus()) {
+			expect(isMCPElicitSchema(value)).toBe(false)
+		}
+	})
+})
+
+// `isElicitContent` is the guard that makes a bound schema an ENFORCED one. Its membership
+// rule is "a JSON record whose every value is an MCPElicitValue, and whose DECLARED names
+// additionally satisfy their field schema" — so the rows below draw from inside that rule
+// (declared names, wrong in schema-specific ways) and from outside it (undeclared names,
+// non-primitive values, and an unenforceable schema, which admits nothing at all).
+describe('isElicitContent', () => {
+	const schema: MCPElicitSchema = {
+		type: 'object',
+		properties: {
+			approved: { type: 'boolean' },
+			ratio: { type: 'number', minimum: 0, maximum: 1 },
+			count: { type: 'integer', minimum: 1, maximum: 5 },
+			label: { type: 'string', minLength: 2, maxLength: 4 },
+			choice: { type: 'string', enum: ['alpha', 'beta'] },
+			titled: { type: 'string', oneOf: [{ const: 'one', title: 'One' }] },
+			home: { type: 'string', format: 'uri' },
+			mail: { type: 'string', format: 'email' },
+			day: { type: 'string', format: 'date' },
+			moment: { type: 'string', format: 'date-time' },
+			tags: {
+				type: 'array',
+				minItems: 1,
+				maxItems: 2,
+				items: { type: 'string', enum: ['a', 'b'] },
+			},
+			picks: { type: 'array', items: { anyOf: [{ const: 'x', title: 'X' }] } },
+		},
+		required: ['approved'],
+	}
+
+	it('accepts a complete legal response, and undeclared properties beside it', () => {
+		expect(
+			isElicitContent(
+				{
+					approved: true,
+					ratio: 0.5,
+					count: 3,
+					label: 'abc',
+					choice: 'beta',
+					titled: 'one',
+					home: 'https://example.test/path',
+					mail: 'operator@example.test',
+					day: '2026-08-07',
+					moment: '2026-08-07T12:30:00Z',
+					tags: ['a', 'b'],
+					picks: ['x'],
+					// Undeclared: the restricted schema is open, so this is data, not a violation.
+					comment: 'anything the client wanted to add',
+				},
+				schema,
+			),
+		).toBe(true)
+		expect(isElicitContent({ approved: false }, schema)).toBe(true)
+		expect(isElicitContent({}, { type: 'object', properties: {} })).toBe(true)
+	})
+
+	it('refuses a required name, a wrong type, and every declared bound', () => {
+		for (const content of [
+			{},
+			{ ratio: 0.5 },
+			{ approved: 'yes' },
+			{ approved: true, ratio: 2 },
+			{ approved: true, ratio: -0.5 },
+			{ approved: true, count: 2.5 },
+			{ approved: true, count: 0 },
+			{ approved: true, count: 6 },
+			{ approved: true, label: 'a' },
+			{ approved: true, label: 'abcde' },
+			{ approved: true, choice: 'gamma' },
+			{ approved: true, titled: 'two' },
+			{ approved: true, home: 'not-absolute' },
+			{ approved: true, mail: 'operator@localhost' },
+			{ approved: true, day: '2026-13-07' },
+			{ approved: true, moment: '2026-08-07 12:30:00' },
+			// RFC 3339 §5.6 defines `date-mday` as 01-28/29/30/31 BASED ON the month and year,
+			// so a syntactically well-formed triple that names no day on the calendar is not a
+			// date. These are drawn from OUTSIDE the shape class the field regex already ranges
+			// over, which is the only place a shape-only check can be wrong.
+			{ approved: true, day: '2026-02-30' },
+			{ approved: true, day: '2026-04-31' },
+			{ approved: true, day: '2025-02-29' },
+			{ approved: true, day: '2100-02-29' },
+			{ approved: true, moment: '2026-02-30T00:00:00Z' },
+			{ approved: true, moment: '2025-02-29T12:00:00+01:00' },
+			{ approved: true, tags: [] },
+			{ approved: true, tags: ['a', 'b', 'a'] },
+			{ approved: true, tags: ['c'] },
+			{ approved: true, picks: ['y'] },
+			{ approved: true, count: 'three' },
+			{ approved: true, tags: 'a' },
+		]) {
+			expect(isElicitContent(content, schema)).toBe(false)
+		}
+	})
+
+	it('refuses a value no elicitation response may carry, declared or not', () => {
+		expect(isElicitContent({ approved: true, nested: { deep: true } }, schema)).toBe(false)
+		expect(isElicitContent({ approved: true, nothing: null }, schema)).toBe(false)
+		expect(isElicitContent({ approved: true, mixed: ['one', 2] }, schema)).toBe(false)
+		expect(isElicitContent({ approved: true, count: Number.NaN }, schema)).toBe(false)
+	})
+
+	// The population boundary, drawn from OUTSIDE the guard's membership rule: an
+	// unenforceable schema admits nothing, because a schema that cannot be checked is never a
+	// permissive one — the strictest failure mode is the only safe one here.
+	it('admits nothing under an unenforceable schema and stays total over hostile input', () => {
+		for (const value of createHostileCorpus()) {
+			expect(isElicitContent({ approved: true }, value)).toBe(false)
+			expect(isElicitContent(value, schema)).toBe(false)
+		}
+		expect(isElicitContent({ approved: true }, { type: 'object' })).toBe(false)
+		expect(isElicitContent({ approved: true }, { type: 'object', properties: { a: 1 } })).toBe(
+			false,
+		)
+	})
+})
+
+// The two RFC 3339 format guards. The membership rule is "a well-formed spelling naming a
+// day that exists", so the rows are drawn from BOTH sides of it: bad shapes (the class a
+// regex already ranges over) and well-formed shapes naming impossible days (the class a
+// shape-only check silently admits).
+describe('isRFC3339Date', () => {
+	it('accepts every real month length, including both leap-rule branches', () => {
+		for (const value of [
+			'2026-01-31',
+			'2026-02-28',
+			'2024-02-29',
+			'2000-02-29',
+			'2026-04-30',
+			'2026-06-30',
+			'2026-09-30',
+			'2026-11-30',
+			'2026-12-31',
+			'0001-01-01',
+		]) {
+			expect(isRFC3339Date(value)).toBe(true)
+		}
+	})
+
+	it('refuses a day the calendar does not have', () => {
+		for (const value of ['2026-02-30', '2026-04-31', '2025-02-29', '2100-02-29', '2026-06-31']) {
+			expect(isRFC3339Date(value)).toBe(false)
+		}
+	})
+
+	it('refuses a malformed spelling and stays total over hostile input', () => {
+		for (const value of ['2026-13-01', '2026-00-01', '2026-01-00', '2026-1-01', '2026/01/01', '']) {
+			expect(isRFC3339Date(value)).toBe(false)
+		}
+		for (const value of createHostileCorpus()) {
+			expect(isRFC3339Date(value)).toBe(false)
+		}
+	})
+})
+
+describe('isRFC3339DateTime', () => {
+	it('accepts the offset forms, a fractional second, and a leap second', () => {
+		for (const value of [
+			'2026-08-07T12:30:00Z',
+			'2026-08-07t12:30:00z',
+			'2024-02-29T00:00:00+01:00',
+			'2026-08-07T23:59:60Z',
+			'2026-08-07T12:30:00.123456-05:30',
+		]) {
+			expect(isRFC3339DateTime(value)).toBe(true)
+		}
+	})
+
+	it('refuses a day the calendar does not have', () => {
+		for (const value of [
+			'2026-02-30T00:00:00Z',
+			'2025-02-29T12:00:00+01:00',
+			'2026-04-31T00:00:00Z',
+		]) {
+			expect(isRFC3339DateTime(value)).toBe(false)
+		}
+	})
+
+	// The spellings a `Date.parse` repair would have started ACCEPTING. Refusing them is as
+	// much of the contract as refusing an impossible day, so they are asserted rather than
+	// assumed to have survived.
+	it('refuses a non-RFC-3339 spelling of a perfectly real instant', () => {
+		for (const value of [
+			'2026-01-31 10:00:00Z',
+			'2026-01-31T10:00:00',
+			'2026-01-31',
+			'2026-01-31T24:00:00Z',
+			'2026-01-31T10:00:00+24:00',
+		]) {
+			expect(isRFC3339DateTime(value)).toBe(false)
+		}
+		for (const value of createHostileCorpus()) {
+			expect(isRFC3339DateTime(value)).toBe(false)
+		}
 	})
 })
 
@@ -300,8 +1100,8 @@ describe('isJSONRPCRequest', () => {
 		expect(isJSONRPCRequest({ jsonrpc: '2.0', method: 'ping', id: 'abc' })).toBe(true)
 	})
 
-	it('accepts a notification (no id)', () => {
-		expect(isJSONRPCRequest({ jsonrpc: '2.0', method: 'notifications/initialized' })).toBe(true)
+	it('rejects a notification, which is a distinct arm rather than an id-less request', () => {
+		expect(isJSONRPCRequest({ jsonrpc: '2.0', method: 'notifications/initialized' })).toBe(false)
 	})
 
 	it('accepts a request with a params record', () => {
@@ -334,6 +1134,247 @@ describe('isJSONRPCRequest', () => {
 		for (const value of [null, undefined, 42, 'x', [], [1], true]) {
 			expect(isJSONRPCRequest(value)).toBe(false)
 		}
+		const accessor = Object.defineProperty({}, 'jsonrpc', {
+			enumerable: true,
+			get() {
+				throw new Error('must not escape')
+			},
+		})
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(isJSONRPCRequest(accessor)).toBe(false)
+		expect(isJSONRPCRequest(proxy)).toBe(false)
+	})
+
+	it('rejects accessor, hidden, and own-undefined request populations', () => {
+		const accessor = Object.defineProperty({ jsonrpc: '2.0', id: 1 }, 'method', {
+			enumerable: true,
+			get: () => 'ping',
+		})
+		const hidden = Object.defineProperty({ jsonrpc: '2.0', id: 1 }, 'method', {
+			enumerable: false,
+			value: 'ping',
+		})
+
+		expect(isJSONRPCRequest(accessor)).toBe(false)
+		expect(isJSONRPCRequest(hidden)).toBe(false)
+		expect(isJSONRPCRequest({ jsonrpc: '2.0', method: 'ping', params: undefined })).toBe(false)
+		expect(
+			isJSONRPCRequest({
+				jsonrpc: '2.0',
+				method: 'ping',
+				params: Object.defineProperty({}, 'hidden', { enumerable: false, value: true }),
+			}),
+		).toBe(false)
+	})
+
+	it('rejects fractional and non-finite numeric ids', () => {
+		for (const id of [1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+			expect(isJSONRPCRequest({ jsonrpc: '2.0', method: 'ping', id })).toBe(false)
+		}
+	})
+})
+
+describe('isJSONRPCNotification', () => {
+	it('accepts an id-less call, with and without params', () => {
+		expect(isJSONRPCNotification({ jsonrpc: '2.0', method: 'notifications/initialized' })).toBe(
+			true,
+		)
+		expect(
+			isJSONRPCNotification({ jsonrpc: '2.0', method: 'notifications/progress', params: { a: 1 } }),
+		).toBe(true)
+	})
+
+	it('rejects a request, whatever the id is', () => {
+		for (const id of ['abc', '', 0, -7, 1]) {
+			expect(isJSONRPCNotification({ jsonrpc: '2.0', method: 'ping', id })).toBe(false)
+		}
+	})
+
+	it('rejects an own id member even when its value is not a legal id', () => {
+		expect(isJSONRPCNotification({ jsonrpc: '2.0', method: 'ping', id: null })).toBe(false)
+	})
+
+	it('rejects a wrong version, a non-string method, and a non-record params', () => {
+		expect(isJSONRPCNotification({ jsonrpc: '1.0', method: 'ping' })).toBe(false)
+		expect(isJSONRPCNotification({ jsonrpc: '2.0', method: 42 })).toBe(false)
+		expect(isJSONRPCNotification({ jsonrpc: '2.0', method: 'ping', params: [1] })).toBe(false)
+	})
+
+	it('is total over the shared adversarial corpus', () => {
+		for (const value of createHostileCorpus()) {
+			expect(isJSONRPCNotification(value)).toBe(false)
+		}
+	})
+})
+
+// The membership rule of the invocation arms: `isJSONRPCRequest` needs an own `id` whose
+// value `isJSONRPCId` accepts; `isJSONRPCNotification` needs NO own `id` member. Those
+// rules cannot both hold, and the corpus below is drawn from OUTSIDE the record population
+// they are stated over as well as from inside it, so the check is exercised where the
+// guards are meant to answer and where they are meant to be silent.
+describe('isJSONRPCRequest / isJSONRPCNotification — mutual exclusivity', () => {
+	it('never answers true for both arms on any input', () => {
+		const corpus: readonly unknown[] = [
+			...createHostileCorpus(),
+			{ jsonrpc: '2.0', method: 'ping', id: 1 },
+			{ jsonrpc: '2.0', method: 'ping', id: '' },
+			{ jsonrpc: '2.0', method: 'ping' },
+			{ jsonrpc: '2.0', method: 'ping', id: null },
+			{ jsonrpc: '2.0', method: 'ping', id: 1.5 },
+			{ jsonrpc: '2.0', method: 'ping', params: { a: 1 } },
+			{ jsonrpc: '2.0', id: 1 },
+		]
+		let overlaps = 0
+		for (const value of corpus) {
+			if (isJSONRPCRequest(value) && isJSONRPCNotification(value)) overlaps += 1
+		}
+
+		expect(overlaps).toBe(0)
+		// The negative control that proves the counter can register an overlap at all: two
+		// predicates that DO both hold, over the same corpus and the same loop.
+		let control = 0
+		for (const value of corpus) {
+			if (isJSONRPCId(value) || value === undefined) control += 0
+			else control += 1
+		}
+		expect(control).toBeGreaterThan(0)
+	})
+
+	it('classifies every valid invocation as exactly one arm', () => {
+		const request = { jsonrpc: '2.0', method: 'ping', id: 1 }
+		const notification = { jsonrpc: '2.0', method: 'notifications/initialized' }
+
+		expect(isJSONRPCInvocation(request)).toBe(true)
+		expect(isJSONRPCInvocation(notification)).toBe(true)
+		expect(isJSONRPCRequest(request)).toBe(true)
+		expect(isJSONRPCNotification(request)).toBe(false)
+		expect(isJSONRPCNotification(notification)).toBe(true)
+		expect(isJSONRPCRequest(notification)).toBe(false)
+	})
+
+	it('is total over the shared adversarial corpus', () => {
+		for (const value of createHostileCorpus()) {
+			expect(isJSONRPCInvocation(value)).toBe(false)
+		}
+	})
+})
+
+// Row 10 / row 11: the open modern result and the legacy arm are distinguished by ONE
+// fact — whether `resultType` is there — and that is what keeps a concrete result's
+// literal discriminant meaningful while the response arm stays open.
+describe('isMCPResult / isMCPLegacyResult', () => {
+	it('accepts any string resultType, including one this package does not know', () => {
+		expect(isMCPResult({ resultType: 'complete' })).toBe(true)
+		expect(isMCPResult({ resultType: 'input_required', requestState: 'opaque' })).toBe(true)
+		expect(isMCPResult({ resultType: 'task', taskId: 't-1' })).toBe(true)
+		expect(isMCPResult({ resultType: '' })).toBe(true)
+	})
+
+	it('rejects a missing or non-string resultType', () => {
+		expect(isMCPResult({})).toBe(false)
+		expect(isMCPResult({ resultType: 5 })).toBe(false)
+		expect(isMCPResult({ resultType: null })).toBe(false)
+	})
+
+	it('rejects result metadata that is not exact result metadata', () => {
+		expect(isMCPResult({ resultType: 'complete', _meta: { 'bad key': 1 } })).toBe(false)
+		expect(
+			isMCPResult({ resultType: 'complete', _meta: { 'io.modelcontextprotocol/serverInfo': {} } }),
+		).toBe(false)
+		expect(
+			isMCPResult({
+				resultType: 'complete',
+				_meta: { 'io.modelcontextprotocol/serverInfo': { name: 'a', version: '1' } },
+			}),
+		).toBe(true)
+	})
+
+	it('accepts the legacy arm exactly when no resultType is present', () => {
+		expect(isMCPLegacyResult({})).toBe(true)
+		expect(isMCPLegacyResult({ tools: [] })).toBe(true)
+		expect(isMCPLegacyResult({ protocolVersion: '2025-06-18' })).toBe(true)
+		expect(isMCPLegacyResult({ resultType: 'complete' })).toBe(false)
+		expect(isMCPLegacyResult({ resultType: 5 })).toBe(false)
+	})
+
+	it('never answers true for both arms, and is total over the adversarial corpus', () => {
+		const corpus: readonly unknown[] = [
+			...createHostileCorpus(),
+			{},
+			{ tools: [] },
+			{ resultType: 'complete' },
+			{ resultType: 5 },
+			{ resultType: 'complete', _meta: { 'bad key': 1 } },
+		]
+		let overlaps = 0
+		for (const value of corpus) {
+			if (isMCPResult(value) && isMCPLegacyResult(value)) overlaps += 1
+		}
+
+		expect(overlaps).toBe(0)
+		// `isMCPLegacyResult` admits any exact-JSON record with no `resultType`, and some
+		// corpus rows are exactly that, so totality here is "answers, never throws".
+		for (const value of createHostileCorpus()) {
+			expect(isMCPResult(value)).toBe(false)
+			expect(typeof isMCPLegacyResult(value)).toBe('boolean')
+		}
+	})
+})
+
+// The membership rule of the response arms: the result arm needs an own `result` and NO
+// own `error`; the error arm needs an own `error` and NO own `result`. Neither can hold
+// with the other, and a both-arms envelope belongs to neither.
+// A `expectTypeOf` assertion is erased at runtime, so what enforces it is `npm run check`;
+// a runtime assertion beside it pins the same fact on real values.
+describe('isJSONRPCResultResponse / isJSONRPCErrorResponse — mutual exclusivity', () => {
+	it('requires an id on the result arm and permits its omission only on the error arm', () => {
+		expectTypeOf<JSONRPCResultResponse['id']>().toEqualTypeOf<JSONRPCId>()
+		expectTypeOf<JSONRPCErrorResponse['id']>().toEqualTypeOf<JSONRPCId | undefined>()
+		expectTypeOf<JSONRPCResponse>().toEqualTypeOf<JSONRPCResultResponse | JSONRPCErrorResponse>()
+	})
+
+	it('forbids the opposite member on each arm', () => {
+		expectTypeOf<JSONRPCResultResponse['error']>().toEqualTypeOf<undefined>()
+		expectTypeOf<JSONRPCErrorResponse['result']>().toEqualTypeOf<undefined>()
+		expectTypeOf<JSONRPCResultResponse>().not.toExtend<JSONRPCErrorResponse>()
+		expectTypeOf<JSONRPCErrorResponse>().not.toExtend<JSONRPCResultResponse>()
+	})
+
+	it('never answers true for both arms on any input', () => {
+		const corpus: readonly unknown[] = [
+			...createHostileCorpus(),
+			{ jsonrpc: '2.0', id: 1, result: { resultType: 'complete' } },
+			{ jsonrpc: '2.0', id: 1, result: {} },
+			{ jsonrpc: '2.0', id: 1, error: { code: -1, message: 'x' } },
+			{ jsonrpc: '2.0', error: { code: -1, message: 'x' } },
+			{ jsonrpc: '2.0', id: 1, result: {}, error: { code: -1, message: 'x' } },
+			{ jsonrpc: '2.0', id: 1 },
+			{ jsonrpc: '2.0', id: null, error: { code: -1, message: 'x' } },
+		]
+		let overlaps = 0
+		for (const value of corpus) {
+			if (isJSONRPCResultResponse(value) && isJSONRPCErrorResponse(value)) overlaps += 1
+		}
+
+		expect(overlaps).toBe(0)
+	})
+
+	it('requires an id on the result arm and permits its absence only on the error arm', () => {
+		expect(isJSONRPCResultResponse({ jsonrpc: '2.0', result: {} })).toBe(false)
+		expect(isJSONRPCErrorResponse({ jsonrpc: '2.0', error: { code: -1, message: 'x' } })).toBe(true)
+		expect(
+			isJSONRPCErrorResponse({ jsonrpc: '2.0', id: null, error: { code: -1, message: 'x' } }),
+		).toBe(false)
+	})
+
+	it('rejects an invocation as either arm, and is total over the adversarial corpus', () => {
+		expect(isJSONRPCResultResponse({ jsonrpc: '2.0', method: 'ping', id: 1 })).toBe(false)
+		expect(isJSONRPCErrorResponse({ jsonrpc: '2.0', method: 'ping', id: 1 })).toBe(false)
+		for (const value of createHostileCorpus()) {
+			expect(isJSONRPCResultResponse(value)).toBe(false)
+			expect(isJSONRPCErrorResponse(value)).toBe(false)
+		}
 	})
 })
 
@@ -342,8 +1383,19 @@ describe('isJSONRPCResponse', () => {
 		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: 1, result: { ok: true } })).toBe(true)
 	})
 
-	it('accepts a success response with a null result value and a null id', () => {
-		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: null, result: null })).toBe(true)
+	it('rejects a null id and a non-object result, neither of which the arms permit', () => {
+		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: null, result: null })).toBe(false)
+		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: 1, result: null })).toBe(false)
+		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: 1, result: 5 })).toBe(false)
+		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: null, error: { code: -1, message: 'x' } })).toBe(
+			false,
+		)
+	})
+
+	it('accepts an error response whose unreadable id is omitted', () => {
+		expect(isJSONRPCResponse({ jsonrpc: '2.0', error: { code: -32_700, message: 'Parse' } })).toBe(
+			true,
+		)
 	})
 
 	it('accepts an error response', () => {
@@ -379,6 +1431,75 @@ describe('isJSONRPCResponse', () => {
 		for (const value of [null, undefined, 0, 'x', [], true]) {
 			expect(isJSONRPCResponse(value)).toBe(false)
 		}
+		const accessor = Object.defineProperty({}, 'jsonrpc', {
+			enumerable: true,
+			get() {
+				throw new Error('must not escape')
+			},
+		})
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(isJSONRPCResponse(accessor)).toBe(false)
+		expect(isJSONRPCResponse(proxy)).toBe(false)
+	})
+
+	it('rejects accessor and hidden response populations', () => {
+		const accessor = Object.defineProperty({ jsonrpc: '2.0', id: 1 }, 'result', {
+			enumerable: true,
+			get: () => ({ ok: true }),
+		})
+		const hidden = Object.defineProperty({ jsonrpc: '2.0', id: 1 }, 'result', {
+			enumerable: false,
+			value: { ok: true },
+		})
+
+		expect(isJSONRPCResponse(accessor)).toBe(false)
+		expect(isJSONRPCResponse(hidden)).toBe(false)
+		expect(
+			isJSONRPCResponse({
+				jsonrpc: '2.0',
+				id: 1,
+				result: Object.defineProperty({}, 'hidden', { enumerable: false, value: true }),
+			}),
+		).toBe(false)
+		expect(
+			isJSONRPCResponse({
+				jsonrpc: '2.0',
+				id: 1,
+				error: {
+					code: -32_600,
+					message: 'bad',
+					data: Object.defineProperty({}, 'value', { enumerable: true, get: () => true }),
+				},
+			}),
+		).toBe(false)
+	})
+
+	it('rejects fractional/non-finite ids and malformed error populations', () => {
+		for (const id of [1.5, Number.NaN, Number.NEGATIVE_INFINITY]) {
+			expect(isJSONRPCResponse({ jsonrpc: '2.0', id, result: {} })).toBe(false)
+		}
+		for (const code of [1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+			expect(
+				isJSONRPCResponse({ jsonrpc: '2.0', id: 1, error: { code, message: 'invalid' } }),
+			).toBe(false)
+		}
+		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: 1, error: undefined })).toBe(false)
+		expect(
+			isJSONRPCResponse({
+				jsonrpc: '2.0',
+				id: 1,
+				error: { code: -32_600, message: 'bad', data: undefined },
+			}),
+		).toBe(false)
+		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: 1, result: {}, error: undefined })).toBe(false)
+		expect(
+			isJSONRPCResponse({
+				jsonrpc: '2.0',
+				id: 1,
+				error: { code: -32_600, message: 'bad', data: Number.NaN },
+			}),
+		).toBe(false)
 	})
 })
 
@@ -452,9 +1573,511 @@ describe('isModernRequest', () => {
 	it('is total over hostile and malformed input', () => {
 		const { proxy, revoke } = Proxy.revocable({}, {})
 		revoke()
-
-		for (const value of [proxy, null, [], { params: { _meta: {} } }]) {
-			expect(isModernRequest(value)).toBe(false)
+		const hidden = {
+			jsonrpc: '2.0',
+			method: 'tools/list',
+			id: 1,
+			params: { _meta: { [MCP_META_VERSION]: '2026-07-28' } },
 		}
+		Object.defineProperty(hidden, 'extra', { value: true })
+
+		for (const value of [proxy, hidden, null, [], { params: { _meta: {} } }]) {
+			expect(isModernRequest(value)).toBe(false)
+			expect(isJSONRPCRequest(value) && isModernRequest(value)).toBe(false)
+		}
+	})
+})
+
+describe('draft Tasks extension validators', () => {
+	it('reads the extension declaration as presence under the extensions record', () => {
+		expect(isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: {} } })).toBe(true)
+		// Presence only — an extension that later defines options must not retroactively
+		// make an option-free declaration invalid.
+		expect(isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: { later: {} } } })).toBe(true)
+		expect(isTaskSupported({ extensions: {} })).toBe(false)
+		expect(isTaskSupported({ [MCP_EXTENSION_TASKS]: {} })).toBe(false)
+		expect(isTaskSupported({ extensions: { 'io.modelcontextprotocol/task': {} } })).toBe(false)
+		// A non-record value is a client speaking a different protocol, not a shorthand.
+		expect(isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: true } })).toBe(false)
+		expect(isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: null } })).toBe(false)
+		expect(isTaskSupported({ elicitation: {} })).toBe(false)
+		expect(isTaskSupported({})).toBe(false)
+	})
+
+	it('answers every value in the shared adversarial corpus without throwing', () => {
+		for (const value of createHostileCorpus()) {
+			expect(isTaskSupported(value)).toBe(false)
+			expect(isMCPTaskResult(value)).toBe(false)
+			expect(isMCPTaskStatus(value)).toBe(false)
+			expect(isMCPTaskDetail(value)).toBe(false)
+		}
+	})
+
+	it('accepts exactly the five lifecycle states', () => {
+		for (const status of ['working', 'input_required', 'completed', 'failed', 'cancelled']) {
+			expect(isMCPTaskStatus(status)).toBe(true)
+		}
+		for (const status of ['done', 'Working', 'pending', '', 0, null]) {
+			expect(isMCPTaskStatus(status)).toBe(false)
+		}
+	})
+
+	// The runtime enforcement of a CONSUMER-supplied manager's declared return shape: its
+	// types are a promise, and this is what stands between a manager that answers a numeric
+	// `taskId` and a client that would receive one.
+	it('validates a task-creation result and rejects every member defect', () => {
+		const created = {
+			resultType: 'task',
+			taskId: 'task-1',
+			status: 'working',
+			createdAt: '1970-01-01T00:00:01.000Z',
+			lastUpdatedAt: '1970-01-01T00:00:01.000Z',
+			ttlMs: null,
+		}
+
+		expect(isMCPTaskResult(created)).toBe(true)
+		// `null` means "no expiry" and is distinct from an absent field, so both are legal.
+		expect(isMCPTaskResult({ ...created, ttlMs: 60_000 })).toBe(true)
+		expect(isMCPTaskResult({ ...created, statusMessage: 'queued', pollIntervalMs: 2_500 })).toBe(
+			true,
+		)
+		expect(isMCPTaskResult({ ...created, resultType: 'complete' })).toBe(false)
+		expect(isMCPTaskResult({ ...created, taskId: 7 })).toBe(false)
+		expect(isMCPTaskResult({ ...created, status: 'done' })).toBe(false)
+		expect(isMCPTaskResult({ ...created, createdAt: 0 })).toBe(false)
+		expect(isMCPTaskResult({ ...created, lastUpdatedAt: null })).toBe(false)
+		expect(isMCPTaskResult({ ...created, ttlMs: 'forever' })).toBe(false)
+		expect(isMCPTaskResult({ ...created, ttlMs: Number.NaN })).toBe(false)
+		expect(isMCPTaskResult({ ...created, statusMessage: 7 })).toBe(false)
+		expect(isMCPTaskResult({ ...created, pollIntervalMs: 'often' })).toBe(false)
+		expect(isMCPTaskResult({ ...created, _meta: { [MCP_META_SERVER]: { name: 'a' } } })).toBe(false)
+	})
+
+	// The same enforcement on the READ side, where `status` selects what else the snapshot owes.
+	// A manager whose TypeScript said `MCPTaskDetail` is still only promising.
+	it('validates a task snapshot and enforces the payload its status owes', () => {
+		const working = {
+			taskId: 'task-1',
+			status: 'working',
+			createdAt: '1970-01-01T00:00:01.000Z',
+			lastUpdatedAt: '1970-01-01T00:00:01.000Z',
+			ttlMs: null,
+		}
+
+		expect(isMCPTaskDetail(working)).toBe(true)
+		expect(isMCPTaskDetail({ ...working, status: 'cancelled' })).toBe(true)
+		expect(isMCPTaskDetail({ ...working, ttlMs: 60_000, pollIntervalMs: 2_500 })).toBe(true)
+		// A creation result is not a snapshot's shape, but the extra discriminator is data the
+		// open contract carries rather than a defect.
+		expect(isMCPTaskDetail({ ...working, resultType: 'task' })).toBe(true)
+		expect(isMCPTaskDetail({ ...working, taskId: 7 })).toBe(false)
+		expect(isMCPTaskDetail({ ...working, status: 'done' })).toBe(false)
+		expect(isMCPTaskDetail({ ...working, ttlMs: Number.NaN })).toBe(false)
+		expect(isMCPTaskDetail({ ...working, pollIntervalMs: 'often' })).toBe(false)
+		// `input_required` owes its requests, `completed` its result, `failed` its error.
+		expect(isMCPTaskDetail({ ...working, status: 'input_required' })).toBe(false)
+		expect(
+			isMCPTaskDetail({
+				...working,
+				status: 'input_required',
+				inputRequests: { approval: { method: 'roots/list' } },
+			}),
+		).toBe(true)
+		expect(isMCPTaskDetail({ ...working, status: 'completed' })).toBe(false)
+		expect(
+			isMCPTaskDetail({ ...working, status: 'completed', result: { resultType: 'complete' } }),
+		).toBe(true)
+		expect(
+			isMCPTaskDetail({
+				...working,
+				status: 'completed',
+				result: { resultType: 'complete', _meta: { 'not a legal key': 1 } },
+			}),
+		).toBe(false)
+		expect(isMCPTaskDetail({ ...working, status: 'failed' })).toBe(false)
+		expect(
+			isMCPTaskDetail({ ...working, status: 'failed', error: { code: -32603, message: 'x' } }),
+		).toBe(true)
+		expect(
+			isMCPTaskDetail({ ...working, status: 'failed', error: { code: -32603.5, message: 'x' } }),
+		).toBe(false)
+	})
+})
+
+// The `error` OBJECT, extracted because a failed response and a `failed` task snapshot owe the
+// same three checks and had been writing them twice.
+describe('isJSONRPCError', () => {
+	it('accepts an integer code with a string message and any data payload', () => {
+		expect(isJSONRPCError({ code: -32602, message: 'Invalid params' })).toBe(true)
+		expect(isJSONRPCError({ code: 0, message: '', data: { any: ['shape'] } })).toBe(true)
+		// `data` is declared `unknown`, so a non-JSON payload is legal here where an exact-JSON
+		// guard would have refused it.
+		expect(isJSONRPCError({ code: 1, message: 'x', data: () => undefined })).toBe(true)
+	})
+
+	it('refuses a non-integer code, a non-string message, and every hostile value', () => {
+		expect(isJSONRPCError({ code: -32602.5, message: 'x' })).toBe(false)
+		expect(isJSONRPCError({ code: Number.NaN, message: 'x' })).toBe(false)
+		expect(isJSONRPCError({ code: '-32602', message: 'x' })).toBe(false)
+		expect(isJSONRPCError({ code: -32602 })).toBe(false)
+		expect(isJSONRPCError({ message: 'x' })).toBe(false)
+		for (const value of createHostileCorpus()) expect(isJSONRPCError(value)).toBe(false)
+	})
+
+	it('agrees with the envelope guard that routes through it', () => {
+		const error = { code: -32700, message: 'Parse error' }
+
+		expect(isJSONRPCErrorResponse({ jsonrpc: '2.0', error })).toBe(isJSONRPCError(error))
+		expect(isJSONRPCErrorResponse({ jsonrpc: '2.0', error: { code: 1.5, message: 'x' } })).toBe(
+			false,
+		)
+	})
+})
+
+// A repaired claim is a NEW claim. `isJSONRPCError` was found non-total at the one door the
+// corpus could reach, and re-verifying the fix where it was found would only prove the fix.
+// So the claim is re-asked at EVERY published door, against the corpus AND against a throwing
+// accessor keyed to each name any guard reads — the class the corpus structurally could not
+// reach, which is how the defect survived a control that ran at it and passed.
+const TOTALITY_SCHEMA: MCPElicitSchema = Object.freeze({
+	type: 'object',
+	properties: Object.freeze({}),
+})
+
+// Every published guard as a unary call. The three guards taking a second argument are given a
+// real one, because a guard starved of its bound would be answering a different question.
+const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = Object.freeze({
+	isAbsoluteURI,
+	isBoundedJSON: (value) => isBoundedJSON(value, { bytes: 4_096, keys: 64, depth: 16 }),
+	isBoundedString: (value) => isBoundedString(value, 4_096),
+	isElicitContent: (value) => isElicitContent(value, TOTALITY_SCHEMA),
+	isFormElicitationSupported,
+	isInitializeRequest,
+	isJSONObject,
+	isJSONRPCError,
+	isJSONRPCErrorResponse,
+	isJSONRPCId,
+	isJSONRPCInvocation,
+	isJSONRPCMessage,
+	isJSONRPCNotification,
+	isJSONRPCRequest,
+	isJSONRPCResponse,
+	isJSONRPCResultResponse,
+	isMCPAnnotations,
+	isMCPBlobResource,
+	isMCPCallResult,
+	isMCPClientCapabilities,
+	isMCPCompletion,
+	isMCPCompletionParams,
+	isMCPCompletionReference,
+	isMCPCompletionResult,
+	isMCPContent,
+	isMCPElicitFieldSchema,
+	isMCPElicitForm,
+	isMCPElicitRequest,
+	isMCPElicitResult,
+	isMCPElicitSchema,
+	isMCPElicitURL,
+	isMCPError,
+	isMCPIcon,
+	isMCPIdentity,
+	isMCPInputRequest,
+	isMCPInputRequestMap,
+	isMCPInputResult,
+	isMCPLegacyResult,
+	isMCPLoggingLevel,
+	isMCPMetaKey,
+	isMCPMetaObject,
+	isMCPProgress,
+	isMCPPaginationParams,
+	isMCPPrompt,
+	isMCPPromptArgument,
+	isMCPPromptGetResult,
+	isMCPPromptMessage,
+	isMCPPromptPage,
+	isMCPResource,
+	isMCPResourceContents,
+	isMCPResourcePage,
+	isMCPResourceTemplate,
+	isMCPResourceTemplatePage,
+	isMCPResult,
+	isMCPResultMetaObject,
+	isMCPServerCapabilities,
+	isMCPStringArguments,
+	isMCPSubscriptionFilter,
+	isMCPTaskDetail,
+	isMCPTaskResult,
+	isMCPTaskStatus,
+	isMCPTextResource,
+	isMCPVersion,
+	isModernRequest,
+	isRFC3339Date,
+	isRFC3339DateTime,
+	isStandardBase64,
+	isTaskSupported,
+})
+
+// The sweep itself, so the guards and their control run the identical loop.
+function sweepGuard(
+	guard: (value: unknown) => boolean,
+	battery: readonly unknown[],
+): readonly number[] {
+	const escaped: number[] = []
+	for (const [index, value] of battery.entries()) {
+		try {
+			guard(value)
+		} catch {
+			escaped.push(index)
+		}
+	}
+	return escaped
+}
+
+// The instrument's negative control, drawn from OUTSIDE the population it certifies: the exact
+// shape `isJSONRPCError` shipped with — two named key reads and no boundary at all. The sweep
+// must REPORT this, or a clean run over the published guards has measured nothing.
+function readsKeysDirectly(value: unknown): boolean {
+	if (typeof value !== 'object' || value === null) return false
+	return (
+		typeof Reflect.get(value, 'code') === 'number' &&
+		typeof Reflect.get(value, 'message') === 'string'
+	)
+}
+
+describe('published guard totality — every door, not the one the defect arrived through', () => {
+	// The sweep is worthless if it silently covers half the surface, so the population is
+	// proven against the barrel before anything is read into the result.
+	it('covers every guard the barrel publishes', () => {
+		const published = Object.keys(core).filter((name) => name.startsWith('is'))
+
+		expect(published.filter((name) => !Object.hasOwn(PUBLISHED_GUARDS, name))).toEqual([])
+		expect(Object.keys(PUBLISHED_GUARDS).filter((name) => !published.includes(name))).toEqual([])
+		expect(published.length).toBeGreaterThan(50)
+	})
+
+	it('reports the unbounded direct key read the published guards must not contain', () => {
+		expect(sweepGuard(readsKeysDirectly, createThrowingKeys(GUARD_KEY_NAMES)).length).toBe(1)
+		// The same battery, the same loop, the repaired guard: bounded where the control escapes.
+		expect(sweepGuard(isJSONRPCError, createThrowingKeys(GUARD_KEY_NAMES))).toEqual([])
+	})
+
+	it('answers false rather than throwing for every hostile value and every throwing key', () => {
+		const battery = [...createHostileCorpus(), ...createThrowingKeys(GUARD_KEY_NAMES)]
+		const escaped: string[] = []
+		for (const [name, guard] of Object.entries(PUBLISHED_GUARDS)) {
+			for (const index of sweepGuard(guard, battery)) escaped.push(`${name}#${String(index)}`)
+		}
+
+		expect(battery.length).toBe(GUARD_KEY_NAMES.length + createHostileCorpus().length)
+		expect(escaped).toEqual([])
+	})
+})
+describe('MCPError', () => {
+	it('preserves the remote message, numeric code, and structured context', () => {
+		const error = new MCPError('Remote failure', -32042, { retry: false })
+
+		expect(error).toBeInstanceOf(Error)
+		expect(error.name).toBe('MCPError')
+		expect(error.message).toBe('Remote failure')
+		expect(error.code).toBe(-32042)
+		expect(error.context).toEqual({ retry: false })
+	})
+
+	it('uses undefined context when the remote error carries no data', () => {
+		expect(new MCPError('Missing', -32601).context).toBeUndefined()
+	})
+
+	it('represents HeaderMismatch without inventing a data payload', () => {
+		const error = new MCPError('Header mismatch', MCP_HEADER_MISMATCH)
+
+		expect(error.code).toBe(-32020)
+		expect(error.context).toBeUndefined()
+	})
+
+	it('preserves MissingRequiredClientCapability data', () => {
+		const context = { requiredCapabilities: { elicitation: { form: {} } } }
+		const error = new MCPError(
+			'Missing required client capability',
+			MCP_MISSING_CAPABILITY,
+			context,
+		)
+
+		expect(error.code).toBe(-32021)
+		expect(error.context).toEqual(context)
+	})
+
+	it('preserves exact UnsupportedProtocolVersion negotiation data', () => {
+		const context = {
+			supported: ['2026-07-28', '2025-11-25', '2025-06-18'],
+			requested: '2024-11-05',
+		}
+		const error = new MCPError('Unsupported protocol version', MCP_UNSUPPORTED_VERSION, context)
+
+		expect(error.code).toBe(-32022)
+		expect(error.context).toEqual(context)
+	})
+})
+
+describe('isMCPError', () => {
+	it('narrows only real MCPError instances', () => {
+		const error = new MCPError('Remote failure', -32042)
+
+		expect(isMCPError(error)).toBe(true)
+		expect(isMCPError(new Error('Remote failure'))).toBe(false)
+		expect(isMCPError({ name: 'MCPError', code: -32042, context: undefined })).toBe(false)
+	})
+
+	it('is total over hostile and primitive inputs', () => {
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+
+		for (const value of [undefined, null, true, 0, '', Symbol('error'), proxy]) {
+			expect(isMCPError(value)).toBe(false)
+		}
+	})
+})
+
+describe('the invocation arms', () => {
+	it('requires an id on a request and forbids one on a notification', () => {
+		expectTypeOf<JSONRPCRequest['id']>().toEqualTypeOf<JSONRPCId>()
+		expectTypeOf<JSONRPCNotification['id']>().toEqualTypeOf<undefined>()
+		expectTypeOf<JSONRPCInvocation>().toEqualTypeOf<JSONRPCRequest | JSONRPCNotification>()
+	})
+
+	it('keeps a request and a notification mutually unassignable', () => {
+		expectTypeOf<JSONRPCRequest>().not.toExtend<JSONRPCNotification>()
+		expectTypeOf<JSONRPCNotification>().not.toExtend<JSONRPCRequest>()
+	})
+
+	it('narrows the union on the id at runtime as well as in the type', () => {
+		const invocation: JSONRPCInvocation = createJSONRPCRequest({ method: 'ping', id: 7 })
+		const notification: JSONRPCInvocation = createJSONRPCNotification('notifications/initialized')
+
+		expect(invocation.id).toBe(7)
+		expect(notification.id).toBeUndefined()
+		expect(Object.hasOwn(notification, 'id')).toBe(false)
+	})
+})
+
+describe('the open MCPResult contract', () => {
+	it('accepts an unknown protocol discriminator', () => {
+		expectTypeOf<MCPResult['resultType']>().toEqualTypeOf<string>()
+
+		expect(isMCPResult({ resultType: 'task', taskId: 't-1' })).toBe(true)
+	})
+
+	it('keeps every concrete result assignable without losing its literal', () => {
+		expectTypeOf<MCPCallResult>().toExtend<MCPResult>()
+		expectTypeOf<MCPCallResult['resultType']>().toEqualTypeOf<'complete'>()
+		expectTypeOf<MCPDiscoverResult>().toExtend<MCPResult>()
+		expectTypeOf<MCPDiscoverResult['resultType']>().toEqualTypeOf<'complete'>()
+		expectTypeOf<MCPListResult>().toExtend<MCPResult>()
+		expectTypeOf<MCPListResult['resultType']>().toEqualTypeOf<'complete'>()
+		expectTypeOf<SubscriptionsListenResult>().toExtend<MCPResult>()
+		expectTypeOf<SubscriptionsListenResult['resultType']>().toEqualTypeOf<'complete'>()
+	})
+
+	it('still narrows a known result to its literal through its own guard', () => {
+		const result: MCPResult | MCPLegacyResult = {
+			resultType: 'complete',
+			content: [{ type: 'text', text: 'hi' }],
+		}
+		if (!isMCPCallResult(result)) throw new Error('expected a complete tool result')
+		const discriminant: 'complete' = result.resultType
+
+		expect(discriminant).toBe('complete')
+		expect(result.content).toHaveLength(1)
+	})
+})
+
+describe('the legacy result arm', () => {
+	it('is disjoint from the modern contract in both directions', () => {
+		expectTypeOf<MCPLegacyResult['resultType']>().toEqualTypeOf<undefined>()
+		expectTypeOf<MCPLegacyResult>().not.toExtend<MCPResult>()
+		expectTypeOf<MCPResult>().not.toExtend<MCPLegacyResult>()
+	})
+
+	it('carries the legacy branch payloads the modern contract would reject', () => {
+		const ping = buildJSONRPCResult(1, {})
+		const list = buildJSONRPCResult(2, { tools: [{ name: 'echo' }] })
+
+		expect(isMCPLegacyResult(ping.result)).toBe(true)
+		expect(isMCPResult(ping.result)).toBe(false)
+		expect(isMCPLegacyResult(list.result)).toBe(true)
+		expect(isMCPResult(list.result)).toBe(false)
+	})
+
+	it('is what the result arm accepts alongside the modern contract', () => {
+		expectTypeOf<JSONRPCResultResponse['result']>().toEqualTypeOf<MCPResult | MCPLegacyResult>()
+	})
+})
+
+describe('the modern result contracts', () => {
+	it('requires every modern stamp on a tools/list result', () => {
+		expectTypeOf<MCPListResult['ttlMs']>().toEqualTypeOf<number>()
+		expectTypeOf<MCPListResult['cacheScope']>().toEqualTypeOf<'public' | 'private'>()
+		expectTypeOf<MCPListResult['tools']>().toEqualTypeOf<readonly MCPToolDescriptor[]>()
+		expectTypeOf<{ readonly tools: readonly MCPToolDescriptor[] }>().not.toExtend<MCPListResult>()
+	})
+
+	it('makes the modern stamp the only difference between the two call results', () => {
+		expectTypeOf<MCPCallResult>().toExtend<MCPUnstampedCallResult>()
+		expectTypeOf<MCPUnstampedCallResult>().not.toExtend<MCPCallResult>()
+		expectTypeOf<MCPUnstampedCallResult>().toExtend<MCPLegacyResult>()
+	})
+
+	it('keeps the input-required union enforcing at least one member', () => {
+		expectTypeOf<MCPInputRequestMap>().toEqualTypeOf<Readonly<Record<string, MCPInputRequest>>>()
+		expectTypeOf<MCPElicitRequest>().toExtend<MCPInputRequest>()
+		expectTypeOf<MCPInputResult>().toExtend<MCPResult>()
+		expectTypeOf<{ readonly resultType: 'input_required' }>().not.toExtend<MCPInputResult>()
+	})
+
+	it('keeps the elicitation parameters discriminated by mode', () => {
+		expectTypeOf<MCPElicitParams>().toEqualTypeOf<MCPElicitForm | MCPElicitURL>()
+		expectTypeOf<MCPElicitRequest['params']>().toEqualTypeOf<MCPElicitParams>()
+		expectTypeOf<MCPElicitForm['mode']>().toEqualTypeOf<'form' | undefined>()
+		expectTypeOf<MCPElicitURL['mode']>().toEqualTypeOf<'url'>()
+	})
+})
+
+describe('MCP resource guards', () => {
+	it('validates the shared page shapes and the text-xor-blob contents discriminator', () => {
+		const resource = { uri: 'memory://resource/one', name: 'one' }
+		const template = { uriTemplate: 'memory://resource/{name}', name: 'named' }
+
+		expect(isMCPPaginationParams({ cursor: 'second' })).toBe(true)
+		expect(isMCPPaginationParams({ cursor: 2 })).toBe(false)
+		expect(isMCPResource(resource)).toBe(true)
+		expect(isMCPResourceTemplate(template)).toBe(true)
+		expect(isMCPResourcePage({ resources: [resource], nextCursor: 'second' })).toBe(true)
+		expect(isMCPResourceTemplatePage({ resourceTemplates: [template] })).toBe(true)
+		expect(isMCPResourceContents({ uri: 'memory://resource/one', text: 'one' })).toBe(true)
+		expect(isMCPResourceContents({ uri: 'memory://resource/one', blob: 'b25l' })).toBe(true)
+		expect(isMCPResourceContents({ uri: 'memory://resource/one', text: 'one', blob: 'b25l' })).toBe(
+			false,
+		)
+	})
+})
+
+describe('MCP prompt guards', () => {
+	it('validates descriptors, pages, rich messages, results, and completion parameters', () => {
+		const argument = { name: 'person', title: 'Person', required: true }
+		const prompt = { name: 'greet', arguments: [argument] }
+		const message = { role: 'user', content: { type: 'text', text: 'Hello' } }
+
+		expect(isMCPPromptArgument(argument)).toBe(true)
+		expect(isMCPPrompt(prompt)).toBe(true)
+		expect(isMCPPromptPage({ prompts: [prompt], nextCursor: 'second' })).toBe(true)
+		expect(isMCPPromptMessage(message)).toBe(true)
+		expect(isMCPPromptMessage({ ...message, role: 'system' })).toBe(false)
+		expect(isMCPPromptGetResult({ resultType: 'complete', messages: [message] })).toBe(true)
+		expect(
+			isMCPCompletionParams({
+				ref: { type: 'ref/resource', uri: 'memory://resource/{name}' },
+				argument: { name: 'name', value: 'o' },
+				context: { arguments: { extension: 'txt' } },
+			}),
+		).toBe(true)
 	})
 })

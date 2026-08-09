@@ -52,40 +52,51 @@ includes app/core so the shared transport contracts have one host-independent ow
    placement and manifest laws. Parse the options container and its host and port leaves
    before mutation, rejecting wrong-shaped containers, empty hosts, and non-integer,
    negative, or out-of-range ports with a coded error and its guard.
-5. **Own the shutdown contract.** Lifecycle transitions serialize in call order, an
-   ephemeral restart re-requests port zero, stop closes hostile active connections
-   deterministically, and runner stop idempotently releases its signal listeners. Runner
-   generations isolate asynchronous failures so an older transition cannot release a
-   newer run's listeners, and convenience startup returns the runner rather than hiding
-   that cleanup.
-6. **Keep boundary enforcement inside the configured toolchain,** each layer owning what
-   it can express: Oxlint `no-restricted-imports` for literal-string declared package,
-   alias, and conventional relative import direction; Oxfmt for formatting;
-   `tests/setupPolicy.ts` as the narrow TypeScript compiler-API pass over computed and
-   template-literal specifiers, declaration placement, and the barrel law; scoped
-   TypeScript projects for host-global isolation; and Vite's real builds and
-   environment-boundary plugin for Vue, CSS, assets, workers, runtime resolution, and
-   physical workspace containment. Add no standalone boundary script and no second
-   parser or source-language analyzer duplicating those layers. Disable the browser
-   application's public directory so an unmanaged file copy cannot bypass the module
-   graph. Keep browser-only runtime tooling development-only and require explicit
-   authorization before adding a Sass compiler.
-7. **Prove it on real hosts.** app/browser tests run on Playwright-backed Vitest Browser
-   Mode against real DOM, probing the installed executable directly with
-   `existsSync(chromium.executablePath())` rather than guessing a channel or reading an
-   environment flag; app/server tests bind port zero on loopback and use real fetch;
-   real child-process tests prove executable readiness, collision exit, signal
-   termination, and port release, remembering that Windows reports
-   `ChildProcess.kill('SIGTERM')` as OS termination by signal while POSIX delivery
-   exercises the graceful listener and exits zero. A capability-dependent test probes the
-   actual capability and scopes any skip narrowly.
+5. **Own the shutdown contract.**
+   - Serialize lifecycle transitions in call order.
+   - Re-request port zero on an ephemeral restart.
+   - Close hostile active connections deterministically on stop.
+   - Release the runner's signal listeners idempotently on stop.
+   - Isolate asynchronous failures by runner generation, so an older transition cannot
+     release a newer run's listeners.
+   - Return the runner from convenience startup rather than hiding that cleanup.
+6. **Keep boundary enforcement inside the configured toolchain.** Each layer owns what it
+   can express:
+   - Oxlint `no-restricted-imports` — literal-string declared package, alias, and
+     conventional relative import direction.
+   - Oxfmt — formatting.
+   - `tests/setupPolicy.ts` — the narrow TypeScript compiler-API pass over computed and
+     template-literal specifiers, declaration placement, and the barrel law.
+   - Scoped TypeScript projects — host-global isolation.
+   - Vite's real builds and environment-boundary plugin — Vue, CSS, assets, workers,
+     runtime resolution, and physical workspace containment.
+
+   Then hold these four limits:
+   - Add no standalone boundary script, and no second parser or source-language analyzer
+     duplicating those layers.
+   - Disable the browser application's public directory, so an unmanaged file copy cannot
+     bypass the module graph.
+   - Keep browser-only runtime tooling development-only.
+   - Require explicit authorization before adding a Sass compiler.
+
+7. **Prove it on real hosts.**
+   - Run app/browser tests on Playwright-backed Vitest Browser Mode against real DOM.
+     Probe the installed executable directly with `existsSync(chromium.executablePath())`
+     rather than guessing a channel or reading an environment flag.
+   - Bind port zero on loopback in app/server tests and use real fetch.
+   - Prove executable readiness, collision exit, signal termination, and port release with
+     real child-process tests. Windows reports `ChildProcess.kill('SIGTERM')` as OS
+     termination by signal, while POSIX delivery exercises the graceful listener and exits
+     zero.
+   - Probe the actual capability in a capability-dependent test, and scope any skip
+     narrowly.
 8. **Document and prove parity** for every app export and behavioral method: guide,
    examples, manifest index, and the parity specifiers walking the existing `src` and
    `app` roots and every selected alias.
-9. **Verify.** Run the rules' cleanup sweeps over source and tests, then one independent
-   design audit, one independent objective audit, a mechanical conformance pass, and the
-   repository gates in their required order. Generated CI runs those gates on the declared
-   minimum Node release and on the current major.
+9. **Verify.** Run the rules' cleanup sweeps over source and tests. Then run the two-lane
+   adversarial pass, a mechanical conformance pass, and the repository gates in their
+   required order. Generated CI runs those gates on the declared minimum Node release and
+   on the current major.
 
 Do not add showcase, authentication, persistence, proxy, styling-system, or product
 policy unless the request requires it. Do not leave placeholders, compatibility shims,

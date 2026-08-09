@@ -3,11 +3,13 @@ import type { MiddlewareHandler } from '@orkestrel/server'
 import type { StartedServerInterface } from '../../../setupServer.js'
 import { describe, expect, it } from 'vitest'
 import {
+	inferRequestVersion,
 	MCP_LEGACY_VERSION,
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
 	MCP_PROTOCOL_VERSION,
 	createMCPClient,
+	createMCPLegacy,
 	createMCPServer,
 } from '@src/core'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -16,10 +18,12 @@ import { createServer } from '@orkestrel/server'
 import {
 	createHTTPClientTransport,
 	createMCPRoutes,
+	inferHeaderIssue,
 	MCP_METHOD_HEADER,
 	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
 } from '@src/server'
+import { createHeaderProjectionRequest, HEADER_PROJECTION_CONTEXTS } from '../../../setup.js'
 import { createTeardown, startServer } from '../../../setupServer.js'
 
 // src/server/mcp/HTTPClientTransport.ts — the HTTP CLIENT transport, proven END-TO-END
@@ -85,7 +89,7 @@ async function connectClient(options?: {
 }): Promise<{ readonly client: MCPClientInterface; readonly handle: StartedServerInterface }> {
 	const dispatcher = createDispatcher<unknown>()
 	dispatcher.add(
-		createMCPRoutes(mcpServer(), {
+		createMCPRoutes(createMCPLegacy(mcpServer()), {
 			...(options?.streaming !== undefined ? { streaming: options.streaming } : {}),
 		}),
 	)
@@ -120,8 +124,8 @@ describe('HTTPClientTransport — JSON reply path (streaming: false)', () => {
 			properties: { a: { type: 'number' }, b: { type: 'number' } },
 		})
 
-		expect(await client.call('add', { a: 2, b: 5 })).toBe(7)
-		expect(await client.call('greet', {})).toBe('hi')
+		expect(await client.call('add', { a: 2, b: 5 })).toEqual({ resultType: 'complete', value: 7 })
+		expect(await client.call('greet', {})).toEqual({ resultType: 'complete', value: 'hi' })
 	})
 
 	it('a remote tool failure throws locally', async () => {
@@ -141,7 +145,7 @@ describe('HTTPClientTransport — SSE reply path (streaming: true)', () => {
 		const tools = await client.tools()
 		expect(tools.map((tool) => tool.name)).toEqual(['add', 'greet', 'boom'])
 
-		expect(await client.call('add', { a: 10, b: 1 })).toBe(11)
+		expect(await client.call('add', { a: 10, b: 1 })).toEqual({ resultType: 'complete', value: 11 })
 	})
 
 	it('a remote tool failure throws locally over the SSE path too', async () => {
@@ -157,12 +161,12 @@ describe('HTTPClientTransport — policy composes in front', () => {
 		const { client } = await connectClient({ guardSecret: 'topsecret', streaming: false })
 
 		expect(client.connected).toBe(true)
-		expect(await client.call('add', { a: 3, b: 4 })).toBe(7)
+		expect(await client.call('add', { a: 3, b: 4 })).toEqual({ resultType: 'complete', value: 7 })
 	})
 
 	it('rejects (no connect) when the bearer is missing against a guarded server', async () => {
 		const dispatcher = createDispatcher<unknown>()
-		dispatcher.add(createMCPRoutes(mcpServer()))
+		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer())))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
 		server.use(createBearerGuard('topsecret'))
 		const handle = track(await startServer(server))
@@ -225,9 +229,64 @@ describe('HTTPClientTransport — lifecycle', () => {
 		])
 	})
 
+	// W06 row 37 — the Node half of the SHARED projection table. The browser face used to
+	// route the same read through `parseRequestContext` and withheld the header on every
+	// context that is modern-by-key-presence but not fully well formed; both faces now
+	// project through `inferRequestVersion`, so this table has one answer per row on both.
+	it.each(HEADER_PROJECTION_CONTEXTS.map((context) => [context.label, context] as const))(
+		'projects %s exactly as the browser face does',
+		async (_label, context) => {
+			const headers: Headers[] = []
+			const transport = createHTTPClientTransport({
+				url: 'http://localhost/mcp',
+				fetch: (_input, init) => {
+					headers.push(new Headers(init?.headers))
+					return Promise.resolve(new Response(null, { status: 202 }))
+				},
+			})
+
+			await transport.send(createHeaderProjectionRequest(context.metadata))
+
+			expect([context.label, headers[0]?.get(MCP_PROTOCOL_VERSION_HEADER) ?? undefined]).toEqual([
+				context.label,
+				context.version,
+			])
+			expect(headers[0]?.get(MCP_METHOD_HEADER)).toBe('tools/list')
+		},
+	)
+
+	// The server's expectation is the third site that reads the same fact, and it is the
+	// reason the raw read is the correct one: `inferHeaderIssue` demands a header for every
+	// context this projection yields a version for, so agreement here IS the absence of a
+	// refusal. A context the projector answers `undefined` for is one the server does not ask
+	// about, so neither face sending a header is equally correct.
+	it('agrees with the server-side expectation on every row of the table', () => {
+		for (const context of HEADER_PROJECTION_CONTEXTS) {
+			const message = createHeaderProjectionRequest(context.metadata)
+			const request = new Request('http://localhost/mcp', {
+				method: 'POST',
+				headers: {
+					[MCP_METHOD_HEADER]: 'tools/list',
+					...(context.version === undefined
+						? {}
+						: { [MCP_PROTOCOL_VERSION_HEADER]: context.version }),
+				},
+			})
+
+			expect([context.label, inferRequestVersion(message)]).toEqual([
+				context.label,
+				context.version,
+			])
+			expect([context.label, inferHeaderIssue(request, message)?.header]).toEqual([
+				context.label,
+				undefined,
+			])
+		}
+	})
+
 	it('captures the initialize result and sends its protocol on the subsequent request', async () => {
 		const dispatcher = createDispatcher<unknown>()
-		dispatcher.add(createMCPRoutes(mcpServer(), { streaming: false }))
+		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer()), { streaming: false }))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
 		const handle = track(await startServer(server))
 		const protocols: (string | null)[] = []
@@ -298,7 +357,7 @@ describe('HTTPClientTransport — lifecycle', () => {
 
 	it('close() clears the captured protocol — a new request carries no header', async () => {
 		const dispatcher = createDispatcher<unknown>()
-		dispatcher.add(createMCPRoutes(mcpServer(), { streaming: false }))
+		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer()), { streaming: false }))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
 		const handle = track(await startServer(server))
 		const protocols: (string | null)[] = []

@@ -18,7 +18,7 @@ design pass itself and record that Opus was unavailable for this round.
 The brief asks for coherent API shape, vocabulary, ergonomics, at most two
 alternatives, bounded units that each name their role and engine, subjective tensions,
 and risks. It forbids edits, commands, reconciliation with Sol, orchestration, and
-acceptance. Never invoke Fable,
+acceptance. Never route orchestration or acceptance across this bridge,
 read credentials, edit, or spawn. Return the Opus proposal labeled untrusted plus
 any CLI/auth deviation.
 """

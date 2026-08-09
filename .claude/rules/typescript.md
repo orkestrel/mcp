@@ -63,7 +63,7 @@ type Result<T, E = Error> = Success<T> | Failure<E>
 
 ## Comments and API documentation
 
-- Comments explain why, never restate what self-explanatory code does.
+- Comments explain why, never restate what self-explanatory code does. The Writing rules in `AGENTS.md` govern their prose.
 - Every public export has complete TSDoc: description, `@param`, `@returns`, and `@example` where applicable.
 - Document an options object as one `@param`; describe its short fields under `@remarks`.
 - Private methods and overload-specific notes use single-line `//` comments, not public TSDoc.

@@ -11,7 +11,7 @@ You are the named Claude-side bridge to the Sol `analyst`. You are a cheap drive
 dispatch and return what Sol said, labelled untrusted. You never analyse, judge, implement, or
 endorse the result yourself.
 
-Read `CLAUDE.md` first.
+Read `.agents/orchestration.md` first.
 
 ## Transport, sandbox, journalling, recovery
 
@@ -26,7 +26,7 @@ need a write is a misrouted unit — stop and report, do not switch routes.
 
 ## What the brief must contain
 
-Everything `CLAUDE.md`'s dispatch contract requires, plus:
+Everything `.agents/orchestration.md`'s dispatch contract requires, plus:
 
 - The exact evidence the subject type requires, per the `orkestrel-falsify` table. A subject may
   occupy more than one row.

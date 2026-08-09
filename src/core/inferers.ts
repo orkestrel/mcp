@@ -1,5 +1,7 @@
-import type { MCPEra, MCPVersion } from './types.js'
-import { SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
+import type { JSONRPCMessage, MCPEra, MCPVersion } from './types.js'
+import { isModernRequest } from './validators.js'
+import { isRecord, isString } from '@orkestrel/contract'
+import { MCP_META_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
 
 /**
  * Infer the wire era for an MCP protocol revision.
@@ -31,4 +33,40 @@ export function inferVersion(offered: readonly string[]): MCPVersion | undefined
 		if (offered.includes(version)) return version
 	}
 	return undefined
+}
+
+/**
+ * Infer the protocol version an outbound message announces itself with — the ONE
+ * projection every HTTP client transport stamps `mcp-protocol-version` from.
+ *
+ * @remarks
+ * This is deliberately the SAME read the server's own expectation performs
+ * ({@link import('@src/server').inferHeaderIssue}): a modern request's reserved
+ * `_meta` version, accepted whenever it is a string. It is NOT
+ * {@link import('./parsers.js').parseRequestContext}, and the difference is the whole
+ * point. That parser answers a different question — is the modern metadata WELL FORMED —
+ * and refuses a request whose capability declaration or logging level is malformed. Such a
+ * request is still modern (era is fixed by key presence) and the server still demands the
+ * header for it, so projecting through the parser withholds a header the peer requires and
+ * earns `-32602` instead of the `-32602` the malformed metadata itself deserves.
+ *
+ * A non-modern message projects nothing: a legacy request's version comes from the
+ * `initialize` handshake the transport captured, not from the message.
+ *
+ * Header NAMES stay with the transports that own the wire (see `constants.ts`); core owns
+ * the value this projection derives, which is the part the two faces disagreed about.
+ *
+ * @param message - The outbound message about to be written
+ * @returns The version to announce, or `undefined` when the message announces none
+ *
+ * @example
+ * ```ts
+ * inferRequestVersion({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: { _meta: meta } })
+ * ```
+ */
+export function inferRequestVersion(message: JSONRPCMessage): string | undefined {
+	if (!isModernRequest(message)) return undefined
+	const metadata = isRecord(message.params?.['_meta']) ? message.params['_meta'] : undefined
+	const version = metadata?.[MCP_META_VERSION]
+	return isString(version) ? version : undefined
 }

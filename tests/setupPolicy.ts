@@ -627,6 +627,42 @@ export function inspectCodingLaw(path: string, content: string): readonly string
 	return violations
 }
 
+/** Inspect fleet policy sources for package-architecture tokens. */
+export function inspectPolicyPurity(path: string, content: string): readonly string[] {
+	const violations: [number, string][] = []
+	const identifier = ['M', 'C', 'P'].join('')
+	const task = ['tasks', '/'].join('')
+	const browser = ['src', '/browser/'].join('')
+	const source = ts.createSourceFile(path, content, ts.ScriptTarget.ESNext, true)
+	const pending: ts.Node[] = [source]
+	while (pending.length > 0) {
+		const node = pending.pop()
+		if (node === undefined) continue
+		if (ts.isIdentifier(node) && node.text.includes(identifier)) {
+			violations.push([
+				node.getStart(),
+				`${path}:${formatPolicyPosition(node)} contains package architecture identifier`,
+			])
+		}
+		if (ts.isStringLiteralLike(node) && node.text.includes(task)) {
+			violations.push([
+				node.getStart(),
+				`${path}:${formatPolicyPosition(node)} contains package architecture task path`,
+			])
+		}
+		if (ts.isStringLiteralLike(node) && node.text.includes(browser)) {
+			violations.push([
+				node.getStart(),
+				`${path}:${formatPolicyPosition(node)} contains package architecture browser path`,
+			])
+		}
+		ts.forEachChild(node, (child) => {
+			pending.push(child)
+		})
+	}
+	return violations.sort((left, right) => left[0] - right[0]).map((entry) => entry[1])
+}
+
 /** Inspect every production TypeScript module under one workspace. */
 export function inspectCodingWorkspace(
 	root: string,

@@ -1,4 +1,4 @@
-import type { JSONRPCRequest, JSONRPCResponse, MCPEra, MCPVersion } from '@src/core'
+import type { JSONRPCInvocation, JSONRPCResponse, MCPEra, MCPVersion } from '@src/core'
 import type { MCPHeaderIssue } from './types.js'
 import {
 	JSONRPC_INVALID_PARAMS,
@@ -26,7 +26,7 @@ import { MCP_METHOD_HEADER, MCP_NAME_HEADER, MCP_PROTOCOL_VERSION_HEADER } from 
  * the active session. Messages name the expected value but never echo the client-supplied one.
  *
  * @param request - The HTTP request carrying the headers
- * @param reference - The parsed request body, or the active legacy session version
+ * @param reference - The parsed invocation body, or the active legacy session version
  * @returns The first header issue, or `undefined` when the applicable headers agree
  *
  * @example
@@ -37,7 +37,7 @@ import { MCP_METHOD_HEADER, MCP_NAME_HEADER, MCP_PROTOCOL_VERSION_HEADER } from 
  */
 export function inferHeaderIssue(
 	request: Request,
-	reference: JSONRPCRequest | MCPVersion,
+	reference: JSONRPCInvocation | MCPVersion,
 ): MCPHeaderIssue | undefined {
 	const protocol = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
 	if (isString(reference)) {
@@ -126,10 +126,10 @@ export function inferHeaderIssue(
  * A supported legacy request is pinned exactly. A modern, malformed, absent, or unsupported
  * request selects the newest supported legacy revision, matching the core initialize result.
  *
- * @param request - The legacy initialize request
+ * @param request - The legacy initialize invocation
  * @returns The negotiated legacy protocol revision
  */
-export function inferLegacyVersion(request: JSONRPCRequest): MCPVersion {
+export function inferLegacyVersion(request: JSONRPCInvocation): MCPVersion {
 	const requested = request.params?.['protocolVersion']
 	const version = inferVersion(isString(requested) ? [requested] : [])
 	if (version !== undefined && inferEra(version) === 'legacy') return version

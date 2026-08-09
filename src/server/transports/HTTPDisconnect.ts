@@ -1,41 +1,89 @@
 import type { StreamInterface } from '@orkestrel/server'
 import type { MCPKeepaliveOptions } from '../types.js'
+import { sanitizeBudget } from '@orkestrel/contract'
 import { DEFAULT_MCP_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_COMMENT } from '../constants.js'
 import { createReadableStream } from '../helpers.js'
 
 /**
- * The HTTP response-disconnect bridge for an MCP SSE stream.
+ * Compose one incoming HTTP request lifetime with one MCP-owned SSE response lifetime.
  *
  * @remarks
- * Composes the incoming request signal with a controller owned by the MCP HTTP face. The
- * returned {@link signal} therefore observes both an incomplete request body and cancellation
- * of the streamed response body. {@link bridge} preserves the supplied SSE response while
- * forwarding its body through a cancellation-aware stream. While that response is held open,
- * the bridge writes SSE comment frames at the configured keepalive interval so an idle dead
- * client becomes observable to the HTTP writer. It never decides how an abort changes handler
- * or session state.
+ * The composed {@link signal} observes request abort and EVERY way this response can end
+ * without one: consumer cancellation of the bridged body, a forwarding failure mid-pump, and a
+ * keepalive tick that finds the SSE stream already closed. That last pair is the whole point of
+ * the composition — a client that vanishes mid-stream aborts nothing by itself, so unless this
+ * object raises the signal on its own failure paths, the handler, the controlled stream, and
+ * the producer behind them all keep running for a response that can no longer be written.
+ * Graceful upstream completion is the one terminal that does NOT abort: the body simply closes,
+ * because the exchange finished rather than ended.
+ *
+ * {@link bridge} preserves the source response status and headers, forwards its body bytes, and
+ * owns keepalive comments plus listener/timer cleanup until upstream completion, request abort,
+ * or consumer cancellation. This is a single-response lifecycle object, not a reusable bridge.
+ * It supplies no handler or session policy.
+ *
+ * The keepalive interval is a BUDGET, sanitized like every other numeric knob in this package:
+ * anything that is not a positive integer — `0`, a negative, a fractional value, `NaN`,
+ * `Infinity` — falls back to {@link DEFAULT_MCP_KEEPALIVE_INTERVAL}, and a larger value clamps
+ * to Node's `2_147_483_647` ms timer maximum. None may reach the platform's timer floor, where
+ * an idle-liveness tick becomes the polling this package forbids everywhere else.
+ *
+ * @example
+ * ```ts
+ * import { HTTPDisconnect } from '@orkestrel/mcp/server'
+ * import { openStream } from '@orkestrel/server'
+ *
+ * const disconnect = new HTTPDisconnect(request.signal, { interval: 15_000 })
+ * const stream = openStream()
+ * const response = disconnect.bridge(stream)
+ * ```
  */
 export class HTTPDisconnect {
-	readonly #abort = new AbortController()
+	readonly #response = new AbortController()
 	readonly #lifecycle = new AbortController()
 	readonly #interval: number
 	readonly #signal: AbortSignal
 	#timer: ReturnType<typeof setInterval> | undefined
+	#pulling = false
 
+	/**
+	 * Create the lifecycle composition for one request and its future SSE response.
+	 *
+	 * @param signal - The incoming request signal
+	 * @param options - Optional keepalive `interval` in milliseconds; an invalid value falls back
+	 *   to {@link DEFAULT_MCP_KEEPALIVE_INTERVAL}, and one above Node's timer maximum clamps to it
+	 */
 	constructor(signal: AbortSignal, options?: MCPKeepaliveOptions) {
-		this.#interval = options?.interval ?? DEFAULT_MCP_KEEPALIVE_INTERVAL
-		this.#signal = AbortSignal.any([signal, this.#abort.signal])
+		// `sanitizeBudget` rejects `NaN`, `Infinity`, a negative, and a fractional value; `0` is a
+		// non-negative integer so it passes, and `setInterval(fn, 0)` is the same busy loop every
+		// one of those produces. A keepalive cadence is therefore bounded below at one, not zero.
+		const interval = sanitizeBudget(options?.interval, DEFAULT_MCP_KEEPALIVE_INTERVAL)
+		this.#interval =
+			interval > 0 ? Math.min(interval, 2_147_483_647) : DEFAULT_MCP_KEEPALIVE_INTERVAL
+		this.#signal = AbortSignal.any([signal, this.#response.signal])
 	}
 
+	/**
+	 * The signal aborted by the incoming request, or by any end of this response that is not
+	 * its graceful completion.
+	 *
+	 * @returns The composed lifecycle signal
+	 */
 	get signal(): AbortSignal {
 		return this.#signal
 	}
 
 	/**
-	 * Bridge cancellation of an SSE response body into this disconnect signal.
+	 * Bridge one open SSE response through cancellation-aware byte forwarding and keepalives.
+	 *
+	 * Consumer cancellation, a read failure while forwarding, and a keepalive tick that finds the
+	 * SSE stream already closed each abort {@link signal}; consumer cancellation also cancels the
+	 * upstream reader. Upstream completion closes the returned body without inventing an abort.
+	 * Every terminal path clears the keepalive timer and detaches the bridge-owned abort listener.
 	 *
 	 * @param stream - The open SSE stream whose response will be consumed by the HTTP writer
-	 * @returns A response with the same status and headers whose body forwards the SSE bytes
+	 * @returns A one-use response preserving status, status text, headers, and SSE body bytes
+	 * @throws When the supplied SSE response has no body
 	 */
 	bridge(stream: StreamInterface): Response {
 		const response = stream.response
@@ -45,31 +93,43 @@ export class HTTPDisconnect {
 		// This timer is SSE transport liveness, not polling for producer work: an idle response
 		// must write to let the HTTP writer observe a dead socket and cancel the body.
 		this.#timer = setInterval(() => {
-			if (stream.closed) this.#stop()
-			else stream.comment(SSE_KEEPALIVE_COMMENT)
+			if (stream.closed) {
+				// A close observed while `reader.read()` is still outstanding is the graceful
+				// `end()` drain window. The read itself will release once it observes the terminal.
+				if (!this.#pulling) this.#abort()
+			} else stream.comment(SSE_KEEPALIVE_COMMENT)
 		}, this.#interval)
-		this.#signal.addEventListener('abort', () => this.#stop(), {
+		// The composed signal already aborted, so this listener only has to release the bridge's
+		// own timer and listener — raising the signal again would be answering an event with
+		// itself.
+		this.#signal.addEventListener('abort', () => this.#release(), {
 			once: true,
 			signal: this.#lifecycle.signal,
 		})
-		if (this.#signal.aborted || stream.closed) this.#stop()
+		if (this.#signal.aborted) this.#release()
+		else if (stream.closed) this.#abort()
 		return new Response(
 			createReadableStream<Uint8Array>(
 				async (controller) => {
+					this.#pulling = true
 					try {
 						const chunk = await reader.read()
 						if (chunk.done) {
-							this.#stop()
+							// The exchange FINISHED. Release the bridge without raising the signal:
+							// an abort here would tell a handler that already answered that its
+							// request was cancelled.
+							this.#release()
 							controller.close()
 						} else controller.enqueue(chunk.value)
 					} catch (error) {
-						this.#stop()
+						this.#abort()
 						controller.error(error)
+					} finally {
+						this.#pulling = false
 					}
 				},
 				async (reason) => {
-					this.#abort.abort()
-					this.#stop()
+					this.#abort()
 					await reader.cancel(reason)
 				},
 			),
@@ -81,11 +141,20 @@ export class HTTPDisconnect {
 		)
 	}
 
-	#stop(): void {
+	// Give up this bridge's OWN resources — the keepalive timer and the abort listener — without
+	// saying anything about the request. The terminal a graceful completion takes.
+	#release(): void {
 		if (this.#timer !== undefined) {
 			clearInterval(this.#timer)
 			this.#timer = undefined
 		}
 		this.#lifecycle.abort()
+	}
+
+	// End the response lifetime: release first, so the listener is already detached, then raise
+	// the composed signal for every owner still holding it. Idempotent — `abort()` is.
+	#abort(): void {
+		this.#release()
+		this.#response.abort()
 	}
 }

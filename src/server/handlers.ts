@@ -1,4 +1,4 @@
-import type { MCPServerInterface } from '@src/core'
+import type { MCPDispatcherInterface } from '@src/core'
 import type { RouteContext } from '@orkestrel/router'
 import type { HTTPHandlerOptions } from './types.js'
 import {
@@ -20,7 +20,7 @@ import {
 	SSE_BUFFERING_DISABLED,
 	SSE_BUFFERING_HEADER,
 } from './constants.js'
-import { acceptsEventStream, allowsOrigin } from './helpers.js'
+import { acceptsEventStream, allowsOrigin, sendEventStream } from './helpers.js'
 import { inferHeaderIssue, inferStatus } from './inferers.js'
 import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
 
@@ -40,18 +40,18 @@ import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
  * defined value is added to `MCPDispatchOptions`, while `undefined` is omitted.
  *
  * @typeParam TState - The consumer's opaque per-request route state type
- * @param mcp - The transport-agnostic MCP server to dispatch through
+ * @param mcp - The transport-agnostic MCP dispatcher to dispatch through
  * @param options - Optional streaming, origin-validation, SSE keepalive, and caller-extraction options
  * @returns A request handler for the stateless MCP POST route
  *
  * @example
  * ```ts
- * import { createMCPServer } from '@orkestrel/mcp'
+ * import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
  * import { createMCPPostHandler } from '@orkestrel/mcp/server'
  * import { createToolManager } from '@orkestrel/tool'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
- * const handler = createMCPPostHandler(mcp, { streaming: true })
+ * const handler = createMCPPostHandler(createMCPLegacy(mcp), { streaming: true })
  * await handler(new Request('http://localhost/mcp', {
  * 	method: 'POST',
  * 	body: '{"jsonrpc":"2.0","method":"ping","id":1}',
@@ -59,7 +59,7 @@ import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
  * ```
  */
 export function createMCPPostHandler<TState = unknown>(
-	mcp: MCPServerInterface,
+	mcp: MCPDispatcherInterface,
 	options?: HTTPHandlerOptions<TState>,
 ): (request: Request, context?: RouteContext<string, TState>) => Promise<Response> {
 	const streaming = options?.streaming ?? true
@@ -70,7 +70,7 @@ export function createMCPPostHandler<TState = unknown>(
 		try {
 			text = await request.text()
 		} catch {
-			return Response.json(buildJSONRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'), {
+			return Response.json(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'), {
 				status: 400,
 			})
 		}
@@ -78,21 +78,22 @@ export function createMCPPostHandler<TState = unknown>(
 		try {
 			parsed = JSON.parse(text)
 		} catch {
-			return Response.json(buildJSONRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'), {
+			return Response.json(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'), {
 				status: 400,
 			})
 		}
-		const rpcRequest = parseJSONRPCMessage(parsed)
-		if (rpcRequest === undefined || !('method' in rpcRequest)) {
-			return Response.json(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request'), {
-				status: 400,
-			})
+		const invocation = parseJSONRPCMessage(parsed)
+		if (invocation === undefined || !('method' in invocation)) {
+			return Response.json(
+				buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Invalid Request'),
+				{ status: 400 },
+			)
 		}
-		const era = isModernRequest(rpcRequest) ? 'modern' : 'legacy'
-		const id = rpcRequest.id ?? null
+		const era = isModernRequest(invocation) ? 'modern' : 'legacy'
+		const id = invocation.id
 		const protocol = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
 		if (era === 'modern') {
-			if (parseRequestContext(rpcRequest) === undefined) {
+			if (parseRequestContext(invocation) === undefined) {
 				return Response.json(
 					buildJSONRPCError(
 						id,
@@ -103,7 +104,7 @@ export function createMCPPostHandler<TState = unknown>(
 				)
 			}
 		}
-		const issue = inferHeaderIssue(request, rpcRequest)
+		const issue = inferHeaderIssue(request, invocation)
 		if (issue !== undefined) {
 			return Response.json(buildJSONRPCError(id, MCP_HEADER_MISMATCH, issue.message), {
 				status: 400,
@@ -124,27 +125,14 @@ export function createMCPPostHandler<TState = unknown>(
 		}
 		const disconnect = new HTTPDisconnect(request.signal, options?.keepalive)
 		const caller = options?.caller?.(request, context)
-		const response = await mcp.dispatch(rpcRequest, {
+		const response = await mcp.dispatch(invocation, {
 			signal: disconnect.signal,
 			...(caller === undefined ? {} : { caller }),
 		})
 		if (response !== undefined && Symbol.asyncIterator in response) {
 			const stream = openStream()
 			stream.response.headers.set(SSE_BUFFERING_HEADER, SSE_BUFFERING_DISABLED)
-			queueMicrotask(async () => {
-				try {
-					let next = await response.next()
-					while (!next.done) {
-						stream.write({ data: JSON.stringify(next.value) })
-						next = await response.next()
-					}
-					stream.write({ data: JSON.stringify(next.value) })
-				} catch {
-					// A producer failure ends this response; the transport cannot replace a partial stream.
-				} finally {
-					stream.end()
-				}
-			})
+			queueMicrotask(() => void sendEventStream(response, stream))
 			return disconnect.bridge(stream)
 		}
 		const status = inferStatus(response, era)

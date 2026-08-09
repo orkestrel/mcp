@@ -51,7 +51,10 @@ import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
  *   live-session request. It then
  *   FORWARDS a fresh `Request` carrying the buffered `text` (`next(forwarded)`) — never the
  *   already-consumed original — so the route re-reads the same body, and stamps the response
- *   with {@link MCP_SESSION_HEADER}.
+ *   with {@link MCP_SESSION_HEADER}. The entry's `touched` instant is read AFTER that
+ *   downstream response, because it means the LAST ACCESS: a request slower than `ttl` would
+ *   otherwise store a session that is already expired, and the write-back RE-ASKS the store, so
+ *   a `DELETE` arriving while the request was suspended is not undone.
  * - **`GET {path}`.** Resolves the session the same way (no mint — only `initialize` mints);
  *   an invalid / unknown id is the same `404`. A valid session opens the resumable
  *   server→client stream via `@orkestrel/server`'s {@link import('@orkestrel/server').openStream}:
@@ -191,7 +194,7 @@ export function createMCPSession<TState extends MCPSessionState>(
 			if (issue?.reason === 'missing') {
 				headers.set(MCP_PROTOCOL_VERSION_HEADER, entry.version)
 			} else if (issue !== undefined) {
-				const requestId = parsed !== undefined && 'method' in parsed ? (parsed.id ?? null) : null
+				const requestId = parsed !== undefined && 'method' in parsed ? parsed.id : undefined
 				return Response.json(buildJSONRPCError(requestId, MCP_HEADER_MISMATCH, issue.message), {
 					status: 400,
 				})
@@ -206,7 +209,17 @@ export function createMCPSession<TState extends MCPSessionState>(
 		const response = await next(forwarded)
 		if (created !== undefined) {
 			if (!response.ok) return response
-			store.set(created.session.id, created)
+			// `touched` is the instant of the LAST ACCESS, so it is read AFTER the suspension. The
+			// mint stamp was taken before a whole `initialize` round trip that the middleware has no
+			// bound on: a handshake slower than `ttl` used to insert a session that was already
+			// expired, and the first request for the id this response advertises swept it away.
+			store.set(created.session.id, { ...created, touched: clock() })
+		} else if (store.get(entry.session.id) === entry) {
+			// The same correction on the resolved-existing path — plus a RE-ASK. `store.get` is
+			// consulted again because a `DELETE` (or the sweep of a sibling request) may have removed
+			// this entry while this request was suspended, and a blind write-back would resurrect a
+			// session whose owner already ended it.
+			store.set(entry.session.id, { ...entry, touched: clock() })
 		}
 		response.headers.set(MCP_SESSION_HEADER, entry.session.id)
 		return response

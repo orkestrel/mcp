@@ -7,7 +7,7 @@ import type { ToolManagerInterface } from '@orkestrel/tool'
 // (`transports/WebSocketClientTransport.ts`) and the `fetch` + `@orkestrel/sse`
 // streamable-HTTP transport (`transports/HTTPClientTransport.ts`) — the browser
 // siblings of the Node face's `WebSocketClientTransport` / `HTTPClientTransport`
-// (`src/server`), speaking the SAME `@src/core` `ClientTransportInterface` so
+// (`src/server`), speaking the SAME `@src/core` `MCPClientTransportInterface` so
 // `createMCPClient` consumes either identically. The host performs the WebSocket
 // handshake and the HTTP request/response plumbing, so this face carries none of the
 // Node client's `node:crypto` / `node:http(s)` machinery.
@@ -35,6 +35,16 @@ import type { ToolManagerInterface } from '@orkestrel/tool'
  *   you from that trap when connecting to this repo's own server. Override only when
  *   targeting a foreign server that speaks a different (or no) subprotocol — pass `[]`
  *   to request no subprotocol at all.
+ *
+ * **No `headers` here, and that divergence from the Node face's `{ url, headers }` is
+ * deliberate rather than unfinished: the host performs the WebSocket handshake.** The
+ * native constructor takes a URL and subprotocols and nothing else, so a page cannot set an
+ * upgrade request header at all — there is no seam for an `Authorization` bearer to reach.
+ * The Node face owns its own `node:http(s)` upgrade request and therefore can, which is why
+ * only that side offers `headers`. Reach a guarded server from a page with a credential the
+ * platform DOES carry: a cookie the browser attaches to the upgrade, a subprotocol token, or
+ * a signed value in the URL. Adding a `headers` key here would be an option that silently
+ * did nothing.
  */
 export interface WebSocketClientTransportOptions {
 	readonly url: string

@@ -1,0 +1,454 @@
+# Orchestration
+
+How agents are dispatched, supervised, and accepted. Every harness follows this file.
+
+## Authority
+
+Read in this order before acting:
+
+1. The user's current instruction. It wins over everything below.
+2. `AGENTS.md` and the applicable `.claude/rules/*.md` files. They govern code substance.
+3. This file. It governs agent operation only and cannot weaken the coding contract.
+4. The dispatch-named skill and the references it requires.
+5. The governing guide or spec.
+
+`CLAUDE.md`, `.codex/config.toml`, and `.cursor/rules/` are bridges. Each points here and adds
+only what its harness needs. None of them restates this file.
+
+Every dispatch tells its executor to read items 2 through 5 before acting.
+
+## The three engines
+
+One workflow runs across all providers. Each engine has one job and never takes another's.
+
+| Engine          | Job                                                   | Posture                                      |
+| --------------- | ----------------------------------------------------- | -------------------------------------------- |
+| **Cursor Grok** | Absorption, distillation, scouting, bounded research  | Read-only; returns evidence, never decisions |
+| **Opus 5**      | Subjective design, design-fit review, implementation  | Proposes, audits, implements; never accepts  |
+| **GPT-5.6 Sol** | Objective analysis, correctness audit, implementation | Proposes, audits, implements; never accepts  |
+
+- Route each nontrivial implementation unit to Opus or Sol. Objective, constraint-heavy,
+  mechanical-precision work goes to Sol. API-shape, naming, and documentation-voice work goes to
+  Opus. Cursor Composer is not an implementation route, and no `composer` role exists.
+- Design and audit always run the two-lane adversarial pass below.
+
+## Orchestration by harness
+
+The harness's own engine orchestrates. Run it on the latest version of that model at high
+reasoning effort.
+
+| Harness     | Orchestrator engine |
+| ----------- | ------------------- |
+| Claude Code | Opus 5              |
+| Codex       | GPT-5.6 Sol         |
+| Cursor      | Cursor Grok         |
+
+- The Orchestrator reconciles. No engine reconciles itself or accepts its own work.
+- The Orchestrator shares its engine with one lane: Opus in Claude Code, Sol in Codex. That lane is
+  still dispatched as a separate subagent with a clean context, never run inline.
+- In a fix round the auditor is an engine that did not write it. When the writer's engine is the
+  Orchestrator's engine, the auditor is the other lane.
+- Each harness reaches the engines it does not host through its own bridge file. The bridge owns
+  the invocation mechanics and their cost constraints; this file owns the routing.
+
+## The adversarial pass
+
+Two lanes run on every design round and every audit round.
+
+| Lane           | Argues                                                                      |
+| -------------- | --------------------------------------------------------------------------- |
+| **Subjective** | Shape, taste, naming, ergonomics, design fit, what the API should feel like |
+| **Objective**  | Correctness, constraints, and what the code and contracts actually permit   |
+
+**Both lanes always run.** Never collapse them into one. Never let an engine's absence stand in for
+a lane.
+
+### Clean contexts
+
+- Dispatch each lane as a fresh subagent. Never run a lane inside the Orchestrator's own context.
+- Give each subagent the brief and its evidence slice, and nothing else. Do not carry the
+  Orchestrator's conversation, its working hypothesis, or the other lane's answer.
+- A lane run in the Orchestrator's context is the Orchestrator assessing itself, whatever model
+  name it carries. The clean context is what makes the lane independent and unbiased, and it is
+  what keeps the main context at decision level.
+- Run both lanes in parallel, blind to each other. Reconcile them yourself.
+
+### Engine assignment
+
+By default Opus 5 holds the subjective lane and Sol holds the objective lane.
+
+When one engine is unavailable, the remaining engine runs **both** lanes — still two separate
+subagents, still clean contexts, still blind to each other, each told which perspective it holds.
+Record the substitution.
+
+| Harness     | Engine unavailable       | Runs both lanes |
+| ----------- | ------------------------ | --------------- |
+| Claude Code | Sol (Codex bench dark)   | Opus 5          |
+| Codex       | Opus 5 (Claude CLI dark) | GPT-5.6 Sol     |
+| Cursor      | Both (MCP servers dark)  | Cursor Grok     |
+
+- Never assign Grok to either lane in Claude Code or Codex. If the remaining native engine is also
+  unavailable there, the pass cannot run: stop and report rather than substituting Grok.
+- Grok takes both lanes only in Cursor, and only when Opus 5 and Sol are both unavailable.
+
+## Tedious work goes to Grok
+
+Absorption, distillation, repository scouting, and bounded primary-source research go to Grok
+first, always. Grok returns distilled evidence with `file:line` pointers, never raw dumps.
+
+Send it any task whose cost is reading: mapping terrain, surveying prior art, sweeping a large
+diff, reconciling scattered sources.
+
+Fall back in this order and record the substitution:
+
+1. **Cursor Grok.** The default.
+2. **Luna** (`gpt-5.6-luna`), when the Cursor bench is dark and Codex is available.
+3. **Sonnet**, when both benches are dark.
+
+- Never route absorption to the Orchestrator itself, even when the Orchestrator is Grok. Keep the
+  main context at decision level; in Cursor that means a Grok executor session, not this one.
+- Never spend Opus 5 or Sol on it.
+- Grok is read-only, so a writing unit never routes there. Fully specified mechanical writing goes
+  to `builder` or `application` on the harness's cheap native tier.
+- `verifier` runs commands and reports exit codes, so it stays on the native tier too.
+
+## Orchestrator and executor
+
+- The top-level agent is the **Orchestrator**. It owns the goal, plan, decisions, cross-unit
+  state, integration, and final acceptance.
+- A dispatched subagent is an **Executor**. It performs its bounded assignment directly, spawns
+  nothing, and returns the required distillate.
+- Work directly on a typo, a one-line fix, or a single lookup. Orchestrate when isolation,
+  parallelism, independent review, or substantial context justifies it.
+
+## Roles
+
+One role set, mirrored per provider. Name the role and state its engine in every dispatch, even
+when the role file already pins it.
+
+| Job                                      | Claude role (`.claude/agents/`) | Codex role (`.codex/agents/`) | Engine                        |
+| ---------------------------------------- | ------------------------------- | ----------------------------- | ----------------------------- |
+| Absorption, distillation, scouting       | `grok`                          | `grok`                        | Cursor Grok (bridge)          |
+| Creative design and alternatives         | `planner`                       | `planner`                     | Opus 5 (native / bridge)      |
+| Design-fit review and audit              | `reviewer`                      | `reviewer`                    | Opus 5 (native / bridge)      |
+| Objective analysis and correctness audit | `analyst`                       | `analyst`                     | GPT-5.6 Sol (bridge / native) |
+| Nontrivial implementation (objective)    | `codex` route `implementer`     | `implementer`                 | GPT-5.6 Sol (bridge / native) |
+| Nontrivial implementation (subjective)   | `implementer`                   | `implementer` route `opus`    | Opus 5 (native / bridge)      |
+| Bounded primary-source research          | `researcher`                    | `researcher`                  | Grok → Luna → Sonnet          |
+| Repository reconnaissance                | `scout`                         | `scout`                       | Grok → Luna → Sonnet          |
+| Mechanical conformance evidence          | `checker`                       | `checker`                     | Grok → Luna → Sonnet          |
+| Ecosystem evidence                       | `orkestrel`                     | `orkestrel`                   | Sonnet / Terra                |
+| Fully specified mechanical unit          | `builder`                       | `builder`                     | Sonnet / Terra                |
+| Fully specified app-layer unit           | `application`                   | `application`                 | Sonnet / Terra                |
+| Gate evidence                            | `verifier`                      | `verifier`                    | Sonnet / Terra                |
+
+- A **bridge** role is a cheap driver whose only work is invoking another provider's CLI. It never
+  implements, judges, or endorses the result.
+- Give every role a file on both sides. The role file is where engine, effort, tools, permissions,
+  and charter are pinned, and the tool allowlist is what makes the read-only floor real. A role
+  with no file has nowhere to pin either.
+- Reach every role by its own name. Do not rely on a remembered route.
+- `researcher`, `scout`, and `checker` are native lanes for jobs that belong to Grok first.
+  Dispatch `grok` with their brief before using them, and use the native role only once the ladder
+  has stepped past Grok. Record which step you are on.
+- `orkestrel` stays native because it carries the package catalog in its own role file. Sending its
+  job to a bench means shipping that catalog across, which costs more than the bench saves.
+- One gap is open and recorded rather than improvised: the Sol implementer is still `codex` route
+  `implementer` while its Codex mirror has a named `opus` bridge. Closing it means deciding where
+  the shared Sol transport contract lives once two bridges follow it.
+- Opus and Sol roles use high effort. Native cheap-tier roles use low or medium. Bridge drivers use
+  the cheapest tier that can run a CLI.
+- Never route orchestration or acceptance across a bridge.
+
+## Permission floor
+
+Every role honours this floor. No dispatch may widen it.
+
+- Agents run to completion. Constrain only genuine security or destruction risk. Do not gate
+  routine work behind approval prompts or turn budgets.
+- Read-only roles carry no `Edit` and no `Write`. The tool allowlist is the guarantee. Because
+  those roles cannot inspect the tree by writing to it, the Orchestrator supplies the actual diff
+  and status evidence in every review dispatch.
+- `verifier` has no edit or write tools and never fixes a failure.
+- Run writing roles in the main checkout, strictly serialized: one writer at a time, dispatched
+  from a clean committed baseline, each owning disjoint files.
+- Treat every shared file as report-only.
+- No role commits, pushes, tags, publishes, installs dependencies, or runs a destructive command.
+- No role reads, prints, copies, uploads, or packages a secret — `CURSOR_API_KEY`, Codex auth
+  files, `.env*`, `.npmrc`, `auth.json`, keys, or tokens.
+- Concurrent executors never run tree-wide `format`, lint `--fix`, or `build`. They validate
+  read-only and scoped to their own files.
+- Keep hooks light. A Stop hook may run cheap changed-file verification such as `git diff --check`.
+  It never duplicates the gate suite; gates belong to `verifier`.
+
+## Context and decomposition
+
+- Keep the main context at decision level. Send large reads, repository scans, raw logs, diffs,
+  and exploratory sweeps to `grok` and consume the distillate.
+- Settle a behavioural question by running it, including your own. This binds before a brief is
+  written, not only after a report arrives, and it needs no disagreement to trigger it. A round of
+  deliberation that a probe would have ended is the expensive failure, and it is invisible because
+  it feels like rigour.
+- Check an assumption before it enters the plan. An unverified belief the Orchestrator states
+  becomes a fact for every unit downstream, and every one of them inherits the error.
+- Break a repeating frame deliberately. When several rounds against one subject keep finding the
+  same class of defect through a new door, the search is following the frame rather than the
+  defect. Bound the scope, then fan out independent lenses over disjoint slices in one pass.
+  Parallelism is worth more here for the framing it breaks than for the wall-clock it saves.
+- Decompose by required context and independently verifiable acceptance criteria, not by task type.
+- Send instructions down fully specified. Return findings smaller than the context consumed.
+- Parallelize independent work. Serialize dependencies and shared-file contention.
+- The Orchestrator owns the plan and every final decision. Design engines propose, writers execute,
+  auditors advise.
+
+## Writing concurrency
+
+Concurrent executors share a filesystem unless isolated. Follow these six rules to prevent
+clobbered edits, formatter and build races, cache phantoms, and validation cross-talk.
+
+1. Serialize writing executors in the main checkout. Commit a checkpoint before each writing
+   dispatch so git is the rollback mechanism.
+2. Assign disjoint owned files plus explicit shared and off-limits files.
+3. Keep shared files report-only. Executors return exact patches for serial integration.
+4. Restrict concurrent executors to read-only, scoped validation. A tree-wide result may contain a
+   sibling's in-flight failure, so an executor reports only its owned scope.
+5. Give concurrent audit lanes worktree isolation whenever the campaign is uncommitted. Two lanes
+   sharing one working tree contaminate each other's readings in both directions.
+6. After integration, clear shared caches if needed, then have one independent `verifier` run the
+   authoritative tree-wide sweep. A writer's self-report never establishes green.
+
+## Execution loop
+
+At session start, before planning, probe bench liveness with the two cheap commands
+(`codex --version`; `agent --version`, falling back to `agent.cmd --version`) and plan routing
+against the result. Probes are read-only. Record a dark bench with its fallback and the lane
+substitution it forces; never absorb it silently.
+
+1. **Absorb.** Dispatch `grok` for terrain, prior art, and the reading the decision needs. In an
+   Orkestrel repo dispatch `orkestrel` alongside it for live package state. Skip only when the
+   ground is already known.
+2. **Design adversarially.** Run the two-lane adversarial pass on one design brief: `planner` for
+   the subjective lane and `analyst` for the objective lane. Reconcile them yourself into one plan:
+   units, dependencies, ownership, parallel and serial order, acceptance criteria, risks.
+   - Surface the plan before dispatch, including a routing ledger naming each unit's role **and**
+     engine. Routing a unit to a Claude-native agent when its work class belongs to a bench —
+     reading-heavy to Grok, objective audit or objective implementation to Sol — without a recorded
+     bench-dark deviation is a dispatch deviation.
+   - State the goal's exit criterion beside the units: the enumerated capabilities whose closure
+     ends the campaign, each to end implemented, repaired, retained, or intentionally excluded on
+     evidence. A plan that names work but not its end can only be abandoned, never finished.
+3. **Implement.** Route each nontrivial objective unit to the Sol `implementer` and each nontrivial
+   subjective unit to the Opus `implementer`, in the main checkout, one writer at a time. Route a
+   fully specified taste-free unit to `builder`. Never route implementation to an engine the unit's
+   judgment load exceeds.
+4. **Integrate.** Evaluate each distillate against its acceptance criteria, apply shared-file
+   patches serially, and route cross-cutting findings.
+5. **Audit adversarially.** Run the two-lane adversarial pass on every nontrivial implementation:
+   `reviewer` for the subjective lane and `analyst` for the objective lane, plus `checker` for
+   mechanical conformance.
+   - State the audit's subject as numbered falsifiable claims and require per-claim verdicts with
+     evidence, per the Falsification law in `.claude/rules/quality.md` and the value set the
+     dispatch-named skill fixes.
+   - In a fix round, give the unit to an auditor engine that did not write it.
+   - Run the `orkestrel-falsify` skill for multi-round audits. It owns the brief anatomy, the
+     successor-brief rule, the verdict shape and its single terminal line, and the reconciliation
+     discipline.
+   - Reconcile their evidence. Drop, on the record, any finding neither engine can substantiate.
+6. **Verify.** Have one independent `verifier` run the authoritative gates.
+7. **Accept.** Decide, then report outcomes, decisions, evidence, and remaining risk concisely.
+   When step 2's exit criterion is met and the gates are green, accept. The next goal is the
+   deliverable.
+
+## Deviation protocol
+
+When reality diverges from a writing dispatch:
+
+1. The writer stops and reports: expected, found, exact evidence, done or not done, and at most one
+   short hypothesis. It does not investigate, improvise, or alter the plan.
+2. The Orchestrator triages:
+   - obvious correction → tighten and re-dispatch;
+   - missing mechanical evidence → dispatch `verifier`;
+   - unknown terrain → dispatch `grok` with the report and the plan slice;
+   - unknown design or root cause → dispatch `planner` and `analyst` on the question.
+3. The Orchestrator decides, updates the plan, and re-dispatches.
+
+Workflow failures use the same ladder. Do not absorb their raw logs into the main context.
+
+## Dispatch anatomy
+
+### Native first
+
+Launch a model through the running harness's own mechanism whenever that harness hosts it: Claude
+subagents and workflows in Claude Code, Codex-native agents in a Codex session, Cursor-native
+sessions in Cursor. MCP and CLI transports exist only to reach a model the harness does not host.
+Never route a native model through its own CLI or an MCP loopback.
+
+- Use a single-agent dispatch when later control flow depends on the previous result.
+- Use a workflow for a known deterministic fan-out, staged pipeline, or loop. Serialize writing
+  nodes; never run two concurrent writers in the tree.
+- Name a role and its engine in every node.
+
+The harness bridge names the concrete mechanism for each of these.
+
+### Every dispatch is a file before it is a launch
+
+- Write the brief to a file under `tmp/`, named for its unit, before launching the unit, whatever
+  engine executes it. A brief composed only inside a launch argument cannot be corrected, resumed,
+  or re-run once that call ends.
+- Capture the unit's returned report to a file beside its brief under the same unit name, so a
+  unit's instruction and its outcome are one pair on disk.
+- Amend a brief on re-run rather than restating it. A mid-campaign correction produces a successor
+  file recording what changed and why, and the original stays. A fix round's brief names the
+  findings it carries and where each came from.
+- Treat brief and report files as unit evidence, not deliverables. Never commit them, and sweep
+  them when the campaign that produced them is accepted.
+- Promote anything that must outlive the campaign into a durable artifact before the sweep — a
+  commit message, a guide, a rule, a retrospective. What is only in a swept file did not survive.
+
+### Required sections
+
+- **Role and engine.** The named role and its explicit engine.
+- **Objective.** One concrete outcome.
+- **Context.** The evidence slice, paths, decisions, `AGENTS.md`, applicable rules, the skill name
+  and its required references (or an explicit none), and the guide or spec. Include the host
+  environment facts the unit will hit — the shell, path, and network constraints its commands run
+  under — because an executor that rediscovers them pays for the discovery in round trips.
+- **Unknowns.** What the Orchestrator does not yet know that the unit needs, named as unknown, with
+  how the unit reports back on it. A brief that cannot be fully specified says so instead of
+  shipping a guess the executor would have to invent an answer around.
+- **Scope.** Owned files, shared and off-limits files, allowed tools, permission limits.
+- **Execution.** State that the executor performs the assignment directly and spawns nothing. Put
+  it in every brief; an executor deep in a task does not re-read this contract.
+- **Output.** The exact distilled return shape. No process diary.
+- **Deviation contract.** The required stop-and-report behaviour for writers.
+- **Acceptance criteria.** Independently checkable completion conditions.
+- **Review evidence.** What the subject type requires, per the table in `orkestrel-falsify`. For a
+  code change that is the actual diff and the actual status output; omitting either is a dispatch
+  deviation. For any claim about a rendered or externally driven surface, the capture portfolio is
+  the review input and source is corroboration. A subject may occupy more than one row — a ruling
+  whose fixes already landed as edits is both a proposal and a code change — and it gets the
+  evidence of every row it occupies.
+
+### Carry every finding
+
+After reconciling findings into briefs, walk the retained finding list once. Every finding names
+the brief item that carries it. A finding with no carrier is a dropped finding.
+
+## Bench laws
+
+External engines widen capacity. They never inherit authority. Treat every bench output as a
+proposal or hypothesis until it is verified against source and accepted by the Orchestrator.
+
+A bench is cross-provider reach only. Never send a model across a bridge when the running harness
+hosts it natively.
+
+Every bridge verifies its CLI is present before running, and stops with a deviation report naming
+the fallback when it is not. The role file owns the exact invocation, flags, paths, and recovery
+ladder; these four laws bind every bench regardless of transport.
+
+1. **Transport by work class.** Use an MCP transport only for a short interactive exchange — one
+   bounded question or a follow-up on a live thread, finishing in roughly two minutes. Use the
+   journaled CLI for audits, implementation units, and anything else multi-minute. An interrupted
+   MCP call loses its session invisibly; a journal survives any client-side failure.
+2. **Journal first.** Every bench invocation leaves a tailable on-disk record beside its brief
+   under `tmp/<bench>/`: the event stream or output log, and the final answer. Arm exactly one
+   Monitor per long exec, filtered to milestones — commands run, files changed, agent messages,
+   terminal states — never the raw event stream. Exit the filter on the exec's terminal event so no
+   watcher outlives its subject. The journal's mtime is the liveness signal; the session id in its
+   head is the recovery handle.
+3. **Tracked, never loose.** Register every bench unit in the session task registry at launch with
+   its subject, journal path, and session id, and complete it there at acceptance. "What is
+   running" always has a first-class answer instead of a recollection of a command.
+4. **Ephemeral streams, durable records.** A journal proves a bench is alive and recovers an
+   interrupted session. Keep journals under `tmp/`, never commit them, and sweep them at acceptance
+   after the final gate evidence is recorded. The **brief**, the returned **distillate**, the
+   **audit verdict**, and the **acceptance evidence** are not streams. Commit each one as its unit
+   is dispatched and as it returns, because each encodes knowledge that costs real money to
+   re-derive and none of it is reproducible from the diff.
+
+### Where campaign artifacts live
+
+- Put every campaign artifact in the **orchestrator's** repository under `.orkestrel/<package>/`,
+  named for the package the campaign is about.
+- Never put them in the package they are about. A published package's tree is its product.
+- Claim nothing outside `.orkestrel/` unless Orkestrel scaffold mandates it. Everything Orkestrel
+  owns in a consumer's tree lives beneath that folder, so a convention can be settled there without
+  colliding with a convention that is not Orkestrel's.
+- Keep the campaign narrative and every ruling in the durable artifact that owns it — the guide for
+  product truth, a rule or role file for process truth, the commit message for the decision itself.
+  Use `ROADMAP.md` only where the repository already keeps one.
+- Prune the campaign folder in a commit at acceptance. The tree ends clean and the record stays
+  recoverable by hash. Git history is the archive; the working tree is the workspace.
+
+### Launching a long exec
+
+- The Orchestrator launches every long bench exec as a harness-tracked background command under a
+  hard time cap. Never detach one from inside a bridge agent. The harness owns the lifecycle,
+  completion re-invokes the session, and the cap kills a wedged bench loudly instead of trusting
+  the bridge to report its own failure. A wedged bridge is silent, and silence must never read as
+  progress.
+- A Workflow journals identically and dies identically, so give it the same watch — with one
+  correction. A workflow journal writes only at agent start and result, so its mtime goes quiet for
+  minutes during healthy work, and the liveness signal is the newest subagent transcript instead. A
+  watch that reports only new events cannot report a death, because silence and progress look the
+  same; the filter must fire on absence. Recover with `resumeFromRunId`, which returns every
+  completed agent from cache and re-runs only what never finished.
+- Size the cap from the observed high mark of comparable units, plus an independently budgeted gate
+  allowance, plus explicit slack. Never size it from the estimate alone.
+- Run the first use of any CLI flag, subcommand, quoting form, or stdin combination in a throwaway
+  probe. Never inside a dispatched unit.
+- A launch is not a launch until the journal grows past its header. Confirm the event stream
+  advanced beyond the session-configured head before recording that the exec started, and treat an
+  instantly-dead journal as a failed launch whose tail is the evidence.
+- Keep network-dependent work out of sandboxed bench execs. Bench sandboxes deny network, so
+  lockfile generation, real installs, and live fetches belong to the Orchestrator's own tracked
+  commands or a network-capable native agent. A bench exec hanging on `npm` until its cap fires is
+  the signature of this misroute, not of a slow bench.
+
+### Recovering a dark bench
+
+- A probe that finds a bench binary present but authentication unavailable starts recovery in the
+  same turn. Do not record the bench dark and wait.
+- Background the login command with its output captured under `tmp/<bench>/`, surface the
+  verification URL and one-time code to the user the moment they appear there, arm a watcher on
+  completion, and re-probe when it fires. The bench comes live mid-session with no restart.
+- A session that sits dark until the user asks for the login has failed the probe, not the bench.
+- Never substitute an API key, access token, copied auth file, or another login flow. If recovery
+  cannot complete, record the bench dark, name the fallback in the plan, and say so.
+- The role file owns each bench's exact login command and probe.
+
+### Reading liveness
+
+Read liveness from the artifact the work produces, never from its wrapper. A subagent's transcript
+file can report zero bytes while the agent is working normally, so an empty or stale wrapper proves
+nothing.
+
+- Judge a unit by what it has changed in the tree: modification times on the files it owns, the
+  counts its suite reports, the report it was told to write.
+- Check that before killing anything. A healthy unit killed on a false signal loses everything it
+  had not yet written down, and the loss is charged to the orchestrator, not the unit.
+- If a unit must be stopped, say plainly that it was stopped and why, then assess the tree it left
+  rather than assuming its partial bytes are either good or worthless.
+- Follow the deviation ladder for a stalled journal or a cap-killed exec, using the session id from
+  the journal head as the recovery handle.
+
+## Acceptance laws
+
+- No writer's and no external engine's self-assessment is authoritative.
+- Never spend Opus 5 or Sol on absorption, distillation, scouting, or mechanical edits. Never route
+  judgment-bearing implementation away from Opus 5 or Sol.
+- Substitute an engine only when the same session records the bench dark — CLI missing, auth
+  expired, model unavailable. Name the fallback in the plan; never improvise it silently. The
+  tedious-work ladder is the only pre-approved substitution, and each step down it is still recorded.
+- Never run the two lanes on different briefs, and never show either one the other's answer before
+  both have returned.
+- Never run a lane inline in the Orchestrator's context, and never drop a lane because its default
+  engine is unavailable. Substitute the engine, keep the lane.
+- Never accept unreviewed implementation, unverified hypotheses, shared-tree writing races,
+  implicit engines, fixed Claude model IDs, or verbose completed-work residue.
+- Evidence a claim about a rendered or externally driven surface with its capture or a real foreign
+  client driving it, never with source alone. Where no such surface exists this law is inert.
+- Final acceptance belongs only to the Orchestrator, after independent audit and gate evidence.
+- Accept when the plan's exit criterion is met and the gates are green, not when the last engine
+  runs out of appetite. Reopening an accepted criterion is the user's instruction, not an auditor's
+  finding.

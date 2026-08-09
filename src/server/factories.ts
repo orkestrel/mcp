@@ -1,6 +1,10 @@
-import type { ClientTransportInterface, MCPServerInterface } from '@src/core'
+import type {
+	MCPClientTransportInterface,
+	MCPContinuationInterface,
+	MCPDispatcherInterface,
+} from '@src/core'
 import type { RouteInput } from '@orkestrel/router'
-import type { UpgradeHandler } from '@orkestrel/server'
+import type { TokenSecret, UpgradeHandler } from '@orkestrel/server'
 import type {
 	HTTPClientTransportOptions,
 	HTTPTransportOptions,
@@ -13,6 +17,7 @@ import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { bindServer } from '@src/core'
 import { isString } from '@orkestrel/contract'
+import { signToken, verifyToken } from '@orkestrel/server'
 import { createNodeWebSocket, WEBSOCKET_VERSION } from '@orkestrel/websocket'
 import { DEFAULT_MCP_PATH, MCP_WEBSOCKET_SUBPROTOCOL } from './constants.js'
 import { createMCPPostHandler } from './handlers.js'
@@ -24,8 +29,25 @@ import { WebSocketClientTransport } from './transports/WebSocketClientTransport.
 import { WebSocketServerTransport } from './transports/WebSocketServerTransport.js'
 
 /**
+ * Adapt the installed server token primitives to the host-neutral MCP continuation port.
+ *
+ * @param secret - Current signing secret or `[current, ...older]` rotation list
+ * @returns A continuation port that seals and opens opaque canonical state strings
+ */
+export function createMCPContinuation(secret: TokenSecret): MCPContinuationInterface {
+	return {
+		seal(value) {
+			return signToken(value, { secret })
+		},
+		open(value) {
+			return verifyToken(value, secret)
+		},
+	}
+}
+
+/**
  * Create the MCP Streamable-HTTP transport routes — mounts a transport-agnostic
- * {@link MCPServerInterface} (the `@src/core` dispatch core) on the fetch-standard router
+ * {@link MCPDispatcherInterface} (the `@src/core` dispatch boundary) on the fetch-standard router
  * spine, pumping each `POST` body through `mcp.dispatch`. Returns the {@link RouteInput}s to
  * hand to `router.add(...)`.
  *
@@ -36,14 +58,14 @@ import { WebSocketServerTransport } from './transports/WebSocketServerTransport.
  * DISPATCH-level outcomes:
  *
  * - A **transport** failure — a malformed JSON body, or a parsed value that is not a
- *   JSON-RPC REQUEST — is an HTTP `400` carrying a JSON-RPC error BODY (`-32700` Parse
- *   error / `-32600` Invalid Request, id `null`).
+ *   JSON-RPC INVOCATION — is an HTTP `400` carrying a JSON-RPC error BODY (`-32700` Parse
+ *   error / `-32600` Invalid Request), with the `id` it could not read OMITTED.
  * - Modern protocol/method/name headers are validated against the body; a mismatch is
  *   HTTP `400` + `-32020`. Headerless initialize is accepted, a live legacy session supplies
  *   its pinned revision, and every other headerless request is rejected.
  * - Legacy dispatch errors stay IN-BAND at HTTP `200`; modern errors map to `400` for
  *   `-32020` / `-32021` / `-32022` / `-32602`, `404` for `-32601`, and `200` otherwise.
- * - A **notification** (a request with no `id`, which `dispatch` resolves to
+ * - A **notification** (an invocation with no `id`, which `dispatch` resolves to
  *   `undefined`) is a `202 Accepted` with no body.
  *
  * When `streaming` is enabled (the default) and the client `Accept`s `text/event-stream`,
@@ -62,7 +84,7 @@ import { WebSocketServerTransport } from './transports/WebSocketServerTransport.
  * allowlist or explicitly delegates validation to an upstream layer.
  *
  * @typeParam TState - The consumer's opaque per-request state type
- * @param mcp - The transport-agnostic {@link MCPServerInterface} to expose over HTTP
+ * @param mcp - The transport-agnostic {@link MCPDispatcherInterface} to expose over HTTP
  * @param options - Optional `path` (default {@link DEFAULT_MCP_PATH}) and `streaming`
  *   (default `true`), plus shared origin, keepalive, and synchronous caller-extraction options; see
  *   {@link HTTPTransportOptions}
@@ -70,15 +92,15 @@ import { WebSocketServerTransport } from './transports/WebSocketServerTransport.
  *
  * @example
  * ```ts
- * import { createMCPServer, createToolManager } from '@src/core'
+ * import { createMCPLegacy, createMCPServer, createToolManager } from '@src/core'
  * import { createMCPRoutes } from '@src/server'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
- * const routes = createMCPRoutes(mcp) // POST /mcp dispatches JSON-RPC (JSON or SSE per Accept)
+ * const routes = createMCPRoutes(createMCPLegacy(mcp)) // both eras; pass `mcp` for modern only
  * ```
  */
 export function createMCPRoutes<TState = unknown>(
-	mcp: MCPServerInterface,
+	mcp: MCPDispatcherInterface,
 	options?: HTTPTransportOptions<TState>,
 ): readonly RouteInput<string, TState>[] {
 	const path = options?.path ?? DEFAULT_MCP_PATH
@@ -93,7 +115,7 @@ export function createMCPRoutes<TState = unknown>(
 
 /**
  * Create the HTTP CLIENT transport for an {@link import('@src/core').MCPClientInterface}
- * — a {@link ClientTransportInterface} that drives a REMOTE Streamable-HTTP MCP server
+ * — a {@link MCPClientTransportInterface} that drives a REMOTE Streamable-HTTP MCP server
  * over `fetch`. The egress mirror of {@link createMCPRoutes}.
  *
  * @remarks
@@ -112,7 +134,7 @@ export function createMCPRoutes<TState = unknown>(
  * @param options - `url` (the remote endpoint; REQUIRED), optional `headers` merged onto
  *   every request, optional `fetch` (default `globalThis.fetch`), and optional `timeout`
  *   (ms, applied via `AbortSignal.timeout`); see {@link HTTPClientTransportOptions}
- * @returns A working {@link ClientTransportInterface} over `fetch`
+ * @returns A working {@link MCPClientTransportInterface} over `fetch`
  *
  * @example
  * ```ts
@@ -128,13 +150,13 @@ export function createMCPRoutes<TState = unknown>(
  */
 export function createHTTPClientTransport(
 	options: HTTPClientTransportOptions,
-): ClientTransportInterface {
+): MCPClientTransportInterface {
 	return new HTTPClientTransport(options)
 }
 
 /**
  * Create the MCP WebSocket transport INGRESS — an {@link UpgradeHandler} that exposes a
- * transport-agnostic {@link MCPServerInterface} over a WebSocket, the WebSocket mirror of
+ * transport-agnostic {@link MCPDispatcherInterface} over a WebSocket, the WebSocket mirror of
  * {@link createMCPRoutes}. Register it on the spine's upgrade seam.
  *
  * @remarks
@@ -162,7 +184,7 @@ export function createHTTPClientTransport(
  * handler BEFORE this one — that handler can claim (decline + destroy) an unauthenticated
  * upgrade so it never reaches this pump.
  *
- * @param mcp - The transport-agnostic {@link MCPServerInterface} to expose over WebSocket
+ * @param mcp - The transport-agnostic {@link MCPDispatcherInterface} to expose over WebSocket
  * @param options - Optional `path` (default {@link DEFAULT_MCP_PATH}) and `subprotocol`
  *   (default {@link MCP_WEBSOCKET_SUBPROTOCOL}); see {@link WebSocketServerOptions}
  * @returns An {@link UpgradeHandler} to register with the spine's `upgrade` seam
@@ -177,7 +199,7 @@ export function createHTTPClientTransport(
  * ```
  */
 export function createWebSocketServer(
-	mcp: MCPServerInterface,
+	mcp: MCPDispatcherInterface,
 	options?: WebSocketServerOptions,
 ): UpgradeHandler {
 	const path = options?.path ?? DEFAULT_MCP_PATH
@@ -207,7 +229,7 @@ export function createWebSocketServer(
 
 /**
  * Create the WebSocket CLIENT transport for an {@link import('@src/core').MCPClientInterface}
- * — a {@link ClientTransportInterface} that drives a REMOTE MCP server over a WebSocket. The
+ * — a {@link MCPClientTransportInterface} that drives a REMOTE MCP server over a WebSocket. The
  * egress mirror of {@link createWebSocketServer} and the WebSocket sibling of {@link
  * createHTTPClientTransport}.
  *
@@ -223,7 +245,7 @@ export function createWebSocketServer(
  *
  * @param options - `url` (the remote WebSocket endpoint; REQUIRED) and optional `headers`
  *   merged onto the upgrade request; see {@link WebSocketClientTransportOptions}
- * @returns A working {@link ClientTransportInterface} over a WebSocket
+ * @returns A working {@link MCPClientTransportInterface} over a WebSocket
  *
  * @example
  * ```ts
@@ -239,13 +261,13 @@ export function createWebSocketServer(
  */
 export function createWebSocketClientTransport(
 	options: WebSocketClientTransportOptions,
-): ClientTransportInterface {
+): MCPClientTransportInterface {
 	return new WebSocketClientTransport(options)
 }
 
 /**
  * Create the stdio CLIENT transport for an {@link import('@src/core').MCPClientInterface}
- * — a {@link ClientTransportInterface} that spawns and drives a CHILD PROCESS MCP server
+ * — a {@link MCPClientTransportInterface} that spawns and drives a CHILD PROCESS MCP server
  * over newline-delimited JSON-RPC on `stdin`/`stdout`, the stdio sibling of {@link
  * createHTTPClientTransport} and {@link createWebSocketClientTransport}.
  *
@@ -260,7 +282,7 @@ export function createWebSocketClientTransport(
  *
  * @param options - `command` (the executable to spawn; REQUIRED), optional `args`,
  *   and optional `env`; see {@link StdioClientTransportOptions}
- * @returns A working {@link ClientTransportInterface} over a child process's stdio
+ * @returns A working {@link MCPClientTransportInterface} over a child process's stdio
  *
  * @example
  * ```ts
@@ -276,13 +298,13 @@ export function createWebSocketClientTransport(
  */
 export function createStdioClientTransport(
 	options: StdioClientTransportOptions,
-): ClientTransportInterface {
+): MCPClientTransportInterface {
 	return new StdioClientTransport(options)
 }
 
 /**
  * Create the MCP stdio transport INGRESS — pumps a transport-agnostic {@link
- * MCPServerInterface} over newline-delimited JSON-RPC on `stdin`/`stdout` (or an
+ * MCPDispatcherInterface} over newline-delimited JSON-RPC on `stdin`/`stdout` (or an
  * injected stream pair), the stdio mirror of {@link createWebSocketServer}.
  *
  * @remarks
@@ -296,7 +318,7 @@ export function createStdioClientTransport(
  * surfaces on `mcp.emitter`'s `error` event rather than escaping the (async) message
  * pump.
  *
- * @param mcp - The transport-agnostic {@link MCPServerInterface} to expose over stdio
+ * @param mcp - The transport-agnostic {@link MCPDispatcherInterface} to expose over stdio
  * @param options - Optional injectable `input` / `output` streams; see
  *   {@link StdioServerOptions}
  * @returns A `{ start(): void; stop(): void }` handle to arm / tear down the pump
@@ -311,7 +333,7 @@ export function createStdioClientTransport(
  * ```
  */
 export function createStdioServer(
-	mcp: MCPServerInterface,
+	mcp: MCPDispatcherInterface,
 	options?: StdioServerOptions,
 ): { start(): void; stop(): void } {
 	const input = options?.input ?? process.stdin

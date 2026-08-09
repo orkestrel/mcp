@@ -18,7 +18,7 @@ import type { MCPMethodHandler, MCPMethodManagerInterface } from './types.js'
  * @example
  * ```ts
  * const methods = new MCPMethodManager()
- * methods.add('tools/list', async (request) => buildJSONRPCResult(request.id ?? null, { tools: [] }))
+ * methods.add('tools/list', async ({ id }) => buildJSONRPCResult(id, { tools: [] }))
  * methods.method('tools/list') // the handler
  * methods.method('tools/nope') // undefined → the dispatch branch answers -32601
  * ```

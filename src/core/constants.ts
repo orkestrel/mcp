@@ -50,10 +50,33 @@ export const MCP_META_SERVER = 'io.modelcontextprotocol/serverInfo'
 /** Reserved modern `_meta` key carrying a `subscriptions/listen` request id. */
 export const MCP_META_SUBSCRIPTION = 'io.modelcontextprotocol/subscriptionId'
 
+/**
+ * The reserved extension key identifying the draft Tasks extension.
+ *
+ * @remarks
+ * The ONE spelling of it in this package. A client declares it per REQUEST, under
+ * `_meta['io.modelcontextprotocol/clientCapabilities'].extensions`; a server advertises it
+ * under `server/discover`'s `capabilities.extensions`. Both sides carry an empty object —
+ * the extension defines no options, so presence is the entire declaration.
+ */
+export const MCP_EXTENSION_TASKS = 'io.modelcontextprotocol/tasks'
+
 /** MCP reserved error: required HTTP metadata does not match the request body. */
 export const MCP_HEADER_MISMATCH = -32020
 
-/** MCP reserved error: an operation needs a client capability that was not declared. */
+/**
+ * MCP reserved error: an operation needs a client capability that was not declared.
+ *
+ * @remarks
+ * The GENERIC code for the whole condition, not one capability's code. This server answers
+ * it in two places — a `tools/call` that needs `elicitation`, and a `tasks/*` request whose
+ * client never declared `io.modelcontextprotocol/tasks` — and the two are told apart by
+ * `error.data.requiredCapabilities` alone (`{ elicitation: {} }` against
+ * `{ extensions: { 'io.modelcontextprotocol/tasks': {} } }`). They are two instances of one
+ * condition, so a second numeral would describe the same fact twice. The Tasks extension's
+ * own draft prose still shows `-32003` in examples; the dated core schema fixes this code,
+ * and the dated schema is what a peer implements against.
+ */
 export const MCP_MISSING_CAPABILITY = -32021
 
 /** MCP reserved error: a request names an unsupported protocol revision. */
@@ -90,6 +113,24 @@ export const DEFAULT_MCP_LIMITS = Object.freeze({
 	depth: 32,
 })
 
+/**
+ * The one empty argument record every argument-less modern `tools/call` runs with.
+ *
+ * @remarks
+ * Frozen and null-prototype, and SHARED: two calls that name no `arguments` receive the same
+ * reference, so nothing a tool writes into its own `arguments` can survive into the next
+ * call — the write fails instead. That failure is a tool-domain failure like any other: the
+ * registry isolates it into a `success: false` result, which reaches the peer as an
+ * `isError: true` tool result rather than as a protocol error, because refusing a mutation
+ * of server-owned input is not a protocol fault.
+ *
+ * The null prototype means an inherited key is never mistaken for a supplied argument:
+ * `arguments.constructor` is `undefined` here rather than a function.
+ */
+export const EMPTY_MCP_ARGUMENTS: Readonly<Record<string, unknown>> = Object.freeze(
+	Object.create(null),
+)
+
 /** JSON-RPC 2.0 reserved error: invalid JSON was received (the message did not parse). */
 export const JSONRPC_PARSE_ERROR = -32700
 
@@ -102,7 +143,25 @@ export const JSONRPC_METHOD_NOT_FOUND = -32601
 /** JSON-RPC 2.0 reserved error: the method's parameters were invalid. */
 export const JSONRPC_INVALID_PARAMS = -32602
 
-/** JSON-RPC 2.0 implementation-defined server error (the `-32000` to `-32099` range). */
+/**
+ * JSON-RPC 2.0 reserved error: the server failed while handling an otherwise valid request.
+ *
+ * @remarks
+ * The code every MODERN internal fault answers with — a provider, handler, continuation,
+ * capacity, stream-source, normalization, or serialization failure the server contained.
+ * It is detail-free on the wire: the caught value reaches the application through the
+ * server's `error` event and never through the response.
+ */
+export const JSONRPC_INTERNAL_ERROR = -32603
+
+/**
+ * JSON-RPC 2.0 implementation-defined server error (the `-32000` to `-32099` range).
+ *
+ * @remarks
+ * Retained for the LEGACY branch alone. A modern fault answers
+ * {@link JSONRPC_INTERNAL_ERROR}; this code survives only where an old-wire peer was
+ * already characterized against it.
+ */
 export const JSONRPC_SERVER_ERROR = -32000
 
 // MCP CLIENT defaults — the identity an `MCPClient` reports in the `initialize`

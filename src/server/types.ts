@@ -25,9 +25,9 @@
 // spine's generic `upgrade` seam (D3): `createWebSocketServer` returns an `UpgradeHandler`
 // that claims an MCP WebSocket upgrade and pumps each decoded JSON-RPC request through
 // `mcp.dispatch`; `createWebSocketClientTransport` opens an upgrade `GET`, validates the
-// handshake accept, and bridges the masked client frames as a `ClientTransportInterface` an
+// handshake accept, and bridges the masked client frames as a `MCPClientTransportInterface` an
 // `MCPClient` drives. Both transports speak the SAME transport-agnostic `MCPServerInterface`
-// / `ClientTransportInterface` the HTTP pair does — the wire framing differs, the dispatch
+// / `MCPClientTransportInterface` the HTTP pair does — the wire framing differs, the dispatch
 // core does not.
 
 import type { JSONRPCMessage, MCPVersion } from '@src/core'
@@ -333,6 +333,13 @@ export interface WebSocketServerOptions {
  *   bearer for a guarded server). The transport always sets `Connection: Upgrade`,
  *   `Upgrade: websocket`, a random `Sec-WebSocket-Key`, `Sec-WebSocket-Version: 13`, and
  *   `Sec-WebSocket-Protocol: mcp`; a header supplied here is merged on top.
+ *
+ * **`headers` exists HERE and not on the browser face's `{ url, protocols }`, and that
+ * divergence is deliberate rather than a lag: the host performs the WebSocket handshake.**
+ * This face owns its own `node:http(s)` upgrade request, so it can set any header on it. A
+ * page cannot — the native `WebSocket` constructor takes a URL and subprotocols and nothing
+ * else — so a `headers` key over there would be an option that silently did nothing. Do not
+ * "harmonize" the two shapes.
  */
 export interface WebSocketClientTransportOptions {
 	readonly url: string

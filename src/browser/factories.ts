@@ -1,4 +1,4 @@
-import type { ClientTransportInterface, MCPTransportInterface } from '@src/core'
+import type { MCPClientTransportInterface, MCPTransportInterface } from '@src/core'
 import type {
 	HTTPClientTransportOptions,
 	MessagePortTransportOptions,
@@ -16,7 +16,7 @@ import { WebSocketClientTransport } from './transports/WebSocketClientTransport.
 
 /**
  * Create the browser-face WebSocket CLIENT transport for an
- * {@link import('@src/core').MCPClientInterface} — a {@link ClientTransportInterface}
+ * {@link import('@src/core').MCPClientInterface} — a {@link MCPClientTransportInterface}
  * that drives a REMOTE MCP server over the native `WebSocket` global, the browser
  * sibling of the Node face's `createWebSocketClientTransport` (`@src/server`).
  *
@@ -31,7 +31,7 @@ import { WebSocketClientTransport } from './transports/WebSocketClientTransport.
  * @param options - `url` (the remote WebSocket endpoint; REQUIRED) and optional
  *   `protocols` (the WebSocket subprotocol(s) to request); see
  *   {@link WebSocketClientTransportOptions}
- * @returns A working {@link ClientTransportInterface} over the native `WebSocket`
+ * @returns A working {@link MCPClientTransportInterface} over the native `WebSocket`
  *
  * @example
  * ```ts
@@ -47,13 +47,13 @@ import { WebSocketClientTransport } from './transports/WebSocketClientTransport.
  */
 export function createWebSocketClientTransport(
 	options: WebSocketClientTransportOptions,
-): ClientTransportInterface {
+): MCPClientTransportInterface {
 	return new WebSocketClientTransport(options)
 }
 
 /**
  * Create the browser-face HTTP CLIENT transport for an
- * {@link import('@src/core').MCPClientInterface} — a {@link ClientTransportInterface}
+ * {@link import('@src/core').MCPClientInterface} — a {@link MCPClientTransportInterface}
  * that drives a REMOTE Streamable-HTTP MCP server over the native `fetch`, the
  * browser sibling of the Node face's `createHTTPClientTransport` (`@src/server`).
  *
@@ -76,7 +76,7 @@ export function createWebSocketClientTransport(
  *   onto every request, optional `fetch` (default `globalThis.fetch`), and optional
  *   `timeout` (ms, applied via `AbortSignal.timeout`); see
  *   {@link HTTPClientTransportOptions}
- * @returns A working {@link ClientTransportInterface} over the native `fetch`
+ * @returns A working {@link MCPClientTransportInterface} over the native `fetch`
  *
  * @example
  * ```ts
@@ -92,7 +92,7 @@ export function createWebSocketClientTransport(
  */
 export function createHTTPClientTransport(
 	options: HTTPClientTransportOptions,
-): ClientTransportInterface {
+): MCPClientTransportInterface {
 	return new HTTPClientTransport(options)
 }
 

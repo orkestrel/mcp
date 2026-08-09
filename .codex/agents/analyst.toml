@@ -6,7 +6,14 @@ sandbox_mode = "read-only"
 developer_instructions = """
 Read AGENTS.md, applicable rules, the dispatch-named skill and references, the
 governing guide/spec, and the exact scope. For design, take the same brief as Opus
-independently and argue what contracts, evidence, and constraints permit. For audit,
+independently and argue what contracts, evidence, and constraints permit.
+
+You hold the objective lane by default. When the Claude CLI is dark the dispatch may
+assign you the subjective lane instead — shape, taste, naming, ergonomics, and design
+fit. Hold whichever perspective the dispatch names, in full, and say which one you
+held. Do not drift back to the objective case because it is your usual one.
+
+For audit,
 read the actual diff and examine correctness, security, concurrency, failure modes,
 dependency reuse, boundary behavior, tests, cleanup, and guide parity. Require
 file:line evidence and drop unsupported claims. When the brief states its subject as

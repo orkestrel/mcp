@@ -1,4 +1,8 @@
-import type { ClientTransportEventMap, ClientTransportInterface, JSONRPCMessage } from '@src/core'
+import type {
+	MCPClientTransportEventMap,
+	MCPClientTransportInterface,
+	JSONRPCMessage,
+} from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { StdioClientTransportOptions } from '../types.js'
 import type { ChildProcessByStdio } from 'node:child_process'
@@ -9,7 +13,7 @@ import { dispatchLines, extractLines } from '../helpers.js'
 
 /**
  * The stdio CLIENT transport for the Model Context Protocol — a
- * {@link ClientTransportInterface} that drives a CHILD PROCESS MCP server over
+ * {@link MCPClientTransportInterface} that drives a CHILD PROCESS MCP server over
  * newline-delimited JSON-RPC on `stdin`/`stdout`, the stdio sibling of {@link
  * import('./HTTPClientTransport.js').HTTPClientTransport} and {@link
  * import('./WebSocketClientTransport.js').WebSocketClientTransport}.
@@ -28,7 +32,7 @@ import { dispatchLines, extractLines } from '../helpers.js'
  * - **Outbound (`send`).** `send(message)` writes one newline-terminated
  *   `JSON.stringify`d line to the child's `stdin`.
  * - **`close()`** kills the child process and fires `close` (idempotent).
- * - **Observable (§13).** Owns the `emitter` ({@link ClientTransportEventMap}); the
+ * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
  *   fault), distinct from the emitter's own listener-error channel.
  *
@@ -39,8 +43,8 @@ import { dispatchLines, extractLines } from '../helpers.js'
  * await client.connect() // start() spawns the child, then the MCP initialize runs over stdio
  * ```
  */
-export class StdioClientTransport implements ClientTransportInterface {
-	readonly #emitter: Emitter<ClientTransportEventMap>
+export class StdioClientTransport implements MCPClientTransportInterface {
+	readonly #emitter: Emitter<MCPClientTransportEventMap>
 	readonly #command: string
 	readonly #args: readonly string[]
 	readonly #env: Readonly<Record<string, string>> | undefined
@@ -49,18 +53,24 @@ export class StdioClientTransport implements ClientTransportInterface {
 	#closed = false
 
 	constructor(options: StdioClientTransportOptions) {
-		this.#emitter = new Emitter<ClientTransportEventMap>()
+		this.#emitter = new Emitter<MCPClientTransportEventMap>()
 		this.#command = options.command
 		this.#args = options.args ?? []
 		this.#env = options.env
 	}
 
-	get emitter(): EmitterInterface<ClientTransportEventMap> {
+	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
 		return this.#emitter
 	}
 
 	get session(): string | undefined {
 		return undefined
+	}
+
+	get duplex(): boolean {
+		// A spawned child's stdin stays writable for the process's life, so a client frame
+		// reaches the peer at any moment — stdio is the transport MCP defines cancellation on.
+		return true
 	}
 
 	async start(): Promise<void> {
@@ -74,7 +84,7 @@ export class StdioClientTransport implements ClientTransportInterface {
 		})
 		this.#child = child
 		child.stdout.on('data', (chunk: Buffer | string) => this.#receive(chunk.toString()))
-		child.on('close', () => this.#onClose())
+		child.on('close', () => this.#onClose(child))
 		child.on('error', (error) => this.#emitter.emit('error', error))
 	}
 
@@ -102,10 +112,11 @@ export class StdioClientTransport implements ClientTransportInterface {
 		dispatchLines(this.#emitter, lines)
 	}
 
-	// The child process closed — fire this transport's `close` once. A `close()` call already
-	// flipped `#closed`, so a child-driven close after an explicit one does not double-emit.
-	#onClose(): void {
-		if (this.#closed) return
+	// The current child process closed — fire this transport's `close` once. A child an explicit
+	// close superseded may report its own close after `start()` has installed a replacement; peer
+	// identity keeps that old event from clearing the live child or emitting a second close.
+	#onClose(child: ChildProcessByStdio<Writable, Readable, null>): void {
+		if (this.#closed || this.#child !== child) return
 		this.#closed = true
 		this.#child = undefined
 		this.#emitter.emit('close')

@@ -99,9 +99,29 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		await transport.start()
 
 		await transport.close()
+		await waitForDelay(60)
 		expect(closed).toBe(1)
 		await transport.close()
 		expect(closed).toBe(1)
+	})
+
+	it('ignores the old child close after a new child has replaced it', async () => {
+		const transport = spawnClient()
+		const messages: JSONRPCMessage[] = []
+		let closed = 0
+		transport.emitter.on('message', (message) => messages.push(message))
+		transport.emitter.on('close', () => (closed += 1))
+		await transport.start()
+
+		await transport.close()
+		await transport.start()
+		await waitForDelay(60)
+
+		expect(closed).toBe(1)
+		await transport.send(createJSONRPCRequest({ method: 'ping', id: 2 }))
+		await waitForDelay(300)
+		expect(messages).toEqual([{ jsonrpc: '2.0', id: 2, result: { pong: true } }])
+		await transport.close()
 	})
 
 	it('the session is undefined for the stateless v1', async () => {

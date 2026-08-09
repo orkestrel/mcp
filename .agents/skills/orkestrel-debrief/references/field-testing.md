@@ -10,8 +10,8 @@ Test from the top down, and do not stop at the tier that passes:
 1. **Frontier** (the harness's default model) — proves the surface works at all.
 2. **Mid tier** (e.g. a codex mechanical model) — proves the surface survives a harness's
    schema abbreviation and a model that reads less carefully.
-3. **Small harness-native** (e.g. Haiku, a codex high-volume model, a cursor composer) —
-   the acceptance tier: these must walk the surface unaided, or the surface is not done.
+3. **Small harness-native** (e.g. Haiku, a codex high-volume model) — the acceptance
+   tier: these must walk the surface unaided, or the surface is not done.
 4. **Local floor** (a quantized 2B-class model through a real tool-calling client) — not
    an acceptance gate; a stochastic probe that exposes teaching gaps nothing else hits.
    Its residual failures must be provably consumer-floor (malformed emission, attention

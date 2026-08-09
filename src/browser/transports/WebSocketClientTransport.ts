@@ -1,4 +1,8 @@
-import type { ClientTransportEventMap, ClientTransportInterface, JSONRPCMessage } from '@src/core'
+import type {
+	MCPClientTransportEventMap,
+	MCPClientTransportInterface,
+	JSONRPCMessage,
+} from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { WebSocketClientTransportOptions } from '../types.js'
 import { parseJSONRPCMessage } from '@src/core'
@@ -8,7 +12,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
 
 /**
  * The browser-face WebSocket CLIENT transport for the Model Context Protocol — a
- * {@link ClientTransportInterface} that drives a REMOTE MCP server over the native
+ * {@link MCPClientTransportInterface} that drives a REMOTE MCP server over the native
  * `WebSocket` global, the browser sibling of the Node face's
  * {@link import('@src/server').WebSocketClientTransport}.
  *
@@ -33,7 +37,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   double-emits. **This transport is not reusable after `close()`** — a `send` issued
  *   after `close()` is silently dropped (not queued, not delivered even on a later
  *   `start()`).
- * - **Observable (§13).** Owns the `emitter` ({@link ClientTransportEventMap}); every
+ * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); every
  *   emit the emitter isolates a listener throw; `error` is a DOMAIN event (a
  *   transport-level fault).
  *
@@ -44,8 +48,8 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  * await client.connect() // the browser handshakes, then the MCP initialize runs over WS frames
  * ```
  */
-export class WebSocketClientTransport implements ClientTransportInterface {
-	readonly #emitter: Emitter<ClientTransportEventMap>
+export class WebSocketClientTransport implements MCPClientTransportInterface {
+	readonly #emitter: Emitter<MCPClientTransportEventMap>
 	readonly #url: string
 	readonly #protocols: string | string[] | undefined
 	#socket: WebSocket | undefined = undefined
@@ -53,7 +57,7 @@ export class WebSocketClientTransport implements ClientTransportInterface {
 	#closed = false
 
 	constructor(options: WebSocketClientTransportOptions) {
-		this.#emitter = new Emitter<ClientTransportEventMap>()
+		this.#emitter = new Emitter<MCPClientTransportEventMap>()
 		this.#url = options.url
 		const protocols = options.protocols
 		// Default to MCP_WEBSOCKET_SUBPROTOCOL when `protocols` is omitted — matching
@@ -69,12 +73,18 @@ export class WebSocketClientTransport implements ClientTransportInterface {
 						: [...protocols]
 	}
 
-	get emitter(): EmitterInterface<ClientTransportEventMap> {
+	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
 		return this.#emitter
 	}
 
 	get session(): string | undefined {
 		return undefined
+	}
+
+	get duplex(): boolean {
+		// A socket is bidirectional for its whole life: either side writes a frame whenever it
+		// has one, with no request to attach it to.
+		return true
 	}
 
 	async start(): Promise<void> {

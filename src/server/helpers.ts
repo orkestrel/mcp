@@ -1,16 +1,18 @@
 import type {
-	ClientTransportEventMap,
-	ClientTransportInterface,
+	MCPClientTransportEventMap,
+	MCPClientTransportInterface,
 	JSONRPCMessage,
 	MCPTransportInterface,
 } from '@src/core'
+import type { MCPStreamControllerInterface } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { SSEParserInterface } from '@orkestrel/sse'
+import type { StreamInterface } from '@orkestrel/server'
 import type { IncomingMessage } from 'node:http'
 import type { LineExtraction, MCPOriginOptions } from './types.js'
 import { createSSEParser } from '@orkestrel/sse'
 import {
-	isJSONRPCRequest,
+	isJSONRPCInvocation,
 	JSONRPC_INVALID_REQUEST,
 	buildJSONRPCError,
 	parseJSONRPCMessage,
@@ -30,6 +32,64 @@ export function createReadableStream<T>(
 	cancel: (reason?: unknown) => void | PromiseLike<void>,
 ): ReadableStream<T> {
 	return new ReadableStream<T>({ pull, cancel })
+}
+
+/**
+ * Pump a controlled held-open exchange onto an open SSE stream — one `data:` event per
+ * notification in order, then the terminating response — and END the exchange however the
+ * pump leaves.
+ *
+ * @remarks
+ * The Streamable-HTTP twin of {@link import('@src/core').sendStream}, and it owns exactly what
+ * that owns. The `finally` releases the exchange on EVERY exit — the normal terminal, a
+ * producer that threw, a `write` that threw, and an abort alike — because nothing else will:
+ * a request whose client vanished cancels nothing by itself, so an exchange this pump walks
+ * away from keeps its producer, its request lifetime, and its live subscription slot forever.
+ * The exchange is released BEFORE the body ends, so the slot is already back when the response
+ * completes.
+ *
+ * Total (§14) — never throws and never rejects. A held-open SSE response has already sent its
+ * headers and part of its body, so there is no failure the transport could still convert into
+ * a different answer; the honest end of a broken stream is a closed one, and the fault itself
+ * is already legible on `server.emitter`'s `error` event, which is where a contained fault
+ * belongs.
+ *
+ * @param stream - The controlled held-open answer to write out and then end
+ * @param sse - The open SSE stream to write each serialized message onto
+ * @returns Resolves once the exchange has ended and the SSE body has been closed
+ *
+ * @example
+ * ```ts
+ * const answer = await mcp.dispatch(invocation, { signal: disconnect.signal })
+ * if (answer !== undefined && Symbol.asyncIterator in answer) {
+ * 	const sse = openStream()
+ * 	queueMicrotask(() => void sendEventStream(answer, sse))
+ * }
+ * ```
+ */
+export async function sendEventStream(
+	stream: MCPStreamControllerInterface,
+	sse: StreamInterface,
+): Promise<void> {
+	try {
+		// The inner `finally` is what makes the totality claim above true of the RELEASE too:
+		// a dispose that threw would otherwise escape past the outer catch that swallows the
+		// pump's own faults.
+		try {
+			let next = await stream.next()
+			while (next.done !== true) {
+				sse.write({ data: JSON.stringify(next.value) })
+				next = await stream.next()
+			}
+			sse.write({ data: JSON.stringify(next.value) })
+		} finally {
+			await stream[Symbol.asyncDispose]()
+		}
+	} catch {
+		// A producer failure, a write fault, or an abort ends this response — see @remarks.
+	} finally {
+		sse.end()
+	}
 }
 
 // The MCP server-transport helpers (AGENTS §4.3 module-scope names — no entity context).
@@ -142,9 +202,9 @@ export function readLastEventId(request: Request): string | undefined {
  * JSON-RPC error body.
  *
  * @remarks
- * Returns `Response.json(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not found'),
- * { status: 404 })`, mirroring `createMCPRoutes`'s `400` transport-failure shape (a
- * JSON-RPC error BODY with a `null` id) but at the session-not-found status. Shared by
+ * Returns `Response.json(buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Session not
+ * found'), { status: 404 })`, mirroring `createMCPRoutes`'s `400` transport-failure shape (a
+ * JSON-RPC error BODY with NO id) but at the session-not-found status. Shared by
  * every {@link import('./middlewares.js').createMCPSession} validation site — the
  * non-`initialize` `POST` path, the resumable `GET {path}` open, and the `DELETE {path}`
  * session-end (each a missing / unknown / TTL-evicted id) — so the single `404` envelope
@@ -153,7 +213,7 @@ export function readLastEventId(request: Request): string | undefined {
  * @returns The `404` JSON-RPC error `Response`
  */
 export function rejectUnknownSession(): Response {
-	return Response.json(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not found'), {
+	return Response.json(buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Session not found'), {
 		status: 404,
 	})
 }
@@ -268,7 +328,7 @@ export function extractLines(buffer: string, chunk: string): LineExtraction {
 
 /**
  * Decode and deliver each complete newline-framed line onto a {@link
- * ClientTransportEventMap} emitter — the shared per-chunk dispatch step both stdio
+ * MCPClientTransportEventMap} emitter — the shared per-chunk dispatch step both stdio
  * transports (client and server) run their {@link extractLines} output through.
  *
  * @remarks
@@ -282,7 +342,7 @@ export function extractLines(buffer: string, chunk: string): LineExtraction {
  * @param lines - The complete lines (from {@link extractLines}) to decode and deliver
  */
 export function dispatchLines(
-	emitter: EmitterInterface<ClientTransportEventMap>,
+	emitter: EmitterInterface<MCPClientTransportEventMap>,
 	lines: readonly string[],
 ): void {
 	for (const line of lines) {
@@ -297,7 +357,7 @@ export function dispatchLines(
 }
 
 /**
- * Bridge a message-channel {@link ClientTransportInterface} (the shape the stdio and
+ * Bridge a message-channel {@link MCPClientTransportInterface} (the shape the stdio and
  * WebSocket SERVER transports already implement) into the environment-agnostic
  * {@link import('@src/core').MCPTransportInterface} port — the adapter
  * {@link import('./factories.js').createStdioServer} and {@link
@@ -309,10 +369,21 @@ export function dispatchLines(
  * `send` decodes the already-serialized reply string back to a {@link JSONRPCMessage}
  * and writes it via `transport.send` (the SAME `JSON.stringify` the underlying
  * transport already performs, so the wire bytes are unchanged). `listen` filters
- * `transport`'s `message` event to REQUESTS ONLY — a stray response is ignored,
- * exactly as the prior hand-rolled pumps did — and re-serializes each one back to a
- * string for `bindServer`. `closed` bridges `transport`'s `close` event. `close`
+ * `transport`'s `message` event to INVOCATIONS ONLY — requests and notifications, never a
+ * stray response, exactly as the prior hand-rolled pumps did — and re-serializes each one
+ * back to a string for `bindServer`. `closed` bridges `transport`'s `close` event. `close`
  * closes the underlying `transport`.
+ *
+ * @remarks A message crossing this bridge is decoded and re-encoded TWICE, and that is
+ * ACCEPTED rather than accidental. Inbound: the carrier already parsed the frame into a
+ * {@link JSONRPCMessage}, and `listen` re-serializes it so `bindServer` can decode it again
+ * under the server's own `limit`. Outbound: `bindServer` serialized the reply, `send` parses
+ * it back, and the carrier stringifies it once more. The cost is two extra `JSON.parse` /
+ * `JSON.stringify` round trips per message, paid to keep ONE pump in the core binder instead
+ * of a hand-rolled one per carrier. It is BOUNDED rather than unbounded because the binder
+ * decodes within `server.limit.message`, so an oversized frame is refused before the second
+ * decode rather than after it. Removing the cost means giving `MCPTransportInterface` a
+ * message-shaped face beside its string one, which every transport would then carry.
  *
  * @remarks Per {@link import('@src/core').MCPTransportInterface}, `listen`/`closed`
  * each hold THE SINGLE current handler (a second call REPLACES the first, never adds).
@@ -337,11 +408,13 @@ export function dispatchLines(
  * bindServer(mcp, bridgeMessageTransport(transport))
  * ```
  */
-export function bridgeMessageTransport(transport: ClientTransportInterface): MCPTransportInterface {
+export function bridgeMessageTransport(
+	transport: MCPClientTransportInterface,
+): MCPTransportInterface {
 	let onMessage: ((message: string) => void) | undefined
 	let onClosed: (() => void) | undefined
 	transport.emitter.on('message', (message) => {
-		if (!isJSONRPCRequest(message)) return
+		if (!isJSONRPCInvocation(message)) return
 		onMessage?.(JSON.stringify(message))
 	})
 	transport.emitter.on('close', () => {

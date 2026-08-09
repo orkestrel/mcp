@@ -2,6 +2,7 @@ import type { JSONRPCMessage } from '@src/core'
 import type { SSEEvent } from '@orkestrel/sse'
 import type { MiddlewareHandler } from '@orkestrel/server'
 import type { MCPOriginOptions, MCPSessionState } from '@src/server'
+import type { ManualClockInterface } from '../../setup.js'
 import type { StartedServerInterface } from '../../setupServer.js'
 import { request } from 'node:http'
 import { describe, expect, it } from 'vitest'
@@ -10,7 +11,9 @@ import {
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
 	MCP_PROTOCOL_VERSION,
+	buildJSONRPCResult,
 	createMCPClient,
+	createMCPLegacy,
 } from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
@@ -28,8 +31,14 @@ import {
 	createManualClock,
 	postJSON,
 	readSSEStream,
+	waitForDelay,
 } from '../../setup.js'
-import { createTeardown, startServer } from '../../setupServer.js'
+import {
+	createClockMiddleware,
+	createDelayMiddleware,
+	createTeardown,
+	startServer,
+} from '../../setupServer.js'
 
 // ── createMCPSession — the plug-and-play stateful session middleware ──────────
 //
@@ -94,11 +103,13 @@ async function startSession(options?: {
 	readonly push?: JSONRPCMessage
 	readonly clock?: () => number
 	readonly origin?: MCPOriginOptions
+	readonly elapse?: { readonly clock: ManualClockInterface; readonly ms: number }
+	readonly hold?: number
 }): Promise<StartedServerInterface<AppState>> {
 	const origin = options?.origin
 	const dispatcher = createDispatcher<AppState>()
 	dispatcher.add(
-		createMCPRoutes<AppState>(createCalculatorServer(), {
+		createMCPRoutes<AppState>(createMCPLegacy(createCalculatorServer()), {
 			...(origin !== undefined ? { origin } : {}),
 		}),
 	)
@@ -111,6 +122,11 @@ async function startSession(options?: {
 			...(origin !== undefined ? { origin } : {}),
 		}),
 	)
+	// BEHIND the session middleware, so the clock moves while `createMCPSession` is suspended
+	// at `await next(forwarded)` — the only place a "last access" claim can be falsified.
+	const elapse = options?.elapse
+	if (elapse !== undefined) server.use(createClockMiddleware<AppState>(elapse.clock, elapse.ms))
+	if (options?.hold !== undefined) server.use(createDelayMiddleware<AppState>(options.hold))
 	if (options?.push !== undefined) server.use(pushTrigger(options.push))
 	return track(await startServer(server))
 }
@@ -247,7 +263,6 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		expect(response.status).toBe(404)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
-			id: null,
 			error: { code: -32600, message: 'Session not found' },
 		})
 	})
@@ -301,9 +316,9 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		const caller = Object.freeze({ subject: 'session-user' })
 		const seen: unknown[] = []
 		const mcp = createCalculatorServer()
-		mcp.methods.add('demo/caller', async (rpcRequest, options) => {
+		mcp.methods.add('demo/caller', async (call, options) => {
 			seen.push(options.caller)
-			return { jsonrpc: '2.0', id: rpcRequest.id ?? null, result: {} }
+			return buildJSONRPCResult(call.id, { resultType: 'complete' })
 		})
 		const dispatcher = createDispatcher<AppState>()
 		dispatcher.add(
@@ -358,7 +373,6 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		expect(response.status).toBe(400)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
-			id: null,
 			error: { code: -32700, message: 'Parse error' },
 		})
 	})
@@ -600,7 +614,6 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 		expect(response.status).toBe(404)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
-			id: null,
 			error: { code: -32600, message: 'Session not found' },
 		})
 	})
@@ -661,6 +674,172 @@ describe('createMCPSession — lazy session TTL eviction', () => {
 	})
 })
 
+// ── W05-B rows 20-22 — `touched` is the instant of the LAST access ───────────
+//
+// `MCPSessionEntry.touched` is defined as the instant of the last access, and both session
+// paths read the clock BEFORE `await next(forwarded)` and installed the entry AFTER it. Every
+// existing TTL spec above advances the clock BETWEEN requests, where the two instants are the
+// same number, so none of them could ever see the difference. These advance it DURING the
+// request instead: `createClockMiddleware` sits behind the session layer and consumes 60ms of
+// the injected manual clock inside a 50ms `ttl`, so a session stamped at request START is
+// already expired by the time it is stored.
+
+describe('createMCPSession — `touched` is the instant of the last access', () => {
+	// Row 20 — the MINT path. `createMCPSession` stamps `touched` when it mints, suspends across
+	// the whole `initialize` round trip, then inserts that PRE-suspension instant. A handshake
+	// that takes longer than the ttl is therefore inserted ALREADY EXPIRED, and the very next
+	// request for the id the server just advertised is swept before it is resolved → 404.
+	it('a session whose initialize round trip outlasts the ttl is live for the id it advertised', async () => {
+		const clock = createManualClock()
+		const handle = await startSession({ ttl: 50, clock: clock.now, elapse: { clock, ms: 60 } })
+
+		const init = await postJSON(handle.base, createJSONRPCRequest())
+		const id = init.headers.get(MCP_SESSION_HEADER)
+		expect(id).not.toBeNull()
+
+		const echoed = await postSession(
+			handle.base,
+			id ?? undefined,
+			createJSONRPCRequest({ method: 'ping', id: 2 }),
+		)
+		expect(echoed.status).toBe(200)
+	})
+
+	// Row 21 — the RESOLVED-EXISTING path, which has the same shape at `:140-141` and needs its
+	// own proof: a session that is used CONTINUOUSLY, by requests each of which outlasts the ttl,
+	// must never expire. Its `touched` is re-read after each suspension or every long request
+	// leaves the session one sweep away from death.
+	it('a continuously-used session survives requests that each outlast the ttl', async () => {
+		const clock = createManualClock()
+		const handle = await startSession({ ttl: 50, clock: clock.now, elapse: { clock, ms: 60 } })
+
+		const init = await postJSON(handle.base, createJSONRPCRequest())
+		const id = init.headers.get(MCP_SESSION_HEADER)
+		expect(id).not.toBeNull()
+
+		const first = await postSession(
+			handle.base,
+			id ?? undefined,
+			createJSONRPCRequest({ method: 'ping', id: 2 }),
+		)
+		expect(first.status).toBe(200)
+
+		// The second echo is the one the resolved path decides: it is swept against a cutoff that
+		// has moved 60ms while the FIRST echo was in flight.
+		const second = await postSession(
+			handle.base,
+			id ?? undefined,
+			createJSONRPCRequest({ method: 'ping', id: 3 }),
+		)
+		expect(second.status).toBe(200)
+	})
+
+	// The control, drawn from OUTSIDE the population the two rows above cover. Both of them are
+	// requests whose handler produces a RESULT; this one is a notification, answered `202` by a
+	// handler that computes nothing and returns no body. A fix that re-stamped only where it
+	// happened to be looking — the result path, the `response.ok` branch, a request carrying an
+	// `id` — passes both rows and fails here.
+	it('a 202 notification re-stamps `touched` even though it answers no request', async () => {
+		const clock = createManualClock()
+		const handle = await startSession({ ttl: 50, clock: clock.now, elapse: { clock, ms: 60 } })
+
+		const init = await postJSON(handle.base, createJSONRPCRequest())
+		const id = init.headers.get(MCP_SESSION_HEADER)
+		expect(id).not.toBeNull()
+
+		const accepted = await postSession(handle.base, id ?? undefined, {
+			jsonrpc: '2.0',
+			method: 'notifications/initialized',
+		})
+		expect(accepted.status).toBe(202)
+
+		const echoed = await postSession(
+			handle.base,
+			id ?? undefined,
+			createJSONRPCRequest({ method: 'ping', id: 4 }),
+		)
+		expect(echoed.status).toBe(200)
+	})
+
+	// Row 22 — RETAINED, and asserted rather than inspected, so rows 20 and 21 cannot silently
+	// invert it. The TTL sweep runs BEFORE the id is resolved: an idle-expired session is gone
+	// from the store, not merely refused. Were resolution to run first, the echo would touch the
+	// entry and carry it past its own cutoff — a session that never dies while anyone knocks.
+	it('sweeps expired sessions before resolving the id, so a stale echo cannot revive one', async () => {
+		const clock = createManualClock()
+		const handle = await startSession({ ttl: 50, clock: clock.now })
+		const init = await postJSON(handle.base, createJSONRPCRequest())
+		const id = init.headers.get(MCP_SESSION_HEADER)
+		expect(id).not.toBeNull()
+
+		clock.advance(80) // idle past the ttl, BETWEEN requests
+		const echoed = await postSession(
+			handle.base,
+			id ?? undefined,
+			createJSONRPCRequest({ method: 'ping', id: 2 }),
+		)
+		expect(echoed.status).toBe(404)
+
+		// Gone from the STORE, not just refused by resolution: a DELETE for the same id has
+		// nothing to remove either.
+		const deleted = await fetch(`${handle.base}/mcp`, {
+			method: 'DELETE',
+			headers: { [MCP_SESSION_HEADER]: id ?? '' },
+		})
+		expect(deleted.status).toBe(404)
+	})
+
+	// Re-asking after a suspension is the OTHER half of reading the clock late: the write-back
+	// consults the store again, because a `DELETE` that lands while a POST is parked downstream
+	// has ended the session, and a blind re-stamp would put it back. The same defect class as
+	// the WebSocket transport's, at a second door.
+	it('a DELETE that lands during a suspended POST is not undone by the write-back', async () => {
+		const handle = await startSession({ hold: 60 })
+		const init = await postJSON(handle.base, createJSONRPCRequest())
+		const id = init.headers.get(MCP_SESSION_HEADER)
+		expect(id).not.toBeNull()
+
+		const parked = postSession(
+			handle.base,
+			id ?? undefined,
+			createJSONRPCRequest({ method: 'ping', id: 2 }),
+		)
+		await waitForDelay(20) // the POST is now inside the session layer's `await next(...)`
+		const deleted = await fetch(`${handle.base}/mcp`, {
+			method: 'DELETE',
+			headers: { [MCP_SESSION_HEADER]: id ?? '' },
+		})
+		expect(deleted.status).toBe(204)
+		expect((await parked).status).toBe(200) // the in-flight request still answers
+
+		// …and the session stays deleted: the write-back found the entry gone and left it gone.
+		const after = await postSession(
+			handle.base,
+			id ?? undefined,
+			createJSONRPCRequest({ method: 'ping', id: 3 }),
+		)
+		expect(after.status).toBe(404)
+	})
+
+	// The other half of row 22's ordering claim: a session INSIDE its window is resolved by the
+	// same sweep-then-resolve order and answers normally. Without this, "everything 404s" would
+	// satisfy the assertion above.
+	it('leaves a session inside its window untouched by the sweep', async () => {
+		const clock = createManualClock()
+		const handle = await startSession({ ttl: 50, clock: clock.now })
+		const init = await postJSON(handle.base, createJSONRPCRequest())
+		const id = init.headers.get(MCP_SESSION_HEADER)
+
+		clock.advance(40) // inside the 50ms window
+		const echoed = await postSession(
+			handle.base,
+			id ?? undefined,
+			createJSONRPCRequest({ method: 'ping', id: 2 }),
+		)
+		expect(echoed.status).toBe(200)
+	})
+})
+
 describe('MCPClient over a server with createMCPSession — the client echoes the session', () => {
 	it('connect → tools/list → tools/call all pass session validation end to end', async () => {
 		// A real stateful server (createMCPSession + createMCPRoutes); the HTTP client transport
@@ -680,7 +859,7 @@ describe('MCPClient over a server with createMCPSession — the client echoes th
 		expect(tools.map((tool) => tool.name)).toEqual(['add', 'boom'])
 
 		const value = await client.call('add', {}) // a tools/call, still echoing the session
-		expect(value).toBe(5)
+		expect(value).toEqual({ resultType: 'complete', value: 5 })
 
 		await client.disconnect()
 	})

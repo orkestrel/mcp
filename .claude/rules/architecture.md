@@ -126,10 +126,10 @@ Store child managers in `#` fields and expose readonly getters typed as their in
 
 - A word is either a centralized kind or a domain folder, never both.
 - A folder named for a centralized kind—`helpers/`, `validators/`, `handlers/`—is that kind's file, not a folder.
-- A function domain is designated in the fleet-canon register (`tests/setupPolicy.ts`,
-  `FUNCTION_DOMAIN_FOLDERS`), not inferred from a folder's name: a camelCase module inside an
-  undesignated folder is misplaced. A workspace requests a new domain through a fleet-canon change;
-  there is no workspace-local registration path.
+- Read a function domain from the fleet-canon register (`tests/setupPolicy.ts`,
+  `FUNCTION_DOMAIN_FOLDERS`). Never infer one from a folder's name; a camelCase module inside an
+  undesignated folder is misplaced.
+- Request a new domain through a fleet-canon change. There is no workspace-local registration path.
 
 ### Extension categories
 
@@ -164,6 +164,12 @@ Both obey:
   barrel row.
 - Never re-export a symbol originating in another package; fix consumer imports to the originating package.
 - Implementation files export their own classes directly.
+- Expose every intentional top-level source export through its correct environment barrel.
+- Never let current consumer count gate later exposure. Developers receive the same supported
+  mechanisms the package uses, so they retain full control and customization.
+- If a declaration should not be public, make it a true local or runtime-private detail, or remove
+  the capability for a substantive reason. Never leave an intentional reusable export stranded
+  outside the barrel.
 - When a symbol moves, update every import; never leave a compatibility re-export.
 
 ```ts
@@ -178,12 +184,14 @@ export * from './greeters/Greeter.js'
 
 ## System constraints
 
-- Build a capability with its first real consumer; do not speculate.
+- Build or substantively expand a capability with its first real consumer; do not speculate. This
+  gate applies only when creating or expanding the capability, not to its later barrel exposure.
 - Keep interfaces to the smallest primitives the capability requires.
 - For multiple backends, implement shared querying/paging/aggregation in one engine over those primitives. A backend may override an operation only with a genuine native fast path and otherwise falls back to the engine.
 - Centralize any pattern repeated twice.
 - Keep everything generic/reusable and free of unrelated-project logic.
-- Do not expand public API without concrete multi-site need.
+- Do not expand the capability set without concrete need. Once that capability exists intentionally,
+  its reusable top-level exports follow the barrel rule above without a second consumer gate.
 - Do not remove structural files because they are currently empty.
 - Prefer the smallest complete implementation that preserves architecture.
 - No deprecation aliases, compatibility shims, or backward-compatibility branches; update all consumers atomically.
