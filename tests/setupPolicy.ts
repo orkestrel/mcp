@@ -1,6 +1,6 @@
 import { globSync, readFileSync } from 'node:fs'
 import { isBuiltin } from 'node:module'
-import { basename, join } from 'node:path'
+import { basename, extname, join } from 'node:path'
 import * as ts from 'typescript'
 
 /** Centralized source modules whose top-level declarations must all be exported. */
@@ -18,6 +18,7 @@ export const CENTRAL_SOURCE_FILES: readonly string[] = Object.freeze([
 	'middlewares.ts',
 	'parsers.ts',
 	'relations.ts',
+	'routes.ts',
 	'schemas.ts',
 	'seeders.ts',
 	'shapers.ts',
@@ -39,6 +40,7 @@ export const FUNCTION_SOURCE_FILES: readonly string[] = Object.freeze([
 	'middlewares.ts',
 	'parsers.ts',
 	'relations.ts',
+	'routes.ts',
 	'schemas.ts',
 	'seeders.ts',
 	'shapers.ts',
@@ -51,11 +53,15 @@ export const DATA_SOURCE_FILES: readonly string[] = Object.freeze([
 	'constants.ts',
 	'contracts.ts',
 	'relations.ts',
+	'routes.ts',
 	'schemas.ts',
 	'shapers.ts',
 	'templates.ts',
 	'validators.ts',
 ])
+
+/** Domain folders whose modules each export one named function rather than one class. */
+export const FUNCTION_DOMAIN_FOLDERS: readonly string[] = Object.freeze(['app/browser/composables'])
 
 /** Worker-only value globals that WebWorker typing must not expose to core implementations. */
 export const WORKER_SCOPE_VALUE_GLOBALS: readonly string[] = Object.freeze([
@@ -90,6 +96,48 @@ export const WORKER_SCOPE_VALUE_GLOBALS: readonly string[] = Object.freeze([
 	'removeEventListener',
 ])
 
+/** Source extensions inspected by the repository coding-law sweep. */
+export const CODING_SOURCE_EXTENSIONS: readonly string[] = Object.freeze([
+	'cjs',
+	'cts',
+	'js',
+	'jsx',
+	'mjs',
+	'mts',
+	'ts',
+	'tsx',
+	'vue',
+])
+
+/** Production-source glob derived from the complete inspected extension vocabulary. */
+export const CODING_SOURCE_GLOB = `{app,src}/**/*.{${CODING_SOURCE_EXTENSIONS.join(',')}}`
+
+/** Fleet-owned policy files that must stay free of any one package's architecture. */
+export const POLICY_INFRASTRUCTURE_FILES: readonly string[] = Object.freeze([
+	'tests/policy.test.ts',
+	'tests/setupPolicy.ts',
+])
+
+/** Source environments whose prefixed paths fleet policy must not name in a literal. */
+export const POLICY_SOURCE_ENVIRONMENTS: readonly string[] = Object.freeze([
+	'browser',
+	'core',
+	'server',
+])
+
+/**
+ * The prefixed source-environment path fleet policy must not name in a literal.
+ *
+ * @remarks
+ * Built rather than written, so this file states no matching literal of its own
+ * and can never report itself. Policy names an environment without the source
+ * prefix when it must name one at all, which is why the prefix is the rule.
+ */
+export const POLICY_ENVIRONMENT_PATTERN: RegExp = new RegExp(
+	`src/(?:${POLICY_SOURCE_ENVIRONMENTS.join('|')})/`,
+	'u',
+)
+
 /** Virtual source text used while binding one policy-inspected module. */
 export const POLICY_SOURCE_TEXTS: Map<string, string> = new Map()
 
@@ -107,6 +155,39 @@ export interface VueScriptExtractorInterface {
 /** Normalize platform separators and duplicate glob segments for stable diagnostics. */
 export function normalizePolicyPath(path: string): string {
 	return path.replaceAll('\\', '/').replace(/\/+/gu, '/')
+}
+
+/** Whether a path belongs to the production-source coding-law corpus. */
+export function isCodingSourcePath(path: string): boolean {
+	const normalized = normalizePolicyPath(path)
+	const extension = normalized.split('.').pop()
+	return (
+		(normalized.startsWith('app/') || normalized.startsWith('src/')) &&
+		extension !== undefined &&
+		CODING_SOURCE_EXTENSIONS.includes(extension)
+	)
+}
+
+/**
+ * Whether a path is an eligible function-domain module.
+ *
+ * @param path - The workspace-relative source path to inspect
+ * @returns `true` when the path is a direct module of a registered function domain
+ */
+export function isFunctionDomainPath(path: string): boolean {
+	const normalized = normalizePolicyPath(path)
+	const file = basename(normalized)
+	const separator = normalized.lastIndexOf('/')
+	const parent = separator < 0 ? '' : normalized.slice(0, separator)
+	return (
+		FUNCTION_DOMAIN_FOLDERS.includes(parent) &&
+		/^[a-z][A-Za-z0-9]*\.ts$/u.test(file) &&
+		file !== 'index.ts' &&
+		file !== 'main.ts' &&
+		!CENTRAL_SOURCE_FILES.includes(file) &&
+		!FUNCTION_SOURCE_FILES.includes(file) &&
+		!DATA_SOURCE_FILES.includes(file)
+	)
 }
 
 /** Whether a declaration carries an explicit export modifier. */
@@ -416,6 +497,31 @@ export function inspectVueCodingLaw(
 	return violations
 }
 
+/** Inspect one production source through the shared coding-law route. */
+export function inspectCodingSource(
+	path: string,
+	content: string,
+	vueScripts?: VueScriptExtractorInterface,
+): readonly string[] {
+	const normalizedPath = normalizePolicyPath(path)
+	if (!normalizedPath.endsWith('.vue')) return inspectCodingLaw(normalizedPath, content)
+	const violations: string[] = []
+	if (!normalizedPath.startsWith('app/browser/')) {
+		violations.push(`${normalizedPath} Vue components belong in app/browser`)
+	}
+	// A missing extractor is reported, never absorbed. Returning [] here would make
+	// every SFC's script block silently unchecked while the surrounding sweep still
+	// reported success — an instrument claiming a coverage it does not have.
+	if (vueScripts === undefined) {
+		violations.push(
+			`${normalizedPath} requires a Vue script extractor; its script blocks were not inspected`,
+		)
+		return violations
+	}
+	violations.push(...inspectVueCodingLaw(normalizedPath, vueScripts(normalizedPath, content)))
+	return violations
+}
+
 /** Add syntax-wide coding-law violations while traversing one source tree. */
 export function inspectCodingNode(
 	path: string,
@@ -490,6 +596,34 @@ export function inspectCodingNode(
 	ts.forEachChild(node, (child) => inspectCodingNode(path, child, violations, checker))
 }
 
+/**
+ * Inspect one eligible function-domain module for its required declaration shape.
+ *
+ * @param path - The source path used in diagnostics
+ * @param source - The parsed source file to inspect
+ * @returns A shape violation when the module is not imports plus one matching named export
+ */
+export function inspectFunctionModule(path: string, source: ts.SourceFile): readonly string[] {
+	const file = basename(normalizePolicyPath(path))
+	const declarations = source.statements.filter(ts.isFunctionDeclaration)
+	const functions = declarations.filter((declaration) => declaration.body !== undefined)
+	const invalid = source.statements.filter(
+		(statement) => !ts.isImportDeclaration(statement) && !ts.isFunctionDeclaration(statement),
+	)
+	const declaration = functions[0]
+	if (
+		functions.length === 1 &&
+		invalid.length === 0 &&
+		declarations.every((candidate) => candidate.name?.text === file.slice(0, -3)) &&
+		declaration !== undefined &&
+		hasExportModifier(declaration) &&
+		!hasModifier(declaration, ts.SyntaxKind.DefaultKeyword)
+	) {
+		return []
+	}
+	return [`${path} declarations do not form one matching exported function implementation`]
+}
+
 /** Inspect one TypeScript source module for repository coding-law violations. */
 export function inspectCodingLaw(path: string, content: string): readonly string[] {
 	const violations: string[] = []
@@ -498,6 +632,8 @@ export function inspectCodingLaw(path: string, content: string): readonly string
 	if (source === undefined) throw new Error(`Policy source was not bound at ${path}`)
 	const checker = program.getTypeChecker()
 	const file = basename(path)
+	const stem = basename(file, extname(file))
+	const functionModule = isFunctionDomainPath(path)
 	const placementExempt =
 		!CENTRAL_SOURCE_FILES.includes(file) &&
 		!FUNCTION_SOURCE_FILES.includes(file) &&
@@ -506,6 +642,9 @@ export function inspectCodingLaw(path: string, content: string): readonly string
 
 	if (/\.[cm]?jsx?$/u.test(path)) {
 		violations.push(`${path} production modules use TypeScript source extensions`)
+	}
+	if (FUNCTION_DOMAIN_FOLDERS.some((folder) => basename(folder) === stem)) {
+		violations.push(`${path} names a function domain, which belongs in a folder rather than a file`)
 	}
 	if (/@ts-(?:expect-error|ignore|nocheck)|eslint-disable|oxlint-disable/u.test(content)) {
 		violations.push(`${path} forbids suppression directives`)
@@ -552,6 +691,7 @@ export function inspectCodingLaw(path: string, content: string): readonly string
 		}
 		if (
 			!placementExempt &&
+			!functionModule &&
 			ts.isFunctionDeclaration(statement) &&
 			!FUNCTION_SOURCE_FILES.includes(file)
 		) {
@@ -559,6 +699,7 @@ export function inspectCodingLaw(path: string, content: string): readonly string
 		}
 		if (
 			!placementExempt &&
+			!functionModule &&
 			ts.isVariableStatement(statement) &&
 			!DATA_SOURCE_FILES.includes(file)
 		) {
@@ -600,6 +741,10 @@ export function inspectCodingLaw(path: string, content: string): readonly string
 		}
 	}
 
+	if (functionModule) {
+		violations.push(...inspectFunctionModule(path, source))
+	}
+
 	if (/^[A-Z][A-Za-z0-9]*\.ts$/u.test(file)) {
 		const classes = source.statements.filter(ts.isClassDeclaration)
 		const invalid = source.statements.filter(
@@ -627,61 +772,125 @@ export function inspectCodingLaw(path: string, content: string): readonly string
 	return violations
 }
 
-/** Inspect fleet policy sources for package-architecture tokens. */
-export function inspectPolicyPurity(path: string, content: string): readonly string[] {
-	const violations: [number, string][] = []
-	const identifier = ['M', 'C', 'P'].join('')
-	const task = ['tasks', '/'].join('')
-	const browser = ['src', '/browser/'].join('')
-	const source = ts.createSourceFile(path, content, ts.ScriptTarget.ESNext, true)
-	const pending: ts.Node[] = [source]
-	while (pending.length > 0) {
-		const node = pending.pop()
-		if (node === undefined) continue
-		if (ts.isIdentifier(node) && node.text.includes(identifier)) {
-			violations.push([
-				node.getStart(),
-				`${path}:${formatPolicyPosition(node)} contains package architecture identifier`,
-			])
-		}
-		if (ts.isStringLiteralLike(node) && node.text.includes(task)) {
-			violations.push([
-				node.getStart(),
-				`${path}:${formatPolicyPosition(node)} contains package architecture task path`,
-			])
-		}
-		if (ts.isStringLiteralLike(node) && node.text.includes(browser)) {
-			violations.push([
-				node.getStart(),
-				`${path}:${formatPolicyPosition(node)} contains package architecture browser path`,
-			])
-		}
-		ts.forEachChild(node, (child) => {
-			pending.push(child)
-		})
-	}
-	return violations.sort((left, right) => left[0] - right[0]).map((entry) => entry[1])
-}
-
-/** Inspect every production TypeScript module under one workspace. */
+/**
+ * Inspect every production source under one workspace.
+ *
+ * @remarks
+ * `vueScripts` is required whenever the workspace contains a `.vue` file: script
+ * blocks cannot be read without it, and omitting it is reported as a violation
+ * against each SFC rather than passing silently.
+ */
 export function inspectCodingWorkspace(
 	root: string,
 	vueScripts?: VueScriptExtractorInterface,
 ): readonly string[] {
 	const violations: string[] = []
-	for (const path of globSync('{app,src}/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}', {
+	for (const path of globSync(CODING_SOURCE_GLOB, {
 		cwd: root,
 	})) {
 		const content = readFileSync(join(root, path), 'utf8')
-		const normalizedPath = normalizePolicyPath(path)
-		if (path.endsWith('.vue') && !normalizedPath.startsWith('app/browser/')) {
-			violations.push(`${normalizedPath} Vue components belong in app/browser`)
+		violations.push(...inspectCodingSource(path, content, vueScripts))
+	}
+	return violations
+}
+
+/**
+ * Read one workspace's declared package name.
+ *
+ * @param root - The workspace root holding the package manifest
+ * @returns The declared package name
+ */
+export function readPackageName(root: string): string {
+	const manifest: unknown = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+	const name =
+		typeof manifest === 'object' && manifest !== null && 'name' in manifest
+			? manifest.name
+			: undefined
+	if (typeof name !== 'string') throw new Error(`Package manifest at ${root} declares no name`)
+	return name
+}
+
+/**
+ * Derive the identifier prefixes fleet policy must not use from a package name.
+ *
+ * @param name - The declared package name, scoped or bare
+ * @returns The short name's upper-snake and Pascal spellings, deduped
+ *
+ * @example
+ * ```ts
+ * derivePolicyTokens('@orkestrel/my-router') // ['MY_ROUTER', 'MyRouter']
+ * ```
+ */
+export function derivePolicyTokens(name: string): readonly string[] {
+	const short = name.slice(name.lastIndexOf('/') + 1)
+	const words = short.split(/[^A-Za-z0-9]+/u).filter((word) => word.length > 0)
+	const upper = words.map((word) => word.toUpperCase()).join('_')
+	const pascal = words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join('')
+	return [...new Set([upper, pascal])].filter((token) => token.length > 0)
+}
+
+/**
+ * Add package-architecture violations while traversing one fleet policy source tree.
+ *
+ * @remarks
+ * An identifier carries a package's architecture when it is named for that package,
+ * so it must begin with the token. A word that merely holds the token somewhere
+ * inside it belongs to the fleet's own vocabulary and is left alone.
+ */
+export function inspectPolicyNode(
+	path: string,
+	node: ts.Node,
+	violations: string[],
+	tokens: readonly string[],
+): void {
+	if (ts.isIdentifier(node)) {
+		const token = tokens.find((candidate) => node.text.startsWith(candidate))
+		if (token !== undefined) {
+			violations.push(`${path}:${formatPolicyPosition(node)} forbids the ${token} package token`)
 		}
+	}
+	if (
+		(ts.isStringLiteral(node) || ts.isTemplateLiteralToken(node)) &&
+		POLICY_ENVIRONMENT_PATTERN.test(node.text)
+	) {
 		violations.push(
-			...(path.endsWith('.vue')
-				? inspectVueCodingLaw(normalizedPath, vueScripts?.(normalizedPath, content))
-				: inspectCodingLaw(normalizedPath, content)),
+			`${path}:${formatPolicyPosition(node)} forbids a source-environment path literal`,
 		)
+	}
+	ts.forEachChild(node, (child) => inspectPolicyNode(path, child, violations, tokens))
+}
+
+/**
+ * Inspect one fleet policy module for a single package's architecture.
+ *
+ * @param path - The workspace-relative source path used in diagnostics
+ * @param content - The TypeScript source text to inspect
+ * @param tokens - The package identifier tokens no identifier may begin with
+ * @returns Every violation, in source-position order
+ */
+export function inspectPolicyPurity(
+	path: string,
+	content: string,
+	tokens: readonly string[],
+): readonly string[] {
+	const violations: string[] = []
+	const source = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true)
+	inspectPolicyNode(path, source, violations, tokens)
+	return violations
+}
+
+/**
+ * Inspect every fleet policy module under one workspace.
+ *
+ * @param root - The workspace root whose manifest names the consuming package
+ * @returns Every violation across the fleet policy files, in file and position order
+ */
+export function inspectPolicyWorkspace(root: string): readonly string[] {
+	const tokens = derivePolicyTokens(readPackageName(root))
+	const violations: string[] = []
+	for (const path of POLICY_INFRASTRUCTURE_FILES) {
+		const content = readFileSync(join(root, path), 'utf8')
+		violations.push(...inspectPolicyPurity(path, content, tokens))
 	}
 	return violations
 }

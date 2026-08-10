@@ -767,10 +767,13 @@ cares should call `validate` first and return an
 the missing argument, or seed `missing: 'empty'` and accept the gaps.
 
 **The control that proves these are ports rather than shaped holes** is that neither
-adapter is privileged. `scripts/conformance.mjs` backs the same three ports with plain
+adapter is privileged. `tests/setupConformance.ts` backs the same three ports with plain
 in-memory objects — no workspace, no template engine, no `@orkestrel/*` registry at
 all — and the foreign conformance client cannot tell the difference, because there is
-nothing on the wire that could.
+nothing on the wire that could. The compiler now agrees with the wire: that fixture is
+TypeScript, annotated with the same exported manager interfaces this section documents,
+so a plain object is a checked implementation of the port rather than a duck-typed
+resemblance to one.
 
 ### Configure modern subscriptions
 
@@ -3369,13 +3372,19 @@ is a different decision from an empty allowlist and deserves its own word.
 
 ## Declared conformance gaps
 
-A reproducible run is `npm run build && node scripts/conformance.mjs`: it starts the
-real Streamable HTTP server from this package's published `dist` output and runs
+A reproducible run is `npm run test:conformance`: it starts the real Streamable HTTP
+server from this package's source and runs
 `@modelcontextprotocol/conformance@0.2.0-alpha.10` against specification revision
 `2026-07-28`. That is a genuine foreign MCP client driving this surface end to end, and
 the current recorded result is **23 passed / 0 failed**, the
 `dns-rebinding-protection` security regression guard (2 passed) included. There is no
 remaining failing scenario in that run.
+
+It is a live-service project of its own — `tests/conformance.test.ts` over the fixture in
+`tests/setupConformance.ts` — and it stays outside `npm test`, which is hermetic and
+offline while this run fetches the runner from the npm registry. Its baseline is recorded
+scenario by scenario rather than as one total, so a scenario that silently stops running
+fails the run instead of disappearing into a matching sum.
 
 **That number has been wrong twice, in the same way, and both times the fixture was the
 cause — so read the fixture before quoting the number.** It was first recorded as

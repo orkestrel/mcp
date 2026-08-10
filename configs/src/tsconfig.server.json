@@ -1,18 +1,15 @@
 {
 	"extends": "../../tsconfig.json",
 	"compilerOptions": {
-		"allowJs": true,
-		"checkJs": true,
 		"lib": ["ESNext"],
 		"types": ["node"],
 		"noEmit": false,
 		"declaration": true,
 		"emitDeclarationOnly": true,
-		"rootDir": "../..",
-		"outDir": "../../dist"
+		"rootDir": "../../src",
+		"outDir": "../../dist/src"
 	},
 	"include": [
-		"../../scripts/conformance.mjs",
 		"../../src/server/**/*.cts",
 		"../../src/server/**/*.mts",
 		"../../src/server/**/*.ts",

@@ -1,9 +1,19 @@
-import { globSync, readFileSync } from 'node:fs'
+import { globSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { inspectPolicyPurity, inspectCodingWorkspace } from './setupPolicy.js'
 import { isBrowserVuePath } from './setup.js'
+import {
+	derivePolicyTokens,
+	inspectCodingWorkspace,
+	inspectPolicyPurity,
+	inspectPolicyWorkspace,
+	POLICY_SOURCE_ENVIRONMENTS,
+	readPackageName,
+} from './setupPolicy.js'
 import { chromium } from 'playwright'
 import { isBrowserExecutable, resolveBrowser, SYSTEM_BROWSER_CHANNELS } from '../vite.config.js'
+
+const POLICY_PLANTED_PATH = 'tests/setupPolicy.ts'
+const POLICY_TOKENS = derivePolicyTokens(readPackageName(process.cwd()))
 
 describe('repository coding law', () => {
 	it('keeps Vue single-file components exclusively in browser environments', () => {
@@ -14,29 +24,6 @@ describe('repository coding law', () => {
 
 	it('enforces source placement, exports, readonly contracts, and syntax law', () => {
 		expect(inspectCodingWorkspace(process.cwd())).toEqual([])
-	})
-
-	it('keeps fleet policy free of package architecture', () => {
-		for (const path of ['tests/policy.test.ts', 'tests/setupPolicy.ts']) {
-			expect([path, inspectPolicyPurity(path, readFileSync(path, 'utf8'))]).toEqual([path, []])
-		}
-	})
-
-	it('reports planted package architecture tokens', () => {
-		const identifier = ['M', 'C', 'P'].join('')
-		const task = ['tasks', '/'].join('')
-		const browser = ['src', '/browser/'].join('')
-		const planted = [
-			`const ${identifier}Probe = 1`,
-			`const method = '${task}get'`,
-			`const path = '${browser}types.ts'`,
-		].join('\n')
-
-		expect(inspectPolicyPurity('planted.ts', planted)).toEqual([
-			'planted.ts:1:7 contains package architecture identifier',
-			'planted.ts:2:16 contains package architecture task path',
-			'planted.ts:3:14 contains package architecture browser path',
-		])
 	})
 })
 
@@ -52,5 +39,29 @@ describe('runner configuration', () => {
 					: SYSTEM_BROWSER_CHANNELS.some((browser) => browser.channel === channel)
 		}
 		expect(valid).toBe(true)
+	})
+})
+
+describe('fleet policy purity', () => {
+	it('keeps fleet policy files free of this package architecture', () => {
+		expect(inspectPolicyWorkspace(process.cwd())).toEqual([])
+	})
+
+	it('reports planted package architecture, so a clean sweep is evidence', () => {
+		const token = POLICY_TOKENS[0]
+		const environment = POLICY_SOURCE_ENVIRONMENTS[0]
+		if (token === undefined || environment === undefined) {
+			throw new Error('The package manifest derived no policy token to plant')
+		}
+		const planted = [
+			'export const ' + token + '_PATH = []',
+			"export const path = 'src/" + environment + "/index.ts'",
+			'',
+		].join('\n')
+
+		expect(inspectPolicyPurity(POLICY_PLANTED_PATH, planted, POLICY_TOKENS)).toEqual([
+			POLICY_PLANTED_PATH + ':1:14 forbids the ' + token + ' package token',
+			POLICY_PLANTED_PATH + ':2:21 forbids a source-environment path literal',
+		])
 	})
 })

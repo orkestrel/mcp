@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/mcp",
-	"version": "0.0.12",
+	"version": "0.0.13",
 	"description": "A typed Model Context Protocol client/server with pluggable HTTP, WebSocket, and stdio transports. Part of the @orkestrel line.",
 	"keywords": [
 		"json-rpc",
@@ -78,6 +78,7 @@
 		"test:src:browser": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:browser",
 		"test:src:server": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:server",
 		"test:policy": "vitest run --config vite.config.ts --no-cache --reporter=dot --project policy",
+		"test:conformance": "vitest run --config vite.config.ts --no-cache --project conformance",
 		"test:guides": "vitest run --config vite.config.ts --reporter=dot --project guides",
 		"build": "npm run clean && npm run build:src",
 		"build:src": "npm run build:src:core && npm run build:src:browser && npm run build:src:server",

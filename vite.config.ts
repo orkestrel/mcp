@@ -1123,7 +1123,7 @@ export function environmentBoundary(
 	}
 }
 
-export const srcCore = (config?: UserConfig): UserConfig =>
+export const srcCore = (options?: UserConfig): UserConfig =>
 	mergeConfig(
 		{
 			resolve,
@@ -1141,10 +1141,10 @@ export const srcCore = (config?: UserConfig): UserConfig =>
 				browser: { enabled: false },
 			},
 		},
-		config ?? {},
+		options ?? {},
 	)
 
-export const srcBrowser = (config?: UserConfig): UserConfig =>
+export const srcBrowser = (options?: UserConfig): UserConfig =>
 	srcCore(
 		mergeConfig(
 			{
@@ -1169,7 +1169,7 @@ export const srcBrowser = (config?: UserConfig): UserConfig =>
 					exclude: ['tests/src/core/**/*.test.ts'],
 					globalSetup: ['./tests/setupGlobal.ts'],
 					setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts'],
-					...(config?.test?.browser?.enabled === false
+					...(options?.test?.browser?.enabled === false
 						? {}
 						: {
 								deps: {
@@ -1189,11 +1189,11 @@ export const srcBrowser = (config?: UserConfig): UserConfig =>
 					fileParallelism: false,
 				},
 			},
-			config ?? {},
+			options ?? {},
 		),
 	)
 
-export const srcServer = (config?: UserConfig): UserConfig =>
+export const srcServer = (options?: UserConfig): UserConfig =>
 	srcCore(
 		mergeConfig(
 			{
@@ -1231,11 +1231,11 @@ export const srcServer = (config?: UserConfig): UserConfig =>
 					setupFiles: ['./tests/setup.ts', './tests/setupServer.ts'],
 				},
 			},
-			config ?? {},
+			options ?? {},
 		),
 	)
 
-export const policy = (config?: UserConfig): UserConfig =>
+export const policy = (options?: UserConfig): UserConfig =>
 	mergeConfig(
 		{
 			resolve,
@@ -1247,10 +1247,50 @@ export const policy = (config?: UserConfig): UserConfig =>
 				browser: { enabled: false },
 			},
 		},
-		config ?? {},
+		options ?? {},
 	)
 
-export const guides = (config?: UserConfig): UserConfig =>
+export const config = (options?: UserConfig): UserConfig =>
+	mergeConfig(
+		{
+			resolve,
+			test: {
+				name: { label: 'config', color: 'yellow' },
+				include: ['tests/config/**/*.test.ts'],
+				setupFiles: ['./tests/setup.ts'],
+				environment: 'node',
+				browser: { enabled: false },
+			},
+		},
+		options ?? {},
+	)
+
+// The live-service project (AGENTS §16 live services): a real `@modelcontextprotocol/
+// conformance` runner, fetched by `npx` and driving a real listener over a real socket.
+// It is deliberately outside `npm test`, which stays hermetic and offline.
+//
+// Only `hookTimeout` is raised, because every second of the run is spent in the hooks:
+// the readiness warm-up and the twenty-scenario run both live there, and the assertions
+// themselves read an already-parsed result in single-digit milliseconds. A warm run
+// measures ~4 s end to end; the five minutes below is the allowance for the cold `npx`
+// download of the runner that a first run on a machine has to pay for.
+export const conformance = (options?: UserConfig): UserConfig =>
+	mergeConfig(
+		{
+			resolve,
+			test: {
+				name: { label: 'conformance', color: 'magenta' },
+				include: ['tests/conformance.test.ts'],
+				setupFiles: ['./tests/setup.ts', './tests/setupConformance.ts'],
+				environment: 'node',
+				browser: { enabled: false },
+				hookTimeout: 300_000,
+			},
+		},
+		options ?? {},
+	)
+
+export const guides = (options?: UserConfig): UserConfig =>
 	mergeConfig(
 		{
 			resolve,
@@ -1263,7 +1303,7 @@ export const guides = (config?: UserConfig): UserConfig =>
 				browser: { enabled: false },
 			},
 		},
-		config ?? {},
+		options ?? {},
 	)
 
 export default defineConfig({
@@ -1274,6 +1314,8 @@ export default defineConfig({
 			{ project: srcBrowser, browser: 'src:browser' },
 			{ project: srcServer },
 			{ project: policy },
+			{ project: config },
+			{ project: conformance },
 			{ project: guides },
 		],
 		browserOptions !== undefined,

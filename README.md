@@ -69,19 +69,21 @@ usage patterns — see [`guides/src/mcp.md`](guides/src/mcp.md).
 Published with two entry points per the `exports` field in `package.json`:
 the environment-agnostic core (`.`) and the Node-only server surface
 (`./server`). The browser face (`./browser`) is ESM only. The tarball is
-623.4 kB packed across 18 files, 2.5 MB unpacked.
+625.0 kB packed across 18 files, 2.5 MB unpacked.
 
 [`CHANGELOG.md`](CHANGELOG.md) lives in the repository and is not in the
 tarball, because `files` is `["dist/src", "README.md"]`.
 
 ## Proven
 
-`npm run build && node scripts/conformance.mjs` starts the real Streamable
-HTTP server from this package's built output and runs
+`npm run test:conformance` starts the real Streamable HTTP server from this
+package's source and runs
 `@modelcontextprotocol/conformance@0.2.0-alpha.10` against MCP revision
 `2026-07-28`. The recorded result is **23 passed / 0 failed**. That is a
 genuine foreign MCP client driving this server end to end, and it is
-evidence about the wire.
+evidence about the wire. It fetches the runner from the npm registry, so it
+is a live-service project of its own and stays outside the hermetic
+`npm test`.
 
 **IDE integration is not claimed.** No IDE, editor, or agent host has driven
 this server. A claim about an external client stays unproven here until one
