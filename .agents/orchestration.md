@@ -255,9 +255,33 @@ substitution it forces; never absorb it silently.
      discipline.
    - Reconcile their evidence. Drop, on the record, any finding neither engine can substantiate.
 6. **Verify.** Have one independent `verifier` run the authoritative gates.
-7. **Accept.** Decide, then report outcomes, decisions, evidence, and remaining risk concisely.
+7. **Re-baseline.** Reconcile the remaining plan against what the phase revealed, before dispatching
+   the next one.
+   - Rule on every remaining unit: **satisfied**, the phase closed it, strike it; **transformed**,
+     the intent stands and the work changed, restate it; **added**, the phase revealed a fork the
+     plan did not consider; **unchanged**.
+   - Redraw the dependency order. Strike a unit whose subject a later unit deletes. State the new
+     prerequisite of a unit that acquired one.
+   - Walk the remaining units once and ask of each whether what just landed still supports it. A
+     decision taken inside a unit can remove a later unit's foundation, and the unit that took it
+     cannot see that.
+   - Re-baseline when a probe overturns a decision the plan rests on, not only at a phase boundary.
+     A measurement that falsifies your own reconciliation changes which units run.
+   - Record what changed and why. An unrecorded re-baseline cannot be audited, and the next one
+     re-derives it.
+8. **Accept.** Decide, then report outcomes, decisions, evidence, and remaining risk concisely.
    When step 2's exit criterion is met and the gates are green, accept. The next goal is the
    deliverable.
+
+### Re-baselining is not rescoping
+
+`.claude/rules/quality.md` fixes the enumerated scope when work begins and forbids reopening it. A
+re-baseline changes which units run. It never changes the goal's exit criterion.
+
+Strike a unit because the phase satisfied it, never because it became inconvenient. Add a unit
+because implementation revealed work the exit criterion already required, never because an engine
+thought of something else worth doing. A re-baseline that moves the exit criterion is a rescope, and
+that needs the user.
 
 ## Deviation protocol
 
@@ -300,6 +324,9 @@ The harness bridge names the concrete mechanism for each of these.
 - Amend a brief on re-run rather than restating it. A mid-campaign correction produces a successor
   file recording what changed and why, and the original stays. A fix round's brief names the
   findings it carries and where each came from.
+- Send a decision taken mid-campaign to every unit already in flight whose brief it invalidates. An
+  executor cannot see a change made after it was dispatched, so it writes the state its brief
+  described and the defect surfaces as its own.
 - Treat brief and report files as unit evidence, not deliverables. Never commit them, and sweep
   them when the campaign that produced them is accepted.
 - Promote anything that must outlive the campaign into a durable artifact before the sweep — a
@@ -312,7 +339,10 @@ The harness bridge names the concrete mechanism for each of these.
 - **Context.** The evidence slice, paths, decisions, `AGENTS.md`, applicable rules, the skill name
   and its required references (or an explicit none), and the guide or spec. Include the host
   environment facts the unit will hit — the shell, path, and network constraints its commands run
-  under — because an executor that rediscovers them pays for the discovery in round trips.
+  under — because an executor that rediscovers them pays for the discovery in round trips. State
+  every standing condition the same way: a file expected to be dirty, a command known to fail, a
+  shim the shell blocks. A condition the brief leaves unnamed comes back as a deviation report
+  about something you already knew.
 - **Unknowns.** What the Orchestrator does not yet know that the unit needs, named as unknown, with
   how the unit reports back on it. A brief that cannot be fully specified says so instead of
   shipping a guess the executor would have to invent an answer around.
@@ -320,7 +350,10 @@ The harness bridge names the concrete mechanism for each of these.
 - **Execution.** State that the executor performs the assignment directly and spawns nothing. Put
   it in every brief; an executor deep in a task does not re-read this contract.
 - **Output.** The exact distilled return shape. No process diary.
-- **Deviation contract.** The required stop-and-report behaviour for writers.
+- **Deviation contract.** The required stop-and-report behaviour for writers, scoped. A conflict
+  with the primary objective stops the unit. An ancillary conflict — where a paragraph sits, which
+  heading a section takes — is the executor's to decide, record, and carry on from. An unscoped
+  contract stops a unit over a detail it was equipped to settle.
 - **Acceptance criteria.** Independently checkable completion conditions.
 - **Review evidence.** What the subject type requires, per the table in `orkestrel-falsify`. For a
   code change that is the actual diff and the actual status output; omitting either is a dispatch
@@ -328,6 +361,27 @@ The harness bridge names the concrete mechanism for each of these.
   the review input and source is corroboration. A subject may occupy more than one row — a ruling
   whose fixes already landed as edits is both a proposal and a code change — and it gets the
   evidence of every row it occupies.
+
+### Check the brief before you send it
+
+Run these five checks on every brief. Each is cheap, and skipping one costs a full dispatch cycle
+that produces no work, because a unit given a brief that is internally consistent and factually
+wrong is right to stop.
+
+- Paste every factual claim from a command you ran this turn — paths, counts, registrations, file
+  existence. A claim about a search names the scope the search covered. A search bounded to one
+  directory proves something about that directory and nothing about the rest of the tree.
+- Read the acceptance criteria against the off-limits list, line by line. Every criterion closes
+  using owned files alone. A criterion that needs an off-limits file gets that file granted or gets
+  struck.
+- Give a small unrelated obligation its own unit. Ride it along in a large one and its scope error
+  blocks the primary work, which is a whole unit lost to a detail.
+- Ask what the change will do to the facts you just measured. A criterion fixed to a measured set is
+  unreachable if the change alters that set, and a file marked off-limits is wrong if the change
+  writes to it. Measure the state the unit will finish in, not only the state it starts from.
+- Name the property the unit must change, and stop. A consequence you expect to follow from it is an
+  observation for the report, not a criterion. Bundled together, the unit can satisfy neither and
+  cannot tell which half you meant.
 
 ### Carry every finding
 
@@ -355,7 +409,10 @@ ladder; these four laws bind every bench regardless of transport.
    Monitor per long exec, filtered to milestones — commands run, files changed, agent messages,
    terminal states — never the raw event stream. Exit the filter on the exec's terminal event so no
    watcher outlives its subject. The journal's mtime is the liveness signal; the session id in its
-   head is the recovery handle.
+   head is the recovery handle. The journal is also the proof the bench ran: a bench unit returns
+   its journal path and session id with its result, and the Orchestrator confirms both before
+   using that result. A report does not carry the engine that produced it, so a bench unit with no
+   journal ran on its driver's engine, however normal its answer reads.
 3. **Tracked, never loose.** Register every bench unit in the session task registry at launch with
    its subject, journal path, and session id, and complete it there at acceptance. "What is
    running" always has a first-class answer instead of a recollection of a command.

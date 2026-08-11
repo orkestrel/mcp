@@ -17,6 +17,7 @@ paths:
 | ------------------------- | ------------------------------------------------------------ |
 | Interfaces/types          | `*/types.ts`                                                 |
 | Constants/data            | `*/constants.ts`                                             |
+| Template definitions      | `*/templates.ts`                                             |
 | Pure helpers              | `*/helpers.ts`                                               |
 | Guards                    | `*/validators.ts`                                            |
 | Guard combinators         | `*/combinators.ts`                                           |
@@ -27,8 +28,11 @@ paths:
 | Shape/algorithm compilers | `*/compilers.ts`                                             |
 | Entity/value factories    | `*/factories.ts`                                             |
 | Middleware factories      | `*/middlewares.ts`                                           |
+| Request handlers          | `*/handlers.ts`                                              |
+| Route tables              | `*/routes.ts`                                                |
 | Seeders                   | `*/seeders.ts`                                               |
 | Schemas                   | `*/schemas.ts`                                               |
+| Compiled contracts        | `*/contracts.ts`                                             |
 | Relations                 | `*/relations.ts`                                             |
 | Error classes/guards      | `*/errors.ts`                                                |
 | Public exports            | `*/index.ts`                                                 |
@@ -57,6 +61,42 @@ Use only the centralized files an environment needs.
   - trivial and genuinely single-use → fold into its caller;
   - non-trivial or reusable → extract, export, unit-test, and route every duplicate through it.
 - `factories.ts`, `compilers.ts`, and `parsers.ts` are centralized files, not hiding places. Factory glue extracts to `helpers.ts`; pure compiler/parser recursion remains exported in its own kind file.
+- Every exported function in `parsers.ts` is named `parse*`. Every exported function in
+  `factories.ts` is named `create*`.
+- The two name forms are one-directional. A name does not place a function: `createWriteDirectory`
+  creates a directory rather than an entity and `isVacant` is a predicate rather than a `Guard<T>`,
+  so both stay in `helpers.ts`. Placement follows what the function is; the name form follows
+  placement.
+- `templates.ts` and `contracts.ts` hold data only — shipped template definitions and compiled
+  contracts. A function that builds either belongs in the kind file for what it builds.
+- `handlers.ts` holds request handlers, which are functions. `routes.ts` holds data only: a route is
+  `{ method, path, handler }`, so the table maps each path to a handler declared in `handlers.ts`
+  and referenced by name, never to a function expression written in place. Neither file mixes kinds and the
+  route set stays readable as data.
+
+### What the policy sweep proves
+
+The fleet policy sweep (`tests/policy.test.ts`, `tests/setupPolicy.ts`) enforces syntactic
+placement: a declaration of a given syntactic kind appears only in a file permitted to hold that
+kind. It reads declaration syntax and file name, never meaning.
+
+- It proves that a module function sits in a function-kind file, that module data sits in a
+  data-kind file, that every centralized declaration is exported, that a class sits in its matching
+  implementation or errors file, and that `constants.ts` declares only UPPER_SNAKE_CASE consts with
+  no bare collection literal.
+- It does not prove a collection is frozen. It reads the declaration, never the value a call
+  returns, so `Object.freeze([…])` and any other call initializer are one syntax to it. The freeze
+  obligation in the kind-purity rules above binds regardless; only the bare literal is mechanical.
+- It does not tell one function kind from another. Every centralized file that permits functions
+  reads the same to it apart from the two name forms above: `cloners.ts`, `combinators.ts`,
+  `compilers.ts`, `errors.ts`, `factories.ts`, `handlers.ts`, `helpers.ts`, `inferers.ts`,
+  `middlewares.ts`, `parsers.ts`, `relations.ts`, `schemas.ts`, `seeders.ts`, `shapers.ts`, and
+  `validators.ts`. That list is exhaustive, a new function kind joins it, and no later version of
+  the sweep claims more.
+- The cleanup sweep and independent review prove kind purity across those files. A helper misfiled
+  as a parser, a coercer misfiled as a guard, a compiler misfiled as a factory, and a shaper
+  misfiled as a cloner are review findings, not red tests.
+- The kind table is mandatory whether or not a test can see the violation.
 
 ## Wrapper test
 
@@ -126,9 +166,11 @@ Store child managers in `#` fields and expose readonly getters typed as their in
 
 - A word is either a centralized kind or a domain folder, never both.
 - A folder named for a centralized kind—`helpers/`, `validators/`, `handlers/`—is that kind's file, not a folder.
-- Read a function domain from the fleet-canon register (`tests/setupPolicy.ts`,
-  `FUNCTION_DOMAIN_FOLDERS`). Never infer one from a folder's name; a camelCase module inside an
-  undesignated folder is misplaced.
+- `FUNCTION_DOMAIN_FOLDERS` in the fleet-canon register (`tests/setupPolicy.ts`) registers the
+  folder paths whose direct modules are function modules. Registration makes a path eligible and
+  fixes the declaration shape checked there; it judges nothing about what a module does.
+- Never infer a function domain from a folder's name; a camelCase module inside an unregistered
+  folder is misplaced.
 - Request a new domain through a fleet-canon change. There is no workspace-local registration path.
 
 ### Extension categories

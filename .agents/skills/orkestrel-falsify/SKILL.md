@@ -78,13 +78,15 @@ nobody claimed.
 - **Give every auditor the means to run its attacks.** A lens that can only read returns derivations,
   and a derivation reads exactly like a verdict — it will confirm a claim that one probe would break.
 - **Tell each auditor exactly where a probe may live, and verify that place works before you say it.**
-  A test runner resolves only what its own configuration includes: a probe written outside the project
-  root is typically not discovered at all, and the run reports no test files rather than a result. The
-  reliable form is a file inside the canonical mirrored suite, run by explicit path, deleted before the
-  auditor returns — promoted into a permanent test when it proves something worth keeping. Give each
+  A test runner resolves only what its own configuration includes: a probe written outside every
+  configured project is not discovered at all, and the run reports no test files rather than a result.
+  Where the repository provides a probe project, use it and name that project in the brief;
+  `.claude/rules/tests.md` governs what may live there. Where it does not, the reliable form is a file
+  inside the canonical mirrored suite, run by explicit path. Either way the probe is deleted before the
+  auditor returns, and promoted into a permanent test when it proves something worth keeping. Give each
   concurrent auditor a distinct filename that already satisfies the repository's test naming
   convention; never invent a prefix to dodge collisions, and never let two auditors claim one path. A
-  leaked probe is discovered by the suite and fails a run nobody else caused.
+  probe left in the mirrored suite is discovered and fails a run nobody else caused.
 - **Run auditors concurrently only when their writes cannot collide.** Read-only lenses still write
   probes; give each a distinct path and forbid whole-project runs, or serialize the round. **This binds
   the orchestrator too:** a tree-wide gate run while a round is live sees the auditors' in-flight probes

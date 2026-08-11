@@ -12,7 +12,7 @@ Read the current authority in this order:
 1. `AGENTS.md` and applicable `.claude/rules/*.md`.
 2. The `integration.md` and `fleet.md` references selected below.
 3. `.agents/orchestration.md` for orchestration.
-4. Relevant package guides, `guides/src/scaffold.md`, and the configured Orkestrel specialist.
+4. Relevant package guides, `guides/scaffold.md`, and the configured Orkestrel specialist.
 
 Explicit user scope wins.
 

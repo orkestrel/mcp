@@ -21,10 +21,56 @@ paths:
 - Allow a scripted boundary stub only when it implements the real interface or protocol minimally, to drive the system under test. It never reimplements project-owned behavior and never stands in for the integration being claimed.
 - Cover happy paths, error paths, empty input, boundary values, `NaN`, positive/negative zero, cycles, and Map/Set order where relevant.
 - Test observable behavior, not implementation details.
+- Assert the membership a discovered or globbed set should have, not a total that a partly empty population satisfies. A glob spanning two locations passes a size check while one of them matches nothing.
 - A regression test records the exact command and its failing count before the fix, and the same command's passing count after.
 - Use `it.todo()` only for explicitly out-of-scope roadmap work, never to complete the current request. Every `.skip` or conditional skip has a narrow verifiable applicability reason.
 - Do not create test files solely for `constants.ts`, barrels, error definitions, or `types.ts`.
 - Run the narrowest relevant Vitest project during development; do not run the entire suite casually.
+
+## Cross-cutting proofs
+
+A proof that covers the workspace instead of one module has a fixed location, so no package invents
+its own:
+
+| Path                        | Proves                                                         |
+| --------------------------- | -------------------------------------------------------------- |
+| `tests/policy.test.ts`      | Every source file obeys the syntactic coding and placement law |
+| `tests/config.test.ts`      | Root configuration resolves its aliases, projects, and outputs |
+| `tests/guides.test.ts`      | Every documented API exists and every public API is documented |
+| `tests/integration.test.ts` | The built package works when installed and driven from outside |
+
+- `.claude/rules/workspace.md` names the Vitest project each location belongs to.
+- `integration.test.ts` is a reserved filename at any level. It names a scope rather than a module,
+  so the mirror rule does not reach it; its scope is the directory it sits in.
+- Give every nested `integration.test.ts` its own exact-path project entry. A glob such as
+  `tests/src/**/integration.test.ts` double-claims a file another project already owns.
+
+## Probes
+
+A probe is a throwaway instrument that settles one question. It is not a test and never ships.
+
+Two kinds, split by which tool has to see the probe:
+
+- A **type probe** is read by `tsc`, whose scoped project includes only its own environment, so it
+  lives in the source tree beside what it measures. Delete it before the unit returns; a leaked one
+  fails the placement sweep, because a probe filename is not a centralized kind file.
+- A **runtime probe** is collected by a Vitest project, so it lives in `tmp/probe/` and runs through
+  the `probe` project. `tmp/` is ignored by git, so no probe enters a commit by accident, and every
+  test script names its project, so no gate runs the `probe` project.
+
+Run a probe before relying on an unverified belief about behaviour: what a function returns, what a
+configuration resolves to, whether a path is reached at all. Prefer a probe to an argument whenever
+the probe is cheap.
+
+Three rules bind every probe:
+
+- **Prove the instrument can fail before trusting that it passed.** Pair it with a control drawn
+  from outside the population it covers.
+- **Promote or delete.** A probe that settles a claim becomes a test in the mirrored location that
+  proves the real source. Delete every other probe. A probe left in the suite reports on the harness
+  while reading as a test.
+- **Never commit a probe.** The ignore rule stops an accident, not a deliberate forced add, and a
+  type probe sits in tracked source with no ignore rule at all.
 
 ## Live-service tests
 
@@ -38,6 +84,14 @@ Live external services/models are the deliberate exception to fast hermetic defa
 - Tune each request to the smallest input/context/output that proves one behavior without becoming brittle or expensive.
 - Prefer semantic bounded assertions over exact generated prose. Increase context/workload only when the scenario requires it.
 
+## Expensive proofs
+
+A test that spawns a process, packs, installs, or drives a real build is a proof, not a unit test.
+
+- Give it its own Vitest project with its own setup and timeout.
+- Keep it out of the default run and require it in `prepublishOnly`.
+- Slow and hermetic is reason enough to isolate a proof; it need not touch an external service.
+
 ## Shared test infrastructure
 
 Test helpers are shared infrastructure, not local test-file clutter.
@@ -45,6 +99,8 @@ Test helpers are shared infrastructure, not local test-file clutter.
 - Extract a fixture, recorder, event factory, async wait, renderer, scenario/data builder, protocol fixture, or DOM builder as soon as it could serve another test.
 - Any duplicate or near-duplicate helper is a defect; consolidate it into one general form.
 - Export every reusable helper, fixture type, factory, constant, and guard from setup files.
+- A setup file owns everything an assertion needs and nothing an assertion is: `describe`, `it`, and `expect` never appear in a `setup*.ts`.
+- Data tables and case matrices belong in a setup file at any size; test registration does not.
 - Test files import shared infrastructure rather than declaring local fixture factories.
 - Never reimplement a framework helper in tests or fixtures; import the real parser, signer, flattener, or other helper.
 - Prefer small customizable factories/stubs that seed inert data for a real scenario over repeated inline setup.
@@ -134,7 +190,7 @@ Before acceptance:
 - prove every intended test file is discovered by the correct project;
 - inspect actual test counts and environments;
 - audit `.todo`, `.skip`, conditional skips, retries, and inflated timeouts;
-- confirm each assertion would fail for the defect it claims to catch;
+- confirm each assertion would fail for the defect it claims to catch, and that it fails rather than passes when its population is empty;
 - confirm helpers do not reimplement production behavior;
 - confirm cleanup runs after setup or assertion failure;
 - confirm current-scope requirements have real tests rather than placeholders.

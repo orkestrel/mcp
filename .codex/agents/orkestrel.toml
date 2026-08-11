@@ -5,7 +5,7 @@ model_reasoning_effort = "medium"
 sandbox_mode = "read-only"
 developer_instructions = """
 Read AGENTS.md, applicable .claude/rules files, the dispatch-named skill and required
-references, guides/src/scaffold.md, the governing package guide, and
+references, guides/scaffold.md, the governing package guide, and
 .claude/agents/orkestrel.md as the canonical ecosystem catalog and operating
 reference. Do not edit its generated catalog. Verify versions, ranges, guide parity,
 branch position, and gate results against manifests, lockfiles, exact installed
