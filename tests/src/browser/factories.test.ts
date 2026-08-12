@@ -129,7 +129,7 @@ describe('serveMCPScope — dedicated-worker-shaped scope (implicit, portless ch
 		double.dispatch({ data: JSON.stringify(modernRequest('tools/list')) })
 
 		await vi.waitFor(() => expect(double.sent).toHaveLength(1))
-		const reply: { result: { tools: readonly { name: string }[] } } = JSON.parse(
+		const reply: { result: { tools: ReadonlyArray<{ name: string }> } } = JSON.parse(
 			String(double.sent[0]),
 		)
 		expect(reply.result.tools.map((tool) => tool.name)).toEqual(['add'])
@@ -636,9 +636,9 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 	})
 
 	it('stamps modern protocol and method headers from each body and names only tools/call', async () => {
-		const protocols: (string | null)[] = []
-		const methods: (string | null)[] = []
-		const names: (string | null)[] = []
+		const protocols: Array<string | null> = []
+		const methods: Array<string | null> = []
+		const names: Array<string | null> = []
 		const versions: unknown[] = []
 		const transport = createHTTPClientTransport({
 			url: `${serverURL}/mcp`,
@@ -700,9 +700,9 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 	})
 
 	it('captures the negotiated protocol and sends it on the subsequent real fetch request', async () => {
-		const protocols: (string | null)[] = []
-		const methods: (string | null)[] = []
-		const names: (string | null)[] = []
+		const protocols: Array<string | null> = []
+		const methods: Array<string | null> = []
+		const names: Array<string | null> = []
 		const transport = createHTTPClientTransport({
 			url: `${serverURL}/mcp`,
 			fetch: (input, init) => {
@@ -730,7 +730,7 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 		// flight — the real network round-trip stays real; only the injected `fetch`
 		// mutates the decoded body, so `MCPClient` must reject the handshake (F4) and the
 		// transport must never have captured the unsupported value.
-		const protocols: (string | null)[] = []
+		const protocols: Array<string | null> = []
 		const transport = createHTTPClientTransport({
 			url: `${serverURL}/mcp`,
 			fetch: async (input, init) => {

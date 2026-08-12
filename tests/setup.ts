@@ -693,7 +693,7 @@ export function modernRequest(method: string, id: string | number = 1): JSONRPCR
 
 /** In-memory resource manager shared by server and legacy dispatch tests. */
 export class MemoryResourceManager implements MCPResourceManagerInterface {
-	readonly #cursors: (string | undefined)[] = []
+	readonly #cursors: Array<string | undefined> = []
 	readonly #reads: MCPResourceReadParams[] = []
 	readonly #options: MCPMethodOptions[] = []
 	readonly #records = new Map<string, readonly MCPResourceContents[]>([
@@ -701,7 +701,7 @@ export class MemoryResourceManager implements MCPResourceManagerInterface {
 		['memory://resource/two', [{ uri: 'memory://resource/two', blob: 'dHdv' }]],
 	])
 
-	get cursors(): readonly (string | undefined)[] {
+	get cursors(): ReadonlyArray<string | undefined> {
 		return this.#cursors
 	}
 
@@ -1324,8 +1324,8 @@ export interface TestTaskOptions {
 export class TestTaskManager implements MCPTaskManagerInterface {
 	readonly #details = new Map<string, MCPTaskDetail>()
 	readonly #identifiers = new Map<string, string>()
-	readonly #starts: (readonly [string, MCPTaskContext, MCPMethodOptions])[] = []
-	readonly #running: Promise<void>[] = []
+	readonly #starts: Array<readonly [string, MCPTaskContext, MCPMethodOptions]> = []
+	readonly #running: Array<Promise<void>> = []
 	readonly #bind: boolean
 	readonly #work: number
 	readonly #asking: boolean
@@ -1346,7 +1346,7 @@ export class TestTaskManager implements MCPTaskManagerInterface {
 	}
 
 	/** Each `(key, context, options)` triple `start` received, in call order. */
-	get starts(): readonly (readonly [string, MCPTaskContext, MCPMethodOptions])[] {
+	get starts(): ReadonlyArray<readonly [string, MCPTaskContext, MCPMethodOptions]> {
 		return this.#starts
 	}
 

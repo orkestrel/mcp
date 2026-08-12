@@ -142,11 +142,11 @@ class MemoryContinuation implements MCPContinuationInterface {
 }
 
 class MemoryPromptManager implements MCPPromptManagerInterface {
-	readonly #cursors: (string | undefined)[] = []
+	readonly #cursors: Array<string | undefined> = []
 	readonly #requests: MCPPromptGetParams[] = []
 	readonly #options: MCPMethodOptions[] = []
 
-	get cursors(): readonly (string | undefined)[] {
+	get cursors(): ReadonlyArray<string | undefined> {
 		return this.#cursors
 	}
 
@@ -1325,7 +1325,7 @@ describe('MCPServer — W01 modern execution and progress', () => {
 				},
 			},
 		)
-		const scenarios: readonly (readonly [MCPProgress, number])[] = [
+		const scenarios: ReadonlyArray<readonly [MCPProgress, number]> = [
 			[invalid, 128],
 			[{ progress: 1, message: 'x'.repeat(64) }, 32],
 		]
@@ -3396,7 +3396,7 @@ function legacyFaults(): readonly FaultScenario[] {
 describe('MCPServer — W02-A: the modern internal-error code', () => {
 	it('answers every modern fault -32603 and none -32000, through dispatch', async () => {
 		const scenarios = modernFaults()
-		const codes: (number | undefined)[] = []
+		const codes: Array<number | undefined> = []
 		for (const scenario of scenarios) {
 			codes.push(await faultOf(await scenario.server.dispatch(scenario.request)))
 		}
@@ -3407,7 +3407,7 @@ describe('MCPServer — W02-A: the modern internal-error code', () => {
 
 	it('answers every modern fault -32603 and none -32000, through handle', async () => {
 		const scenarios = modernFaults()
-		const codes: (number | undefined)[] = []
+		const codes: Array<number | undefined> = []
 		for (const scenario of scenarios) {
 			codes.push(await faultOfText(await scenario.server.handle(JSON.stringify(scenario.request))))
 		}
@@ -3419,8 +3419,8 @@ describe('MCPServer — W02-A: the modern internal-error code', () => {
 	// The translated door runs the identical normalization and error-code pipeline.
 	it('answers collapsed legacy tool faults -32603 through dispatch and handle', async () => {
 		const scenarios = legacyFaults()
-		const dispatched: (number | undefined)[] = []
-		const handled: (number | undefined)[] = []
+		const dispatched: Array<number | undefined> = []
+		const handled: Array<number | undefined> = []
 		for (const scenario of scenarios) {
 			dispatched.push(await faultOf(await scenario.server.dispatch(scenario.request)))
 			handled.push(
@@ -3864,7 +3864,7 @@ interface InputProbeInterface {
 	/** Every selector context, in order — its length is the selector's call count. */
 	readonly selections: readonly MCPInputContext[]
 	/** Every argument record the tool actually executed with — its length is the run count. */
-	readonly executions: readonly Readonly<Record<string, unknown>>[]
+	readonly executions: ReadonlyArray<Readonly<Record<string, unknown>>>
 }
 
 function inputProbe(
@@ -5673,7 +5673,7 @@ function watchedTaskManager(
 
 describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 	it('forwards every input response verbatim and answers an empty complete result', async () => {
-		const forwarded: Readonly<Record<string, unknown>>[] = []
+		const forwarded: Array<Readonly<Record<string, unknown>>> = []
 		const tasks = new TestTaskManager({ asking: true })
 		const mcp = taskServer({
 			tasks: {

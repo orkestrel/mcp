@@ -189,11 +189,9 @@ describe('MCPTaskClient — the shape', () => {
 	// The port is a published contract, so it has to be usable without an `MCPClient` behind it.
 	// This also pins the one thing the class is given: a correlated-request door and a deadline.
 	it('issues the three wire methods through the request door it was handed', async () => {
-		const issued: (readonly [
-			string,
-			Readonly<Record<string, unknown>> | undefined,
-			number | undefined,
-		])[] = []
+		const issued: Array<
+			readonly [string, Readonly<Record<string, unknown>> | undefined, number | undefined]
+		> = []
 		const client = new MCPTaskClient({
 			request: async (method, params, deadline) => {
 				issued.push([method, params, deadline])

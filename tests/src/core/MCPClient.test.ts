@@ -2605,7 +2605,7 @@ describe('MCPClientTransportInterface — a failing send rejects, never throws',
 describe('MCPClient — §13 observer safety', () => {
 	it('a throwing connect listener cannot corrupt connect, and routes to the error handler', async () => {
 		const loopback = createLoopback(serverWithTools())
-		const errors: (readonly [unknown, string])[] = []
+		const errors: Array<readonly [unknown, string]> = []
 		// The emitter's `error` handler receives (error, event) — never a domain event.
 		const client = createMCPClient({
 			transport: loopback,

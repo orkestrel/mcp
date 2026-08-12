@@ -63,7 +63,7 @@ describe('createMCPServer', () => {
 	})
 
 	it('wires the on hooks (the §8 reserved key) to the emitter', async () => {
-		const seen: (readonly [string, string | number | undefined])[] = []
+		const seen: Array<readonly [string, string | number | undefined]> = []
 		const server = createMCPServer({
 			identity: { name: 'demo', version: '1.0.0' },
 			tools: createToolManager(),

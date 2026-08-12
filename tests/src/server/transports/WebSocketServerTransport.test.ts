@@ -32,7 +32,7 @@ function jsonFrame(value: unknown): Buffer {
 }
 
 // Decode the JSON payloads of the server's text response frames the client read.
-function decodeResponses(frames: readonly { opcode: number; payload: Buffer }[]): unknown[] {
+function decodeResponses(frames: ReadonlyArray<{ opcode: number; payload: Buffer }>): unknown[] {
 	return frames
 		.filter((frame) => frame.opcode === WEBSOCKET_OPCODE_TEXT)
 		.map((frame) => JSON.parse(frame.payload.toString('utf-8')))

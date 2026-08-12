@@ -81,7 +81,7 @@ export function serializeJSON(value: unknown, limits: MCPJSONLimitOptions): stri
 		let keys = 0
 		const chunks: string[] = []
 		const ancestors = new WeakSet<object>()
-		const pending: (
+		const pending: Array<
 			| { readonly operation: 'value'; readonly value: unknown; readonly depth: number }
 			| { readonly operation: 'string'; readonly value: string; readonly output: string[] }
 			| { readonly operation: 'text'; readonly text: string }
@@ -94,7 +94,7 @@ export function serializeJSON(value: unknown, limits: MCPJSONLimitOptions): stri
 					readonly index: number
 					readonly depth: number
 			  }
-		)[] = [{ operation: 'value', value, depth: 0 }]
+		> = [{ operation: 'value', value, depth: 0 }]
 
 		while (pending.length > 0) {
 			const frame = pending.pop()
@@ -148,7 +148,7 @@ export function serializeJSON(value: unknown, limits: MCPJSONLimitOptions): stri
 					pending.push({ operation: 'string', value: name, output: frame.encoded })
 					continue
 				}
-				const entries: { readonly text: string; readonly value: unknown }[] = []
+				const entries: Array<{ readonly text: string; readonly value: unknown }> = []
 				for (let index = 0; index < frame.names.length; index += 1) {
 					const key = frame.names[index]
 					const text = frame.encoded[index]

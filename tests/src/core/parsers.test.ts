@@ -354,7 +354,7 @@ describe('parseRequestContext', () => {
 	})
 
 	it('rejects malformed complete metadata and known capability fields', () => {
-		const metadata: readonly Readonly<Record<string, unknown>>[] = [
+		const metadata: ReadonlyArray<Readonly<Record<string, unknown>>> = [
 			{
 				[MCP_META_VERSION]: '2026-07-28',
 				[MCP_META_CAPABILITIES]: { custom: true },

@@ -240,7 +240,7 @@ describe('MCPProgressReporter', () => {
 
 	it('rejects a reentrant report instead of orphaning the installed slot', async () => {
 		const reporter = new MCPProgressReporter('reentrant', LIMITS, new AbortController().signal)
-		const inner: Promise<void>[] = []
+		const inner: Array<Promise<void>> = []
 		let traps = 0
 		const hostile = new Proxy(
 			{ progress: 9 },
@@ -296,7 +296,7 @@ describe('MCPProgressReporter', () => {
 	it('refuses a take whose resolver hook parks a rival consumer', async () => {
 		const intrinsic = Promise.withResolvers
 		const reporter = new MCPProgressReporter('rival', LIMITS, new AbortController().signal)
-		const rival: Promise<JSONRPCNotification>[] = []
+		const rival: Array<Promise<JSONRPCNotification>> = []
 		const realm = {
 			withResolvers<T>(): PromiseWithResolvers<T> {
 				Promise.withResolvers = intrinsic
@@ -332,8 +332,8 @@ describe('MCPProgressReporter', () => {
 	it('refuses a take whose resolver hook parks a rival consumer and fills the slot', async () => {
 		const intrinsic = Promise.withResolvers
 		const reporter = new MCPProgressReporter('rival-slot', LIMITS, new AbortController().signal)
-		const rival: Promise<JSONRPCNotification>[] = []
-		const reported: Promise<void>[] = []
+		const rival: Array<Promise<JSONRPCNotification>> = []
+		const reported: Array<Promise<void>> = []
 		const realm = {
 			withResolvers<T>(): PromiseWithResolvers<T> {
 				Promise.withResolvers = intrinsic
@@ -370,7 +370,7 @@ describe('MCPProgressReporter', () => {
 	it('consumes a slot its own resolver hook installs instead of parking behind it', async () => {
 		const intrinsic = Promise.withResolvers
 		const reporter = new MCPProgressReporter('installed', LIMITS, new AbortController().signal)
-		const reported: Promise<void>[] = []
+		const reported: Array<Promise<void>> = []
 		const realm = {
 			withResolvers<T>(): PromiseWithResolvers<T> {
 				Promise.withResolvers = intrinsic
@@ -397,7 +397,7 @@ describe('MCPProgressReporter', () => {
 	it('clears every slot before stop invokes a hostile rejection hook', async () => {
 		const intrinsic = Promise.withResolvers
 		const reporter = new MCPProgressReporter('ordered-stop', LIMITS, new AbortController().signal)
-		const taken: Promise<JSONRPCNotification>[] = []
+		const taken: Array<Promise<JSONRPCNotification>> = []
 		const realm = {
 			withResolvers<T>(): PromiseWithResolvers<T> {
 				Promise.withResolvers = intrinsic
@@ -434,7 +434,7 @@ describe('MCPProgressReporter', () => {
 		const signal = new AbortController().signal
 		const detach = signal.removeEventListener
 		const reporter = new MCPProgressReporter('ordered-detach', LIMITS, signal)
-		const taken: Promise<JSONRPCNotification>[] = []
+		const taken: Array<Promise<JSONRPCNotification>> = []
 		Object.defineProperty(signal, 'removeEventListener', {
 			configurable: true,
 			value(type: string, listener: EventListenerOrEventListenerObject): void {

@@ -227,10 +227,10 @@ const resolve = {
 }
 
 export function gateBrowserProjects(
-	registrations: readonly {
+	registrations: ReadonlyArray<{
 		readonly project: () => UserConfig
 		readonly browser?: string
-	}[],
+	}>,
 	available: boolean,
 	argv: readonly string[],
 ): NonNullable<UserConfig['test']> {

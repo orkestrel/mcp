@@ -60,7 +60,7 @@ const dispatcher = createMCPLegacy(
 
 const malformedId: JSONRPCId = JSON.parse('null')
 
-const cases: readonly (readonly [string, JSONRPCInvocation, JSONRPCResponse | undefined])[] = [
+const cases: ReadonlyArray<readonly [string, JSONRPCInvocation, JSONRPCResponse | undefined]> = [
 	[
 		'initialize-default',
 		{ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },

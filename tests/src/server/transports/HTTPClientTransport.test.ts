@@ -3,7 +3,9 @@ import type { MiddlewareHandler } from '@orkestrel/server'
 import type { StartedServerInterface } from '../../../setupServer.js'
 import { describe, expect, it } from 'vitest'
 import {
+	buildJSONRPCResult,
 	inferRequestVersion,
+	isJSONRPCId,
 	MCP_LEGACY_VERSION,
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
@@ -12,6 +14,7 @@ import {
 	createMCPLegacy,
 	createMCPServer,
 } from '@src/core'
+import { isRecord } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
@@ -289,9 +292,9 @@ describe('HTTPClientTransport — lifecycle', () => {
 		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer()), { streaming: false }))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
 		const handle = track(await startServer(server))
-		const protocols: (string | null)[] = []
-		const methods: (string | null)[] = []
-		const names: (string | null)[] = []
+		const protocols: Array<string | null> = []
+		const methods: Array<string | null> = []
+		const names: Array<string | null> = []
 		const transport = createHTTPClientTransport({
 			url: `${handle.base}/mcp`,
 			fetch: (input, init) => {
@@ -330,17 +333,14 @@ describe('HTTPClientTransport — lifecycle', () => {
 			method: 'POST',
 			path: '/mcp',
 			handler: async (request) => {
-				const body = (await request.json()) as { readonly id: unknown }
-				return Response.json({
-					jsonrpc: '2.0',
-					id: body.id,
-					result: { protocolVersion: '2099-01-01' },
-				})
+				const body: unknown = await request.json()
+				const id = isRecord(body) && isJSONRPCId(body['id']) ? body['id'] : 0
+				return Response.json(buildJSONRPCResult(id, { protocolVersion: '2099-01-01' }))
 			},
 		})
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
 		const handle = track(await startServer(server))
-		const protocols: (string | null)[] = []
+		const protocols: Array<string | null> = []
 		const transport = createHTTPClientTransport({
 			url: `${handle.base}/mcp`,
 			fetch: (input, init) => {
@@ -360,7 +360,7 @@ describe('HTTPClientTransport — lifecycle', () => {
 		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer()), { streaming: false }))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
 		const handle = track(await startServer(server))
-		const protocols: (string | null)[] = []
+		const protocols: Array<string | null> = []
 		const transport = createHTTPClientTransport({
 			url: `${handle.base}/mcp`,
 			fetch: (input, init) => {

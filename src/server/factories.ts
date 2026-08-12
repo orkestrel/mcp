@@ -102,7 +102,7 @@ export function createMCPContinuation(secret: TokenSecret): MCPContinuationInter
 export function createMCPRoutes<TState = unknown>(
 	mcp: MCPDispatcherInterface,
 	options?: HTTPTransportOptions<TState>,
-): readonly RouteInput<string, TState>[] {
+): ReadonlyArray<RouteInput<string, TState>> {
 	const path = options?.path ?? DEFAULT_MCP_PATH
 	const post: RouteInput<string, TState> = {
 		method: 'POST',
