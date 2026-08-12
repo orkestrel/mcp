@@ -96,6 +96,7 @@
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.58.12",
+		"@modelcontextprotocol/conformance": "0.2.0-alpha.10",
 		"@orkestrel/guide": "^0.0.9",
 		"@orkestrel/router": "^0.0.9",
 		"@orkestrel/scaffold": "^0.0.27",

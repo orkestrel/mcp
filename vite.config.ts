@@ -1266,14 +1266,15 @@ export const config = (options?: UserConfig): UserConfig =>
 	)
 
 // The live-service project (AGENTS §16 live services): a real `@modelcontextprotocol/
-// conformance` runner, fetched by `npx` and driving a real listener over a real socket.
-// It is deliberately outside `npm test`, which stays hermetic and offline.
+// conformance` runner, spawned from the pinned development dependency and driving a real
+// listener over a real socket. It is deliberately outside `npm test`, which stays hermetic.
 //
-// Only `hookTimeout` is raised, because every second of the run is spent in the hooks:
-// the readiness warm-up and the twenty-scenario run both live there, and the assertions
-// themselves read an already-parsed result in single-digit milliseconds. A warm run
-// measures ~4 s end to end; the five minutes below is the allowance for the cold `npx`
-// download of the runner that a first run on a machine has to pay for.
+// Only `hookTimeout` is raised, because every second of the run is spent in the hook: the
+// twenty-scenario run and the version probe both live there, and the assertions read an
+// already-parsed result in single-digit milliseconds. Measured on this tree across four
+// runs the whole hook took 0.95-1.04 s, against 2.6-6.2 s while the runner still came
+// through `npx`. Thirty seconds is roughly thirty times the measured figure — slack for a
+// loaded machine, not an allowance for a download, which no longer happens here.
 export const conformance = (options?: UserConfig): UserConfig =>
 	mergeConfig(
 		{
@@ -1281,10 +1282,10 @@ export const conformance = (options?: UserConfig): UserConfig =>
 			test: {
 				name: { label: 'conformance', color: 'magenta' },
 				include: ['tests/conformance.test.ts'],
-				setupFiles: ['./tests/setup.ts', './tests/setupConformance.ts'],
+				setupFiles: ['./tests/setup.ts'],
 				environment: 'node',
 				browser: { enabled: false },
-				hookTimeout: 300_000,
+				hookTimeout: 30_000,
 			},
 		},
 		options ?? {},

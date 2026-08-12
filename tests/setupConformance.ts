@@ -27,7 +27,9 @@ import type {
 import type { StartedServerInterface } from './setupServer.js'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { beforeAll } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { isRecord } from '@orkestrel/contract'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -37,11 +39,11 @@ import { startServer } from './setupServer.js'
 
 // ── The pinned runner ────────────────────────────────────────────────────────
 
-/** The exact conformance runner build this suite is pinned to. */
-export const CONFORMANCE_RELEASE = '0.2.0-alpha.10'
+/** The conformance runner package, pinned as a development dependency and resolved from disk. */
+export const CONFORMANCE_PACKAGE = '@modelcontextprotocol/conformance'
 
-/** The npm specifier `npx` resolves for every runner invocation. */
-export const CONFORMANCE_PACKAGE = `@modelcontextprotocol/conformance@${CONFORMANCE_RELEASE}`
+/** The runner's entry module inside its installed package. */
+export const CONFORMANCE_ENTRY = `${CONFORMANCE_PACKAGE}/dist/index.js`
 
 /** The dated protocol revision the runner drives the server at. */
 export const CONFORMANCE_SPEC = '2026-07-28'
@@ -496,21 +498,66 @@ export async function startConformance(): Promise<StartedServerInterface<undefin
 // ── The foreign runner ───────────────────────────────────────────────────────
 
 /**
- * Invoke the pinned conformance runner and collect everything it wrote.
+ * Read the runner build the package manifest pins.
  *
  * @remarks
- * `npx` is a `.cmd` shim on Windows and Node refuses to spawn one without a shell, so a
- * bare spawn dies with `ENOENT` before the runner ever starts. The shell is enabled on
- * that platform only, and every argument is a literal this file owns, so nothing is
- * interpolated into it beyond the caller's loopback URL.
+ * The manifest is the SINGLE authority for the version. It is what `npm install` puts on
+ * disk and what the lockfile records, so a constant copied beside it is a second copy that
+ * can disagree with the build actually running. The recorded scenario baseline is a
+ * baseline of exactly this build, so the suite asserts the runner reports it.
+ *
+ * @returns The exact version `devDependencies` pins the runner to
+ * @throws When the manifest pins no such development dependency
+ */
+export function readConformanceRelease(): string {
+	const parsed: unknown = JSON.parse(
+		readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+	)
+	if (!isRecord(parsed) || !isRecord(parsed['devDependencies'])) {
+		throw new Error('Package manifest must declare object devDependencies')
+	}
+	const release = parsed['devDependencies'][CONFORMANCE_PACKAGE]
+	if (typeof release !== 'string') {
+		throw new Error(`Package manifest must pin ${CONFORMANCE_PACKAGE} in devDependencies`)
+	}
+	return release
+}
+
+/**
+ * Resolve the installed runner's entry module.
+ *
+ * @remarks
+ * The runner is a development dependency, so its entry is already on disk when the suite
+ * starts and no invocation fetches anything. Resolution is anchored on this module, which
+ * is what makes the answer the tree's own install rather than whatever a cache holds.
+ *
+ * @returns The absolute path to the runner's entry module
+ * @throws When the development dependency is not installed, naming what to do about it
+ */
+export function resolveConformanceRunner(): string {
+	try {
+		return createRequire(import.meta.url).resolve(CONFORMANCE_ENTRY)
+	} catch {
+		throw new Error(
+			`The conformance project needs the ${CONFORMANCE_PACKAGE} development dependency, ` +
+				`which is not installed. Run \`npm install\`, then rerun \`npm run test:conformance\`.`,
+		)
+	}
+}
+
+/**
+ * Invoke the installed conformance runner and collect everything it wrote.
+ *
+ * @remarks
+ * Node runs the runner's entry file directly. A file path needs no shell on any host, so
+ * none is enabled and nothing the caller passes is ever handed to one.
  *
  * @param command - The runner subcommand and its options
  * @returns The runner's combined standard output and standard error
  */
 export async function executeRunner(command: readonly string[]): Promise<string> {
-	const runner = spawn('npx', ['--yes', CONFORMANCE_PACKAGE, ...command], {
+	const runner = spawn(process.execPath, [resolveConformanceRunner(), ...command], {
 		stdio: ['ignore', 'pipe', 'pipe'],
-		shell: process.platform === 'win32',
 	})
 	const chunks: string[] = []
 	runner.stdout.setEncoding('utf8')
@@ -573,30 +620,3 @@ export async function executeConformance(url: string): Promise<ConformanceResult
 	}
 	return result
 }
-
-/**
- * Warm the runner and prove it is the pinned build, before any scenario runs.
- *
- * @remarks
- * This is the live-service readiness gate (§16 live services): it downloads the runner
- * into the `npx` cache so the measured run does not pay for a cold fetch, and it throws
- * loudly rather than skipping when the runner cannot be reached or is the wrong build.
- *
- * @returns The version the runner reported
- * @throws When `npx` cannot produce the pinned runner, naming what to do about it
- */
-export async function warmConformance(): Promise<string> {
-	const output = await executeRunner(['--version'])
-	for (const line of output.split(/\r?\n/)) {
-		if (line.trim() === CONFORMANCE_RELEASE) return line.trim()
-	}
-	throw new Error(
-		`The conformance project needs ${CONFORMANCE_PACKAGE}, which npx could not produce. ` +
-			`Confirm this machine reaches the npm registry, then rerun \`npm run test:conformance\`. ` +
-			`\`npx --yes ${CONFORMANCE_PACKAGE} --version\` wrote:\n${output}`,
-	)
-}
-
-beforeAll(async () => {
-	await warmConformance()
-})

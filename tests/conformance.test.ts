@@ -1,12 +1,17 @@
 // The real foreign client driving this package's server end to end (§16 live services).
-// Protocol tests prove the protocol; this proves the integration, so it needs the network
-// and stays out of `npm test`. Run it with `npm run test:conformance`.
+// Protocol tests prove the protocol; this proves the integration, so it spawns a foreign
+// process against a real socket and stays out of `npm test`. Run `npm run test:conformance`.
 
 import type { StartedServerInterface } from './setupServer.js'
 import type { ConformanceResult, ConformanceScenario } from './setupConformance.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { DEFAULT_MCP_PATH } from '@src/server'
-import { executeConformance, startConformance } from './setupConformance.js'
+import {
+	executeConformance,
+	executeRunner,
+	readConformanceRelease,
+	startConformance,
+} from './setupConformance.js'
 
 // The recorded baseline, scenario by scenario. A bare total hides a scenario that stopped
 // running, and this number has been wrong twice — both times because the FIXTURE, not the
@@ -39,14 +44,23 @@ describe('MCP server conformance', () => {
 	// listener must be released in exactly that case.
 	let host: StartedServerInterface<undefined> | undefined
 	let result: ConformanceResult
+	let version: string
 
 	beforeAll(async () => {
 		host = await startConformance()
+		version = (await executeRunner(['--version'])).trim()
 		result = await executeConformance(`${host.base}${DEFAULT_MCP_PATH}`)
 	})
 
 	afterAll(async () => {
 		await host?.stop()
+	})
+
+	// The baseline below is a baseline of ONE runner build, so an install that drifted off the
+	// manifest pin would rewrite these numbers without touching this package. The manifest is
+	// the single authority for the version and this is where the running process answers to it.
+	it('runs the runner build the manifest pins', () => {
+		expect(version).toBe(readConformanceRelease())
 	})
 
 	it('runs every recorded scenario with no failure', () => {

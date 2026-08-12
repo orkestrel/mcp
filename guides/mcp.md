@@ -2358,8 +2358,9 @@ const tools = await http.tools()
 
 #### Bootstrap
 
-The `serveWorker` analog (the bootstrap factories in `src/browser/factories.ts`) — boot an `MCPServer`
-inside a hostable scope and wire its message events to it.
+The `serveWorker` analog (the bootstrap binders in `src/browser/helpers.ts`) — boot an `MCPServer`
+inside a hostable scope and wire its message events to it. Each returns a disposer rather than an
+entity, so they sit beside `createScopeMessageListener` in `helpers.ts`, not in `factories.ts`.
 
 | API             | Kind     | Summary                                                                                                                        |
 | --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
@@ -3373,16 +3374,17 @@ is a different decision from an empty allowlist and deserves its own word.
 ## Declared conformance gaps
 
 A reproducible run is `npm run test:conformance`: it starts the real Streamable HTTP
-server from this package's source and runs
-`@modelcontextprotocol/conformance@0.2.0-alpha.10` against specification revision
+server from this package's source and runs `@modelcontextprotocol/conformance` — the
+release `package.json` pins as a development dependency — against specification revision
 `2026-07-28`. That is a genuine foreign MCP client driving this surface end to end, and
 the current recorded result is **23 passed / 0 failed**, the
 `dns-rebinding-protection` security regression guard (2 passed) included. There is no
 remaining failing scenario in that run.
 
-It is a live-service project of its own — `tests/conformance.test.ts` over the fixture in
-`tests/setupConformance.ts` — and it stays outside `npm test`, which is hermetic and
-offline while this run fetches the runner from the npm registry. Its baseline is recorded
+It is a project of its own — `tests/conformance.test.ts` over the fixture in
+`tests/setupConformance.ts` — and it stays outside `npm test` because it spawns a foreign
+process and drives it over a real socket, not because it reaches the network. The runner
+is a pinned development dependency resolved from `node_modules`, so the run is offline. Its baseline is recorded
 scenario by scenario rather than as one total, so a scenario that silently stops running
 fails the run instead of disappearing into a matching sum.
 
@@ -3659,8 +3661,8 @@ Four facts about the published artifact. Each is a decision carrying its number,
 omission, and a consumer meets all four at install time rather than in a build log.
 
 **IDE integration is not claimed.** A real foreign protocol client drives the Streamable
-HTTP surface end to end — `@modelcontextprotocol/conformance@0.2.0-alpha.10` against
-revision `2026-07-28`, recorded at 23 passed / 0 failed — and that is a claim about the
+HTTP surface end to end — `@modelcontextprotocol/conformance` against revision
+`2026-07-28`, recorded at 23 passed / 0 failed — and that is a claim about the
 wire. No IDE, editor, or agent host has driven this server. The rule is this repository's
 own: a claim about an external client stays unproven until one representative real client
 of that class drives it end to end, and no client of the IDE class has. **What it costs:**

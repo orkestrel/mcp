@@ -1,9 +1,11 @@
 import type { JSONRPCMessage, MCPServerInterface } from '@src/core'
 import type { SSEParserInterface } from '@orkestrel/sse'
-import type { ServeMCPOptions, ScopeTransportInterface } from './types.js'
-import { bindServer, parseJSONRPCMessage } from '@src/core'
+import type { ServeMCPOptions, ScopeTransportInterface, ServeMCPScopeInterface } from './types.js'
+import { bindServer, createMCPServer, parseJSONRPCMessage } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { createSSEParser } from '@orkestrel/sse'
+import { DEFAULT_MCP_SERVER_NAME, DEFAULT_MCP_SERVER_VERSION } from './constants.js'
+import { createScopeTransport } from './factories.js'
 import { MessagePortTransport } from './transports/MessagePortTransport.js'
 
 // The MCP browser-transport helpers (AGENTS §4.3 module-scope names — no entity
@@ -14,7 +16,15 @@ import { MessagePortTransport } from './transports/MessagePortTransport.js'
 // narrow at the boundary, never `as` (AGENTS §14): a malformed / non-message SSE
 // `data:` event is dropped, never thrown.
 //
-// `createScopeMessageListener` is the bootstrap factory's per-event dispatcher, extracted here
+// `serveMCPScope` / `serveMCP` are the worker bootstrap. They are reusable exported
+// infrastructure that BOOTS and BINDS — the browser sibling of `src/core`'s
+// `bindServer` / `bindClient` — and each returns an idempotent disposer rather than an
+// entity, so they belong here rather than in `factories.ts` (`.claude/rules/architecture.md`
+// kind purity: placement follows what a function is, and every exported `factories.ts`
+// function is named `create*`). The value factory they compose, `createScopeTransport`,
+// stays in `factories.ts`.
+//
+// `createScopeMessageListener` is the bootstrap's per-event dispatcher, extracted
 // (AGENTS §5 — no function is declared inside another function body) so
 // `serveMCPScope` merely CALLS it and stores the RETURNED closure (an ordinary
 // value assignment, not an inline function literal) for `addEventListener` /
@@ -144,4 +154,51 @@ export function createScopeMessageListener(
 		}
 		if (isString(event.data)) scopeTransport.deliver(event.data)
 	}
+}
+
+/**
+ * Boot an `MCPServer` inside a hostable worker scope and wire its message events to it.
+ *
+ * @remarks
+ * Port-bearing events are gated by `options.accept`, deduplicated by port, and receive
+ * their own `MessagePortTransport` binding. Portless string events use the scope's
+ * implicit channel. The returned disposer removes the listener, unbinds the implicit
+ * channel, and closes every accepted port binding.
+ *
+ * @param scope - The hostable worker scope to wire
+ * @param options - The tools, optional identity, and optional port-event gate
+ * @returns An idempotent disposer for every binding owned by this call
+ */
+export function serveMCPScope(scope: ServeMCPScopeInterface, options: ServeMCPOptions): () => void {
+	const server = createMCPServer({
+		tools: options.tools,
+		identity: {
+			name: options.name ?? DEFAULT_MCP_SERVER_NAME,
+			version: options.version ?? DEFAULT_MCP_SERVER_VERSION,
+		},
+	})
+	const scopeTransport = createScopeTransport(scope)
+	const unbindScope = bindServer(server, scopeTransport)
+	const teardowns = new Set<() => void>()
+	const onMessage = createScopeMessageListener(server, scopeTransport, teardowns, options)
+	scope.addEventListener('message', onMessage)
+	let disposed = false
+	return () => {
+		if (disposed) return
+		disposed = true
+		scope.removeEventListener('message', onMessage)
+		unbindScope()
+		for (const teardown of teardowns) teardown()
+		teardowns.clear()
+	}
+}
+
+/**
+ * Boot an `MCPServer` inside the current hostable worker scope.
+ *
+ * @param options - The tools, optional identity, and optional port-event gate
+ * @returns The disposer returned by {@link serveMCPScope}
+ */
+export function serveMCP(options: ServeMCPOptions): () => void {
+	return serveMCPScope(globalThis, options)
 }
