@@ -21,7 +21,7 @@
 > [Project a host-owned resource, prompt, and completion registry](#project-a-host-owned-resource-prompt-and-completion-registry).
 >
 > **The dispatch core is transport-agnostic and provider-agnostic.** `MCPServer`
-> and `MCPClient` live in [`src/core`](../../src/core) and import only siblings —
+> and `MCPClient` live in [`src/core`](../src/core) and import only siblings —
 > JSON-RPC types, `@orkestrel/tool`'s tool registry, `@orkestrel/emitter`'s
 > observable surface, `@orkestrel/contract`'s guards. No HTTP, no WebSocket, no
 > stdio, and no `as`: every value off the wire is narrowed by a total guard. The
@@ -37,8 +37,8 @@
 > like a local throw. A remote JSON-RPC error rejects with `MCPError`, preserving
 > its numeric `code` and optional `error.data` as `context`.
 >
-> **The wire lives ONE layer out.** [`src/server`](../../src/server) carries the
-> three Node transports and [`src/browser`](../../src/browser) the browser face.
+> **The wire lives ONE layer out.** [`src/server`](../src/server) carries the
+> three Node transports and [`src/browser`](../src/browser) the browser face.
 > Each is a matched ingress/egress pair speaking the same `MCPServerInterface` /
 > `MCPClientTransportInterface`; only the framing differs:
 >
@@ -1588,13 +1588,13 @@ either one changes what `MCPClient` can talk to, which is a different decision f
 paths are tested, and no unit is scheduled against them.
 
 That eight-module list is a membership rule rather than a reassurance, so it is executed instead
-of asserted: [the repository law suite](../../tests/policy.test.ts) computes the legacy-owning
+of asserted: [the repository law suite](../tests/policy.test.ts) computes the legacy-owning
 module set from the tree and requires it to EQUAL that list **in both directions**, so a new
 participant and a stale entry fail the same way. The same suite checks the `MCPServer` clause as
 three separate facts. What neither check can reach is recorded beside them, in the suite and in
 `tests/setupPolicy.ts`: legacy participation that never spells the entity name or the method
 name — a handler table, a computed concatenation, a branch on a version VALUE — is invisible to
-a structural rule, and [the dispatch tests](../../tests/src/core/MCPLegacy.test.ts) are the guard
+a structural rule, and [the dispatch tests](../tests/src/core/MCPLegacy.test.ts) are the guard
 for that class.
 
 **Three things a legacy client sees differently than it did before this collapse**, because
@@ -3291,20 +3291,20 @@ closed — while ordinary upstream completion closes the response without invent
 
 ## Tests
 
-- [Exact JSON and Tool-result ownership](../../tests/src/core/cloners.test.ts)
-- [Request-scoped progress backpressure](../../tests/src/core/MCPProgressReporter.test.ts)
-- [Held-open stream cancellation](../../tests/src/core/MCPStreamController.test.ts)
-- [Serialized stream translation](../../tests/src/core/MCPTextStreamController.test.ts)
-- [Core dispatch integration](../../tests/src/core/MCPServer.test.ts)
-- [Legacy translation onto the modern engine](../../tests/src/core/MCPLegacy.test.ts)
-- [Resource and prompt port projection, pagination, and completion](../../tests/src/core/MCPServer.test.ts)
-- [Resource, prompt, and error guards](../../tests/src/core/validators.test.ts)
-- [Client-side durable tasks and the absent poll loop](../../tests/src/core/MCPTaskClient.test.ts)
-- [HTTP response lifecycle composition](../../tests/src/server/transports/HTTPDisconnect.test.ts)
-- [HTTP handler integration](../../tests/src/server/handlers.test.ts)
-- [Session middleware integration](../../tests/src/server/middlewares.test.ts)
-- [Guide/source/public-barrel parity](../../tests/guides.test.ts)
-- [Repository law, including the legacy-removability boundary](../../tests/policy.test.ts)
+- [Exact JSON and Tool-result ownership](../tests/src/core/cloners.test.ts)
+- [Request-scoped progress backpressure](../tests/src/core/MCPProgressReporter.test.ts)
+- [Held-open stream cancellation](../tests/src/core/MCPStreamController.test.ts)
+- [Serialized stream translation](../tests/src/core/MCPTextStreamController.test.ts)
+- [Core dispatch integration](../tests/src/core/MCPServer.test.ts)
+- [Legacy translation onto the modern engine](../tests/src/core/MCPLegacy.test.ts)
+- [Resource and prompt port projection, pagination, and completion](../tests/src/core/MCPServer.test.ts)
+- [Resource, prompt, and error guards](../tests/src/core/validators.test.ts)
+- [Client-side durable tasks and the absent poll loop](../tests/src/core/MCPTaskClient.test.ts)
+- [HTTP response lifecycle composition](../tests/src/server/transports/HTTPDisconnect.test.ts)
+- [HTTP handler integration](../tests/src/server/handlers.test.ts)
+- [Session middleware integration](../tests/src/server/middlewares.test.ts)
+- [Guide/source/public-barrel parity](../tests/guides.test.ts)
+- [Repository law, including the legacy-removability boundary](../tests/policy.test.ts)
 
 ## Declared non-goals
 
@@ -3742,7 +3742,7 @@ transport` tables) is a real export of the mcp layer (`src/core` or
 4. **The four legacy methods, and they live in `MCPLegacy`.** The decorator owns the
    whole fixed set; `MCPServer` holds no era branch, imports no legacy module, and
    spells no legacy method or header name, all three checked structurally by
-   [the repository law suite](../../tests/policy.test.ts). `ping`, `tools/list`, and
+   [the repository law suite](../tests/policy.test.ts). `ping`, `tools/list`, and
    `tools/call` are TRANSLATED onto the modern engine — they acquire modern request
    metadata, run through the same dispatcher, and are projected back unstamped — so
    they inherit the modern engine's execution port, cancellation, bounds, and
