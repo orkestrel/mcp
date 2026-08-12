@@ -7,7 +7,7 @@
 > behind it. `Tool` binds the advertised definition to its handler; `ToolManager` keeps tools by
 > name in insertion order, advertises their definitions, and executes calls with per-call error
 > isolation; `ToolCall` and `ToolResult` are the correlated pair that travels between a caller
-> and the registry. Source: [`src/core`](../../src/core). Published through `@orkestrel/tool`.
+> and the registry. Source: [`src/core`](../src/core). Published through `@orkestrel/tool`.
 >
 > **Anyone can call a tool.** Nothing here is model-specific — `tools.execute(call)` is an
 > ordinary async call returning an ordinary result, and plain application code may drive it
@@ -32,7 +32,7 @@ a result and never a throw. Everything else in this module is the plain data tho
 
 ### Contracts
 
-The data shapes, from [`types.ts`](../../src/core/types.ts). Every property is readonly, and an
+The data shapes, from [`types.ts`](../src/core/types.ts). Every property is readonly, and an
 absent optional field is simply absent.
 
 | Name                   | Kind      | Shape / Purpose                                                                                                                     |
@@ -46,9 +46,9 @@ absent optional field is simply absent.
 | `ToolManagerInterface` | interface | The registry contract; its readonly `count` is the number of registered tools. See [`## Methods`](#methods).                        |
 | `ToolResult`           | type      | `ToolSuccess \| ToolFailure` — the discriminated correlated outcome; narrow on `success` to read `value` or `error`.                |
 
-### Helpers
+### Validators
 
-The call-envelope guard, from [`helpers.ts`](../../src/core/helpers.ts).
+The call-envelope guard, from [`validators.ts`](../src/core/validators.ts).
 
 | Name         | Kind     | Signature                               | Behavior                                                                                                                                                              |
 | ------------ | -------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -56,7 +56,7 @@ The call-envelope guard, from [`helpers.ts`](../../src/core/helpers.ts).
 
 ### Factories
 
-From [`factories.ts`](../../src/core/factories.ts) — the constructor-free way to reach both
+From [`factories.ts`](../src/core/factories.ts) — the constructor-free way to reach both
 classes.
 
 | Name                | Kind     | Signature                                 | Behavior                                                                  |
@@ -66,7 +66,7 @@ classes.
 
 ### `Tool`
 
-The implementing class of `ToolInterface`, from [`Tool.ts`](../../src/core/tools/Tool.ts). It
+The implementing class of `ToolInterface`, from [`Tool.ts`](../src/core/tools/Tool.ts). It
 copies the fields it was given — omitting each optional one that was not supplied — and keeps
 the handler in a private field, so a tool's advertised shape cannot drift from what it executes.
 The parameter schema, argument record, and present caller context are forwarded by reference,
@@ -77,7 +77,7 @@ call surface.
 ### `ToolManager`
 
 The implementing class of `ToolManagerInterface`, from
-[`ToolManager.ts`](../../src/core/tools/ToolManager.ts). One name-keyed map is its whole state:
+[`ToolManager.ts`](../src/core/tools/ToolManager.ts). One name-keyed map is its whole state:
 tools stay in insertion order, `tools()` and `definitions()` return fresh readonly arrays rather
 than a view of that map, and every projection is computed on demand so a mutation can never
 leave a stale copy behind. It is the only place a call can fail into a result instead of an
@@ -253,13 +253,13 @@ registers here unchanged.
 
 ## Tests
 
-- [`Tool.test.ts`](../../tests/src/core/tools/Tool.test.ts) — definition binding, optional-field omission, argument identity, return values, and the deliberate absence of handler isolation.
-- [`ToolManager.test.ts`](../../tests/src/core/tools/ToolManager.test.ts) — insertion order, overwrite and removal lifecycle, definition projection, and isolated single and batch execution.
-- [`factories.test.ts`](../../tests/src/core/factories.test.ts) — factory construction and working instances.
-- [`helpers.test.ts`](../../tests/src/core/helpers.test.ts) — tool-call envelope boundaries: incomplete calls, wrong field types, and non-record arguments.
+- [`Tool.test.ts`](../tests/src/core/tools/Tool.test.ts) — definition binding, optional-field omission, argument identity, return values, and the deliberate absence of handler isolation.
+- [`ToolManager.test.ts`](../tests/src/core/tools/ToolManager.test.ts) — insertion order, overwrite and removal lifecycle, definition projection, and isolated single and batch execution.
+- [`factories.test.ts`](../tests/src/core/factories.test.ts) — factory construction and working instances.
+- [`validators.test.ts`](../tests/src/core/validators.test.ts) — tool-call envelope boundaries: incomplete calls, wrong field types, and non-record arguments.
 
 ## See also
 
-- [`README.md`](../README.md) — the guides index.
+- [`README.md`](README.md) — the guides index.
 - [`contract.md`](contract.md) — the dependency mirror for `@orkestrel/contract`, whose total guards back `isToolCall` and the registry's overload narrowing.
-- [`AGENTS.md`](../../AGENTS.md) — the repository's coding and documentation contract.
+- [`AGENTS.md`](../AGENTS.md) — the repository's coding and documentation contract.

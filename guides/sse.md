@@ -15,7 +15,7 @@
 > trailing unterminated event at end-of-stream. A pure functional primitive —
 > no Emitter, no server / HTTP / agent coupling; it never throws on malformed
 > input, only `SSEError('OVERFLOW')` when a configured `limit` is exceeded.
-> Source: [`src/core`](../../src/core). Surfaced through the `@src/core`
+> Source: [`src/core`](../src/core). Surfaced through the `@src/core`
 > barrel.
 
 ## Surface
