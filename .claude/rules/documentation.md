@@ -2,7 +2,7 @@
 paths:
   - '*.md'
   - 'guides/**/*.md'
-  - 'tests/guides/**/*.ts'
+  - 'tests/guides.test.ts'
   - 'src/**/types.ts'
   - 'src/**/index.ts'
   - 'app/**/types.ts'
@@ -32,6 +32,8 @@ Documentation is an enforced contract, not explanatory decoration. The Writing r
 - Every public export is documented.
 - TypeScript, SCSS, Markdown, tests, and showcase remain aligned.
 - A parity failure identifies drift; never suppress or weaken the test.
+- Falsify a prose claim the way you falsify a code claim. The parity test proves a name exists, never that a sentence about behavior is true, so run the example and read what it returns. A `// false` beside a call that returns `true` is a defect of the same kind as a wrong return value, and it reaches every consumer who installs the package.
+- Re-read the prose last, against what actually shipped. Where a change chose to document a limit rather than close it, the sentence was often drafted for the option that lost, or written more confidently than the code earns. Code rulings survive review because a test can break them; prose rulings survive because nothing tries.
 
 For behavioral interfaces/classes:
 

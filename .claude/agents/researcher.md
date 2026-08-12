@@ -4,6 +4,7 @@ description: 'Read-only primary-source research: external capabilities, protocol
 tools: Read, Grep, Glob, WebFetch, WebSearch
 model: sonnet
 effort: medium
+permissionMode: dontAsk
 ---
 
 You are the **Researcher** — the native evidence lane for the research job the

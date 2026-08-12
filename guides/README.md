@@ -4,14 +4,14 @@ A dual-axis index into this repository's guides — by concept, and by directory
 
 ## By concept
 
-| Concept | Spec                       | Source                                                                                    | Tests                                                                                                                         |
-| ------- | -------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Concept | Spec               | Source                                                                                    | Tests                                                                                                                         |
+| ------- | ------------------ | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | MCP     | [`mcp.md`](mcp.md) | [`src/core`](../src/core), [`src/server`](../src/server), [`src/browser`](../src/browser) | [`tests/src/core`](../tests/src/core), [`tests/src/server`](../tests/src/server), [`tests/src/browser`](../tests/src/browser) |
 
 ## By directory
 
-| Directory     | Guide                      |
-| ------------- | -------------------------- |
+| Directory     | Guide              |
+| ------------- | ------------------ |
 | `src/core`    | [`mcp.md`](mcp.md) |
 | `src/server`  | [`mcp.md`](mcp.md) |
 | `src/browser` | [`mcp.md`](mcp.md) |

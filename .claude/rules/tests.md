@@ -22,6 +22,10 @@ paths:
 - Cover happy paths, error paths, empty input, boundary values, `NaN`, positive/negative zero, cycles, and Map/Set order where relevant.
 - Test observable behavior, not implementation details.
 - Assert the membership a discovered or globbed set should have, not a total that a partly empty population satisfies. A glob spanning two locations passes a size check while one of them matches nothing.
+- Never assert an implementation against itself. Compare the answer to a declaration, a fixture, or a second mechanism that could disagree with it. Re-deriving the answer the same way the source derives it produces a test that passes for every value the source ever returns, and it reads exactly like a real one.
+- Probe a host-varying property at runtime, on the host the test is running on, and assert against what the probe returned. Filesystem case folding, path separators, permission bits, and rename semantics differ per host, so a fixture built on one host describes that host and silently measures something else on the next.
+- Assert a runtime-chosen result as the property it must have, not as the number one run produced. Compression, timing, and buffer sizing are the runtime's choice, so pin the relationship the test depends on — that the encoded form is larger, that the second call is faster — and let the assertion fail when the input drifts out of the range where that relationship holds.
+- Give a conditional skip the mechanism that makes it inapplicable, cited, not the platform name alone. A test skipped on a platform is a test nobody re-examines; a test skipped because a named API rejects a named case is one anybody can re-check.
 - A regression test records the exact command and its failing count before the fix, and the same command's passing count after.
 - Use `it.todo()` only for explicitly out-of-scope roadmap work, never to complete the current request. Every `.skip` or conditional skip has a narrow verifiable applicability reason.
 - Do not create test files solely for `constants.ts`, barrels, error definitions, or `types.ts`.
@@ -91,6 +95,7 @@ A test that spawns a process, packs, installs, or drives a real build is a proof
 - Give it its own Vitest project with its own setup and timeout.
 - Keep it out of the default run and require it in `prepublishOnly`.
 - Slow and hermetic is reason enough to isolate a proof; it need not touch an external service.
+- Where such a proof stays in a shared project, size its budget from a full contended run rather than from an isolated one. A budget that clears the isolated cost by a thin margin turns contention into a red gate reporting a timeout, which carries no diagnostic about the code and costs a full investigation to dismiss.
 
 ## Shared test infrastructure
 

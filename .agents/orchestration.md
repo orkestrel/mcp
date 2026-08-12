@@ -1,6 +1,7 @@
 # Orchestration
 
-How agents are dispatched, supervised, and accepted. Every harness follows this file.
+How agents are dispatched, how long-running work is supervised, and how both are accepted. Every
+harness follows this file.
 
 ## Authority
 
@@ -219,10 +220,25 @@ clobbered edits, formatter and build races, cache phantoms, and validation cross
 
 ## Execution loop
 
-At session start, before planning, probe bench liveness with the two cheap commands
-(`codex --version`; `agent --version`, falling back to `agent.cmd --version`) and plan routing
-against the result. Probes are read-only. Record a dark bench with its fallback and the lane
-substitution it forces; never absorb it silently.
+At session start, before planning, probe bench liveness and plan routing against the result. Resolve
+each CLI first (`codex --version`; `agent --version`, falling back to `agent.cmd --version`), then
+run the bench's authentication-state check where it exposes one. Neither answer is liveness. A
+version string proves the binary is installed, and an authentication-state check reads stored
+credentials, so both pass while the account is out of quota, while the routed model is unavailable to
+it, while the server has already revoked the credential the check just read, and inside a sandbox
+with the network denied. Record a bench live only on a bounded round-tripped model call that came
+back, and record what came back beside the routing decision. Probes are read-only, and the role file
+owns each bench's exact probe.
+
+The two local steps still run, because they route the recovery rather than decide the verdict: an
+unresolved CLI is an install problem, a failed authentication-state check starts the login ladder
+below, and a bench that passes both and still cannot round-trip is dark for a reason no local check
+can see. Record every dark bench with its fallback and the lane substitution it forces, and never
+absorb one silently. A readiness script reports readiness and performs no model call, so the round
+trip belongs to the Orchestrator's own probe or to the bridge carrying the unit, never to the hook.
+Liveness also expires: a dispatch that fails on quota, model access, or the network is a fresh
+liveness result rather than a unit-level fault, so record the bench dark from there and re-plan the
+lane instead of re-dispatching against a session-start answer that no longer holds.
 
 1. **Absorb.** Dispatch `grok` for terrain, prior art, and the reading the decision needs. In an
    Orkestrel repo dispatch `orkestrel` alongside it for live package state. Skip only when the
@@ -332,6 +348,24 @@ The harness bridge names the concrete mechanism for each of these.
 - Promote anything that must outlive the campaign into a durable artifact before the sweep — a
   commit message, a guide, a rule, a retrospective. What is only in a swept file did not survive.
 
+### Where campaign artifacts live
+
+- Put every campaign artifact in the **orchestrator's** repository under `.orkestrel/<package>/`,
+  named for the package the campaign is about.
+- Never put them in the package they are about. A published package's tree is its product.
+- Claim nothing outside `.orkestrel/` unless Orkestrel scaffold mandates it. Everything Orkestrel
+  owns in a consumer's tree lives beneath that folder, so a convention can be settled there without
+  colliding with a convention that is not Orkestrel's.
+- Keep the campaign narrative and every ruling in the durable artifact that owns it — the guide for
+  product truth, a rule or role file for process truth, the commit message for the decision itself.
+  Use `ROADMAP.md` only where the repository already keeps one.
+- Prefer a mechanism that recomputes a fact over a document that records it. A ledger of live state
+  is stale from the moment it is written, and the next campaign reads it as current. Where the fact
+  can be derived, derive it: the fleet's publish order lives in the catalog table `scaffold catalog`
+  regenerates, not in a written order anyone has to remember to update.
+- Prune the campaign folder in a commit at acceptance. The tree ends clean and the record stays
+  recoverable by hash. Git history is the archive; the working tree is the workspace.
+
 ### Required sections
 
 - **Role and engine.** The named role and its explicit engine.
@@ -364,13 +398,26 @@ The harness bridge names the concrete mechanism for each of these.
 
 ### Check the brief before you send it
 
-Run these five checks on every brief. Each is cheap, and skipping one costs a full dispatch cycle
+Run these seven checks on every brief. Each is cheap, and skipping one costs a full dispatch cycle
 that produces no work, because a unit given a brief that is internally consistent and factually
 wrong is right to stop.
 
-- Paste every factual claim from a command you ran this turn — paths, counts, registrations, file
-  existence. A claim about a search names the scope the search covered. A search bounded to one
-  directory proves something about that directory and nothing about the rest of the tree.
+- Name the executor that will actually read the brief, and write its transport for that reader. The
+  same unit goes either to a bridge driver that invokes a bench CLI or to the bench engine already
+  running inside that CLI, and the sections that are essential for the first are nonsense to the
+  second: a brief telling an engine to launch its own CLI fails on arrival. Describe the route the
+  reader takes, not the route the work travels.
+- Paste the command and its output for every factual claim — paths, counts, registrations, file
+  existence. A description of a result is not the result, and a name recalled beside a counted set
+  is a guess. A claim about a search names the scope the search covered: a search bounded to one
+  directory proves something about that directory and nothing about the rest of the tree, and a
+  filtered set proves something about the filter's membership rule and nothing about the population
+  it was drawn from.
+- Take every measurement under the conditions the unit will run in, or have the unit take it. A
+  number measured in your environment and asserted as a criterion is unreachable when the
+  executor's sandbox denies what yours permitted, and no edit to the owned files can close it.
+  Where the unit is better placed to measure than you are, make the measurement its first step and
+  fix the criterion to the property you want rather than to the number you saw.
 - Read the acceptance criteria against the off-limits list, line by line. Every criterion closes
   using owned files alone. A criterion that needs an off-limits file gets that file granted or gets
   struck.
@@ -388,6 +435,70 @@ wrong is right to stop.
 After reconciling findings into briefs, walk the retained finding list once. Every finding names
 the brief item that carries it. A finding with no carrier is a dropped finding.
 
+## Long-running commands
+
+A bench exec, a Workflow, an install, a build, and a publish chain are one class of thing: a
+command that outlives the turn that started it. Every law here binds all of them.
+
+### Launching
+
+- The Orchestrator launches every long command as a harness-tracked background command under a hard
+  time cap. Never detach one from inside a dispatched agent. The harness owns the lifecycle,
+  completion re-invokes the session, and the cap kills a wedged command loudly instead of trusting
+  the agent to report its own failure. A wedged bridge is silent, and silence must never read as
+  progress.
+- Write a multi-step chain to a script file and run the file. A chain composed inside one shell
+  argument cannot be read back, corrected, or re-run, and the record of what actually ran is the
+  argument text in a transcript rather than a file on disk.
+- Detach anything that must survive its launching shell with `setsid`. A backgrounded flow the
+  harness reaps mid-step leaves the work half done and the exit status missing, and the reap looks
+  identical to the step failing.
+- Size the cap from the observed high mark of comparable commands, plus an independently budgeted
+  gate allowance, plus explicit slack. Never size it from the estimate alone.
+- Run the first use of any CLI flag, subcommand, quoting form, or stdin combination in a throwaway
+  probe. Never inside a dispatched unit or a publish chain.
+- A launch is not a launch until its record grows past its header. Confirm the log advanced beyond
+  the head before recording that the command started, and treat an instantly-dead log as a failed
+  launch whose tail is the evidence.
+- Keep network-dependent work out of sandboxed bench execs. Bench sandboxes deny network, so
+  lockfile generation, real installs, and live fetches belong to the Orchestrator's own tracked
+  commands or a network-capable native agent. A bench exec hanging on `npm` until its cap fires is
+  the signature of this misroute, not of a slow bench.
+- A Workflow journals identically and dies identically, so give it the same watch — with one
+  correction. A workflow journal writes only at agent start and result, so its mtime goes quiet for
+  minutes during healthy work, and the liveness signal is the newest subagent transcript instead. A
+  watch that reports only new events cannot report a death, because silence and progress look the
+  same; the filter must fire on absence. Recover with `resumeFromRunId`, which returns every
+  completed agent from cache and re-runs only what never finished.
+
+### Reading liveness
+
+Read liveness from the artifact the work produces, never from its wrapper. A subagent's transcript
+file can report zero bytes while the agent is working normally, so an empty or stale wrapper proves
+nothing.
+
+- Judge a unit by what it has changed in the tree: modification times on the files it owns, the
+  counts its suite reports, the report it was told to write.
+- Check that before killing anything. A healthy unit killed on a false signal loses everything it
+  had not yet written down, and the loss is charged to the orchestrator, not the unit.
+- If a unit must be stopped, say plainly that it was stopped and why, then assess the tree it left
+  rather than assuming its partial bytes are either good or worthless.
+- Follow the deviation ladder for a stalled journal or a cap-killed exec, using the session id from
+  the journal head as the recovery handle.
+
+### Confirm dead before relaunching
+
+- Prove the previous run is gone before starting another. List the processes and read the list. A
+  second run started beside a live first one produces failures that read as the subject's — a
+  publish chain relaunched over a live one reports `EOTP` and `E403` that are its own two processes
+  colliding, and both readings point at the registry.
+- Kill by process id, never by pattern. `pkill -f` matches the relaunch that is already starting, so
+  the pattern that cleans up the old run kills the new one and the cleanup reads as a launch
+  failure.
+- Read a failure against what was running when it happened, not against what you believe was
+  running. The check costs one command and is the only thing that separates a real failure from
+  self-inflicted contention.
+
 ## Bench laws
 
 External engines widen capacity. They never inherit authority. Treat every bench output as a
@@ -396,9 +507,13 @@ proposal or hypothesis until it is verified against source and accepted by the O
 A bench is cross-provider reach only. Never send a model across a bridge when the running harness
 hosts it natively.
 
-Every bridge verifies its CLI is present before running, and stops with a deviation report naming
-the fallback when it is not. The role file owns the exact invocation, flags, paths, and recovery
-ladder; these four laws bind every bench regardless of transport.
+A bench exec is a long-running command, so every law under **Long-running commands** binds it too.
+This section adds what is true of a bench and nothing else.
+
+Every bridge verifies before running that its CLI resolves and its bench is authenticated, and stops
+with a deviation report naming the fallback when either fails. The role file owns the exact
+invocation, flags, paths, probe, and recovery ladder; these four laws bind every bench regardless of
+transport.
 
 1. **Transport by work class.** Use an MCP transport only for a short interactive exchange — one
    bounded question or a follow-up on a live thread, finishing in roughly two minutes. Use the
@@ -423,45 +538,6 @@ ladder; these four laws bind every bench regardless of transport.
    is dispatched and as it returns, because each encodes knowledge that costs real money to
    re-derive and none of it is reproducible from the diff.
 
-### Where campaign artifacts live
-
-- Put every campaign artifact in the **orchestrator's** repository under `.orkestrel/<package>/`,
-  named for the package the campaign is about.
-- Never put them in the package they are about. A published package's tree is its product.
-- Claim nothing outside `.orkestrel/` unless Orkestrel scaffold mandates it. Everything Orkestrel
-  owns in a consumer's tree lives beneath that folder, so a convention can be settled there without
-  colliding with a convention that is not Orkestrel's.
-- Keep the campaign narrative and every ruling in the durable artifact that owns it — the guide for
-  product truth, a rule or role file for process truth, the commit message for the decision itself.
-  Use `ROADMAP.md` only where the repository already keeps one.
-- Prune the campaign folder in a commit at acceptance. The tree ends clean and the record stays
-  recoverable by hash. Git history is the archive; the working tree is the workspace.
-
-### Launching a long exec
-
-- The Orchestrator launches every long bench exec as a harness-tracked background command under a
-  hard time cap. Never detach one from inside a bridge agent. The harness owns the lifecycle,
-  completion re-invokes the session, and the cap kills a wedged bench loudly instead of trusting
-  the bridge to report its own failure. A wedged bridge is silent, and silence must never read as
-  progress.
-- A Workflow journals identically and dies identically, so give it the same watch — with one
-  correction. A workflow journal writes only at agent start and result, so its mtime goes quiet for
-  minutes during healthy work, and the liveness signal is the newest subagent transcript instead. A
-  watch that reports only new events cannot report a death, because silence and progress look the
-  same; the filter must fire on absence. Recover with `resumeFromRunId`, which returns every
-  completed agent from cache and re-runs only what never finished.
-- Size the cap from the observed high mark of comparable units, plus an independently budgeted gate
-  allowance, plus explicit slack. Never size it from the estimate alone.
-- Run the first use of any CLI flag, subcommand, quoting form, or stdin combination in a throwaway
-  probe. Never inside a dispatched unit.
-- A launch is not a launch until the journal grows past its header. Confirm the event stream
-  advanced beyond the session-configured head before recording that the exec started, and treat an
-  instantly-dead journal as a failed launch whose tail is the evidence.
-- Keep network-dependent work out of sandboxed bench execs. Bench sandboxes deny network, so
-  lockfile generation, real installs, and live fetches belong to the Orchestrator's own tracked
-  commands or a network-capable native agent. A bench exec hanging on `npm` until its cap fires is
-  the signature of this misroute, not of a slow bench.
-
 ### Recovering a dark bench
 
 - A probe that finds a bench binary present but authentication unavailable starts recovery in the
@@ -474,20 +550,95 @@ ladder; these four laws bind every bench regardless of transport.
   cannot complete, record the bench dark, name the fallback in the plan, and say so.
 - The role file owns each bench's exact login command and probe.
 
-### Reading liveness
+## Publishing the fleet
 
-Read liveness from the artifact the work produces, never from its wrapper. A subagent's transcript
-file can report zero bytes while the agent is working normally, so an empty or stale wrapper proves
-nothing.
+Publishing is the user's decision and the user's credential. The Orchestrator prepares, surfaces
+the approval, and runs the publishes the user asked for. It never substitutes an API key, an access
+token, a copied auth file, or another login flow, and it never asks the user to paste a token into
+the conversation.
 
-- Judge a unit by what it has changed in the tree: modification times on the files it owns, the
-  counts its suite reports, the report it was told to write.
-- Check that before killing anything. A healthy unit killed on a false signal loses everything it
-  had not yet written down, and the loss is charged to the orchestrator, not the unit.
-- If a unit must be stopped, say plainly that it was stopped and why, then assess the tree it left
-  rather than assuming its partial bytes are either good or worthless.
-- Follow the deviation ladder for a stalled journal or a cap-killed exec, using the session id from
-  the journal head as the recovery handle.
+A publish chain is a long-running command, so every law under **Long-running commands** binds it:
+write the chain to a file, detach it with `setsid`, and confirm the previous one is dead before
+starting another.
+
+### What a bump obliges
+
+A runtime dependency and a development dependency have different blast radius, and confusing them
+either publishes packages nobody needed to publish or leaves a consumer pinned to an older release.
+
+- A **runtime** `dependencies` bump reaches every consumer of the published package. Every package
+  downstream of it re-pins, re-runs its gates, bumps, and republishes, in layer order.
+- A **development** `devDependencies` bump reaches nobody. Re-pin it, prove the gates still green,
+  and commit to `main`. Do not bump the version and do not publish.
+- A development bump that forces a change to `src` or `app` is no longer a development bump. The
+  published types or runtime moved, so that package bumps and publishes on its own account, and
+  its own dependents follow the runtime rule above.
+
+Every package is `0.0.x`, where a caret pins one exact release. A dependent therefore sees a new
+version only after it re-pins and republishes, so the fleet publishes in topological layer order
+derived from runtime `dependencies` alone. Layers exist for a reason a flat pass cannot fix: two
+ranges that disagree install two copies of the same package, and the compiler reads them as two
+distinct types.
+
+Read the order from the catalog table in `.claude/agents/orkestrel.md`, which `scaffold catalog`
+regenerates from the registry. Its `Layer` column is the publish round. Regenerate it before
+sequencing a cascade rather than trusting the copy in the tree, and never write a second order down
+somewhere else.
+
+The tooling packages sit outside that order because nothing depends on them at runtime. `scaffold`
+is a development dependency of every package, including packages it depends on itself, so a runtime
+layering would report a cycle that does not exist. Each package builds against the already-published
+`scaffold`, never against an unpublished one, and a `scaffold` release therefore publishes on its own
+and propagates as files rather than as a cascade.
+
+### Preparing
+
+1. **Bump from what the registry serves, not from the local manifest.** A repository's `version`
+   can sit a release behind what was published from another checkout, and bumping that produces a
+   version the registry already holds, which fails on upload after the whole gate chain has run.
+   Read the registry first.
+2. **Prepare a whole layer before authenticating.** Bump each version, re-pin every `@orkestrel`
+   range to what the registry serves now, install, and run the package's own `prepublishOnly` to
+   green. Move any self-pin in source with the manifest. Commit and push before the window opens.
+3. **Prepare the next layer only after this one is on the registry.** A dependent's new pin cannot
+   install until the version it names exists, so preparation and publication interleave and cannot
+   be batched ahead.
+
+The window is for uploads. Every gate, build, install, and commit happens outside it, which is what
+makes `--ignore-scripts` the right flag at publish time: the artifact was already proved, and the
+flag is what stops the gate chain running a second time inside the five minutes.
+
+### Reaching the approval
+
+- **Log in first** when the session is new or a day has passed. `npm login` and `npm publish` reach
+  the same browser approval, and a publish that has to run the login flow spends the window on it.
+- `npm login` backgrounded with stdin at EOF falls through to a legacy `Username:` prompt and exits
+  **zero** without authenticating. Confirm with `npm whoami` rather than an exit code.
+- npm offers its browser approval only when it sees a TTY. Without one it fails `EOTP` and there is
+  no way to answer it. Run the login, and the first publish of a layer, under
+  `script -qfc '<command>' <log>` with stdin read from a fifo a long `sleep` holds open.
+- npm prints `Press ENTER to open in the browser` and does not begin polling until that is
+  acknowledged. Send a newline into the fifo. The browser it tries to open does not exist in a
+  headless container, which is harmless.
+- Surface the approval URL to the user the moment it appears in the log, and say that approving it
+  opens a five-minute window covering the rest of the layer.
+
+### Spending the window
+
+- The window opens when the user approves, not when the first publish starts. Chain every remaining
+  publish inside the same process as the gate package, so no human turn sits inside it.
+- Publish serially. Concurrent publishes collide on the auth handshake and fail each other.
+- `EOTP` inside the window is intermittent contention rather than the window closing. Retry each
+  package about three times before recording it failed, and retry a failed set once the layer ends;
+  packages have landed on the third attempt and on a later pass with no new approval.
+- Expect a large layer to outlast one window. Size batches to what uploads in five minutes and tell
+  the user how many approvals to expect, rather than discovering it mid-run.
+- Read the result from the registry, not from an exit code: a piped `npm publish` reports the exit
+  status of the pipeline, and a CDN read straight after a publish can still serve the previous
+  version.
+- Re-read the registry before telling the user a package failed. A chain still running, a retry that
+  landed, and CDN lag all produce a failure reading that the registry contradicts, and a false
+  failure report costs a needless approval and a needless republish.
 
 ## Acceptance laws
 
