@@ -1,6 +1,7 @@
 // The real foreign client driving this package's server end to end (§16 live services).
 // Protocol tests prove the protocol; this proves the integration, so it spawns a foreign
-// process against a real socket and stays out of `npm test`. Run `npm run test:conformance`.
+// process against a real socket. The runner is resolved from the pinned development
+// dependency and the socket is local, so the run is hermetic and `npm test` gates it.
 
 import type { StartedServerInterface } from './setupServer.js'
 import type { ConformanceResult, ConformanceScenario } from './setupConformance.js'

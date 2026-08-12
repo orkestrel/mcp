@@ -81,9 +81,8 @@ package's source and runs
 `@modelcontextprotocol/conformance@0.2.0-alpha.10` against MCP revision
 `2026-07-28`. The recorded result is **23 passed / 0 failed**. That is a
 genuine foreign MCP client driving this server end to end, and it is
-evidence about the wire. It fetches the runner from the npm registry, so it
-is a live-service project of its own and stays outside the hermetic
-`npm test`.
+evidence about the wire. It resolves the runner from `node_modules` and
+drives a loopback socket, so the run is offline and `npm test` gates it.
 
 **IDE integration is not claimed.** No IDE, editor, or agent host has driven
 this server. A claim about an external client stays unproven here until one

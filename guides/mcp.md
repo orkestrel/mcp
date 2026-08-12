@@ -3382,11 +3382,11 @@ the current recorded result is **23 passed / 0 failed**, the
 remaining failing scenario in that run.
 
 It is a project of its own — `tests/conformance.test.ts` over the fixture in
-`tests/setupConformance.ts` — and it stays outside `npm test` because it spawns a foreign
-process and drives it over a real socket, not because it reaches the network. The runner
-is a pinned development dependency resolved from `node_modules`, so the run is offline. Its baseline is recorded
-scenario by scenario rather than as one total, so a scenario that silently stops running
-fails the run instead of disappearing into a matching sum.
+`tests/setupConformance.ts` — and `npm test` gates it. It spawns a foreign process and
+drives it over a real socket, but the runner is a pinned development dependency resolved
+from `node_modules` and the socket is loopback, so the run is offline and hermetic. Its
+baseline is recorded scenario by scenario rather than as one total, so a scenario that
+silently stops running fails the run instead of disappearing into a matching sum.
 
 **That number has been wrong twice, in the same way, and both times the fixture was the
 cause — so read the fixture before quoting the number.** It was first recorded as
