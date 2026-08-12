@@ -200,7 +200,7 @@ ws.destroy()
 
 ## Tests
 
-- [`tests/guides/src/parity.test.ts`](../../tests/guides/src/parity.test.ts) — the `## Surface` ↔ `src/server` bijection and the `## Methods` ↔ interface/class method parity.
+- [`tests/guides.test.ts`](../../tests/guides.test.ts) — the `## Surface` ↔ `src/server` bijection and the `## Methods` ↔ interface/class method parity.
 - [`tests/src/server/helpers.test.ts`](../../tests/src/server/helpers.test.ts) — the RFC 6455 codec as pure units against the spec's own byte vectors: the §1.3 handshake accept token, the unmasked + masked "Hello" frames (§5.7), the 7/16/64-bit length-form boundaries (125 / 126 / 65 536), the control opcodes, an incomplete buffer → `undefined` (split mid-header, mid-mask, mid-payload), a frame with trailing bytes (`consumed` recovers the remainder), and the encode↔parse inverse for masked and unmasked frames.
 - [`tests/src/server/NodeWebSocket.test.ts`](../../tests/src/server/NodeWebSocket.test.ts) — the wrapper driven end to end over an in-memory `node:stream` Duplex pair (two cross-wired `PassThrough`s — a real bidirectional socket, no mock): the 101 handshake (with subprotocol echo), a masked client text frame → `message`, continuation-fragment reassembly, two frames in one chunk, `send` → an unmasked readable frame, ping → auto-pong, the close handshake + `close` event, `destroy` idempotency, and §13 observer-error isolation.
 - [`tests/integration`](../../tests/integration) — the public factory driven by native Chromium `WebSocket`s against a real Node HTTP upgrade server: handshake, multibyte and 2 MB payloads, binary rejection, client/server closes, ordered bursts, concurrency, churn, and reconnect.

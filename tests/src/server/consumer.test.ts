@@ -5,6 +5,11 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
+// This proof packs the package, links a real consumer against it and runs the
+// TypeScript compiler twice, so its cost is seconds rather than milliseconds and
+// the default per-test budget cannot hold it. The timeout states that cost
+// instead of inflating a unit test's; the durable placement is its own project
+// at the canonical tests/integration.test.ts, kept out of the default run.
 describe('published package consumer', () => {
 	it('resolves runtime and declaration faces through the package exports map', async () => {
 		const root = fileURLToPath(new URL('../../../', import.meta.url))
@@ -236,5 +241,5 @@ void invalid
 		} finally {
 			await rm(target, { recursive: true, force: true })
 		}
-	})
+	}, 120_000)
 })

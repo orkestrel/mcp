@@ -3303,7 +3303,7 @@ closed — while ordinary upstream completion closes the response without invent
 - [HTTP response lifecycle composition](../../tests/src/server/transports/HTTPDisconnect.test.ts)
 - [HTTP handler integration](../../tests/src/server/handlers.test.ts)
 - [Session middleware integration](../../tests/src/server/middlewares.test.ts)
-- [Guide/source/public-barrel parity](../../tests/guides/src/parity.test.ts)
+- [Guide/source/public-barrel parity](../../tests/guides.test.ts)
 - [Repository law, including the legacy-removability boundary](../../tests/policy.test.ts)
 
 ## Declared non-goals

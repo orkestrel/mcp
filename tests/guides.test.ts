@@ -16,9 +16,9 @@ import {
 	resolveLink,
 	symbolKey,
 } from '@orkestrel/guide'
-import { findMissingNamedImports, readInventory, requireText } from '../../setupServer.js'
+import { findMissingNamedImports, readInventory, requireText } from './setupServer.js'
 
-const ROOT = new URL('../../../', import.meta.url)
+const ROOT = new URL('../', import.meta.url)
 const files = readInventory(ROOT, ['src', 'guides', 'tests'], ['.ts', '.md'])
 // The three published faces in one table. `SOURCES`, the refusal rows, the live population rows,
 // and the package.json export-key check all read it, so a face's scope and its export key have
@@ -346,7 +346,7 @@ describe('public package faces', () => {
 
 	it('derives the exact package export keys from the same face map', () => {
 		const parsed: unknown = JSON.parse(
-			readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'),
+			readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 		)
 		if (!isRecord(parsed) || !('exports' in parsed) || !isRecord(parsed['exports'])) {
 			throw new Error('Package manifest must declare object exports')
