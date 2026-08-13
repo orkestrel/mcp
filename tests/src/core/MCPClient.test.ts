@@ -30,7 +30,8 @@ import { createHTTPClientTransport } from '@src/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
 import { createServer } from 'node:http'
-import { createSignalRecorder, waitForDelay } from '../../setup.js'
+import { waitForDelay } from '@orkestrel/test'
+import { createSignalRecorder } from '../../setup.js'
 
 // MCPClient ↔ a REAL MCPServer over an in-process LOOPBACK transport (AGENTS §16 — a
 // real server + real ToolManager, no mocks of the unit under test). The loopback's

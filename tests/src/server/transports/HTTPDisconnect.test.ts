@@ -2,7 +2,8 @@ import type { StreamInterface } from '@orkestrel/server'
 import { HTTPDisconnect } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { openStream } from '@orkestrel/server'
-import { waitForDelay, waitForSettlement } from '../../../setup.js'
+import { waitForDelay } from '@orkestrel/test'
+import { waitForSettlement } from '../../../setup.js'
 import { createStreamStub } from '../../../setupServer.js'
 
 describe('HTTPDisconnect', () => {

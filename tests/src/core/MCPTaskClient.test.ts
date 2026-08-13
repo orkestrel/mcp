@@ -8,13 +8,13 @@ import {
 	JSONRPC_METHOD_NOT_FOUND,
 	MCPTaskClient,
 } from '@src/core'
+import { waitForDelay } from '@orkestrel/test'
 import {
 	createCalculatorServer,
 	createRecordingTransport,
 	createTaskServer,
 	TASK_CAPABILITIES,
 	TestTaskManager,
-	waitForDelay,
 } from '../../setup.js'
 
 // The CLIENT half of the draft Tasks extension, over a real MCPServer with the extension

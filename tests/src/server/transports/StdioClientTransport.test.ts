@@ -1,6 +1,7 @@
 import type { JSONRPCMessage } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { createJSONRPCRequest, waitForDelay } from '../../../setup.js'
+import { createJSONRPCRequest } from '../../../setup.js'
+import { waitForDelay } from '@orkestrel/test'
 import { StdioClientTransport } from '@src/server'
 
 // src/server/transports/StdioClientTransport.ts — the stdio CLIENT transport, driven END TO

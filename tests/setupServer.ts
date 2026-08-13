@@ -8,136 +8,19 @@ import type { SourceInterface } from '@orkestrel/guide'
 import type { MiddlewareHandler, ServerInterface, StreamInterface } from '@orkestrel/server'
 import type { WebSocketFrame } from '@orkestrel/websocket'
 import type { ManualClockInterface } from './setup.js'
-import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { createServer as createHTTPServer, request as httpRequest } from 'node:http'
 import { connect } from 'node:net'
-import { fileURLToPath } from 'node:url'
-import {
-	isAbsolute,
-	relative as relativePath,
-	resolve as resolveFilesystemPath,
-	sep,
-} from 'node:path'
 import { Duplex, PassThrough } from 'node:stream'
 import { afterEach } from 'vitest'
 import { isRecord } from '@orkestrel/contract'
 import { extractSourceLines, fenceImports, findMissing } from '@orkestrel/guide'
-import { waitForDelay } from './setup.js'
+import { waitForDelay } from '@orkestrel/test'
 import {
 	computeWebSocketAccept,
 	encodeWebSocketFrame,
 	parseWebSocketFrame,
 	WEBSOCKET_OPCODE_TEXT,
 } from '@orkestrel/websocket'
-
-/**
- * Read a deterministic text inventory rooted beneath one real workspace directory.
- *
- * @param root - The workspace root URL
- * @param directories - Root-relative directories to traverse without following symbolic links
- * @param extensions - Optional filename suffixes to retain
- * @returns A root-relative path-to-text inventory ordered by path
- *
- * @example
- * ```ts
- * readInventory(new URL('../', import.meta.url), ['src'], ['.ts'])
- * ```
- */
-export function readInventory(
-	root: URL,
-	directories: readonly string[],
-	extensions: readonly string[] = [],
-): Readonly<Record<string, string>> {
-	if (directories.length === 0) return {}
-	const supplied = fileURLToPath(root)
-	const rootStatus = lstatSync(supplied)
-	if (rootStatus.isSymbolicLink()) throw new Error('Root is a symbolic link')
-	if (!rootStatus.isDirectory()) throw new Error('Root is not a directory')
-	const base = realpathSync.native(supplied)
-	const pending: string[] = []
-	const queued = new Set<string>()
-	const contents = new Map<string, string>()
-
-	for (const directory of directories) {
-		const candidate = directory === '.' ? base : resolveFilesystemPath(base, directory)
-		const requested = relativePath(base, candidate)
-		if (requested === '..' || requested.startsWith(`..${sep}`) || isAbsolute(requested)) {
-			throw new Error(`Directory outside root: ${directory}`)
-		}
-		const status = lstatSync(candidate)
-		if (status.isSymbolicLink()) throw new Error(`Directory is a symbolic link: ${directory}`)
-		if (!status.isDirectory()) throw new Error(`Not a directory: ${directory}`)
-		const physical = realpathSync.native(candidate)
-		const resolved = relativePath(base, physical)
-		if (resolved === '..' || resolved.startsWith(`..${sep}`) || isAbsolute(resolved)) {
-			throw new Error(`Directory outside root: ${directory}`)
-		}
-		if (queued.has(physical)) continue
-		queued.add(physical)
-		pending.push(physical)
-	}
-
-	while (pending.length > 0) {
-		const directory = pending.pop()
-		if (directory === undefined) continue
-		for (const entry of readdirSync(directory, { withFileTypes: true })) {
-			const path = resolveFilesystemPath(directory, entry.name)
-			const status = lstatSync(path)
-			if (status.isSymbolicLink()) continue
-			if (status.isDirectory()) {
-				const physical = realpathSync.native(path)
-				const resolved = relativePath(base, physical)
-				if (
-					resolved === '..' ||
-					resolved.startsWith(`..${sep}`) ||
-					isAbsolute(resolved) ||
-					queued.has(physical)
-				) {
-					continue
-				}
-				queued.add(physical)
-				pending.push(physical)
-				continue
-			}
-			if (
-				!status.isFile() ||
-				(extensions.length > 0 && !extensions.some((value) => entry.name.endsWith(value)))
-			) {
-				continue
-			}
-			const key = relativePath(base, path).split(sep).join('/')
-			if (!contents.has(key)) contents.set(key, readFileSync(path, 'utf8'))
-		}
-	}
-
-	const files: Record<string, string> = {}
-	for (const key of Array.from(contents.keys()).sort()) {
-		const value = contents.get(key)
-		if (value !== undefined) files[key] = value
-	}
-	return files
-}
-
-/**
- * Require one root-relative text entry from an inventory.
- *
- * @param files - The workspace text inventory
- * @param relative - The required root-relative path
- * @returns The file text
- * @throws When the exact inventory key is absent
- *
- * @example
- * ```ts
- * requireText(files, 'guides/README.md')
- * ```
- */
-export function requireText(files: Readonly<Record<string, string>>, relative: string): string {
-	if (Object.hasOwn(files, relative)) {
-		const text = files[relative]
-		if (text !== undefined) return text
-	}
-	throw new Error(`Missing file: ${relative}`)
-}
 
 /**
  * Find the imports Guide surfaces from a projected fence that are absent from their exact public

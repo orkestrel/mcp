@@ -2,7 +2,8 @@ import type { JSONRPCMessage } from '@src/core'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { StdioServerTransport } from '@src/server'
-import { createJSONRPCRequest, waitForDelay } from '../../../setup.js'
+import { waitForDelay } from '@orkestrel/test'
+import { createJSONRPCRequest } from '../../../setup.js'
 
 // src/server/transports/StdioServerTransport.ts — the stdio SERVER bridge, driven END TO END
 // over a REAL pair of injectable `node:stream` PassThroughs standing in for

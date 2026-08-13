@@ -100,10 +100,11 @@
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.58.12",
 		"@modelcontextprotocol/conformance": "0.2.0-alpha.10",
-		"@orkestrel/guide": "^0.0.9",
+		"@orkestrel/guide": "^0.0.11",
 		"@orkestrel/router": "^0.0.9",
 		"@orkestrel/scaffold": "^0.0.30",
 		"@orkestrel/server": "^0.0.12",
+		"@orkestrel/test": "^0.0.1",
 		"@types/node": "^26.2.0",
 		"@vitest/browser-playwright": "^4.1.10",
 		"oxfmt": "^0.63.0",

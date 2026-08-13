@@ -8,11 +8,8 @@ import { buildJSONRPCResult, MCPStreamController } from '@src/core'
 import { extractSourceLines } from '@orkestrel/guide'
 import { readFileSync } from 'node:fs'
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import {
-	inspectOwnerOfLastResort,
-	OWNER_OF_LAST_RESORT_SPELLINGS,
-	waitForDelay,
-} from '../../setup.js'
+import { waitForDelay } from '@orkestrel/test'
+import { inspectOwnerOfLastResort, OWNER_OF_LAST_RESORT_SPELLINGS } from '../../setup.js'
 
 // MCPStreamController is the one cancellation engine every modern stream leaves dispatch
 // through. What it exists to fix is a property of NATIVE async generators, not of this

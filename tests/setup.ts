@@ -4,6 +4,7 @@
 
 import type { EmitterInterface, EventMap } from '@orkestrel/emitter'
 import type { SSEEvent } from '@orkestrel/sse'
+import type { RecorderInterface } from '@orkestrel/test'
 import type {
 	MCPClientTransportEventMap,
 	MCPClientTransportInterface,
@@ -43,46 +44,7 @@ import {
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
 import { createSSEParser } from '@orkestrel/sse'
-
-// ── Call recorder (a real callback, not a mock) ──────────────────────────────
-//
-// AGENTS §16.1: when a test only needs to count calls or inspect arguments, use a
-// recorder — a real listener that records every invocation — rather than a test-
-// framework spy. `handler` is a genuine callback; `calls` is each invocation's
-// argument tuple, in order.
-
-/** A real call-recording callback over an argument tuple (AGENTS §16.1). */
-export interface TestRecorderInterface<TArgs extends readonly unknown[]> {
-	readonly calls: readonly TArgs[]
-	readonly count: number
-	readonly handler: (...args: TArgs) => void
-	clear(): void
-}
-
-/**
- * Create a {@link TestRecorderInterface} — a real callback that records each
- * invocation's arguments, for asserting what fired and with what (AGENTS §16.1).
- *
- * @typeParam TArgs - The argument tuple the recorded handler receives
- * @returns A recorder whose `handler` records into `calls`
- */
-export function createRecorder<TArgs extends readonly unknown[]>(): TestRecorderInterface<TArgs> {
-	const calls: TArgs[] = []
-	return {
-		get calls() {
-			return calls
-		},
-		get count() {
-			return calls.length
-		},
-		handler(...args: TArgs) {
-			calls.push(args)
-		},
-		clear() {
-			calls.length = 0
-		},
-	}
-}
+import { createRecorder, waitForDelay } from '@orkestrel/test'
 
 // ── Abort-listener recorder (a real AbortSignal, counted) ────────────────────
 //
@@ -165,7 +127,7 @@ export function createSignalRecorder(): TestSignalRecorderInterface {
 
 /**
  * Create a recorder for an {@link import('@orkestrel/emitter').EmitterErrorHandler} — the
- * emitter's own listener-error channel (AGENTS §13): a `TestRecorderInterface<[error, event]>`
+ * emitter's own listener-error channel (AGENTS §13): a `RecorderInterface<[error, event]>`
  * whose `handler` is wired as the `error` option, so an emit-safety test asserts a buggy
  * listener's throw was routed here (with the offending event name) instead of corrupting the
  * entity. Argument order is `(error, event)`, matching `EmitterErrorHandler`. A thin alias over
@@ -173,15 +135,13 @@ export function createSignalRecorder(): TestSignalRecorderInterface {
  *
  * @returns A recorder of `[error: unknown, event: string]` calls
  */
-export function createErrorRecorder(): TestRecorderInterface<
-	readonly [error: unknown, event: string]
-> {
+export function createErrorRecorder(): RecorderInterface<readonly [error: unknown, event: string]> {
 	return createRecorder<readonly [error: unknown, event: string]>()
 }
 
 /** A {@link createRecorder} per listed event of an `EmitterInterface`, keyed by event name. */
 export type EmitterRecorders<TMap extends EventMap, TName extends keyof TMap> = {
-	readonly [K in TName]: TestRecorderInterface<TMap[K]>
+	readonly [K in TName]: RecorderInterface<TMap[K]>
 }
 
 /**
@@ -258,17 +218,6 @@ export function isMCPMethodHandler(value: unknown): value is MCPMethodHandler {
 }
 
 // ── Async wait (AGENTS §16.1) ─────────────────────────────────────────────────
-
-/**
- * Resolve after `ms` milliseconds — the single shared delay helper (AGENTS §16.1), for
- * letting a real short timer elapse instead of inlining a `setTimeout` promise per test.
- *
- * @param ms - Milliseconds to wait; defaults to `0` (a macrotask turn)
- * @returns A promise that resolves once the delay elapses
- */
-export function waitForDelay(ms = 0): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms))
-}
 
 /**
  * Resolve when a signal aborts — the wakeup a cooperating producer parks on, so a fixture

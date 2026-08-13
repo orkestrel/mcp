@@ -2,7 +2,8 @@ import type { JSONRPCMessage } from '@src/core'
 import type { SSEMessage, StreamInterface } from '@orkestrel/server'
 import { describe, expect, it } from 'vitest'
 import { MCPSession } from '@src/server'
-import { createJSONRPCRequest, createRecorder } from '../../setup.js'
+import { createRecorder } from '@orkestrel/test'
+import { createJSONRPCRequest } from '../../setup.js'
 
 // src/server/MCPSession.ts — one MCP transport session, the per-session entity a
 // `createMCPSession` middleware owns, with its bounded resumable replay log FOLDED IN (the old

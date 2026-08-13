@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { MCP_META_SERVER } from '@src/core'
 import { DEFAULT_MCP_SERVER_NAME, DEFAULT_MCP_SERVER_VERSION, serveMCPScope } from '@src/browser'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { createJSONRPCRequest, MODERN_METADATA, modernRequest, waitForDelay } from '../../setup.js'
+import { waitForDelay } from '@orkestrel/test'
+import { createJSONRPCRequest, MODERN_METADATA, modernRequest } from '../../setup.js'
 
 // serveMCPScope (`src/browser/helpers.ts`) — the exported, scope-parameterized core
 // `serveMCP` wraps over `globalThis`. Driven here with SCOPE DOUBLES (AGENTS §16 — a

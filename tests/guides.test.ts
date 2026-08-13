@@ -1,5 +1,6 @@
-// The consumer-side guides-parity drop-in: runs @orkestrel/guide projections
-// against this repository's own guides/README.md manifest.
+// The consumer-side guides-parity drop-in: runs @orkestrel/guide's checks against this
+// repository's own guides/README.md manifest. The five constants below are this package's
+// own, and are what a sibling package changes.
 
 import { isRecord } from '@orkestrel/contract'
 import { describe, expect, it } from 'vitest'
@@ -7,39 +8,72 @@ import { readFileSync } from 'node:fs'
 import {
 	createGuide,
 	createSource,
+	createSourceManager,
 	fenceImports,
 	findMissing,
 	findUnexampled,
+	findUnlisted,
 	isExternalLink,
 	missingSymbols,
 	parseManifest,
 	resolveLink,
 	symbolKey,
 } from '@orkestrel/guide'
-import { findMissingNamedImports, readInventory, requireText } from './setupServer.js'
+import { requireValue } from '@orkestrel/test'
+import { readInventory } from '@orkestrel/test/server'
+import { findMissingNamedImports } from './setupServer.js'
 
-const ROOT = new URL('../', import.meta.url)
-const files = readInventory(ROOT, ['src', 'guides', 'tests'], ['.ts', '.md'])
-// The three published faces in one table. `SOURCES`, the refusal rows, the live population rows,
-// and the package.json export-key check all read it, so a face's scope and its export key have
-// exactly one place to be stated. No row carries a hand-picked foreign symbol; each row's negative
-// control is derived below from what its neighbours really publish.
-const FACES = Object.freeze([
-	{ specifier: '@orkestrel/mcp', module: 'src/core' },
-	{ specifier: '@orkestrel/mcp/browser', module: 'src/browser' },
-	{ specifier: '@orkestrel/mcp/server', module: 'src/server' },
-])
-const SOURCES: ReadonlyMap<string, ReturnType<typeof createSource>> = new Map(
-	FACES.map((face): [string, ReturnType<typeof createSource>] => [
-		face.specifier,
-		createSource({ files, module: face.module }),
-	]),
+/** Every fence language this package's guides are allowed to use. */
+const FENCE_LANGUAGES = Object.freeze(['text', 'ts'])
+/** The fence language whose blocks count as worked examples. */
+const EXAMPLE_LANGUAGE = 'ts'
+/** Each import specifier this package's own guides may resolve against. */
+const MODULES = Object.freeze({
+	'@orkestrel/mcp': 'src/core',
+	'@orkestrel/mcp/browser': 'src/browser',
+	'@orkestrel/mcp/server': 'src/server',
+})
+/**
+ * Declarations deliberately kept out of the barrel, as `symbolKey` strings.
+ *
+ * A class that one-class-per-file evicted from its single consumer cannot become a local, so
+ * it stays exported without being public. Naming it here is what makes that intentional rather
+ * than forgotten — and the second assertion below fails when a name here stops being stranded,
+ * so the list cannot rot.
+ */
+const INTERNAL: readonly string[] = Object.freeze([])
+
+/** Root-level files this package's guides link to. `readInventory` walks directories only. */
+const ROOT_FILES = Object.freeze(['AGENTS.md'])
+
+const root = new URL('../', import.meta.url)
+const files: Record<string, string> = {
+	...readInventory(root, ['src', 'guides', 'tests'], { extensions: ['.ts', '.md'] }),
+}
+for (const name of ROOT_FILES) files[name] = readFileSync(new URL(name, root), 'utf8')
+const manifest = parseManifest(
+	requireValue(files['guides/README.md'], 'Missing file: guides/README.md'),
+	'guides',
 )
-const manifest = parseManifest(requireText(files, 'guides/README.md'), 'guides')
+const sourceManager = createSourceManager({ files, modules: MODULES })
 
 it('manifest lists at least one guide', () => {
 	expect(manifest.length).toBeGreaterThan(0)
 })
+
+// The three published faces in one table. `SOURCES`, the refusal rows, the live population rows,
+// and the package.json export-key check all read it, so a face's scope and its export key have
+// exactly one place to be stated. No row carries a hand-picked foreign symbol; each row's negative
+// control is derived below from what its neighbours really publish.
+const FACES = Object.freeze(
+	Object.entries(MODULES).map(([specifier, module]) => ({ specifier, module })),
+)
+const SOURCES: ReadonlyMap<string, ReturnType<typeof createSource>> = new Map(
+	FACES.map((face): [string, ReturnType<typeof createSource>] => [
+		face.specifier,
+		requireValue(sourceManager.source(face.specifier), `Unmapped specifier: ${face.specifier}`),
+	]),
+)
 
 // The core-face scope-guard invariant, stated once because it is a property of an expectation and
 // not of a hand-picked set of rows: ANY row whose expectation names `createMCPRoutes` against
@@ -424,13 +458,28 @@ for (const entry of POPULATIONS) {
 }
 
 for (const entry of manifest) {
-	const guide = createGuide(requireText(files, entry.spec))
+	const guide = createGuide(requireValue(files[entry.spec], `Missing file: ${entry.spec}`))
 	const source = createSource({ files, module: entry.source })
 
 	describe(`${entry.concept}`, () => {
+		it('uses only listed fence languages', () => {
+			expect(findUnlisted(guide.fences(), FENCE_LANGUAGES)).toEqual([])
+		})
+
 		it('extracts non-empty aggregate barrel and documented surfaces', () => {
 			expect(source.surface().length).toBeGreaterThan(0)
 			expect(guide.surface().length).toBeGreaterThan(0)
+		})
+		it('re-exports every direct declaration that is not named internal', () => {
+			const stranded = missingSymbols(source.exports(), source.surface())
+			expect(stranded.filter((key) => !INTERNAL.includes(key))).toEqual([])
+		})
+		it('names no symbol internal that the barrel already exports', () => {
+			const stranded = missingSymbols(source.exports(), source.surface())
+			expect(INTERNAL.filter((key) => !stranded.includes(key))).toEqual([])
+		})
+		it('re-exports only direct declarations', () => {
+			expect(missingSymbols(source.surface(), source.exports())).toEqual([])
 		})
 		it('documents every barrel export', () => {
 			expect(missingSymbols(source.surface(), guide.surface())).toEqual([])
@@ -465,7 +514,10 @@ for (const entry of manifest) {
 		}
 
 		it('documents an example for every Surface function', () => {
-			const fences = guide.patterns()
+			const fences = guide
+				.fences()
+				.filter((fence) => fence.language === EXAMPLE_LANGUAGE)
+				.map((fence) => fence.code)
 			const names = guide
 				.surface()
 				.filter((symbol) => symbol.kind === 'function')
@@ -477,7 +529,10 @@ for (const entry of manifest) {
 			const entity = group.interface.replace(/Interface$/, '')
 			describe(`${group.interface} examples`, () => {
 				it('documents an example for every method', () => {
-					const fences = guide.patterns()
+					const fences = guide
+						.fences()
+						.filter((fence) => fence.language === EXAMPLE_LANGUAGE)
+						.map((fence) => fence.code)
 					const examples =
 						entity === group.interface
 							? source.examples(group.interface)
@@ -488,8 +543,9 @@ for (const entry of manifest) {
 		}
 
 		it('named imports reference only real exports in every ```ts fence', () => {
-			for (const fence of guide.patterns()) {
-				expect(findMissingNamedImports(fence, SOURCES, '@orkestrel/mcp')).toEqual([])
+			const fences = guide.fences().filter((fence) => fence.language === EXAMPLE_LANGUAGE)
+			for (const fence of fences) {
+				expect(findMissingNamedImports(fence.code, SOURCES, '@orkestrel/mcp')).toEqual([])
 			}
 		})
 

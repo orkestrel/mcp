@@ -68,6 +68,7 @@ import {
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
+import { waitForDelay } from '@orkestrel/test'
 import {
 	buildNestedRecord,
 	createErrorRecorder,
@@ -80,7 +81,6 @@ import {
 	modernRequest,
 	recordEmitterEvents,
 	TestTaskManager,
-	waitForDelay,
 } from '../../setup.js'
 
 // MCPServer is the transport-agnostic JSON-RPC 2.0 dispatch core that exposes a live

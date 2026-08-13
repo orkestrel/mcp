@@ -7,7 +7,7 @@ import type {
 } from '@src/core'
 import { MCPStreamController, MCPTextStreamController } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { waitForDelay } from '../../setup.js'
+import { waitForDelay } from '@orkestrel/test'
 
 // MCPTextStreamController is a TRANSLATION boundary and nothing else: it serializes each
 // message and delegates every lifecycle decision into the controlled typed stream beneath

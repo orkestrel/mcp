@@ -9,7 +9,8 @@ import { isRecord } from '@orkestrel/contract'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import { createWebSocketClientTransport, createWebSocketServer } from '@src/server'
-import { createCalculatorServer, MODERN_METADATA, waitForDelay } from '../../../setup.js'
+import { waitForDelay } from '@orkestrel/test'
+import { createCalculatorServer, MODERN_METADATA } from '../../../setup.js'
 import { createTeardown, startServer, startUpgradeServer } from '../../../setupServer.js'
 
 // src/server/mcp/WebSocketClientTransport.ts — the WebSocket CLIENT transport (the egress

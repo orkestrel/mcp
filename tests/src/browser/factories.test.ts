@@ -21,6 +21,7 @@ import {
 	MCP_WEBSOCKET_SUBPROTOCOL,
 } from '@src/browser'
 import { isRecord } from '@orkestrel/contract'
+import { waitForDelay } from '@orkestrel/test'
 import {
 	createCalculatorServer,
 	createJSONRPCRequest,
@@ -30,7 +31,6 @@ import {
 	postJSON,
 	probeDuplex,
 	readMethods,
-	waitForDelay,
 } from '../../setup.js'
 import { createScopeCarrier, drainRecorded, recordPort } from '../../setupBrowser.js'
 

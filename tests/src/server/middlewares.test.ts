@@ -25,13 +25,13 @@ import {
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
 } from '@src/server'
+import { waitForDelay } from '@orkestrel/test'
 import {
 	createCalculatorServer,
 	createJSONRPCRequest,
 	createManualClock,
 	postJSON,
 	readSSEStream,
-	waitForDelay,
 } from '../../setup.js'
 import {
 	createClockMiddleware,
