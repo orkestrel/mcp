@@ -522,12 +522,7 @@ export function readPolicySources(root: string): readonly PolicySource[] {
  */
 export function testToPolicySource(path: string): string | undefined {
 	const normalized = normalizePolicyPath(path)
-	// Both reserved names label a scope rather than a module, so neither has a
-	// source to mirror. `consumer.test.ts` drives the built package from outside
-	// through a generated consumer, which is a shape with no source module by
-	// construction rather than one whose source is missing.
 	if (basename(normalized) === 'integration.test.ts') return undefined
-	if (basename(normalized) === 'consumer.test.ts') return undefined
 	if (!normalized.startsWith('tests/') || !normalized.endsWith('.test.ts')) return undefined
 	return `${normalized.slice('tests/'.length, -'.test.ts'.length)}.ts`
 }
@@ -694,8 +689,7 @@ export const POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 	},
 	{
 		label: 'rejects an unmirrored module test',
-		membership:
-			'module tests below tests/src or tests/app except integration.test.ts and consumer.test.ts',
+		membership: 'module tests below tests/src or tests/app except integration.test.ts',
 		rule: 'mirror',
 		files: [
 			{

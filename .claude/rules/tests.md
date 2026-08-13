@@ -46,12 +46,17 @@ its own:
 | `tests/service/**/*.test.ts` | The live external services this package drives, driven for real |
 
 - `.claude/rules/workspace.md` names the Vitest project each location belongs to.
-- `integration.test.ts` and `consumer.test.ts` are reserved filenames at any level. Each names a
-  scope rather than a module, so the mirror rule does not reach either; the scope is the directory it
-  sits in.
-- Put a generated-consumer proof in `consumer.test.ts` under the environment it drives. It installs
-  or links the built package and drives it from outside, so it has no source module to mirror by
-  construction. Never add a source module to satisfy the mirror rule.
+- `integration.test.ts` is a reserved filename at any level. It names a scope rather than a module,
+  so the mirror rule does not reach it; its scope is the directory it sits in.
+- Put a generated-consumer proof in `tests/integration.test.ts`. It is the installed-package proof,
+  so it belongs in the `integration` project, out of the default run and required by
+  `prepublishOnly`. Never place one under `tests/src` or `tests/app` — that runs it in a unit project
+  and makes it a module test with no source module.
+- Install the packed tarball, never a link to the workspace root. A link resolves the whole
+  repository, so every path the `files` field excludes still answers and the proof cannot fail for
+  the omission it exists to catch. Run `npm pack` and install the tarball it writes.
+- A test the mirror rule flags is a misplaced test until its placement is checked. Move it to the
+  location its scope names. Never widen the rule to accept it.
 - Give every nested `integration.test.ts` its own exact-path project entry. A glob such as
   `tests/src/**/integration.test.ts` double-claims a file another project already owns.
 

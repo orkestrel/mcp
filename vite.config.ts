@@ -216,6 +216,24 @@ export const conformance = (options?: UserConfig): UserConfig =>
 		options ?? {},
 	)
 
+export const integration = (options?: UserConfig): UserConfig =>
+	mergeConfig(
+		{
+			resolve,
+			test: {
+				name: { label: 'integration', color: 'blue' },
+				include: ['tests/integration.test.ts'],
+				setupFiles: ['./tests/setup.ts'],
+				globalSetup: ['./tests/setupGlobal.ts'],
+				environment: 'node',
+				testTimeout: 120_000,
+				hookTimeout: 120_000,
+				fileParallelism: false,
+			},
+		},
+		options ?? {},
+	)
+
 // A workbench, not a proof. No gate selects this project.
 export const probe = (options?: UserConfig): UserConfig =>
 	mergeConfig(
@@ -243,6 +261,7 @@ export default defineConfig({
 			config,
 			...(isExactCaseFile(resolveWorkspacePath('tests/guides.test.ts')) ? [guides] : []),
 			conformance,
+			integration,
 			probe,
 		],
 	},

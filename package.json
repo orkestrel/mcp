@@ -82,12 +82,13 @@
 		"test:conformance": "vitest run --config vite.config.ts --no-cache --reporter=dot --project conformance",
 		"test:probe": "vitest run --config vite.config.ts --no-cache --reporter=verbose --project probe",
 		"test:guides": "vitest run --config vite.config.ts --reporter=dot --project guides",
+		"test:integration": "vitest run --config vite.config.ts --no-cache --reporter=dot --project integration",
 		"build": "npm run clean && npm run build:src",
 		"build:src": "npm run build:src:core && npm run build:src:browser && npm run build:src:server",
 		"build:src:core": "vite build --config configs/src/vite.core.config.ts && npm run copy dist/src/core/index.d.ts dist/src/core/index.d.cts",
 		"build:src:browser": "vite build --config configs/src/vite.browser.config.ts",
 		"build:src:server": "vite build --config configs/src/vite.server.config.ts && npm run copy dist/src/server/index.d.ts dist/src/server/index.d.cts",
-		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test"
+		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:integration"
 	},
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.11",

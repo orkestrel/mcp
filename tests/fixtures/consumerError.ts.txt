@@ -1,0 +1,13 @@
+// Copied into the temporary consumer as `consumerError.ts` by `createConsumer` and compiled there
+// by `compileConsumer`. The negative control for the type proof: it assigns a shipped string
+// constant to a number, so a compiler reading the installed declarations reports TS2322. A
+// compiler resolving nothing reports a missing module instead, which is how a green type run that
+// proved nothing is told from one that did.
+//
+// Every consumer program carries a trailing `.txt`: it resolves only inside a consumer that
+// installed the tarball, so the workspace's own compiler, linter, and formatter must not read it.
+// This one is written to fail, so the workspace's own gates must never compile it.
+import { MCP_MODERN_VERSION } from '@orkestrel/mcp'
+
+const invalid: number = MCP_MODERN_VERSION
+void invalid

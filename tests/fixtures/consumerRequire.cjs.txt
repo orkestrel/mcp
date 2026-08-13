@@ -1,0 +1,54 @@
+// Copied into the temporary consumer as `consumerRequire.cjs` by `createConsumer` and run by Node
+// from outside the workspace. It reads the `require` condition of the installed exports map: core
+// and server resolve, and the browser face is refused because it declares no CommonJS entry.
+//
+// Every consumer program carries a trailing `.txt`: it resolves only inside a consumer that
+// installed the tarball, so the workspace's own compiler, linter, and formatter must not read it.
+const { createToolManager } = require('@orkestrel/tool')
+const {
+	MCP_META_CAPABILITIES,
+	MCP_META_VERSION,
+	MCP_MODERN_VERSION,
+	createMCPServer,
+} = require('@orkestrel/mcp')
+const { createMCPRoutes } = require('@orkestrel/mcp/server')
+
+async function runConsumer() {
+	const mcp = createMCPServer({
+		identity: { name: 'consumer', version: '1.0.0' },
+		tools: createToolManager(),
+	})
+	const answer = await mcp.dispatch({
+		jsonrpc: '2.0',
+		method: 'tools/list',
+		id: 1,
+		params: {
+			_meta: {
+				[MCP_META_VERSION]: MCP_MODERN_VERSION,
+				[MCP_META_CAPABILITIES]: {},
+			},
+		},
+	})
+	if (Symbol.asyncIterator in answer || answer.result?.tools?.length !== 0) {
+		throw new Error('CommonJS core face did not dispatch tools/list')
+	}
+	const routes = createMCPRoutes(mcp)
+	if (routes.length !== 1 || routes[0].method !== 'POST' || routes[0].path !== '/mcp') {
+		throw new Error('CommonJS server face did not mount its POST route')
+	}
+
+	let browserRejected = false
+	try {
+		require('@orkestrel/mcp/browser')
+	} catch (error) {
+		browserRejected = error?.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED'
+	}
+	if (!browserRejected) throw new Error('browser face unexpectedly exposed CommonJS')
+
+	console.log('require:core-dispatch,server-route,browser-refused')
+}
+
+runConsumer().catch((error) => {
+	console.error(error)
+	process.exitCode = 1
+})

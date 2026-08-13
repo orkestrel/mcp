@@ -1,0 +1,39 @@
+// Copied into the temporary consumer as `consumerTypes.ts` by `createConsumer` and compiled there
+// by `compileConsumer`. Its declarations come from the installed tarball, never from `src/`.
+//
+// Every consumer program carries a trailing `.txt`: it resolves only inside a consumer that
+// installed the tarball, so the workspace's own compiler, linter, and formatter must not read it.
+import { createToolManager } from '@orkestrel/tool'
+import {
+	MCP_META_CAPABILITIES,
+	MCP_META_VERSION,
+	MCP_MODERN_VERSION,
+	createMCPServer,
+} from '@orkestrel/mcp'
+import { createMessagePortTransport } from '@orkestrel/mcp/browser'
+import { createMCPRoutes } from '@orkestrel/mcp/server'
+
+const mcp = createMCPServer({
+	identity: { name: 'typed-consumer', version: '1.0.0' },
+	tools: createToolManager(),
+})
+const answer = await mcp.dispatch({
+	jsonrpc: '2.0',
+	method: 'tools/list',
+	id: 1,
+	params: {
+		_meta: {
+			[MCP_META_VERSION]: MCP_MODERN_VERSION,
+			[MCP_META_CAPABILITIES]: {},
+		},
+	},
+})
+const routes = createMCPRoutes(mcp)
+const channel = new MessageChannel()
+const transport = createMessagePortTransport({ port: channel.port1 })
+
+void answer
+void routes
+void transport
+channel.port1.close()
+channel.port2.close()
