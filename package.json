@@ -101,7 +101,7 @@
 		"@modelcontextprotocol/conformance": "0.2.0-alpha.10",
 		"@orkestrel/guide": "^0.0.9",
 		"@orkestrel/router": "^0.0.9",
-		"@orkestrel/scaffold": "^0.0.27",
+		"@orkestrel/scaffold": "^0.0.29",
 		"@orkestrel/server": "^0.0.10",
 		"@types/node": "^26.2.0",
 		"@vitest/browser-playwright": "^4.1.10",
