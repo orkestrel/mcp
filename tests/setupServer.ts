@@ -2,23 +2,16 @@
 // (and `src:server`) projects. `node:*` imports belong here, never in `setup.ts`
 // (AGENTS §16.1).
 
-import type { SpawnSyncReturns } from 'node:child_process'
 import type { IncomingMessage, Server } from 'node:http'
 import type { SourceInterface } from '@orkestrel/guide'
 import type { MiddlewareHandler, ServerInterface, StreamInterface } from '@orkestrel/server'
 import type { WebSocketFrame } from '@orkestrel/websocket'
 import type { ManualClockInterface } from './setup.js'
-import { spawnSync } from 'node:child_process'
-import { globSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { createServer as createHTTPServer, request as httpRequest } from 'node:http'
-import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import {
-	basename,
-	dirname,
 	isAbsolute,
-	join,
 	relative as relativePath,
 	resolve as resolveFilesystemPath,
 	sep,
@@ -27,7 +20,6 @@ import { Duplex, PassThrough } from 'node:stream'
 import { afterEach } from 'vitest'
 import { isRecord } from '@orkestrel/contract'
 import { extractSourceLines, fenceImports, findMissing } from '@orkestrel/guide'
-import { WORKSPACE_ROOT } from '../configs/helpers.js'
 import { waitForDelay } from './setup.js'
 import {
 	computeWebSocketAccept,
@@ -812,240 +804,4 @@ export async function startUpgradeServer(
 			})
 		},
 	}
-}
-
-// ── Installed-package consumer (the tests/integration.test.ts machinery) ─────
-//
-// The integration proof drives the PACKED tarball. `npm pack` writes the exact archive
-// `npm publish` uploads, and the consumer installs that file, so a path `files` omits is
-// genuinely absent from the consumer and the programs that need it fail. Linking the
-// repository root instead exposes the whole tree — `src/`, `tests/`, `node_modules/` — so a
-// packaging defect resolves anyway and no assertion can see it.
-
-/** The npm executable for this host. */
-export const NPM_COMMAND = process.platform === 'win32' ? 'npm.cmd' : 'npm'
-
-/** The workspace compiler that compiles each typed consumer program. */
-export const COMPILER_PATH = resolveFilesystemPath(
-	WORKSPACE_ROOT,
-	'node_modules/typescript/bin/tsc',
-)
-
-/**
- * The settings every typed consumer program is compiled under.
- *
- * @remarks
- * `NodeNext` reads the installed `exports` map the way a real consumer's compiler does, and
- * `--ignoreConfig` keeps this workspace's `tsconfig.json` out of a compilation that must see
- * only what was installed.
- */
-export const COMPILER_ARGUMENTS: readonly string[] = Object.freeze([
-	COMPILER_PATH,
-	'--ignoreConfig',
-	'--noEmit',
-	'--target',
-	'ESNext',
-	'--module',
-	'NodeNext',
-	'--moduleResolution',
-	'NodeNext',
-	'--lib',
-	'ESNext,DOM',
-	'--types',
-	'node',
-	'--strict',
-])
-
-/**
- * Every consumer program fixture, named as it sits in `tests/fixtures/`.
- *
- * @remarks
- * Each carries a trailing `.txt` so this workspace's compiler, linter, and formatter never read
- * a program that resolves only inside a consumer — one of them is written to fail on purpose.
- * {@link createConsumer} copies each into the consumer under the name `.txt` is stripped from.
- */
-export const CONSUMER_PROGRAMS: readonly string[] = Object.freeze([
-	'consumerImport.mjs.txt',
-	'consumerRequire.cjs.txt',
-	'consumerSubpath.mjs.txt',
-	'consumerTypes.ts.txt',
-	'consumerError.ts.txt',
-])
-
-/** The manifest a temporary consumer declares before the packed package is installed into it. */
-export const CONSUMER_MANIFEST = '{"name":"outside-consumer","private":true,"type":"module"}\n'
-
-/** A temporary consumer with the packed package installed into it. */
-export interface ConsumerInterface {
-	/** The directory each consumer program runs in. */
-	readonly directory: string
-	/** The packed archive installed into it. */
-	readonly archive: string
-	/** Remove the temporary workspace holding the archive and the consumer. */
-	stop(): Promise<void>
-}
-
-/**
- * Read one declared dependency range out of a package manifest.
- *
- * @param manifest - The parsed manifest
- * @param field - The dependency field to read (`dependencies`, `devDependencies`, …)
- * @param name - The package whose declared range is required
- * @returns The declared range
- * @throws When the manifest declares no such range
- *
- * @example
- * ```ts
- * readRange(manifest, 'dependencies', '@orkestrel/tool')
- * ```
- */
-export function readRange(manifest: unknown, field: string, name: string): string {
-	if (!isRecord(manifest)) throw new Error('The package manifest is not a record')
-	const declared: unknown = manifest[field]
-	if (!isRecord(declared)) throw new Error(`The package manifest declares no ${field}`)
-	const range: unknown = declared[name]
-	if (typeof range !== 'string') throw new Error(`${field} declares no range for ${name}`)
-	return range
-}
-
-/**
- * Pack this workspace into `destination` and resolve the archive it wrote.
- *
- * @remarks
- * `--ignore-scripts` keeps `npm pack`'s own lifecycle out of the proof. This workspace declares
- * no `prepack` or `prepare` today, and a later one must not run a build from inside a test.
- *
- * @param destination - An empty directory the archive is written to
- * @returns The absolute path of the written archive
- * @throws When `npm pack` fails or writes anything other than one archive
- */
-export function packWorkspace(destination: string): string {
-	const packed = spawnSync(
-		NPM_COMMAND,
-		['pack', '--ignore-scripts', '--pack-destination', destination],
-		{ cwd: WORKSPACE_ROOT, encoding: 'utf8', windowsHide: true },
-	)
-	if (packed.status !== 0) throw new Error(`npm pack failed:\n${packed.stderr}${packed.stdout}`)
-	const archives = globSync('*.tgz', { cwd: destination })
-	const [archive] = archives
-	if (archives.length !== 1 || archive === undefined) {
-		throw new Error(`npm pack wrote ${String(archives.length)} archives, expected one`)
-	}
-	return join(destination, archive)
-}
-
-/**
- * Build a temporary consumer with this workspace's packed package installed into it.
- *
- * @remarks
- * Packs the workspace, installs the written archive into a sibling directory together with the
- * declared ranges of the two packages a consumer of this API supplies itself, and copies every
- * {@link CONSUMER_PROGRAMS} fixture in. The consumer resolves `@orkestrel/mcp` only through what
- * the archive carried, so an omitted `files` entry surfaces as a failing program. Call `stop()`
- * to remove the whole temporary workspace; a failure while building removes it first and rethrows.
- *
- * @returns The consumer directory, its archive, and its teardown
- * @throws When `npm pack` or `npm install` fails
- *
- * @example
- * ```ts
- * const consumer = await createConsumer()
- * const result = runConsumer(consumer, 'consumerImport.mjs')
- * ```
- */
-export async function createConsumer(): Promise<ConsumerInterface> {
-	const workspace = await mkdtemp(join(tmpdir(), 'orkestrel-mcp-consumer-'))
-	try {
-		const packed = join(workspace, 'packed')
-		const directory = join(workspace, 'consumer')
-		await mkdir(packed)
-		await mkdir(directory)
-		const archive = packWorkspace(packed)
-		const manifest: unknown = JSON.parse(readFileSync(join(WORKSPACE_ROOT, 'package.json'), 'utf8'))
-		await writeFile(join(directory, 'package.json'), CONSUMER_MANIFEST)
-		const installed = spawnSync(
-			NPM_COMMAND,
-			[
-				'install',
-				'--ignore-scripts',
-				'--no-audit',
-				'--no-fund',
-				archive,
-				`@orkestrel/tool@${readRange(manifest, 'dependencies', '@orkestrel/tool')}`,
-				`@types/node@${readRange(manifest, 'devDependencies', '@types/node')}`,
-			],
-			{ cwd: directory, encoding: 'utf8', windowsHide: true },
-		)
-		if (installed.status !== 0) {
-			throw new Error(`npm install failed:\n${installed.stderr}${installed.stdout}`)
-		}
-		for (const program of CONSUMER_PROGRAMS) {
-			await copyFile(
-				join(WORKSPACE_ROOT, 'tests', 'fixtures', program),
-				join(directory, basename(program, '.txt')),
-			)
-		}
-		return {
-			directory,
-			archive,
-			async stop() {
-				// A recursive removal is worth one guard: the consumer is only ever a direct child
-				// of the system temp directory, and anything else is a path this never built.
-				const target = resolveFilesystemPath(workspace)
-				if (dirname(target) !== resolveFilesystemPath(tmpdir())) {
-					throw new Error(`Refusing to remove a consumer outside the temp directory: ${target}`)
-				}
-				await rm(target, { recursive: true, force: true })
-			},
-		}
-	} catch (error) {
-		await rm(workspace, { recursive: true, force: true })
-		throw error
-	}
-}
-
-/**
- * Run one consumer program with Node, from inside the consumer.
- *
- * @param consumer - The consumer the program was copied into
- * @param program - The program filename, as it sits in the consumer
- * @returns What the program's process reported
- *
- * @example
- * ```ts
- * runConsumer(consumer, 'consumerImport.mjs')
- * ```
- */
-export function runConsumer(
-	consumer: ConsumerInterface,
-	program: string,
-): SpawnSyncReturns<string> {
-	return spawnSync(process.execPath, [program], {
-		cwd: consumer.directory,
-		encoding: 'utf8',
-		windowsHide: true,
-	})
-}
-
-/**
- * Compile one consumer program under {@link COMPILER_ARGUMENTS}, from inside the consumer.
- *
- * @param consumer - The consumer the program was copied into
- * @param program - The program filename, as it sits in the consumer
- * @returns What the compiler's process reported, diagnostics included
- *
- * @example
- * ```ts
- * compileConsumer(consumer, 'consumerTypes.ts')
- * ```
- */
-export function compileConsumer(
-	consumer: ConsumerInterface,
-	program: string,
-): SpawnSyncReturns<string> {
-	return spawnSync(process.execPath, [...COMPILER_ARGUMENTS, program], {
-		cwd: consumer.directory,
-		encoding: 'utf8',
-		windowsHide: true,
-	})
 }
