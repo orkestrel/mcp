@@ -35,7 +35,7 @@ import {
 	waitForAbort,
 	waitForDelay,
 } from '../../setup.js'
-import { createTeardown, startServer, upgradeRequest } from '../../setupServer.js'
+import { closeResource, createTeardown, startServer, upgradeRequest } from '../../setupServer.js'
 
 // src/server/factories.ts — createMCPRoutes, the stateless Streamable-HTTP MCP
 // transport, proven over a REAL @orkestrel/server + a REAL MCPServer over a REAL
@@ -52,7 +52,9 @@ import { createTeardown, startServer, upgradeRequest } from '../../setupServer.j
 // is a separate plug-and-play middleware, proven in middlewares.test.ts; here
 // `createMCPRoutes` is stateless-only.
 
-const { track } = createTeardown((handle: StartedServerInterface) => handle.stop())
+// Servers AND the clients driven against them, released newest first: a client the teardown
+// closes is one a FAILING assertion cannot leave attached to the server it then has to stop.
+const { track } = createTeardown(closeResource)
 
 describe('createMCPContinuation', () => {
 	it('adapts the installed token primitives into the host-neutral seal/open port', async () => {
@@ -425,20 +427,21 @@ async function startWsMCP(
 describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-transports WS e2e', () => {
 	it('serves a legacy initialize and tools/call through the decorator over a real socket', async () => {
 		const handle = await startWsMCP(createMCPLegacy(createCalculatorServer()))
-		const client = createMCPClient({
-			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
-			version: '2025-06-18',
-		})
+		const client = track(
+			createMCPClient({
+				transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
+				version: '2025-06-18',
+			}),
+		)
 
 		await client.connect()
 		expect(client.version).toBe('2025-06-18')
 		expect(await client.call('add', {})).toEqual({ resultType: 'complete', value: 5 })
-		await client.disconnect()
 	})
 
 	it('CONTROL — a bare server answers modern-shaped initialize with -32601 over a real socket', async () => {
 		const handle = await startWsMCP()
-		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
+		const transport = track(createWebSocketClientTransport({ url: `${handle.base}/mcp` }))
 
 		await transport.start()
 		const legacy = new Promise<unknown>((resolve) => transport.emitter.on('message', resolve))
@@ -458,14 +461,15 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 			}),
 		)
 		await expect(modern).resolves.toMatchObject({ error: { code: -32601 } })
-		await transport.close()
 	})
 
 	it('connect → tools/list → tools/call(add): a value round-trips over real WebSocket frames', async () => {
 		const handle = await startWsMCP()
-		const client = createMCPClient({
-			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
-		})
+		const client = track(
+			createMCPClient({
+				transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
+			}),
+		)
 
 		// connect() handshakes over WS (the 101 upgrade + the MCP initialize over frames).
 		await client.connect()
@@ -485,15 +489,15 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 
 	it('a remote erroring tool throws locally (isError → throw)', async () => {
 		const handle = await startWsMCP()
-		const client = createMCPClient({
-			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
-		})
+		const client = track(
+			createMCPClient({
+				transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
+			}),
+		)
 		await client.connect()
 
 		// `boom` throws server-side → an in-band `isError` tool result → the client throws.
 		await expect(client.call('boom', {})).rejects.toThrow(/kaboom/)
-
-		await client.disconnect()
 	})
 
 	it('declines a non-WebSocket request to the path (the spine destroys the socket)', async () => {

@@ -3,6 +3,7 @@
 // (AGENTS §16.1).
 
 import type { IncomingMessage, Server } from 'node:http'
+import type { MCPClientInterface, MCPClientTransportInterface } from '@src/core'
 import type { SourceInterface } from '@orkestrel/guide'
 import type { MiddlewareHandler, ServerInterface, StreamInterface } from '@orkestrel/server'
 import type { WebSocketFrame } from '@orkestrel/websocket'
@@ -507,6 +508,17 @@ export interface TeardownInterface<T> {
  * assertion throws mid-test. The disposer is the caller's (`(handle) => handle.stop()`),
  * so the registrar stays agnostic to what it tears down.
  *
+ * @remarks
+ * Disposal runs in REVERSE registration order, because a resource is built on the ones
+ * registered before it: a client is opened against a server that is already listening, so
+ * the client is closed first and the server stops with nothing still attached. The order
+ * matters rather than merely reading well — `ServerInterface.stop()` waits on
+ * `server.close()`, an UPGRADED WebSocket is detached from the connection set that
+ * `closeIdleConnections()` reaches, and that wait is bounded by nothing this side owns, so
+ * a socket still open when the server stops parks teardown until Vitest's hook timeout
+ * fires (10s) and `destroy()` — the force-close that would have freed it — is never
+ * reached.
+ *
  * @typeParam T - The kind of item tracked (the disposer's parameter type)
  * @param dispose - How to dispose one tracked item (may be async)
  * @returns A registrar whose `track` enrolls an item and returns it
@@ -516,7 +528,7 @@ export function createTeardown<T>(
 ): TeardownInterface<T> {
 	const tracked: T[] = []
 	afterEach(async () => {
-		for (const item of tracked.splice(0)) await dispose(item)
+		for (const item of tracked.splice(0).reverse()) await dispose(item)
 	})
 	return {
 		track(item) {
@@ -567,6 +579,38 @@ export async function startServer<TState>(
 			await server.destroy()
 		},
 	}
+}
+
+/**
+ * Everything a server suite hands to {@link createTeardown} — a started server, an MCP
+ * client, or a bare client transport driven without one.
+ */
+export type TestResource = StartedServerInterface | MCPClientInterface | MCPClientTransportInterface
+
+/**
+ * Release one tracked {@link TestResource} — the disposer a suite that opens CLIENTS as
+ * well as servers passes to {@link createTeardown}.
+ *
+ * @remarks
+ * Each member is identified by the one release method it declares (`stop` / `disconnect` /
+ * `close`), so the check is a structural narrowing rather than an assertion (§14). Every
+ * one of the three is idempotent, so a test that already released its client inline — the
+ * disconnect being the CLAIM there rather than cleanup — tears down exactly once and the
+ * second call returns immediately.
+ *
+ * @param resource - The started server, MCP client, or client transport to release
+ * @returns Resolves once the resource is released
+ *
+ * @example
+ * ```ts
+ * const { track } = createTeardown(closeResource)
+ * const client = track(createMCPClient({ transport: track(createWebSocketClientTransport(options)) }))
+ * ```
+ */
+export function closeResource(resource: TestResource): Promise<void> {
+	if ('stop' in resource) return resource.stop()
+	if ('disconnect' in resource) return resource.disconnect()
+	return resource.close()
 }
 
 // ── Raw HTTP upgrade driver (the WebSocket transport's upgrade seam) ─────────

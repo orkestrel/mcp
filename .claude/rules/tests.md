@@ -36,25 +36,26 @@ paths:
 A proof that covers the workspace instead of one module has a fixed location, so no package invents
 its own:
 
-| Path                         | Proves                                                          |
-| ---------------------------- | --------------------------------------------------------------- |
-| `tests/policy.test.ts`       | Every source file obeys the syntactic coding and placement law  |
-| `tests/config.test.ts`       | Root configuration resolves its aliases, projects, and outputs  |
-| `tests/guides.test.ts`       | Every documented API exists and every public API is documented  |
-| `tests/conformance.test.ts`  | Where this package drifts from the official tooling it tracks   |
-| `tests/integration.test.ts`  | The built package works when installed and driven from outside  |
-| `tests/service/**/*.test.ts` | The live external services this package drives, driven for real |
+| Path                         | Proves                                                              |
+| ---------------------------- | ------------------------------------------------------------------- |
+| `tests/policy.test.ts`       | Every source file obeys the syntactic coding and placement law      |
+| `tests/config.test.ts`       | Root configuration resolves its aliases, projects, and outputs      |
+| `tests/guides.test.ts`       | Every documented API exists and every public API is documented      |
+| `tests/conformance.test.ts`  | Where this package drifts from the official tooling it tracks       |
+| `tests/integration.test.ts`  | The package's features work together end to end across environments |
+| `tests/service/**/*.test.ts` | The live external services this package drives, driven for real     |
 
 - `.claude/rules/workspace.md` names the Vitest project each location belongs to.
 - `integration.test.ts` is a reserved filename at any level. It names a scope rather than a module,
   so the mirror rule does not reach it; its scope is the directory it sits in.
-- Put a generated-consumer proof in `tests/integration.test.ts`. It is the installed-package proof,
-  so it belongs in the `integration` project, out of the default run and required by
-  `prepublishOnly`. Never place one under `tests/src` or `tests/app` — that runs it in a unit project
-  and makes it a module test with no source module.
-- Install the packed tarball, never a link to the workspace root. A link resolves the whole
-  repository, so every path the `files` field excludes still answers and the proof cannot fail for
-  the omission it exists to catch. Run `npm pack` and install the tarball it writes.
+- An integration test is an end-to-end test: it composes the package's own features and drives them
+  together, through the public API, with no part of the system under test replaced.
+- Scope it by where the composition happens. `tests/integration.test.ts` drives features **across**
+  environments — core through server, core through browser, one environment's output consumed by
+  another. A nested `tests/src/<environment>/integration.test.ts` drives features **within** that one
+  environment.
+- Do not put a packaging, install, or distribution check in an integration test. What the tarball
+  contains is a different question from whether the features compose.
 - A test the mirror rule flags is a misplaced test until its placement is checked. Move it to the
   location its scope names. Never widen the rule to accept it.
 - Give every nested `integration.test.ts` its own exact-path project entry. A glob such as
