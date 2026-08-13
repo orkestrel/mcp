@@ -55,7 +55,10 @@ async function startWs(path?: string): Promise<StartedServerInterface> {
 	const dispatcher = createDispatcher<unknown>()
 	const server = createServer<unknown>({ dispatcher, state: () => undefined })
 	server.upgrade(
-		createWebSocketServer(createCalculatorServer(), path === undefined ? undefined : { path }),
+		createWebSocketServer(createCalculatorServer(), {
+			emitter: server.emitter,
+			...(path === undefined ? {} : { path }),
+		}),
 	)
 	return teardown.track(await startServer(server))
 }

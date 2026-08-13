@@ -1,6 +1,6 @@
 import type { MCPDispatcherInterface } from '@src/core'
 import type { MiddlewareHandler } from '@orkestrel/server'
-import type { StartedServerInterface } from '../../setupServer.js'
+import type { ClientSocketInterface, StartedServerInterface } from '../../setupServer.js'
 import { spawn } from 'node:child_process'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
@@ -21,10 +21,12 @@ import {
 	createStdioServer,
 	createWebSocketClientTransport,
 	createWebSocketServer,
+	DEFAULT_MCP_PATH,
 	MCP_METHOD_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
 } from '@src/server'
+import { WEBSOCKET_CLOSE_NORMAL, WEBSOCKET_OPCODE_CLOSE } from '@orkestrel/websocket'
 import {
 	collectSSE,
 	createCalculatorServer,
@@ -35,7 +37,13 @@ import {
 	waitForAbort,
 	waitForDelay,
 } from '../../setup.js'
-import { closeResource, createTeardown, startServer, upgradeRequest } from '../../setupServer.js'
+import {
+	closeResource,
+	createTeardown,
+	openClientSocket,
+	startServer,
+	upgradeRequest,
+} from '../../setupServer.js'
 
 // src/server/factories.ts — createMCPRoutes, the stateless Streamable-HTTP MCP
 // transport, proven over a REAL @orkestrel/server + a REAL MCPServer over a REAL
@@ -420,7 +428,9 @@ async function startWsMCP(
 ): Promise<StartedServerInterface> {
 	const dispatcher = createDispatcher<unknown>()
 	const server = createServer<unknown>({ dispatcher, state: () => undefined })
-	server.upgrade(createWebSocketServer(mcp)) // ingress over the spine upgrade seam
+	// Ingress over the spine upgrade seam, following the spine's own lifecycle: `emitter` is
+	// what lets `stop()` end the sockets this handler claimed.
+	server.upgrade(createWebSocketServer(mcp, { emitter: server.emitter }))
 	return track(await startServer(server))
 }
 
@@ -531,6 +541,63 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 		})
 		expect(outcome.claimed).toBe(false)
 	})
+})
+
+// ── The WebSocket ingress follows the spine's lifecycle ──────────────────────
+//
+// A claimed upgraded socket is detached from the connection set the spine's own close walks,
+// so the claimant is the ONLY thing that can end it: leave it open and `stop()` spends its
+// whole `drain` budget and then cuts the connection mid-protocol. `createWebSocketServer`
+// therefore closes every socket it still owns on the spine's `stop` event, with the RFC 6455
+// close handshake `WebSocketServerTransport.close()` already performs — the clean goodbye the
+// drain window exists for. Each row here drives a REAL socket against a REAL spine and reads
+// the actual wire (AGENTS §16): the frame the server sent, not a report that it sent one.
+//
+// The timing bound is deliberately loose (a second against a 10s drain budget): the claim is
+// "the drain settles on the close" versus "the drain runs out", and those are three orders of
+// magnitude apart. A tight bound would measure the runner's load instead.
+
+const socketTeardown = createTeardown<ClientSocketInterface>((socket) => socket.close())
+
+describe('createWebSocketServer — the spine stop closes every socket it claimed', () => {
+	it('closes a live socket with an RFC 6455 close frame, so stop settles in milliseconds', async () => {
+		const handle = await startWsMCP()
+		const socket = socketTeardown.track(await openClientSocket(handle.base, DEFAULT_MCP_PATH))
+
+		const started = performance.now()
+		await handle.server.stop()
+		const elapsed = performance.now() - started
+		await socket.closed
+
+		expect(elapsed).toBeLessThan(1000)
+		// The goodbye is the PROTOCOL close, not a destroy: a destroyed socket sends no frame
+		// at all, so this assertion is exactly what separates the two implementations.
+		const close = socket.frames.find((frame) => frame.opcode === WEBSOCKET_OPCODE_CLOSE)
+		expect(close?.payload.readUInt16BE(0)).toBe(WEBSOCKET_CLOSE_NORMAL)
+	}, 20_000)
+
+	it('CONTROL — a server with no WebSocket at all still stops immediately', async () => {
+		const handle = await startWsMCP()
+
+		const started = performance.now()
+		await handle.server.stop()
+
+		expect(performance.now() - started).toBeLessThan(1000)
+	}, 20_000)
+
+	it('a client that already went away neither throws nor holds the stop path', async () => {
+		const handle = await startWsMCP()
+		const socket = socketTeardown.track(await openClientSocket(handle.base, DEFAULT_MCP_PATH))
+		// The peer vanishes without a close frame — the socket the handler owns is already dead
+		// when `stop()` reaches it, so closing it must be a silent no-op.
+		socket.close()
+		await socket.closed
+
+		const started = performance.now()
+		await expect(handle.server.stop()).resolves.toBeUndefined()
+
+		expect(performance.now() - started).toBeLessThan(1000)
+	}, 20_000)
 })
 
 async function driveStdioChild(

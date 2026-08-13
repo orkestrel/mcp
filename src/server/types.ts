@@ -31,8 +31,9 @@
 // core does not.
 
 import type { JSONRPCMessage, MCPVersion } from '@src/core'
+import type { EmitterInterface } from '@orkestrel/emitter'
 import type { RouteContext } from '@orkestrel/router'
-import type { StreamInterface } from '@orkestrel/server'
+import type { ServerEventMap, StreamInterface } from '@orkestrel/server'
 import type { MCPSession } from './MCPSession.js'
 
 /**
@@ -298,10 +299,16 @@ export interface HTTPClientTransportOptions {
 }
 
 /**
- * Options for `createWebSocketServer` — where the WebSocket upgrade is accepted and the
- * subprotocol negotiated.
+ * Options for `createWebSocketServer` — the spine lifecycle the ingress follows, plus where
+ * the WebSocket upgrade is accepted and the subprotocol negotiated.
  *
  * @remarks
+ * - `emitter` — the emitter of the `@orkestrel/server` spine this handler is registered on
+ *   (`server.emitter`). REQUIRED: on its `stop` event the handler closes every socket it
+ *   still owns with the RFC 6455 close handshake, so the spine's drain settles at once. An
+ *   upgraded socket is detached from the connection set the spine's own close walks, so
+ *   nothing but the claimant can end it — leave it open and `stop()` spends its whole
+ *   `drain` budget and then cuts the connection mid-protocol.
  * - `path` — the request path the upgrade handler CLAIMS; defaults to
  *   {@link import('./constants.js').DEFAULT_MCP_PATH} (`'/mcp'`, the same path the HTTP
  *   transport mounts at). A protocol-upgrade request to any OTHER path is DECLINED
@@ -316,6 +323,7 @@ export interface HTTPClientTransportOptions {
  * before this one can decline an unauthenticated upgrade).
  */
 export interface WebSocketServerOptions {
+	readonly emitter: EmitterInterface<ServerEventMap>
 	readonly path?: string
 	readonly subprotocol?: string
 }

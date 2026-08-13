@@ -49,8 +49,9 @@
 >   injectable-`fetch` egress.
 > - **WebSocket** — `createWebSocketServer` claims an upgrade on
 >   `@orkestrel/server`'s upgrade seam, composing `@orkestrel/websocket`'s RFC 6455
->   wrapper for full duplex over one persistent connection.
->   `createWebSocketClientTransport` is the `node:http(s)`-upgrade egress.
+>   wrapper for full duplex over one persistent connection, and closes every socket
+>   it claimed when that spine stops. `createWebSocketClientTransport` is the
+>   `node:http(s)`-upgrade egress.
 > - **stdio** — `createStdioServer` pumps newline-delimited JSON-RPC over a
 >   process's `stdin`/`stdout` (or injected streams); `createStdioClientTransport`
 >   spawns a child process and drives the same protocol over its piped stdio.
@@ -2139,6 +2140,16 @@ HTTP transports share ONE transport contract. Like the HTTP transport it is
 `server.upgrade(...)` handler BEFORE this one (it can decline + destroy an
 unauthenticated upgrade).
 
+**It follows the spine's lifecycle, which is why `emitter` is required.** Pass the
+spine's own `server.emitter`: on its `stop` event the handler closes every socket it
+still owns with the RFC 6455 close handshake, so each client reads a clean goodbye and
+the spine's drain settles in milliseconds. Node detaches an upgraded socket from the
+connection set the spine's own close walks, so the claimant is the ONLY thing that can
+end it — an ingress holding its sockets open costs `stop()` the whole `drain` budget
+(10s by default) and the connection is then cut mid-protocol. A socket whose peer already
+vanished is no longer held, and closing a dead one is a no-op, so a departed client
+neither throws nor delays the stop.
+
 ```ts
 import { createMCPClient, createMCPServer } from '@orkestrel/mcp'
 import { createWebSocketClientTransport, createWebSocketServer } from '@orkestrel/mcp/server'
@@ -2148,7 +2159,8 @@ const mcp = createMCPServer({
 	identity: { name: 'docs', version: '1.0.0' },
 	tools: createToolManager(),
 })
-server.upgrade(createWebSocketServer(mcp)) // claims an MCP WebSocket upgrade to /mcp
+// Claims an MCP WebSocket upgrade to /mcp, and closes those sockets when the spine stops.
+server.upgrade(createWebSocketServer(mcp, { emitter: server.emitter }))
 
 // An MCP client connects over the SAME MCPClient, a WebSocket transport instead of HTTP:
 const client = createMCPClient({
@@ -2159,10 +2171,10 @@ await client.connect() // the RFC 6455 handshake, then the MCP initialize over f
 
 #### Factories
 
-| API                              | Kind     | Summary                                                                                                                                                             |
-| -------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createWebSocketServer`          | function | Mount an `MCPDispatcherInterface` over WebSocket — returns an `UpgradeHandler` for `server.upgrade(...)` (claims an MCP WS upgrade, pipes it through `bindServer`). |
-| `createWebSocketClientTransport` | function | Create a `MCPClientTransportInterface` that drives a REMOTE MCP server over a WebSocket (the WS egress mirror).                                                     |
+| API                              | Kind     | Summary                                                                                                                                                                                                           |
+| -------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createWebSocketServer`          | function | Mount an `MCPDispatcherInterface` over WebSocket — returns an `UpgradeHandler` for `server.upgrade(...)` (claims an MCP WS upgrade, pipes it through `bindServer`, and closes its sockets on the spine's `stop`). |
+| `createWebSocketClientTransport` | function | Create a `MCPClientTransportInterface` that drives a REMOTE MCP server over a WebSocket (the WS egress mirror).                                                                                                   |
 
 #### Entities
 
@@ -2183,10 +2195,10 @@ _`upgradeRequestPath` (used by `createWebSocketServer`) and `bridgeMessageTransp
 
 #### Types
 
-| Type                              | Kind      | Shape                                                                                                                                |
-| --------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `WebSocketServerOptions`          | interface | `{ path?: string; subprotocol?: string }` — the upgrade path (default `/mcp`) + the negotiated subprotocol (default `'mcp'`).        |
-| `WebSocketClientTransportOptions` | interface | `{ url: string; headers?: Record<string, string> }` — the remote WS endpoint (`ws(s)://` or `http(s)://`) + extra handshake headers. |
+| Type                              | Kind      | Shape                                                                                                                                                                                                                                             |
+| --------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WebSocketServerOptions`          | interface | `{ emitter: EmitterInterface<ServerEventMap>; path?: string; subprotocol?: string }` — the spine emitter whose `stop` closes the claimed sockets (REQUIRED), the upgrade path (default `/mcp`), and the negotiated subprotocol (default `'mcp'`). |
+| `WebSocketClientTransportOptions` | interface | `{ url: string; headers?: Record<string, string> }` — the remote WS endpoint (`ws(s)://` or `http(s)://`) + extra handshake headers.                                                                                                              |
 
 ### stdio transport
 
@@ -4059,7 +4071,7 @@ application/json` and an `Accept` of BOTH `application/json` and
     state or widened `send` contract is needed. Both captured
     headers are merged before `options.headers`, so a caller-supplied key wins.
 16. **The WebSocket transport is the full-duplex ingress over the spine
-    upgrade seam (`src/server`).** `createWebSocketServer(mcp, options?)`
+    upgrade seam (`src/server`).** `createWebSocketServer(mcp, options)`
     returns an `UpgradeHandler` (`@orkestrel/server`) to register with
     `server.upgrade(...)`; it composes `@orkestrel/websocket`'s RFC 6455
     wrapper over the spine's generic upgrade seam. It DECLINES (returns
@@ -4080,7 +4092,15 @@ socket, key, head, protocol })` (SERVER mode → writes the `101` handshake
     text frame per message, `close` closes the socket): inbound text frames
     are `JSON.parse`d (guarded) + narrowed via `parseJSONRPCMessage` onto
     `message`, a malformed / non-message frame surfaces on `error` and is
-    DROPPED, and the socket's `close` bridges to the transport's `close`.
+    DROPPED, and the socket's `close` bridges to the transport's `close`. It
+    also OWNS what it claimed: the handler holds every live transport and, on
+    `options.emitter`'s `stop` event (the spine's own emitter, REQUIRED),
+    `close`s each one — the RFC 6455 close handshake, never a destroy. Node
+    detaches an upgraded socket from the connection set the spine's close
+    walks, so nothing else can end it: without this the spine's `stop()`
+    spends its whole `drain` budget and then cuts the connection
+    mid-protocol. A transport drops out of the held set on its own `close`,
+    so a peer that already vanished neither throws nor delays the stop.
 17. **The WebSocket CLIENT transport drives a remote server over an upgrade
     (`src/server`).** `createWebSocketClientTransport({ url, headers? })`
     returns a `MCPClientTransportInterface` — the WebSocket egress mirror of

@@ -234,7 +234,7 @@ export async function start(): Promise<BrowserFixtureInterface> {
 	server.use(applyBrowserCORS)
 	server.use(recordInbound)
 	server.use(createMCPSession<MCPSessionState>({ origin }))
-	server.upgrade(createWebSocketServer(mcp))
+	server.upgrade(createWebSocketServer(mcp, { emitter: server.emitter }))
 	server.upgrade(createRecordingWebSocketHandler(mcp))
 	server.upgrade(createRawWebSocketHandler())
 	const port = await server.start()

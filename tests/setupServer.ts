@@ -10,6 +10,7 @@ import type { WebSocketFrame } from '@orkestrel/websocket'
 import type { ManualClockInterface } from './setup.js'
 import { lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import { createServer as createHTTPServer, request as httpRequest } from 'node:http'
+import { connect } from 'node:net'
 import { fileURLToPath } from 'node:url'
 import {
 	isAbsolute,
@@ -485,6 +486,55 @@ export function readClientFrames(client: Duplex): { readonly frames: readonly We
 	return { frames }
 }
 
+/** A raw client socket held open against a real server's WebSocket endpoint. */
+export interface ClientSocketInterface {
+	/** Every frame the server has sent since the `101`, decoded as it arrives. */
+	readonly frames: readonly WebSocketFrame[]
+	/** Resolves when the client end is fully closed (after its last `data` event). */
+	readonly closed: Promise<void>
+	/** Destroy the client end — the peer that goes away without a close frame. */
+	close(): void
+}
+
+/**
+ * Open a raw RFC 6455 client socket against a real server and decode what it sends back
+ * (AGENTS §16.1) — a genuine TCP peer, no wrapper and no mock.
+ *
+ * @remarks
+ * Connects to `base`, writes a valid upgrade `GET` for `path`, and resolves once the
+ * server's handshake response arrives, so the caller knows the socket is CLAIMED before it
+ * acts. {@link readClientFrames} strips that handshake and decodes every later frame, which
+ * is what makes a server-side protocol close (an opcode-`8` frame) distinguishable from a
+ * socket destroy (no frame at all). `closed` resolves on the socket's `close` event, after
+ * node has dispatched every `data` event, so an assertion over `frames` never races the wire.
+ *
+ * @param base - The server's bound base URL (e.g. `http://127.0.0.1:<port>`)
+ * @param path - The endpoint path to upgrade (e.g. `/mcp`)
+ * @returns The connected {@link ClientSocketInterface}
+ */
+export async function openClientSocket(base: string, path: string): Promise<ClientSocketInterface> {
+	const url = new URL(base)
+	const socket = connect(Number(url.port), url.hostname)
+	socket.on('error', () => {}) // a server-side destroy is an expected end here, never fatal
+	await new Promise<void>((resolve) => socket.once('connect', () => resolve()))
+	const reader = readClientFrames(socket)
+	const closed = new Promise<void>((resolve) => socket.once('close', () => resolve()))
+	const handshake = new Promise<void>((resolve) => socket.once('data', () => resolve()))
+	socket.write(
+		`GET ${path} HTTP/1.1\r\nHost: ${url.host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n` +
+			`Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n` +
+			`Sec-WebSocket-Protocol: mcp\r\n\r\n`,
+	)
+	await handshake
+	return {
+		get frames() {
+			return reader.frames
+		},
+		closed,
+		close: () => socket.destroy(),
+	}
+}
+
 // ── Teardown registrar (tracked-resource cleanup) ─────────────────────────────
 //
 // AGENTS §16.1: the duplicated `const tracked = []` + `afterEach(dispose-all)` +
@@ -512,12 +562,12 @@ export interface TeardownInterface<T> {
  * Disposal runs in REVERSE registration order, because a resource is built on the ones
  * registered before it: a client is opened against a server that is already listening, so
  * the client is closed first and the server stops with nothing still attached. The order
- * matters rather than merely reading well — `ServerInterface.stop()` waits on
- * `server.close()`, an UPGRADED WebSocket is detached from the connection set that
- * `closeIdleConnections()` reaches, and that wait is bounded by nothing this side owns, so
- * a socket still open when the server stops parks teardown until Vitest's hook timeout
- * fires (10s) and `destroy()` — the force-close that would have freed it — is never
- * reached.
+ * matters rather than merely reading well — an UPGRADED WebSocket is detached from the
+ * connection set both `closeIdleConnections()` and `closeAllConnections()` walk, so neither
+ * `stop()` nor `destroy()` can reach it: a socket nothing on this side closes parks teardown
+ * on `stop()` until Vitest's hook timeout fires (10s), and `destroy()` would have hung in
+ * exactly the same place. What frees it is the owner closing it — which is what the WebSocket
+ * ingress now does on the spine's `stop` event.
  *
  * @typeParam T - The kind of item tracked (the disposer's parameter type)
  * @param dispose - How to dispose one tracked item (may be async)

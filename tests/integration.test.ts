@@ -175,7 +175,7 @@ async function startStack(options?: TestStackOptions): Promise<TestStackInterfac
 		host: '127.0.0.1',
 	})
 	if (options?.legacy === true) server.use(createMCPSession<MCPSessionState>())
-	server.upgrade(createWebSocketServer(face))
+	server.upgrade(createWebSocketServer(face, { emitter: server.emitter }))
 	const handle: StartedServerInterface<MCPSessionState> = await startServer(server)
 	const channels: MessageChannel[] = []
 	const clients: MCPClientInterface[] = []

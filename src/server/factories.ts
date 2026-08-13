@@ -179,13 +179,21 @@ export function createHTTPClientTransport(
  *   as a frame — a NOTIFICATION sends nothing, and a non-request message (a stray response) is
  *   ignored. A `dispatch` / `send` fault surfaces on `mcp.emitter`'s `error` event rather than
  *   escaping the (async) message pump.
+ * - **Closes on the spine's `stop`.** It holds every socket it claimed and, on `options.emitter`'s
+ *   `stop` event, closes each one with the RFC 6455 close handshake, so the spine's drain settles
+ *   at once and each client reads a clean goodbye. Node detaches an upgraded socket from the
+ *   connection set the spine's own close walks, so the claimant is the only thing that can end
+ *   it: an ingress that held its sockets open would cost `stop()` the whole `drain` budget and
+ *   then have the connection cut mid-protocol. A socket the peer already dropped is gone from
+ *   the set (its transport's `close` removes it), and closing a dead one is a no-op either way.
  *
  * It is MECHANISM, not policy: compose an auth guard IN FRONT by registering an upgrade
  * handler BEFORE this one — that handler can claim (decline + destroy) an unauthenticated
  * upgrade so it never reaches this pump.
  *
  * @param mcp - The transport-agnostic {@link MCPDispatcherInterface} to expose over WebSocket
- * @param options - Optional `path` (default {@link DEFAULT_MCP_PATH}) and `subprotocol`
+ * @param options - The spine's `emitter` (REQUIRED — the `stop` event this ingress closes its
+ *   sockets on), plus optional `path` (default {@link DEFAULT_MCP_PATH}) and `subprotocol`
  *   (default {@link MCP_WEBSOCKET_SUBPROTOCOL}); see {@link WebSocketServerOptions}
  * @returns An {@link UpgradeHandler} to register with the spine's `upgrade` seam
  *
@@ -195,15 +203,24 @@ export function createHTTPClientTransport(
  * import { createWebSocketServer } from '@src/server'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
- * server.upgrade(createWebSocketServer(mcp)) // an MCP client now connects over ws://…/mcp
+ * server.upgrade(createWebSocketServer(mcp, { emitter: server.emitter })) // ws://…/mcp
  * ```
  */
 export function createWebSocketServer(
 	mcp: MCPDispatcherInterface,
-	options?: WebSocketServerOptions,
+	options: WebSocketServerOptions,
 ): UpgradeHandler {
-	const path = options?.path ?? DEFAULT_MCP_PATH
-	const subprotocol = options?.subprotocol ?? MCP_WEBSOCKET_SUBPROTOCOL
+	const path = options.path ?? DEFAULT_MCP_PATH
+	const subprotocol = options.subprotocol ?? MCP_WEBSOCKET_SUBPROTOCOL
+	// The sockets this handler currently owns — a closure store, like the session middleware's.
+	// A transport leaves on its own `close`, so the set holds exactly the LIVE connections.
+	const live = new Set<WebSocketServerTransport>()
+	// The spine is stopping: say the RFC 6455 goodbye on every socket still open. Nothing else
+	// can — node detaches an upgraded socket from the connection set the spine's close walks —
+	// so without this the drain runs to its deadline and the connection is cut mid-protocol.
+	options.emitter.on('stop', () => {
+		for (const transport of live) void transport.close()
+	})
 	return (request: IncomingMessage, socket: Duplex, head: Buffer): boolean => {
 		// DECLINE anything that is not our MCP WebSocket upgrade — the spine fans it onward or
 		// destroys it. Never touch the socket on a decline (it is not ours yet).
@@ -221,6 +238,8 @@ export function createWebSocketServer(
 		// `mcp.emitter`'s `error` event.
 		const ws = createNodeWebSocket({ socket, key, head, protocol: subprotocol })
 		const transport = new WebSocketServerTransport(ws)
+		live.add(transport)
+		transport.emitter.on('close', () => live.delete(transport))
 		bindServer(mcp, bridgeMessageTransport(transport))
 		void transport.start()
 		return true
