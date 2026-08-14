@@ -102,7 +102,7 @@
 		"@modelcontextprotocol/conformance": "0.2.0-alpha.10",
 		"@orkestrel/guide": "^0.0.11",
 		"@orkestrel/router": "^0.0.9",
-		"@orkestrel/scaffold": "^0.0.32",
+		"@orkestrel/scaffold": "^0.0.33",
 		"@orkestrel/server": "^0.0.12",
 		"@orkestrel/test": "^0.0.3",
 		"@types/node": "^26.2.0",
