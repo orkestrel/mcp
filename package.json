@@ -72,7 +72,7 @@
 		"format": "oxfmt --config .oxfmtrc.json --write .",
 		"format:check": "oxfmt --config .oxfmtrc.json --check .",
 		"lint:check": "oxlint --config .oxlintrc.json --deny-warnings .",
-		"test": "npm run test:src && npm run test:policy && npm run test:config && npm run test:conformance && npm run test:guides",
+		"test": "npm run test:src && npm run test:policy && npm run test:config && npm run test:guides && npm run test:conformance && npm run test:integration",
 		"test:src": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:core --project src:browser --project src:server",
 		"test:src:core": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:core",
 		"test:src:browser": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:browser",
@@ -88,7 +88,7 @@
 		"build:src:core": "vite build --config configs/src/vite.core.config.ts && npm run copy dist/src/core/index.d.ts dist/src/core/index.d.cts",
 		"build:src:browser": "vite build --config configs/src/vite.browser.config.ts",
 		"build:src:server": "vite build --config configs/src/vite.server.config.ts && npm run copy dist/src/server/index.d.ts dist/src/server/index.d.cts",
-		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:integration"
+		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test"
 	},
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.11",
@@ -102,7 +102,7 @@
 		"@modelcontextprotocol/conformance": "0.2.0-alpha.10",
 		"@orkestrel/guide": "^0.0.11",
 		"@orkestrel/router": "^0.0.9",
-		"@orkestrel/scaffold": "^0.0.30",
+		"@orkestrel/scaffold": "^0.0.32",
 		"@orkestrel/server": "^0.0.12",
 		"@orkestrel/test": "^0.0.2",
 		"@types/node": "^26.2.0",
