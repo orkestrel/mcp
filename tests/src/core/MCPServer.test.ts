@@ -68,10 +68,9 @@ import {
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { waitForDelay } from '@orkestrel/test'
+import { createRecorder, waitForDelay } from '@orkestrel/test'
 import {
 	buildNestedRecord,
-	createErrorRecorder,
 	createJSONRPCNotification,
 	createJSONRPCRequest,
 	createHostilePeer,
@@ -2997,7 +2996,7 @@ describe('MCPServer — request event (§13)', () => {
 	})
 
 	it('EMIT SAFETY: a throwing request listener cannot corrupt the dispatch, and routes to the error handler', async () => {
-		const errors = createErrorRecorder()
+		const errors = createRecorder<readonly [error: unknown, event: string]>()
 		const mcp = server(errors.handler)
 		mcp.emitter.on('request', () => {
 			throw new Error('request observer blew up')
@@ -3012,7 +3011,7 @@ describe('MCPServer — request event (§13)', () => {
 	})
 
 	it('EMIT SAFETY: a throwing error handler neither escapes nor recurses', async () => {
-		const errors = createErrorRecorder()
+		const errors = createRecorder<readonly [error: unknown, event: string]>()
 		const mcp = server((error, event) => {
 			errors.handler(error, event)
 			throw new Error('error handler blew up too')
