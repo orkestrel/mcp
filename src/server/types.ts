@@ -361,11 +361,11 @@ export interface WebSocketClientTransportOptions {
  * @remarks
  * - `command` — the executable to spawn (e.g. `'node'`, `'./my-mcp-server'`). REQUIRED.
  * - `args` — the command-line arguments passed to `command`; defaults to none.
- * - `env` — the environment variables for the spawned child, passed straight to
- *   `node:child_process`'s `spawn`; when OMITTED the child inherits the full
- *   `process.env` (the `spawn` default), when PROVIDED it REPLACES the inherited
- *   environment entirely (`spawn` semantics) — a caller wanting to extend rather
- *   than replace spreads `process.env` into `env` themselves.
+ * - `env` — environment variable overrides MERGED over the parent `process.env` for the
+ *   spawned child (the composed `@orkestrel/process` supervisor's merge semantics): when
+ *   OMITTED the child inherits the full `process.env`, when PROVIDED each named key overrides
+ *   the inherited value while every unlisted key is still inherited. This transport cannot
+ *   REPLACE the inherited environment entirely — the supervisor always merges over the parent.
  */
 export interface StdioClientTransportOptions {
 	readonly command: string

@@ -5,11 +5,10 @@ import type {
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { StdioClientTransportOptions } from '../types.js'
-import type { ChildProcessByStdio } from 'node:child_process'
-import type { Readable, Writable } from 'node:stream'
-import { spawn } from 'node:child_process'
+import { Process } from '@orkestrel/process/server'
+import { PROCESS_GRACE } from '@orkestrel/process'
 import { Emitter } from '@orkestrel/emitter'
-import { dispatchLines, extractLines } from '../helpers.js'
+import { dispatchLines } from '../helpers.js'
 
 /**
  * The stdio CLIENT transport for the Model Context Protocol — a
@@ -19,22 +18,29 @@ import { dispatchLines, extractLines } from '../helpers.js'
  * import('./WebSocketClientTransport.js').WebSocketClientTransport}.
  *
  * @remarks
- * - **Spawns the server.** `start()` runs `node:child_process`'s `spawn(options.command,
- *   options.args, { env: options.env, stdio: ['pipe', 'pipe', 'inherit'] })` — the
- *   child's `stdin`/`stdout` are piped for the JSON-RPC channel, its `stderr` inherits
- *   the parent's (diagnostics pass through, never parsed as protocol).
- * - **Inbound (`message`).** Each `stdout` chunk is folded through the shared
- *   {@link extractLines} line-framing helper (buffering a partial trailing line
- *   across reads); every complete line is decoded and delivered via the shared
- *   {@link dispatchLines} helper — a well-formed {@link JSONRPCMessage} emits
- *   `message`, a malformed line emits `error` (§14, never throws). The child's
- *   `close` bridges to this transport's `close`.
- * - **Outbound (`send`).** `send(message)` writes one newline-terminated
- *   `JSON.stringify`d line to the child's `stdin`.
- * - **`close()`** kills the child process and fires `close` (idempotent).
+ * - **Composes `@orkestrel/process`.** `start()` builds one supervised
+ *   {@link import('@orkestrel/process/server').Process} with `writable: true`, so the child's
+ *   `stdin`/`stdout` are the JSON-RPC channel and its `stderr` is retained as bounded evidence
+ *   rather than parsed as protocol. The supervisor owns spawn, framing, and termination.
+ * - **Inbound (`message`).** Standard output is drained eagerly through the supervisor's
+ *   `readline`-framed `lines` iterable, so a multi-byte UTF-8 sequence split across two reads is
+ *   decoded whole and a final line written without a trailing newline still arrives. Each framed
+ *   line is decoded and delivered via the shared {@link dispatchLines} helper — a well-formed
+ *   {@link JSONRPCMessage} emits `message`, a malformed line emits `error` (§14, never throws).
+ * - **Outbound (`send`).** `send(message)` writes one newline-terminated `JSON.stringify`d line
+ *   through the supervisor's `send` and AWAITS its answer, so this promise settles only after the
+ *   host reports the line handled rather than the moment the write is queued. The supervisor never
+ *   rejects — it answers `false` for a channel that was closed, destroyed, or ended, and for a write
+ *   that failed — so a `false` answer REJECTS here with the same not-connected error a transport
+ *   that was never started raises. A dead peer surfaces at the caller instead of vanishing.
+ * - **`close()`** terminates the child through the supervisor's bounded `SIGTERM` → grace →
+ *   `SIGKILL` group-kill, awaits its observed exit, tears down the supervisor, and fires `close`
+ *   once (idempotent). On a POSIX host the child leads its own process group, so the group-kill
+ *   reaches its grandchildren rather than orphaning them.
  * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
- *   fault), distinct from the emitter's own listener-error channel.
+ *   fault, including the child spawn cause the supervisor surfaces), distinct from the emitter's
+ *   own listener-error channel.
  *
  * @example
  * ```ts
@@ -48,8 +54,7 @@ export class StdioClientTransport implements MCPClientTransportInterface {
 	readonly #command: string
 	readonly #args: readonly string[]
 	readonly #env: Readonly<Record<string, string>> | undefined
-	#child: ChildProcessByStdio<Writable, Readable, null> | undefined = undefined
-	#buffer = ''
+	#process: Process | undefined = undefined
 	#closed = false
 
 	constructor(options: StdioClientTransportOptions) {
@@ -75,50 +80,59 @@ export class StdioClientTransport implements MCPClientTransportInterface {
 
 	async start(): Promise<void> {
 		// Already spawned — a second `start()` (e.g. via `connect()`) short-circuits (idempotent).
-		if (this.#child !== undefined) return
+		if (this.#process !== undefined) return
 		this.#closed = false
-		this.#buffer = ''
-		const child = spawn(this.#command, [...this.#args], {
-			env: this.#env,
-			stdio: ['pipe', 'pipe', 'inherit'],
+		const child = new Process({
+			command: {
+				file: this.#command,
+				arguments: [...this.#args],
+				...(this.#env === undefined ? {} : { environment: this.#env }),
+			},
+			workspace: process.cwd(),
+			grace: PROCESS_GRACE,
+			writable: true,
 		})
-		this.#child = child
-		child.stdout.on('data', (chunk: Buffer | string) => this.#receive(chunk.toString()))
-		child.on('close', () => this.#onClose(child))
-		child.on('error', (error) => this.#emitter.emit('error', error))
+		this.#process = child
+		child.emitter.on('error', (cause) => this.#emitter.emit('error', cause))
+		void child.exit.then(() => this.#onExit(child))
+		void this.#pump(child)
 	}
 
 	async send(message: JSONRPCMessage): Promise<void> {
-		const child = this.#child
-		if (child === undefined) throw new Error('stdio transport is not connected')
-		child.stdin.write(`${JSON.stringify(message)}\n`)
+		const child = this.#process
+		// The supervisor's `send` never rejects: it ANSWERS `false` when the channel was closed,
+		// destroyed, ended, or the write failed. Awaiting that answer is what keeps a dead peer from
+		// vanishing — an unawaited call resolves this `send` before the line reaches the host.
+		const delivered = child === undefined ? false : await child.send(JSON.stringify(message))
+		if (!delivered) throw new Error('stdio transport is not connected')
 	}
 
 	async close(): Promise<void> {
 		if (this.#closed) return
 		this.#closed = true
-		const child = this.#child
-		this.#child = undefined
-		if (child !== undefined) child.kill()
+		const child = this.#process
+		this.#process = undefined
+		if (child !== undefined) await child.destroy()
 		this.#emitter.emit('close')
 	}
 
-	// Buffer a raw stdout chunk through the shared line-framing helper, then decode + deliver
-	// every complete line onto this transport's emitter (a partial trailing line carries
-	// forward to the next chunk).
-	#receive(chunk: string): void {
-		const { lines, remainder } = extractLines(this.#buffer, chunk)
-		this.#buffer = remainder
-		dispatchLines(this.#emitter, lines)
+	// Drain the supervisor's newline-framed stdout lines, decoding + delivering every complete line
+	// onto this transport's emitter. A child an explicit close or a replacement superseded stops
+	// dispatching: peer identity keeps a stale iteration from emitting onto the live child.
+	async #pump(child: Process): Promise<void> {
+		for await (const line of child.lines) {
+			if (this.#process !== child) return
+			dispatchLines(this.#emitter, [line])
+		}
 	}
 
-	// The current child process closed — fire this transport's `close` once. A child an explicit
-	// close superseded may report its own close after `start()` has installed a replacement; peer
-	// identity keeps that old event from clearing the live child or emitting a second close.
-	#onClose(child: ChildProcessByStdio<Writable, Readable, null>): void {
-		if (this.#closed || this.#child !== child) return
+	// The current child process exited — fire this transport's `close` once. A child an explicit
+	// close superseded reports its own exit after `start()` has installed a replacement; peer
+	// identity keeps that old exit from clearing the live child or emitting a second close.
+	#onExit(child: Process): void {
+		if (this.#closed || this.#process !== child) return
 		this.#closed = true
-		this.#child = undefined
+		this.#process = undefined
 		this.#emitter.emit('close')
 	}
 }

@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/mcp",
-	"version": "0.0.18",
+	"version": "0.0.19",
 	"description": "A typed Model Context Protocol client/server with pluggable HTTP, WebSocket, and stdio transports. Part of the @orkestrel line.",
 	"keywords": [
 		"json-rpc",
@@ -93,6 +93,7 @@
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.12",
 		"@orkestrel/emitter": "^0.0.7",
+		"@orkestrel/process": "^0.0.3",
 		"@orkestrel/sse": "^0.0.5",
 		"@orkestrel/tool": "^0.0.11",
 		"@orkestrel/websocket": "^0.0.9"
@@ -102,18 +103,18 @@
 		"@modelcontextprotocol/conformance": "0.2.0-alpha.10",
 		"@orkestrel/guide": "^0.0.12",
 		"@orkestrel/router": "^0.0.10",
-		"@orkestrel/scaffold": "^0.0.41",
+		"@orkestrel/scaffold": "^0.0.44",
 		"@orkestrel/server": "^0.0.14",
-		"@orkestrel/test": "^0.0.6",
+		"@orkestrel/test": "^0.0.7",
 		"@types/node": "^26.2.0",
-		"@vitest/browser-playwright": "^4.1.10",
-		"oxfmt": "^0.63.0",
-		"oxlint": "^1.78.0",
+		"@vitest/browser-playwright": "^4.1.11",
+		"oxfmt": "^0.64.0",
+		"oxlint": "^1.79.0",
 		"playwright": "^1.62.1",
 		"typescript": "^6.0.3",
 		"vite": "~8.2.1",
 		"vite-plugin-dts": "^5.0.3",
-		"vitest": "^4.1.10"
+		"vitest": "^4.1.11"
 	},
 	"peerDependencies": {
 		"@orkestrel/router": "^0.0.10",
