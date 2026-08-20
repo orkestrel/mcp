@@ -95,6 +95,7 @@ import {
 	isMCPCompletion,
 	isMCPCompletionParams,
 	isMCPInputResult,
+	isModernRequest,
 	isMCPPaginationParams,
 	isMCPPromptGetResult,
 	isMCPPromptPage,
@@ -372,6 +373,17 @@ export class MCPServer implements MCPServerInterface {
 		options: MCPMethodOptions,
 	): Promise<JSONRPCResponse | MCPStream> {
 		const id = request.id
+		const method = request.method
+		if (!isModernRequest(request)) {
+			if (this.#methods.method(method) === undefined) {
+				return buildJSONRPCError(id, JSONRPC_METHOD_NOT_FOUND, `Method not found: ${method}`)
+			}
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: request declares no protocol version',
+			)
+		}
 		const context = parseRequestContext(request, {
 			bytes: this.#limits.message,
 			depth: this.#limits.depth,

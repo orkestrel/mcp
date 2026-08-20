@@ -63,9 +63,13 @@ lanes' full answers ride beside this file.
   silently (timed out at the caller's full deadline). TypeScript refuses the composition — the
   outer call receives `MCPDispatcherInterface`, not `MCPServerInterface` — so the type system is
   the guard, no code changes, and no example or guide sentence teaches the misuse.
-- **Reference-server unknown-method behavior** (the objective bound's corroboration) is under
-  bounded research on the Grok lane; the Q2 ruling stands independently of it, and the result
-  lands in the guide's worst-case sentence if it returns before U4 closes.
+- **Reference-server unknown-method behavior**, resolved 2026-08-20: the Grok lane went dark on
+  this question (recorded, killed by process id) and the native researcher closed it — neither
+  reference SDK's legacy server exits or goes silent on a pre-initialize unknown method; the
+  TypeScript server answers `-32601` and the Python server answers `-32602`, and the client's
+  fallback fires on any discover failure short of `MCP_UNSUPPORTED_VERSION`, so the Q2 ruling
+  stands corroborated with silence bounded by the caller's own deadline. The cited record rides
+  in `handshake-research-servers.md`.
 
 ## Findings recorded outside this scope
 

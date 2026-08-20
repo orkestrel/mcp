@@ -715,6 +715,42 @@ describe('MCPServer — identity', () => {
 })
 
 describe('MCPServer — modern-and-legacy dispatch', () => {
+	it('answers a legacy initialize on the bare modern server as an unregistered method', async () => {
+		const mcp = createMCPServer({
+			identity: { name: 'modern-server', version: '2.0.0' },
+			tools: tools(),
+		})
+		const response = responseOf(await mcp.dispatch(createJSONRPCRequest({ method: 'initialize' })))
+
+		expect(response?.error).toEqual({
+			code: JSONRPC_METHOD_NOT_FOUND,
+			message: 'Method not found: initialize',
+		})
+		expect(await mcp.handle('{"jsonrpc":"2.0","method":"initialize","id":2}')).toBe(
+			'{"jsonrpc":"2.0","id":2,"error":{"code":-32601,"message":"Method not found: initialize"}}',
+		)
+	})
+
+	it('names the absent protocol version on a registered modern method', async () => {
+		const mcp = createMCPServer({
+			identity: { name: 'modern-server', version: '2.0.0' },
+			tools: tools(),
+		})
+		const response = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					method: 'tools/list',
+					params: { _meta: { [MCP_META_CAPABILITIES]: {} } },
+				}),
+			),
+		)
+
+		expect(response?.error).toEqual({
+			code: JSONRPC_INVALID_PARAMS,
+			message: 'Invalid params: request declares no protocol version',
+		})
+	})
+
 	it('keeps the legacy method responses byte-identical and unstamped', async () => {
 		const mcp = server()
 
@@ -747,6 +783,7 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 		)
 
 		expect(response?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(response?.error?.message).toBe('Invalid params: malformed modern request metadata')
 	})
 
 	it('treats a present non-string version as modern and rejects it with -32602', async () => {

@@ -2534,9 +2534,12 @@ states that widest arm.
 | `handle`   | `Promise<string \| MCPTextStreamControllerInterface \| undefined>`      | Pre-parse UTF-8 byte bound → `JSON.parse` → narrow → `dispatch` → serialize. Overflow/parse failure → `-32700`; non-invocation → `-32600`, each with its unreadable `id` OMITTED; notification → `undefined`; held-open answer → its serialized mirror.                                                                                                                                                                                                                                                    |
 
 Both doors demand modern request metadata, and a bare `MCPServer` has no other era to fall
-back on. A version-less `{ jsonrpc, method, id }` is refused `-32602` with
-`Invalid params: malformed modern request metadata`, and so is one carrying
-`MCP_META_VERSION` alone — `MCP_META_CAPABILITIES` is required beside it. The alternative to
+back on. A version-less `{ jsonrpc, method, id }` naming a registered method is refused
+`-32602` with `Invalid params: request declares no protocol version`; one naming a method the
+modern seam does not register — a legacy `initialize` — is refused `-32601` with
+`Method not found: initialize`; and one carrying `MCP_META_VERSION` alone is refused `-32602`
+with `Invalid params: malformed modern request metadata` — `MCP_META_CAPABILITIES` is required
+beside it. The alternative to
 stamping the metadata yourself is wrapping the server in `createMCPLegacy`, which answers the
 handshake and translates the dated method set on the way in.
 

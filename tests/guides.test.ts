@@ -486,7 +486,7 @@ describe('guides/mcp.md tools/list request metadata', () => {
 		)
 
 		expect(unstamped).toBe(
-			'{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Invalid params: malformed modern request metadata"}}',
+			'{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Invalid params: request declares no protocol version"}}',
 		)
 		expect(stamped).toBe(
 			'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"add","inputSchema":{"type":"object"}}],"resultType":"complete","ttlMs":60000,"cacheScope":"private","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"calculator","version":"1.0.0"}}}}',
