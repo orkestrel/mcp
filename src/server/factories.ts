@@ -358,12 +358,13 @@ export function createStdioServer(
 	const input = options?.input ?? process.stdin
 	const output = options?.output ?? process.stdout
 	const transport = new StdioServerTransport(input, output)
-	bindServer(mcp, bridgeMessageTransport(transport))
+	const unbind = bindServer(mcp, bridgeMessageTransport(transport))
 	return {
 		start(): void {
 			void transport.start()
 		},
 		stop(): void {
+			unbind()
 			void transport.close()
 		},
 	}

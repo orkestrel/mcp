@@ -28,9 +28,10 @@ import { dispatchLines, extractLines } from '../helpers.js'
  *   transport's `close`.
  * - **Outbound (`send`).** `send(message)` writes one newline-terminated
  *   `JSON.stringify`d line to `output`.
- * - **`close()`** fires this transport's `close` (idempotent) — the injected streams
- *   are owned by the caller (typically `process.stdin`/`process.stdout`, which must
- *   never be closed out from under the process) and are not torn down here.
+ * - **`close()`** removes this transport's input subscriptions and fires its `close`
+ *   event (idempotent). The injected streams are owned by the caller (typically
+ *   `process.stdin`/`process.stdout`), so the transport never closes, pauses, ends, or
+ *   blanket-clears them.
  * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
  *   fault), distinct from the emitter's own listener-error channel.
@@ -39,6 +40,9 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 	readonly #emitter: Emitter<MCPClientTransportEventMap>
 	readonly #input: NodeJS.ReadableStream
 	readonly #output: NodeJS.WritableStream
+	readonly #data = (chunk: Buffer | string): void => this.#receive(chunk.toString())
+	readonly #ending = (): void => this.#onClose()
+	readonly #failure = (error: Error): void => this.#emitter.emit('error', error)
 	#buffer = ''
 	#started = false
 	#closed = false
@@ -70,9 +74,9 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 		// (the single MCPServer pump subscribes once).
 		if (this.#started || this.#closed) return
 		this.#started = true
-		this.#input.on('data', (chunk: Buffer | string) => this.#receive(chunk.toString()))
-		this.#input.on('close', () => this.#onClose())
-		this.#input.on('error', (error) => this.#emitter.emit('error', error))
+		this.#input.on('data', this.#data)
+		this.#input.on('close', this.#ending)
+		this.#input.on('error', this.#failure)
 	}
 
 	async send(message: JSONRPCMessage): Promise<void> {
@@ -82,6 +86,7 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 	async close(): Promise<void> {
 		if (this.#closed) return
 		this.#closed = true
+		this.#release()
 		this.#emitter.emit('close')
 	}
 
@@ -100,6 +105,13 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 	#onClose(): void {
 		if (this.#closed) return
 		this.#closed = true
+		this.#release()
 		this.#emitter.emit('close')
+	}
+
+	#release(): void {
+		this.#input.removeListener('data', this.#data)
+		this.#input.removeListener('close', this.#ending)
+		this.#input.removeListener('error', this.#failure)
 	}
 }

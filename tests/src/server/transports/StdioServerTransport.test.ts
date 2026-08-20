@@ -160,7 +160,38 @@ describe('StdioServerTransport — send writes response lines the peer decodes',
 })
 
 describe('StdioServerTransport — lifecycle', () => {
-	it('close() fires the transport close event and is idempotent', async () => {
+	it('restores the caller-owned input listener counts when close() releases the transport', async () => {
+		const input = new PassThrough()
+		const output = new PassThrough()
+		input.on('data', () => {})
+		input.on('close', () => {})
+		input.on('error', () => {})
+		const before = [
+			input.listenerCount('data'),
+			input.listenerCount('close'),
+			input.listenerCount('error'),
+		]
+		const transport = new StdioServerTransport(input, output)
+		await transport.start()
+
+		expect([
+			input.listenerCount('data'),
+			input.listenerCount('close'),
+			input.listenerCount('error'),
+		]).toEqual(before.map((count) => count + 1))
+
+		await transport.close()
+
+		expect([
+			input.listenerCount('data'),
+			input.listenerCount('close'),
+			input.listenerCount('error'),
+		]).toEqual(before)
+		expect(input.destroyed).toBe(false)
+		expect(input.writableEnded).toBe(false)
+	})
+
+	it('close() twice is a no-op and start() after close stays refused', async () => {
 		const input = new PassThrough()
 		const output = new PassThrough()
 		const transport = new StdioServerTransport(input, output)
@@ -172,9 +203,15 @@ describe('StdioServerTransport — lifecycle', () => {
 		expect(closed).toBe(1)
 		await transport.close()
 		expect(closed).toBe(1)
+		await transport.start()
+		expect([
+			input.listenerCount('data'),
+			input.listenerCount('close'),
+			input.listenerCount('error'),
+		]).toEqual([0, 0, 0])
 	})
 
-	it('the input stream ending propagates to the transport close event', async () => {
+	it('the input stream close event releases the executing listener and its siblings', async () => {
 		const input = new PassThrough()
 		const output = new PassThrough()
 		const transport = new StdioServerTransport(input, output)
@@ -186,6 +223,11 @@ describe('StdioServerTransport — lifecycle', () => {
 		await waitForDelay()
 
 		expect(closed).toBe(1)
+		expect([
+			input.listenerCount('data'),
+			input.listenerCount('close'),
+			input.listenerCount('error'),
+		]).toEqual([0, 0, 0])
 	})
 
 	it('the session is undefined for the stateless v1', async () => {

@@ -703,6 +703,31 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 		expect(await driveStdioChild(createCalculatorServer(), 'bare')).toBe(0)
 	})
 
+	it('stop() returns synchronously and releases only the factory-owned input listeners', () => {
+		const input = new PassThrough()
+		const output = new PassThrough()
+		input.on('data', () => {})
+		input.on('close', () => {})
+		input.on('error', () => {})
+		const before = [
+			input.listenerCount('data'),
+			input.listenerCount('close'),
+			input.listenerCount('error'),
+		]
+		const handle = createStdioServer(createCalculatorServer(), { input, output })
+		handle.start()
+
+		expect(handle.stop()).toBeUndefined()
+		expect(handle.stop()).toBeUndefined()
+		expect([
+			input.listenerCount('data'),
+			input.listenerCount('close'),
+			input.listenerCount('error'),
+		]).toEqual(before)
+		expect(input.destroyed).toBe(false)
+		expect(input.writableEnded).toBe(false)
+	})
+
 	function stdio() {
 		const input = new PassThrough()
 		const output = new PassThrough()
