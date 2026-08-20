@@ -278,9 +278,9 @@ export interface MCPSessionEntry {
  *
  * @remarks
  * - `url` — the absolute URL of the remote server's Streamable-HTTP endpoint (the
- *   `POST` target every JSON-RPC message is written to, e.g.
+ *   `POST` target every JSON-RPC message is written to, for example,
  *   `http://localhost:3000/mcp`). REQUIRED.
- * - `headers` — extra request headers merged onto every `POST` (e.g. an
+ * - `headers` — extra request headers merged onto every `POST` (for example, an
  *   `Authorization` bearer for a guarded server). The transport always sets
  *   `content-type: application/json` and an `Accept` of both `application/json` and
  *   `text/event-stream` (so the server may answer with either framing); a key supplied
@@ -338,7 +338,7 @@ export interface WebSocketServerOptions {
  *   `wss://` URL OR an `http://` / `https://` one (a `ws(s)` scheme is converted to `http(s)`
  *   for the underlying `node:http(s)` upgrade request; either reaches the same endpoint).
  *   REQUIRED.
- * - `headers` — extra request headers merged onto the upgrade `GET` (e.g. an `Authorization`
+ * - `headers` — extra request headers merged onto the upgrade `GET` (for example, an `Authorization`
  *   bearer for a guarded server). The transport always sets `Connection: Upgrade`,
  *   `Upgrade: websocket`, a random `Sec-WebSocket-Key`, `Sec-WebSocket-Version: 13`, and
  *   `Sec-WebSocket-Protocol: mcp`; a header supplied here is merged on top.
@@ -360,7 +360,7 @@ export interface WebSocketClientTransportOptions {
  * stdio-framed MCP server (newline-delimited JSON-RPC over `stdin`/`stdout`).
  *
  * @remarks
- * - `command` — the executable to spawn (e.g. `'node'`, `'./my-mcp-server'`). REQUIRED.
+ * - `command` — the executable to spawn (for example, `'node'`, `'./my-mcp-server'`). REQUIRED.
  * - `args` — the command-line arguments passed to `command`; defaults to none.
  * - `env` — environment variable overrides MERGED over the parent `process.env` for the
  *   spawned child (the composed `@orkestrel/process` supervisor's merge semantics): when

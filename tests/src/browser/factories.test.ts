@@ -131,11 +131,9 @@ describe('createWebSocketClientTransport — the browser client against the Node
 		await transport.close()
 	})
 
-	it('R2: default protocols (no option) connects against createWebSocketServer (which echoes mcp)', async () => {
-		// createWebSocketServer unconditionally echoes Sec-WebSocket-Protocol: mcp; per
-		// RFC 6455 §4.1 a client must fail if the server returns a subprotocol it did not
-		// request. Omitting `protocols` now defaults to MCP_WEBSOCKET_SUBPROTOCOL — this
-		// test proves the default matches the server's echo (no connection failure).
+	it('offers the default mcp protocol token that createWebSocketServer selects', async () => {
+		// The server selects its configured subprotocol only when the client's offer contains
+		// that token. Omitting `protocols` defaults the offer to MCP_WEBSOCKET_SUBPROTOCOL.
 		const client = createMCPClient({
 			transport: createWebSocketClientTransport({ url: `${serverURL}/mcp` }),
 		})

@@ -3,7 +3,9 @@
 // own, and are what a sibling package changes.
 
 import type { JSONRPCMessage } from '@src/core'
+import { createMCPServer } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
+import { createTool, createToolManager } from '@orkestrel/tool'
 import { describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
 import { fstatSync, readFileSync } from 'node:fs'
@@ -91,12 +93,14 @@ const sourceManager = createSourceManager({ files, modules: MODULES })
 describe('README.md', () => {
 	const readme = createGuide(requireValue(files['README.md'], 'Missing file: README.md'))
 
-	it('resolves every relative link', () => {
-		const broken = readme
-			.links()
-			.filter((href) => !isExternalLink(href))
-			.map((href) => resolveLink('README.md', href))
-			.filter((path) => files[path] === undefined)
+	it('contains only repository-relative links or absolute URLs', () => {
+		const links = readme.links()
+		const broken = links.filter((href) =>
+			isExternalLink(href)
+				? !URL.canParse(href)
+				: files[resolveLink('README.md', href)] === undefined,
+		)
+		expect(links.length).toBeGreaterThan(0)
 		expect(broken).toEqual([])
 	})
 })
@@ -465,6 +469,28 @@ describe('public package faces', () => {
 		)
 		expect(Object.keys(parsed['exports']).sort()).toEqual(expected.concat('./package.json').sort())
 		expect(parsed['exports']['./package.json']).toBe('./package.json')
+	})
+})
+
+describe('guides/mcp.md tools/list request metadata', () => {
+	it('requires modern metadata before the guide request succeeds', async () => {
+		const tools = createToolManager()
+		tools.add(createTool({ name: 'add', execute: (args) => Number(args['x']) + Number(args['y']) }))
+		const server = createMCPServer({
+			identity: { name: 'calculator', version: '1.0.0' },
+			tools,
+		})
+		const unstamped = await server.handle('{"jsonrpc":"2.0","method":"tools/list","id":1}')
+		const stamped = await server.handle(
+			'{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}',
+		)
+
+		expect(unstamped).toBe(
+			'{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Invalid params: malformed modern request metadata"}}',
+		)
+		expect(stamped).toBe(
+			'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"add","inputSchema":{"type":"object"}}],"resultType":"complete","ttlMs":60000,"cacheScope":"private","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"calculator","version":"1.0.0"}}}}',
+		)
 	})
 })
 

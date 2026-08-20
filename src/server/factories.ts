@@ -124,7 +124,7 @@ export function createMCPRoutes<TState = unknown>(
  * both `application/json` and `text/event-stream` (the server answers with EITHER — a
  * plain JSON envelope or a Streamable-HTTP SSE `data:` event, decoded with `@orkestrel/sse`),
  * and the reply is surfaced on the transport's `message` event for the client's id
- * correlation. Add `options.headers` (e.g. an `Authorization` bearer) to reach a guarded
+ * correlation. Add `options.headers` (for example, an `Authorization` bearer) to reach a guarded
  * server. `start` / `close` hold no connection; against a STATEFUL server it captures the
  * `mcp-session-id` from `initialize` and echoes it on later requests. It also captures
  * the initialize result's `protocolVersion` and sends `mcp-protocol-version` alone on each
@@ -281,7 +281,7 @@ export function createWebSocketServer(
  * `computeWebSocketAccept`), and opens a persistent bidirectional frame channel; each JSON-RPC
  * message the client `send`s is written as one masked text frame, and each decoded reply is
  * surfaced on the transport's `message` event for the client's id correlation. Add
- * `options.headers` (e.g. an `Authorization` bearer) to reach a guarded server.
+ * `options.headers` (for example, an `Authorization` bearer) to reach a guarded server.
  *
  * @param options - `url` (the remote WebSocket endpoint; REQUIRED) and optional `headers`
  *   merged onto the upgrade request; see {@link WebSocketClientTransportOptions}

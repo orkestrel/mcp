@@ -74,9 +74,6 @@ Published per the `exports` field in `package.json`: the
 environment-agnostic core (`.`), the Node-only server surface (`./server`),
 and the browser face (`./browser`), which is ESM only.
 
-[The changelog](https://github.com/orkestrel/mcp/blob/main/CHANGELOG.md) lives in the repository and is not in the
-tarball, because `files` is `["dist/src", "README.md"]`.
-
 ## Proven
 
 `npm run test:conformance` starts the real Streamable HTTP server from this
@@ -108,7 +105,7 @@ protocol-level gap and non-goal, is in
   TypeScript 5.9.3 through a transitive pin and this project compiles with
   6.0.3, so `build` prints one notice per built face. It is informational:
   `build` exits 0 and every declaration is emitted.
-- **Source maps ship.** Measured on 2026-08-20, the five `.map` files are
+- **Source maps ship.** Measured on 2026-08-20, the `.map` files are
   1,168,764 of 2,543,024 unpacked bytes (46.0 percent). They are kept so a consumer debugging a
   protocol library steps into real source.
 

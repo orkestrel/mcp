@@ -59,7 +59,7 @@ export function createWebSocketClientTransport(
  * `Accept` of both `application/json` and `text/event-stream` (the server answers
  * with EITHER — a plain JSON envelope or a Streamable-HTTP SSE `data:` event,
  * decoded with `@orkestrel/sse`), and the reply is surfaced on the transport's
- * `message` event for the client's id correlation. Add `options.headers` (e.g. an
+ * `message` event for the client's id correlation. Add `options.headers` (for example, an
  * `Authorization` bearer) to reach a guarded server. `start` / `close` hold no
  * connection; against a STATEFUL server it captures the `mcp-session-id` from
  * `initialize` and echoes it on later requests. It also captures the initialize

@@ -43,7 +43,7 @@ export interface JSONRPCRequest {
 
 /**
  * A JSON-RPC 2.0 notification — a fire-and-forget `method` call that is answered by
- * nothing (e.g. `notifications/initialized`).
+ * nothing (for example, `notifications/initialized`).
  *
  * @remarks
  * A notification MUST NOT carry an `id`, so `id` is declared `never`: a
@@ -1656,7 +1656,7 @@ export interface MCPMethodManagerInterface {
 	/**
 	 * Registers one modern method — replacing any handler already under that name.
 	 *
-	 * @param name - The JSON-RPC method name to answer (e.g. `'tools/call'`)
+	 * @param name - The JSON-RPC method name to answer (for example, `'tools/call'`)
 	 * @param handler - The handler dispatched for that method
 	 */
 	add(name: string, handler: MCPMethodHandler): void
@@ -2185,7 +2185,7 @@ export interface MCPClientTransportInterface {
  *   rejected, and the connection it owned on the transport closed — or that close faulted or
  *   timed out, which rejects the `disconnect` caller rather than withholding this event).
  * - `notification` — a server-initiated JSON-RPC NOTIFICATION arrived — forwarded for the
- *   consumer to react to (e.g. a `notifications/tools/list_changed`). A
+ *   consumer to react to (for example, a `notifications/tools/list_changed`). A
  *   `notifications/progress` frame claimed by an in-flight request's progress handler is
  *   delivered there instead, and a RESPONSE correlating to nothing pending is discarded
  *   rather than forwarded here, because it answers a request that has already settled.

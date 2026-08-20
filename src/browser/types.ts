@@ -58,7 +58,7 @@ export interface WebSocketClientTransportOptions {
  * @remarks
  * - `url` — the absolute URL of the remote server's Streamable-HTTP endpoint (the
  *   `POST` target every JSON-RPC message is written to). REQUIRED.
- * - `headers` — extra request headers merged onto every `POST` (e.g. an
+ * - `headers` — extra request headers merged onto every `POST` (for example, an
  *   `Authorization` bearer for a guarded server). The transport always sets
  *   `content-type: application/json` and an `Accept` of both `application/json` and
  *   `text/event-stream`; a key supplied here is merged on top.
@@ -82,7 +82,7 @@ export interface HTTPClientTransportOptions {
  * {@link MessagePortTransport} sends and listens on.
  *
  * @remarks
- * `port` — the channel half to drive (e.g. one side of a `new MessageChannel()`, or
+ * `port` — the channel half to drive (for example, one side of a `new MessageChannel()`, or
  * the port a `message` event's `ports[0]` carried). REQUIRED. The SAME transport
  * works as either a server or a client carrier — the role comes from whether it is
  * handed to `bindServer` or `bindClient`/`createDuplexClientTransport` (`@src/core`).
@@ -136,7 +136,7 @@ export interface ServeMCPScopeInterface {
  *   deliver directly to the implicit scope channel (the tool executes, blind; in a
  *   Service Worker the reply is silently dropped — see `serveMCPScope`'s portless note).
  *   Prefer a handshake token in `event.data` as the primary pattern
- *   (e.g. `(event) => event.data === token`) — for same-origin worker/MessagePort
+ *   (for example, `(event) => event.data === token`) — for same-origin worker/MessagePort
  *   messages `event.origin` is frequently the empty string, making origin
  *   allow-listing unreliable; origin checks are meaningful for cross-origin
  *   `postMessage` only. When omitted, ALL port-bearing events are accepted — every

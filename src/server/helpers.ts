@@ -393,7 +393,7 @@ export function dispatchLines(
  * and re-routes it to whichever handler is active (`undefined` while
  * none is), so rebinding never double-dispatches.
  *
- * @remarks A response whose `result` serializes away (e.g. `undefined`) is dropped by
+ * @remarks A response whose `result` serializes away (for example, `undefined`) is dropped by
  * the message validators on the wire's decode side — an asymmetry the stdio/WS carrier
  * shares with the streamable-HTTP face, because both round-trip through `JSON.stringify`
  * / `JSON.parse` before re-validation.

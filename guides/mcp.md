@@ -3763,6 +3763,15 @@ The modern-only scope of `subscriptions/listen` is a stated limit rather than a 
 it is recorded under [Declared non-goals](#declared-non-goals) with the other era-scoped
 surfaces.
 
+**The `MCPClientTransportInterface` rename is deferred past the readiness wave.** This is a
+naming decision rather than a protocol gap. The existing public name remains the documented
+contract until a later unit owns the rename and updates every consumer.
+
+**The remaining corrected guide fences are prose-checked, not executed.** The earlier
+`tools/list` metadata fence has an in-process transcription in `tests/guides.test.ts`; the
+other corrected fences have named-import, symbol, and link parity checks but no executed
+transcription.
+
 ## Declared packaging limits
 
 The facts about the published artifact. Each is a decision carrying its number, not an
@@ -3817,7 +3826,7 @@ The `.map` files carry it, one per built output: core ESM and CJS, server ESM an
 and browser ESM. They are kept on purpose. A consumer debugging a protocol library steps
 into real source rather than a bundle, and the frames that matter when a wire fault
 reaches a consumer are inside this code. Measured with `npm pack --dry-run --json` on
-2026-08-20, the five maps are 1,168,764 of 2,543,024 unpacked bytes (46.0 percent).
+2026-08-20, the maps are 1,168,764 of 2,543,024 unpacked bytes (46.0 percent).
 **What it costs:** those 1,168,764 unpacked bytes on disk.
 **Closer:** none wanted — dropping them is a size decision this package has declined.
 

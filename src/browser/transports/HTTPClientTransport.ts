@@ -34,7 +34,7 @@ import { readEventStream } from '../helpers.js'
  * - **Request/response over `fetch`.** `send(message)` POSTs the JSON-serialized
  *   message to `options.url` with `content-type: application/json` and an
  *   `Accept` of BOTH `application/json` and `text/event-stream` (so the server may
- *   answer with either framing) — plus any `options.headers` (e.g. an
+ *   answer with either framing) — plus any `options.headers` (for example, an
  *   `Authorization` bearer). It then decodes the reply and emits each decoded
  *   {@link JSONRPCMessage} on the `message` event the
  *   {@link import('@src/core').MCPClientInterface} subscribes to.
