@@ -33,7 +33,6 @@ import {
 import {
 	DEFAULT_MCP_CLIENT_NAME,
 	DEFAULT_MCP_CLIENT_VERSION,
-	DEFAULT_MCP_PROBE_TIMEOUT,
 	DEFAULT_MCP_REQUEST_TIMEOUT,
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_INVALID_REQUEST,
@@ -44,6 +43,7 @@ import {
 	MCP_MODERN_VERSION,
 	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
+	SUPPORTED_PROTOCOL_VERSIONS,
 } from './constants.js'
 import { MCPError, isMCPError } from './errors.js'
 import { buildCallOutcome, buildCancelledNotification, matchesResultType } from './helpers.js'
@@ -96,8 +96,8 @@ import {
  *   exit — the deadline, an abort, a rejecting `send`, the answer itself, and the
  *   teardown's drain — without any of those paths knowing they exist.
  * - **Per-request deadline.** An ordinary `#request` carries `this.#timeout`. The initial
- *   discovery probe uses that same 30-second default, or the shorter probe deadline where
- *   `timeout` was configured, so a silent peer cannot hold negotiation indefinitely.
+ *   discovery probe uses that same configured deadline, so a silent peer cannot hold
+ *   negotiation indefinitely.
  *   `AbortSignal.timeout` (never a raw `setTimeout`) rejects only that pending request, and the
  *   same deadline bounds the WAIT on the transport's `close`, the one wait no drain and no signal
  *   can reach. It bounds the wait rather than the close, which keeps running, so a retry joins it
@@ -126,7 +126,6 @@ export class MCPClient implements MCPClientInterface {
 	readonly #capabilities: MCPClientCapabilities
 	readonly #pin: MCPVersion | undefined
 	readonly #timeout: number
-	readonly #probe: number
 	// The draft Tasks extension's client half, built once and held. It is given this client's
 	// own correlated-request door rather than a second path to the peer, so a task read shares
 	// the id space, the pending table, the deadline, and the `disconnect` drain with every other
@@ -203,6 +202,13 @@ export class MCPClient implements MCPClientInterface {
 	#offer: MCPVersion
 
 	constructor(options: MCPClientOptions) {
+		const requested: unknown = options.version
+		if (requested !== undefined && !isMCPVersion(requested)) {
+			throw new MCPError('Unsupported protocol version', MCP_UNSUPPORTED_VERSION, {
+				supported: SUPPORTED_PROTOCOL_VERSIONS,
+				requested,
+			})
+		}
 		this.#emitter = new Emitter<MCPClientEventMap>({
 			...(options.on !== undefined ? { on: options.on } : {}),
 			...(options.error !== undefined ? { error: options.error } : {}),
@@ -213,13 +219,9 @@ export class MCPClient implements MCPClientInterface {
 			version: DEFAULT_MCP_CLIENT_VERSION,
 		}
 		this.#capabilities = options.capabilities ?? {}
-		this.#pin = options.version
-		this.#offer = options.version ?? MCP_MODERN_VERSION
+		this.#pin = requested
+		this.#offer = requested ?? MCP_MODERN_VERSION
 		this.#timeout = options.timeout ?? DEFAULT_MCP_REQUEST_TIMEOUT
-		this.#probe =
-			options.timeout === undefined
-				? DEFAULT_MCP_REQUEST_TIMEOUT
-				: Math.min(options.timeout, DEFAULT_MCP_PROBE_TIMEOUT)
 		this.#tasks = new MCPTaskClient({
 			request: this.#request.bind(this),
 			timeout: this.#timeout,
@@ -307,7 +309,7 @@ export class MCPClient implements MCPClientInterface {
 		const received = await this.#request(
 			'server/discover',
 			undefined,
-			this.#probe,
+			this.#timeout,
 			this.#version ?? this.#offer,
 		)
 		const owned = attempt(() => cloneJSONRecord(received))
@@ -708,7 +710,21 @@ export class MCPClient implements MCPClientInterface {
 				return
 			}
 
-			const version = inferVersion(discovery.supportedVersions)
+			let version: MCPVersion | undefined
+			if (this.#pin === undefined) {
+				version = inferVersion(discovery.supportedVersions)
+			} else if (discovery.supportedVersions.includes(this.#pin)) {
+				version = this.#pin
+			} else {
+				throw new MCPError(
+					'MCP server does not support the pinned protocol version',
+					MCP_UNSUPPORTED_VERSION,
+					{
+						supported: discovery.supportedVersions,
+						requested: this.#pin,
+					},
+				)
+			}
 			if (version === undefined) {
 				throw new MCPError(
 					'MCP server supports no compatible protocol version',
@@ -872,6 +888,13 @@ export class MCPClient implements MCPClientInterface {
 		}
 		if (!isMCPVersion(protocol) || inferEra(protocol) !== 'legacy') {
 			throw new Error(`MCP server negotiated unsupported protocol version '${protocol}'`)
+		}
+		if (this.#pin !== undefined && protocol !== this.#pin) {
+			throw new MCPError(
+				'MCP server negotiated a different protocol version than the client pinned',
+				MCP_UNSUPPORTED_VERSION,
+				{ requested: this.#pin, negotiated: protocol },
+			)
 		}
 		// The re-asks ask different questions: one keeps a superseded attempt from
 		// writing to a transport a `disconnect` is already closing, the other keeps it from

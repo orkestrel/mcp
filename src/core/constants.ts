@@ -179,6 +179,3 @@ export const DEFAULT_MCP_CLIENT_VERSION = '1.0.0'
  * is unset — a request the remote server does not answer within it rejects.
  */
 export const DEFAULT_MCP_REQUEST_TIMEOUT = 30_000
-
-/** The maximum discovery-probe deadline used when a client deadline is configured. */
-export const DEFAULT_MCP_PROBE_TIMEOUT = 50

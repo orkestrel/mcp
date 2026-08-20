@@ -1,13 +1,13 @@
 /**
- * A remote Model Context Protocol JSON-RPC error, preserving its machine-readable
- * numeric code and optional structured context.
+ * A Model Context Protocol error preserving its machine-readable numeric code and
+ * optional structured context.
  *
  * @remarks
- * {@link MCPClient} throws this error only for a remote JSON-RPC `error` response.
- * Local lifecycle and transport conditions such as disconnects and request timeouts
- * remain plain `Error`s. `context` carries the response's optional `error.data`
- * unchanged and is `undefined` when the peer omitted it. This includes the modern
- * reserved paths: `-32020` carries no context, `-32021` may carry
+ * {@link MCPClient} throws this error for a remote JSON-RPC `error` response and for a
+ * locally detected protocol incompatibility. Local lifecycle and transport conditions such
+ * as disconnects and request timeouts remain plain `Error`s. For a remote response, `context`
+ * carries the optional `error.data` unchanged and is `undefined` when the peer omitted it.
+ * This includes the modern reserved paths: `-32020` carries no context, `-32021` may carry
  * `requiredCapabilities`, and `-32022` carries the peer's `supported` revisions and
  * `requested` revision for negotiation recovery.
  *
@@ -27,7 +27,7 @@ export class MCPError extends Error {
 	readonly context: unknown
 
 	/**
-	 * Creates a remote MCP protocol error.
+	 * Creates an MCP protocol error.
 	 *
 	 * @param message - The human-readable JSON-RPC error message
 	 * @param code - The machine-readable numeric JSON-RPC error code

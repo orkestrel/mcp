@@ -9,7 +9,6 @@ import type {
 } from '@src/core'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { readFileSync } from 'node:fs'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
 	createMCPClient,
@@ -25,6 +24,7 @@ import {
 	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
 	parseJSONRPCMessage,
+	SUPPORTED_PROTOCOL_VERSIONS,
 } from '@src/core'
 import { createHTTPClientTransport } from '@src/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -32,6 +32,14 @@ import { createEmitter } from '@orkestrel/emitter'
 import { createServer } from 'node:http'
 import { waitForDelay } from '@orkestrel/test'
 import { createSignalRecorder } from '../../setup.js'
+
+const NATIVE_ABORT_TIMEOUT = AbortSignal.timeout
+const RECORDED_ABORT_DEADLINES: number[] = []
+
+function recordAbortTimeout(deadline: number): AbortSignal {
+	RECORDED_ABORT_DEADLINES.push(deadline)
+	return NATIVE_ABORT_TIMEOUT(deadline)
+}
 
 // MCPClient ↔ a REAL MCPServer over an in-process LOOPBACK transport (a
 // real server + real ToolManager, no mocks of the unit under test). The loopback's
@@ -581,6 +589,26 @@ function serverWithTools(): MCPDispatcherInterface {
 }
 
 describe('MCPClient — connect (modern-and-legacy negotiation)', () => {
+	it('rejects an invalid runtime pin synchronously during construction', () => {
+		const peer = createFixturePeer({ reply: () => undefined })
+		const options: unknown = { transport: peer, version: '2020-01-01' }
+		let failure: unknown
+
+		try {
+			Reflect.apply(createMCPClient, undefined, [options])
+		} catch (error) {
+			failure = error
+		}
+
+		expect(isMCPError(failure)).toBe(true)
+		expect(failure).toMatchObject({
+			code: MCP_UNSUPPORTED_VERSION,
+			context: { supported: SUPPORTED_PROTOCOL_VERSIONS, requested: '2020-01-01' },
+		})
+		expect(peer.started).toBe(0)
+		expect(peer.sent).toEqual([])
+	})
+
 	it('opens the transport, discovers modern support, and reports the newest common version', async () => {
 		const loopback = createLoopback(serverWithTools())
 		const client = createMCPClient({
@@ -646,6 +674,26 @@ describe('MCPClient — connect (modern-and-legacy negotiation)', () => {
 		expect(client.version).toBeUndefined()
 		expect(loopback.closed).toBe(1)
 		expect(loopback.sent).toEqual(['initialize'])
+	})
+
+	it('rejects a pinned legacy reply that negotiates a different supported revision', async () => {
+		const peer = createFixturePeer({
+			reply: (request) => {
+				if (request.method !== 'initialize' || request.id === undefined) return undefined
+				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+			},
+		})
+		const client = createMCPClient({ transport: peer, version: '2025-06-18' })
+
+		await expect(client.connect()).rejects.toMatchObject({
+			code: MCP_UNSUPPORTED_VERSION,
+			context: { requested: '2025-06-18', negotiated: MCP_PROTOCOL_VERSION },
+		})
+
+		expect(client.connected).toBe(false)
+		expect(client.version).toBeUndefined()
+		expect(peer.closed).toBe(1)
+		expect(peer.sent).toEqual(['initialize'])
 	})
 
 	it('rejects an absent legacy protocol and closes before initialization completes', async () => {
@@ -748,6 +796,26 @@ describe('MCPClient — modern discovery and fallback', () => {
 
 		expect(client.connected).toBe(false)
 		expect(client.version).toBeUndefined()
+		expect(peer.sent).toEqual(['server/discover'])
+	})
+
+	it('rejects a discovery result that does not advertise the pinned modern revision', async () => {
+		const peer = createFixturePeer({
+			reply: (request) => {
+				if (request.method !== 'server/discover' || request.id === undefined) return undefined
+				return discoverResponse(request.id, [MCP_PROTOCOL_VERSION])
+			},
+		})
+		const client = createMCPClient({ transport: peer, version: '2026-07-28' })
+
+		await expect(client.connect()).rejects.toMatchObject({
+			code: MCP_UNSUPPORTED_VERSION,
+			context: { supported: [MCP_PROTOCOL_VERSION], requested: '2026-07-28' },
+		})
+
+		expect(client.connected).toBe(false)
+		expect(client.version).toBeUndefined()
+		expect(peer.closed).toBe(1)
 		expect(peer.sent).toEqual(['server/discover'])
 	})
 
@@ -1038,7 +1106,7 @@ describe('MCPClient — modern discovery and fallback', () => {
 				return undefined
 			},
 		})
-		const client = createMCPClient({ transport: peer, timeout: 5_000 })
+		const client = createMCPClient({ transport: peer, timeout: 30 })
 
 		await client.connect()
 
@@ -1082,15 +1150,6 @@ describe('MCPClient — modern discovery and fallback', () => {
 				'initialize',
 				'notifications/initialized',
 			])
-
-			const source = readFileSync(
-				new URL('../../../src/core/MCPClient.ts', import.meta.url),
-				'utf8',
-			)
-			expect(source).toContain('readonly #probe: number')
-			expect(source).toContain(
-				'options.timeout === undefined\n\t\t\t\t? DEFAULT_MCP_REQUEST_TIMEOUT\n\t\t\t\t: Math.min(options.timeout, DEFAULT_MCP_PROBE_TIMEOUT)',
-			)
 		} finally {
 			peer.release('/silent')
 			await Promise.allSettled([
@@ -1099,6 +1158,28 @@ describe('MCPClient — modern discovery and fallback', () => {
 				configured.disconnect(),
 			])
 			await peer.stop()
+		}
+	})
+
+	it('applies the configured 15_000ms deadline to the negotiation probe', async () => {
+		const peer = createFixturePeer({
+			reply: (request) => {
+				if (request.method !== 'server/discover' || request.id === undefined) return undefined
+				return discoverResponse(request.id, ['2026-07-28'])
+			},
+		})
+		const client = createMCPClient({ transport: peer, timeout: 15_000 })
+		// Scope the recorder to negotiation and forward every call to the real host primitive. The
+		// 14,999ms control proves the recorder distinguishes the deadline the client supplies.
+		RECORDED_ABORT_DEADLINES.splice(0)
+		AbortSignal.timeout = recordAbortTimeout
+		try {
+			void AbortSignal.timeout(14_999)
+			await client.connect()
+			expect(RECORDED_ABORT_DEADLINES).toEqual([14_999, 15_000])
+		} finally {
+			AbortSignal.timeout = NATIVE_ABORT_TIMEOUT
+			await client.disconnect()
 		}
 	})
 
@@ -1545,9 +1626,8 @@ describe('MCPClient — connect/disconnect ordering', () => {
 	})
 
 	it('aborts an in-flight connect when disconnect is awaited, closing the transport once', async () => {
-		// The peer answers nothing, and a default-configured client has no probe deadline, so
-		// the discovery request stays pending until something else settles it: `disconnect` is
-		// the only thing that can.
+		// The peer answers nothing, and the default 30-second deadline has not fired when
+		// `disconnect` settles the pending discovery request.
 		const peer = createFixturePeer({ reply: () => undefined })
 		const client = createMCPClient({ transport: peer })
 

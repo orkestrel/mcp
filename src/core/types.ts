@@ -2237,7 +2237,11 @@ export interface MCPClientOptions {
 	readonly identity?: MCPIdentity
 	/** The open client-capability record carried by modern requests. */
 	readonly capabilities?: MCPClientCapabilities
-	/** An optional protocol revision pin; absence permits negotiation. */
+	/**
+	 * An optional exact protocol revision pin; absence permits negotiation. A defined pin must
+	 * match the peer's negotiated revision. An unsupported runtime value throws an
+	 * {@link MCPError} synchronously during construction.
+	 */
 	readonly version?: MCPVersion
 	/** The per-request deadline in milliseconds (default {@link import('./constants.js').DEFAULT_MCP_REQUEST_TIMEOUT}). */
 	readonly timeout?: number
@@ -2479,7 +2483,7 @@ export interface MCPTaskClientInterface {
  *   `AbortSignal.timeout(timeout)`: a server that never replies REJECTS that pending
  *   request once the deadline fires. The initial discovery probe and every public request use a
  *   deadline. An omitted `timeout` selects {@link DEFAULT_MCP_REQUEST_TIMEOUT}; an explicit
- *   timeout also caps the probe at {@link DEFAULT_MCP_PROBE_TIMEOUT}. The client's
+ *   timeout applies that deadline to the probe. The client's
  *   wait on the transport's `close` carries that same deadline, because it is the one wait neither
  *   the pending-request drain nor the supersession signal can reach; the deadline ends the wait,
  *   not the close, so a retry joins that close rather than issuing a second one.

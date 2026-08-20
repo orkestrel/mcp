@@ -1699,7 +1699,6 @@ cannot represent.
 | `DEFAULT_MCP_CLIENT_NAME`     | const | `'taverna'` — the default client name reported in the `initialize` handshake.                                        |
 | `DEFAULT_MCP_CLIENT_VERSION`  | const | `'1.0.0'` — the default client version reported in the `initialize` handshake.                                       |
 | `DEFAULT_MCP_REQUEST_TIMEOUT` | const | `30000` — the default per-request deadline (ms) an `MCPClient` applies.                                              |
-| `DEFAULT_MCP_PROBE_TIMEOUT`   | const | `50` — the maximum configured discovery-probe deadline in milliseconds.                                              |
 
 ### Helpers
 
@@ -4138,10 +4137,10 @@ on? })` drives a REMOTE server over an injected `MCPClientTransportInterface`
     ordinary request races `AbortSignal.timeout(timeout)` (never a raw
     `setTimeout`; default `DEFAULT_MCP_REQUEST_TIMEOUT`): a server that
     never replies REJECTS the pending request (`timed out`) rather than
-    hanging. The discovery probe always has a deadline. An omitted `timeout`
-    selects `DEFAULT_MCP_REQUEST_TIMEOUT`; an explicit timeout also caps the
-    probe at `DEFAULT_MCP_PROBE_TIMEOUT`. A public `discover()` call uses the
-    ordinary request deadline. A `send` write failure rejects
+    hanging. The discovery probe carries the same request deadline: an omitted
+    `timeout` selects `DEFAULT_MCP_REQUEST_TIMEOUT`, and a configured one
+    applies to the probe as to every request. A public `discover()` call uses
+    the ordinary request deadline. A `send` write failure rejects
     its own pending request. The same `timeout` bounds the client's WAIT on the
     transport's `close`: that await holds no pending entry, so neither the drain
     nor a request deadline reaches it, and a shutdown accepted and never answered
