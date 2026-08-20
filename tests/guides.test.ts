@@ -48,7 +48,7 @@ const MODULES = Object.freeze({
 const INTERNAL: readonly string[] = Object.freeze([])
 
 /** Root-level files this package's guides link to. `readInventory` walks directories only. */
-const ROOT_FILES = Object.freeze(['AGENTS.md'])
+const ROOT_FILES = Object.freeze(['AGENTS.md', 'README.md'])
 
 /** Source modules that own removable legacy server ingress. */
 const LEGACY_OWNERS = Object.freeze([
@@ -87,6 +87,19 @@ const manifest = parseManifest(
 	'guides',
 )
 const sourceManager = createSourceManager({ files, modules: MODULES })
+
+describe('README.md', () => {
+	const readme = createGuide(requireValue(files['README.md'], 'Missing file: README.md'))
+
+	it('resolves every relative link', () => {
+		const broken = readme
+			.links()
+			.filter((href) => !isExternalLink(href))
+			.map((href) => resolveLink('README.md', href))
+			.filter((path) => files[path] === undefined)
+		expect(broken).toEqual([])
+	})
+})
 
 it('manifest lists at least one guide', () => {
 	expect(manifest.length).toBeGreaterThan(0)

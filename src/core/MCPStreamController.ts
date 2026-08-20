@@ -54,7 +54,7 @@ export class MCPStreamController implements MCPStreamControllerInterface {
 	#closed = false
 
 	/**
-	 * Control one produced stream for the lifetime of one request.
+	 * Controls one produced stream for the lifetime of one request.
 	 *
 	 * @param source - The produced held-open result whose cancellation this controller owns
 	 * @param signal - The request signal every closure settles against; its abort ends the exchange
@@ -70,7 +70,7 @@ export class MCPStreamController implements MCPStreamControllerInterface {
 	}
 
 	/**
-	 * Read the next message, or the terminating response that ends the exchange.
+	 * Reads the next message, or the terminating response that ends the exchange.
 	 *
 	 * @remarks
 	 * At most one read is outstanding against the source at a time, and a rival read is
@@ -105,7 +105,7 @@ export class MCPStreamController implements MCPStreamControllerInterface {
 	}
 
 	/**
-	 * End the exchange because the consumer already has its answer.
+	 * Ends the exchange because the consumer already has its answer.
 	 *
 	 * @param value - The terminal the consumer is ending on
 	 * @returns That terminal as the iteration's `return`
@@ -119,7 +119,7 @@ export class MCPStreamController implements MCPStreamControllerInterface {
 	}
 
 	/**
-	 * End the exchange with a failure the consumer is raising.
+	 * Ends the exchange with a failure the consumer is raising.
 	 *
 	 * @param error - The failure to end the exchange with
 	 * @returns Never — the returned promise always rejects
@@ -131,7 +131,7 @@ export class MCPStreamController implements MCPStreamControllerInterface {
 	}
 
 	/**
-	 * End the exchange permanently, with no terminal response.
+	 * Ends the exchange permanently, with no terminal response.
 	 *
 	 * @remarks
 	 * Idempotent, and the operation an owner that is not the consumer uses: a transport whose
@@ -147,7 +147,7 @@ export class MCPStreamController implements MCPStreamControllerInterface {
 	}
 
 	/**
-	 * End the exchange when the scope that owns it exits.
+	 * Ends the exchange when the scope that owns it exits.
 	 *
 	 * @remarks
 	 * {@link stop} under the name a `finally` calls it by, so a pump discharges its ownership
@@ -161,7 +161,7 @@ export class MCPStreamController implements MCPStreamControllerInterface {
 	}
 
 	/**
-	 * Iterate this exchange — the controller is its own iterator.
+	 * Iterates this exchange — the controller is its own iterator.
 	 *
 	 * @returns This controller
 	 */

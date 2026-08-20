@@ -601,7 +601,7 @@ describe('MCPClient — connect (modern-and-legacy negotiation)', () => {
 		const loopback = createLoopback(serverWithTools())
 		const client = createMCPClient({ transport: loopback })
 		let connects = 0
-		client.on('connect', () => {
+		client.emitter.on('connect', () => {
 			connects += 1
 		})
 
@@ -1333,7 +1333,7 @@ describe('MCPClient — id correlation', () => {
 		const client = createMCPClient({ transport: loopback })
 		await client.connect()
 		const seen: JSONRPCMessage[] = []
-		client.on('notification', (message) => seen.push(message))
+		client.emitter.on('notification', (message) => seen.push(message))
 
 		// A message that is NOT a response to a pending request (here a server-pushed
 		// notification injected straight onto the transport) is surfaced, not dropped.
@@ -1500,7 +1500,7 @@ describe('MCPClient — disconnect', () => {
 		const loopback = createLoopback(serverWithTools())
 		const client = createMCPClient({ transport: loopback })
 		let disconnects = 0
-		client.on('disconnect', () => {
+		client.emitter.on('disconnect', () => {
 			disconnects += 1
 		})
 		await client.connect()
@@ -1531,7 +1531,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const loopback = createLoopback(serverWithTools())
 		const client = createMCPClient({ transport: loopback })
 		let connects = 0
-		client.on('connect', () => {
+		client.emitter.on('connect', () => {
 			connects += 1
 		})
 
@@ -1659,7 +1659,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		})
 		const client = createMCPClient({ transport: peer, version: MCP_PROTOCOL_VERSION })
 		let connects = 0
-		client.on('connect', () => {
+		client.emitter.on('connect', () => {
 			connects += 1
 		})
 
@@ -1743,8 +1743,8 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		})
 		const client = createMCPClient({ transport: peer })
 		const events: string[] = []
-		client.on('connect', () => events.push('connect'))
-		client.on('disconnect', () => events.push('disconnect'))
+		client.emitter.on('connect', () => events.push('connect'))
+		client.emitter.on('disconnect', () => events.push('disconnect'))
 
 		const connecting = client.connect()
 		await waitForDelay(20)
@@ -1771,8 +1771,8 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		})
 		const client = createMCPClient({ transport: peer })
 		const events: string[] = []
-		client.on('connect', () => events.push('connect'))
-		client.on('disconnect', () => events.push('disconnect'))
+		client.emitter.on('connect', () => events.push('connect'))
+		client.emitter.on('disconnect', () => events.push('disconnect'))
 
 		await expect(client.connect()).rejects.toThrow('MCP client disconnected')
 
@@ -2027,7 +2027,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		})
 		const client = createMCPClient({ transport: peer })
 		const faults: string[] = []
-		client.on('error', (error: unknown) =>
+		client.emitter.on('error', (error: unknown) =>
 			faults.push(error instanceof Error ? error.message : String(error)),
 		)
 
@@ -2219,8 +2219,8 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		})
 		const client = createMCPClient({ transport: peer })
 		const events: string[] = []
-		client.on('error', () => events.push('error'))
-		client.on('disconnect', () => events.push('disconnect'))
+		client.emitter.on('error', () => events.push('error'))
+		client.emitter.on('disconnect', () => events.push('disconnect'))
 		await client.connect()
 
 		const tools = await client.tools()
@@ -2247,7 +2247,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		})
 		const client = createMCPClient({ transport: peer })
 		const events: string[] = []
-		client.on('disconnect', () => events.push('disconnect'))
+		client.emitter.on('disconnect', () => events.push('disconnect'))
 		await client.connect()
 
 		await expect(client.disconnect()).rejects.toThrow('transport close failed')
@@ -2316,7 +2316,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		})
 		const client = createMCPClient({ transport: peer })
 		const faults: string[] = []
-		client.on('error', (error: unknown) =>
+		client.emitter.on('error', (error: unknown) =>
 			faults.push(error instanceof Error ? error.message : String(error)),
 		)
 
@@ -2407,7 +2407,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		})
 		const client = createMCPClient({ transport: peer, timeout: 30 })
 		const faults: string[] = []
-		client.on('error', (error: unknown) =>
+		client.emitter.on('error', (error: unknown) =>
 			faults.push(error instanceof Error ? error.message : String(error)),
 		)
 
@@ -2612,7 +2612,7 @@ describe('MCPClient — observer safety', () => {
 			transport: loopback,
 			error: (error, event) => errors.push([error, event]),
 		})
-		client.on('connect', () => {
+		client.emitter.on('connect', () => {
 			throw new Error('observer boom')
 		})
 
@@ -3055,8 +3055,8 @@ describe('MCPClient — per-request cancellation', () => {
 		await client.connect()
 		const notifications: JSONRPCMessage[] = []
 		const errors: unknown[] = []
-		client.on('notification', (message) => notifications.push(message))
-		client.on('error', (error) => errors.push(error))
+		client.emitter.on('notification', (message) => notifications.push(message))
+		client.emitter.on('error', (error) => errors.push(error))
 		const controller = new AbortController()
 
 		const pending = client.call('slow', {}, { signal: controller.signal })
@@ -3118,7 +3118,7 @@ describe('MCPClient — request-scoped progress', () => {
 		await client.connect()
 		const seen: unknown[] = []
 		const notifications: JSONRPCMessage[] = []
-		client.on('notification', (message) => notifications.push(message))
+		client.emitter.on('notification', (message) => notifications.push(message))
 
 		const pending = client.call('slow', {}, { progress: (progress) => seen.push(progress) })
 		const id = requestId(peer, 2)
@@ -3178,7 +3178,7 @@ describe('MCPClient — request-scoped progress', () => {
 		await client.connect()
 		const seen: unknown[] = []
 		const notifications: JSONRPCMessage[] = []
-		client.on('notification', (message) => notifications.push(message))
+		client.emitter.on('notification', (message) => notifications.push(message))
 
 		const pending = client.call('slow', {}, { progress: (progress) => seen.push(progress) })
 		const id = requestId(peer, 2)
@@ -3201,7 +3201,7 @@ describe('MCPClient — request-scoped progress', () => {
 		await client.connect()
 		const seen: unknown[] = []
 		const notifications: JSONRPCMessage[] = []
-		client.on('notification', (message) => notifications.push(message))
+		client.emitter.on('notification', (message) => notifications.push(message))
 
 		const pending = client.call('slow', {}, { progress: (progress) => seen.push(progress) })
 		const id = requestId(peer, 2)
@@ -3226,7 +3226,7 @@ describe('MCPClient — request-scoped progress', () => {
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 		const errors: unknown[] = []
-		client.on('error', (error) => errors.push(error))
+		client.emitter.on('error', (error) => errors.push(error))
 
 		const pending = client.call(
 			'slow',
@@ -3443,7 +3443,7 @@ describe('MCPClient — an uncorrelated response is discarded', () => {
 		const client = createMCPClient({ transport: loopback })
 		await client.connect()
 		const seen: JSONRPCMessage[] = []
-		client.on('notification', (message) => seen.push(message))
+		client.emitter.on('notification', (message) => seen.push(message))
 
 		// A response is an ANSWER to a request this client issued. With nothing pending it
 		// answers a request that already settled — by its deadline, an abort, or a drain —

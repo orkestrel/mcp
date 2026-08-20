@@ -27,9 +27,9 @@ import { MCPSession } from './MCPSession.js'
 import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
 
 /**
- * Create the native MCP session {@link MiddlewareHandler} — the plug-and-play stateful layer
+ * Creates the native MCP session {@link MiddlewareHandler} — the plug-and-play stateful layer
  * that fronts a session-agnostic {@link import('./factories.js').createMCPRoutes}. Compose it
- * via `router.use(createMCPSession())` (or the equivalent middleware seam), mirroring any
+ * with `router.use(createMCPSession())` (or the equivalent middleware seam), mirroring any
  * other closure-scoped stateful middleware. Has NO dependency on `@orkestrel/middleware` — the
  * session store, mint-on-`initialize`, and resumable stream are all native to this package.
  *
@@ -38,11 +38,11 @@ import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
  * `path` (default {@link DEFAULT_MCP_PATH}); a request to any other path passes straight
  * through (`next()`).
  *
- * A modern-shaped POST also passes straight through via `next()`, ignoring any session id.
+ * A modern-shaped POST also passes straight through with `next()`, ignoring any session id.
  * The remaining behavior is the legacy session layer:
  *
  * - **`POST {path}`.** Buffers `const text = await request.text()` (so the downstream route
- *   can re-read it via a freshly-built forwarded `Request`). Resolves a session via {@link
+ *   can re-read it from a freshly-built forwarded `Request`). Resolves a session through {@link
  *   readSessionHeader}: a VALID id touches the entry and sets `context.state.session`; an
  *   ABSENT / unknown id whose (guarded) body parses to an `initialize` request ({@link
  *   isInitializeRequest}) MINTS a fresh {@link MCPSession} (`crypto.randomUUID()`, `capacity`)
@@ -57,7 +57,7 @@ import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
  *   a `DELETE` arriving while the request was suspended is not undone.
  * - **`GET {path}`.** Resolves the session the same way (no mint — only `initialize` mints);
  *   an invalid / unknown id is the same `404`. A valid session opens the resumable
- *   server→client stream via `@orkestrel/server`'s {@link import('@orkestrel/server').openStream}:
+ *   server→client stream through `@orkestrel/server`'s {@link import('@orkestrel/server').openStream}:
  *   replays every event after the client's `Last-Event-ID` ({@link readLastEventId}) BEFORE
  *   attaching the stream for live pushes, then attaches; cancellation of the streamed response
  *   body composes with `request.signal` and detaches it. Long-lived — never `end()`ed here.

@@ -25,7 +25,7 @@ import { inferHeaderIssue, inferStatus } from './inferers.js'
 import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
 
 /**
- * Create the Streamable-HTTP POST handler used by `createMCPRoutes`.
+ * Creates the Streamable-HTTP POST handler used by `createMCPRoutes`.
  *
  * @remarks
  * Modern requests require matching protocol/method headers and a matching name header only

@@ -12,8 +12,8 @@ import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constan
  * The single session entity (the old `SessionState` + `EventStore` merged): it holds the
  * session `id`, its OWN bounded, replayable log of pushed server→client messages (the
  * resumable GET-SSE channel — a private `#events` `Map` + a monotone `#counter`, with
- * `capacity` / `ttl` eviction, NOT a separate store), and the set of currently OPEN
- * server→client SSE streams (a resumable `GET {path}` registers via `attach`, unregisters via
+ * `capacity` / `ttl` eviction, not a separate store), and the set of open
+ * server→client SSE streams (a resumable `GET {path}` registers through `attach`, unregisters through
  * `detach` on disconnect). Still a small entity (not a record), built minimal + extensible.
  *
  * - **`push` is the server-initiated primitive.** It APPENDS the message to the log (assigning

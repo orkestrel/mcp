@@ -43,7 +43,7 @@ export class MCPProgressReporter implements MCPProgressInterface {
 	#stopped = false
 
 	/**
-	 * Create one non-durable progress slot for an active request.
+	 * Creates one non-durable progress slot for an active request.
 	 *
 	 * @param token - The opaque progress token copied into each notification
 	 * @param limits - The byte, key, and depth bounds applied to every progress payload
@@ -59,7 +59,7 @@ export class MCPProgressReporter implements MCPProgressInterface {
 	}
 
 	/**
-	 * Publish one bounded, strictly increasing progress value and await its consumption.
+	 * Publishes one bounded, strictly increasing progress value and awaits its consumption.
 	 *
 	 * @param progress - The progress payload to own and hand to the serial consumer
 	 * @returns A promise resolving after {@link take} consumes the item
@@ -85,7 +85,7 @@ export class MCPProgressReporter implements MCPProgressInterface {
 	}
 
 	/**
-	 * Take the next progress notification, waiting for the single producer slot when empty.
+	 * Takes the next progress notification, waiting for the single producer slot when empty.
 	 *
 	 * @returns The official progress notification carrying the original token
 	 * @throws When the reporter stops or another consumer already has a pending take
@@ -120,7 +120,7 @@ export class MCPProgressReporter implements MCPProgressInterface {
 	}
 
 	/**
-	 * Permanently stop the reporter, reject pending work, and detach its abort listener.
+	 * Stops the reporter permanently, rejects pending work, and detaches its abort listener.
 	 *
 	 * Repeated calls are idempotent. No queued or replayable progress survives the first call.
 	 *

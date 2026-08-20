@@ -48,13 +48,13 @@ export const DEFAULT_MCP_SERVER_VERSION = '1.0.0'
 // The WebSocket subprotocol constant, declared here independently of the Node face's
 // `MCP_WEBSOCKET_SUBPROTOCOL` (`src/server/constants.ts`) — peer environment faces share
 // no import, so the same value is declared on each face. The browser face's
-// `WebSocketClientTransport` defaults to this value when `protocols` is omitted, matching
-// `createWebSocketServer`'s unconditional echo.
+// `WebSocketClientTransport` defaults to this value when `protocols` is omitted, and
+// `createWebSocketServer` selects it from the client's offer.
 
 /**
  * The WebSocket subprotocol `createWebSocketClientTransport` requests by default —
- * `'mcp'`, matching `createWebSocketServer`'s unconditional `Sec-WebSocket-Protocol:
- * mcp` echo. Per RFC 6455 §4.1 a client MUST fail the connection if the server returns
+ * `'mcp'`, which `createWebSocketServer` selects when the client offers it. Per RFC 6455
+ * §4.1 a client MUST fail the connection if the server returns
  * a subprotocol it did not request; Node ≥ 22 (undici) enforces this strictly, so the
  * default bakes the correct value in. Override `WebSocketClientTransportOptions.protocols`
  * only when connecting to a foreign server that speaks a different subprotocol (or `[]`

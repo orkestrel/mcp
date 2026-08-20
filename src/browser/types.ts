@@ -28,8 +28,8 @@ import type { ToolManagerInterface } from '@orkestrel/tool'
  *   the native `WebSocket` constructor the same way) URL of the remote server's
  *   WebSocket endpoint. REQUIRED.
  * - `protocols` — the WebSocket subprotocol(s) to request. **Defaults to
- *   {@link import('./constants.js').MCP_WEBSOCKET_SUBPROTOCOL} (`'mcp'`)**, matching
- *   `createWebSocketServer`'s unconditional `Sec-WebSocket-Protocol: mcp` echo. Per
+ *   {@link import('./constants.js').MCP_WEBSOCKET_SUBPROTOCOL} (`'mcp'`)**, which
+ *   `createWebSocketServer` selects when the offer contains it. Per
  *   RFC 6455 §4.1 a client must fail the connection if the server returns a subprotocol
  *   it did not request; Node ≥ 22 (undici) enforces this strictly, so the default saves
  *   you from that trap when connecting to this repo's own server. Override only when
@@ -97,10 +97,10 @@ export interface MessagePortTransportOptions {
  * internal carrier `serveMCPScope` binds to route the implicit (portless) message
  * channel, plus the `deliver` entry point the scope's own `message` listener pushes
  * an inbound string through (the scope itself never registers `listen`'s handler
- * for the caller — `serveMCPScope`'s dispatcher does, via this `deliver`).
+ * for the caller — `serveMCPScope`'s dispatcher does, through this `deliver`).
  */
 export interface ScopeTransportInterface extends MCPTransportInterface {
-	/** Push one inbound message string into the currently registered `listen` handler. */
+	/** Pushes one inbound message string into the active `listen` handler. */
 	deliver(message: string): void
 }
 

@@ -1,11 +1,11 @@
 // The MCP server-transport surface — the source of truth. The transports
 // for the Model Context Protocol over the server spine: the Streamable HTTP transport
-// (route handlers via `createMCPRoutes` + the `fetch` egress `createHTTPClientTransport`)
+// (route handlers through `createMCPRoutes` + the `fetch` egress `createHTTPClientTransport`)
 // and the WebSocket transport (an ingress `createWebSocketServer` over the spine's
 // `upgrade` seam + the egress `createWebSocketClientTransport` over `node:http(s)`).
 //
 // The HTTP transport mounts a transport-agnostic `MCPServerInterface` (the `@src/core` MCP
-// dispatch core) on a spine `Server` via `createMCPRoutes`, pumping each POST body through
+// dispatch core) on a spine `Server` through `createMCPRoutes`, pumping each POST body through
 // `mcp.dispatch`. It is MECHANISM, never policy — auth / rate-limiting compose IN FRONT as
 // ordinary middleware, while the protocol-required origin mechanism takes its policy from the
 // consumer's shared `origin` options. `createMCPRoutes` is STATELESS — a single `POST {path}`. Statefulness is
@@ -81,7 +81,7 @@ export interface MCPKeepaliveOptions {
 }
 
 /**
- * Synchronously extract consumer-asserted caller context from an HTTP request after the
+ * Extracts consumer-asserted caller context synchronously from an HTTP request after the
  * transport has validated it for dispatch.
  *
  * @remarks
@@ -134,7 +134,7 @@ export interface HTTPHandlerOptions<TState = unknown> {
 /**
  * Options for `createMCPRoutes` — the mount path plus the shared POST-handler options.
  * `createMCPRoutes` is STATELESS; sessions are a separate middleware ({@link
- * import('./middlewares.js').createMCPSession}), composed via `server.use`.
+ * import('./middlewares.js').createMCPSession}), composed with `server.use`.
  *
  * @remarks
  * `path` is the request path the single `POST` route answers; it defaults to {@link
@@ -315,10 +315,9 @@ export interface HTTPClientTransportOptions {
  *   {@link import('./constants.js').DEFAULT_MCP_PATH} (`'/mcp'`, the same path the HTTP
  *   transport mounts at). A protocol-upgrade request to any OTHER path is DECLINED
  *   (the handler returns `false`, so the spine fans it to the next handler or destroys it).
- * - `subprotocol` — the WebSocket subprotocol echoed in the `101` handshake's
+ * - `subprotocol` — the WebSocket subprotocol selected in the `101` handshake's
  *   `Sec-WebSocket-Protocol`; defaults to {@link import('./constants.js').MCP_WEBSOCKET_SUBPROTOCOL}
- *   (`'mcp'`). It is echoed unconditionally (the client requests it), so an MCP WebSocket
- *   endpoint is distinguishable from another WebSocket on the same path.
+ *   (`'mcp'`). It is sent only when the client's offer contains that token.
  *
  * Auth / origin policy is deliberately ABSENT: like the HTTP transport, the WebSocket
  * transport is MECHANISM — compose a guard IN FRONT (a `Server.upgrade` handler registered

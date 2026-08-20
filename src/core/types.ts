@@ -153,7 +153,7 @@ export type JSONRPCMessage = JSONRPCInvocation | JSONRPCResponse
  * Concrete results — {@link MCPCallResult}, {@link MCPDiscoverResult},
  * {@link MCPListResult}, {@link MCPPromptListResult}, {@link MCPPromptGetResult},
  * {@link MCPCompletionResult}, {@link MCPInputResult}, and
- * {@link SubscriptionsListenResult} — stay CLOSED and keep their literal
+ * {@link MCPSubscriptionResult} — stay CLOSED and keep their literal
  * `resultType`, so a caller that knows which method it called still narrows to a
  * literal through that result's guard. Openness lives here, at the arm a server may
  * answer any registered method through, and nowhere else.
@@ -197,7 +197,7 @@ export type MCPVersion = '2026-07-28' | '2025-11-25' | '2025-06-18'
  * The `Object` suffix is not a role suffix from the type table — it NAMES THE SHAPE.
  * `_meta` is a JSON object whose values are exact JSON, and a reader who sees
  * `MCPMeta` cannot tell that from a key, a string, or an entry. The same holds for
- * {@link MCPResultMetaObject} and {@link SubscriptionsListenResultMetaObject}, which are
+ * {@link MCPResultMetaObject} and {@link MCPSubscriptionResultMetaObject}, which are
  * that object narrowed by one reserved key each.
  */
 export type MCPMetaObject = Readonly<Record<string, JSONValue>>
@@ -246,7 +246,7 @@ export type MCPServerCapabilities = Readonly<Record<string, MCPMetaObject>> & {
  * The wire era selected by an MCP request's structure.
  *
  * @remarks
- * `'modern'` and `'legacy'`, and NOT the boolean such a union usually should be: this is
+ * `'modern'` and `'legacy'`, and not the boolean such a union would usually be: this is
  * a genuine protocol discriminant, not a behavioural switch. It names which
  * published wire shape a request took — a fact the request already carries — and it
  * is emitted on {@link MCPServerEventMap}'s `request` event, where an observer logs
@@ -633,14 +633,14 @@ export interface MCPElicitation {
 
 /** Host-neutral integrity and storage port for opaque MRTR continuation state. */
 export interface MCPContinuationInterface {
-	/** Protect a canonical state string and return the opaque client carrier. */
+	/** Protects a canonical state string and returns the opaque client carrier. */
 	seal(value: string): Promise<string>
-	/** Recover a protected canonical state string, or `undefined` when invalid. */
+	/** Recovers a protected canonical state string, or `undefined` when invalid. */
 	open(value: string): Promise<string | undefined>
 }
 
 /**
- * Decide whether the current `tools/call` needs operator input.
+ * Decides whether the current `tools/call` needs operator input.
  *
  * @param context - The original call plus a verified response/state on a retry
  * @param options - The resolved per-request method options
@@ -652,7 +652,7 @@ export type MCPInputHandler = (
 ) => MCPElicitation | undefined | Promise<MCPElicitation | undefined>
 
 /**
- * Derive the deployment-authenticated principal bound into signed request state.
+ * Derives the deployment-authenticated principal bound into signed request state.
  *
  * @param request - The parsed `tools/call` request
  * @param options - The resolved per-request method options
@@ -669,9 +669,9 @@ export interface MCPInputOptions {
 	readonly continuation: MCPContinuationInterface
 	/** Continuation lifetime in milliseconds; required so MCP never invents an expiry policy. */
 	readonly ttl: number
-	/** Resolve the authenticated principal for the call in hand. */
+	/** Resolves the authenticated principal for the call in hand. */
 	readonly principal: MCPPrincipalHandler
-	/** Decide whether the call needs a form elicitation, including on verified retries. */
+	/** Decides whether the call needs a form elicitation, including on verified retries. */
 	readonly elicit: MCPInputHandler
 }
 
@@ -684,12 +684,12 @@ export interface MCPProgress {
 
 /** Backpressured request-scoped progress reporter supplied to an explicit executor. */
 export interface MCPProgressInterface {
-	/** Report one finite, strictly increasing progress value and await its consumption. */
+	/** Reports one finite, strictly increasing progress value and awaits its consumption. */
 	report(progress: MCPProgress): Promise<void>
 }
 
 /**
- * Receive one progress report a peer published for a request this client issued.
+ * Receives one progress report a peer published for a request this client issued.
  *
  * @remarks
  * The RECEIVING half of {@link MCPProgressInterface}, and deliberately not its mirror:
@@ -715,7 +715,7 @@ export interface MCPExecutionContext {
 	readonly progress?: MCPProgressInterface
 }
 
-/** Execute one canonical tool call or return a fully formed complete MCP result. */
+/** Executes one canonical tool call or return a fully formed complete MCP result. */
 export type MCPExecutionHandler = (
 	context: MCPExecutionContext,
 ) => ToolResult | MCPCallResult | Promise<ToolResult | MCPCallResult>
@@ -767,7 +767,7 @@ export type MCPTaskStatus = 'working' | 'input_required' | 'completed' | 'failed
  * because the schema distinguishes absence from `null`. `createdAt` and `lastUpdatedAt` are
  * described as ISO 8601 instants, though the generated schema validates only a
  * string, so this package carries whatever the manager produced without reformatting
- * it. `pollIntervalMs` is the manager's hint about how often the client should ask
+ * it. `pollIntervalMs` is the manager's hint about how often the client can ask
  * again; a manager that pushes notifications instead simply omits it.
  */
 export type MCPTask = {
@@ -794,7 +794,7 @@ export type MCPTask = {
  * that ended it, and `working` / `cancelled` carry nothing extra. Narrow on `status`.
  *
  * `result` is an open {@link MCPResult} rather than an {@link MCPCallResult}: only
- * `tools/call` can currently be deferred, but the payload is the deferred method's
+ * `tools/call` can be deferred, but the payload is the deferred method's
  * own result and the extension says nothing that fixes it to one method forever.
  */
 export type MCPTaskDetail =
@@ -865,7 +865,7 @@ export interface MCPTaskContext {
  */
 export interface MCPTaskManagerInterface {
 	/**
-	 * Create — or return the existing — durable task for one stable operation key.
+	 * Creates — or return the existing — durable task for one stable operation key.
 	 *
 	 * @remarks
 	 * The obligations this package cannot enforce, and one consequence that is easy
@@ -893,7 +893,7 @@ export interface MCPTaskManagerInterface {
 	 */
 	start(key: string, context: MCPTaskContext, options: MCPMethodOptions): Promise<MCPTask>
 	/**
-	 * Read one task's current snapshot.
+	 * Reads one task's current snapshot.
 	 *
 	 * @remarks
 	 * EVERY `tasks/*` method runs through here first, not only `tasks/get`. {@link update}
@@ -908,7 +908,7 @@ export interface MCPTaskManagerInterface {
 	 */
 	task(id: string, options: MCPMethodOptions): Promise<MCPTaskDetail | undefined>
 	/**
-	 * Answer the input requests an `input_required` task is waiting on.
+	 * Answers the input requests an `input_required` task is waiting on.
 	 *
 	 * @remarks
 	 * Responses are keyed by the request keys the task published. A key the task does not
@@ -933,7 +933,7 @@ export interface MCPTaskManagerInterface {
 		options: MCPMethodOptions,
 	): Promise<void>
 	/**
-	 * Ask one task to stop.
+	 * Asks one task to stop.
 	 *
 	 * @remarks
 	 * Cancellation is COOPERATIVE: a task that has already finished, or one whose work
@@ -947,7 +947,7 @@ export interface MCPTaskManagerInterface {
 }
 
 /**
- * Decide whether the `tools/call` in hand becomes a durable task.
+ * Decides whether the `tools/call` in hand becomes a durable task.
  *
  * @remarks
  * Deferral is entirely the SERVER's decision. The extension gives a client no flag and
@@ -987,7 +987,7 @@ export type MCPTaskHandler = (
 export interface MCPTaskOptions {
 	/** The durable store the server creates tasks in and reads them back from. */
 	readonly tasks: MCPTaskManagerInterface
-	/** Decide whether the call in hand is deferred, and under which stable key. */
+	/** Decides whether the call in hand is deferred, and under which stable key. */
 	readonly defer: MCPTaskHandler
 }
 
@@ -1100,7 +1100,7 @@ export interface MCPPromptGetResult {
  */
 export interface MCPResourceManagerInterface {
 	/**
-	 * Read one resource page.
+	 * Reads one resource page.
 	 *
 	 * @param pagination - The optional opaque cursor
 	 * @param options - The resolved per-request options
@@ -1111,7 +1111,7 @@ export interface MCPResourceManagerInterface {
 		options: MCPMethodOptions,
 	): MCPResourcePage | Promise<MCPResourcePage>
 	/**
-	 * Read one concrete resource URI.
+	 * Reads one concrete resource URI.
 	 *
 	 * @param params - The URI and optional multi-round response carrier
 	 * @param options - The resolved per-request options
@@ -1126,7 +1126,7 @@ export interface MCPResourceManagerInterface {
 		| undefined
 		| Promise<readonly MCPResourceContents[] | MCPInputResult | undefined>
 	/**
-	 * Read one resource-template page.
+	 * Reads one resource-template page.
 	 *
 	 * @remarks
 	 * `uriTemplate` values are RFC 6570 strings. Expansion belongs to the manager that resolves
@@ -1151,7 +1151,7 @@ export interface MCPResourceManagerInterface {
  */
 export interface MCPPromptManagerInterface {
 	/**
-	 * Read one prompt page.
+	 * Reads one prompt page.
 	 *
 	 * @param pagination - The optional opaque cursor
 	 * @param options - The resolved per-request options
@@ -1162,7 +1162,7 @@ export interface MCPPromptManagerInterface {
 		options: MCPMethodOptions,
 	): MCPPromptPage | Promise<MCPPromptPage>
 	/**
-	 * Resolve one named prompt.
+	 * Resolves one named prompt.
 	 *
 	 * @param params - The prompt name, string arguments, and optional multi-round response carrier
 	 * @param options - The resolved per-request options
@@ -1235,7 +1235,7 @@ export interface MCPCompletionResult {
  */
 export interface MCPCompletionManagerInterface {
 	/**
-	 * Complete one argument against its host-owned reference.
+	 * Completes one argument against its host-owned reference.
 	 *
 	 * @param params - The reference, argument fragment, and optional resolved context
 	 * @param options - The resolved per-request options
@@ -1318,26 +1318,26 @@ export type MCPDiscoverResult = {
  * and takes the `MCP` prefix; the keys are the protocol's and do not change.
  */
 export interface MCPSubscriptionFilter {
-	/** Receive `notifications/tools/list_changed` when the server produces it. */
+	/** Receives `notifications/tools/list_changed` when the server produces it. */
 	readonly toolsListChanged?: boolean
-	/** Receive `notifications/prompts/list_changed` when the server produces it. */
+	/** Receives `notifications/prompts/list_changed` when the server produces it. */
 	readonly promptsListChanged?: boolean
-	/** Receive `notifications/resources/list_changed` when the server produces it. */
+	/** Receives `notifications/resources/list_changed` when the server produces it. */
 	readonly resourcesListChanged?: boolean
-	/** Receive `notifications/resources/updated` for these resource URIs. */
+	/** Receives `notifications/resources/updated` for these resource URIs. */
 	readonly resourceSubscriptions?: readonly string[]
 }
 
 /** The required metadata on a graceful `subscriptions/listen` result. */
-export type SubscriptionsListenResultMetaObject = MCPResultMetaObject & {
+export type MCPSubscriptionResultMetaObject = MCPResultMetaObject & {
 	/** The JSON-RPC id of the `subscriptions/listen` request whose stream is closing. */
 	readonly 'io.modelcontextprotocol/subscriptionId': JSONRPCId
 }
 
 /** The terminating result returned when a `subscriptions/listen` stream closes gracefully. */
-export type SubscriptionsListenResult = {
+export type MCPSubscriptionResult = {
 	readonly resultType: 'complete'
-	readonly _meta: SubscriptionsListenResultMetaObject
+	readonly _meta: MCPSubscriptionResultMetaObject
 }
 
 // THE MODERN METHOD SEAM — the per-request execution options a handler receives,
@@ -1393,7 +1393,7 @@ export interface MCPMethodOptions {
 }
 
 /**
- * Produce notifications for one honoured `subscriptions/listen` filter.
+ * Produces notifications for one honoured `subscriptions/listen` filter.
  *
  * @remarks
  * The producer parks on its own event source while idle and ends its iterable to close the
@@ -1413,7 +1413,7 @@ export type MCPSubscriptionHandler = (
 export interface MCPSubscriptionOptions {
 	/** The notification filter this server can actually honour. */
 	readonly notifications: MCPSubscriptionFilter
-	/** Open the producer for one honoured filter. */
+	/** Opens the producer for one honoured filter. */
 	readonly listen: MCPSubscriptionHandler
 }
 
@@ -1477,7 +1477,7 @@ export type MCPTextStream = AsyncGenerator<string, string, unknown>
  */
 export interface MCPStreamControllerInterface extends MCPStream {
 	/**
-	 * Read the next notification, or the terminating response that ends the exchange.
+	 * Reads the next notification, or the terminating response that ends the exchange.
 	 *
 	 * @remarks
 	 * At most ONE read is outstanding against the producer, and a rival read is refused
@@ -1489,7 +1489,7 @@ export interface MCPStreamControllerInterface extends MCPStream {
 	 */
 	next(): Promise<IteratorResult<JSONRPCNotification, JSONRPCResponse>>
 	/**
-	 * End the exchange because the consumer already has its answer.
+	 * Ends the exchange because the consumer already has its answer.
 	 *
 	 * @param value - The terminal the consumer is ending on
 	 * @returns That terminal as the iteration's `return`
@@ -1498,14 +1498,14 @@ export interface MCPStreamControllerInterface extends MCPStream {
 		value: JSONRPCResponse | PromiseLike<JSONRPCResponse>,
 	): Promise<IteratorResult<JSONRPCNotification, JSONRPCResponse>>
 	/**
-	 * End the exchange with a failure the consumer is raising.
+	 * Ends the exchange with a failure the consumer is raising.
 	 *
 	 * @param error - The failure to end the exchange with
 	 * @returns Never — the returned promise always rejects with the supplied failure
 	 */
 	throw(error: unknown): Promise<IteratorResult<JSONRPCNotification, JSONRPCResponse>>
 	/**
-	 * End the exchange permanently, with no terminal response.
+	 * Ends the exchange permanently, with no terminal response.
 	 *
 	 * @remarks
 	 * Idempotent, and never a way to deliver an answer: a read parked on the producer
@@ -1516,7 +1516,7 @@ export interface MCPStreamControllerInterface extends MCPStream {
 	 */
 	stop(): void
 	/**
-	 * End the exchange when the scope that owns it exits.
+	 * Ends the exchange when the scope that owns it exits.
 	 *
 	 * @remarks
 	 * The scoped spelling of {@link stop}, and the member a pump discharges its ownership
@@ -1561,13 +1561,13 @@ export interface MCPStreamControllerInterface extends MCPStream {
  */
 export interface MCPTextStreamControllerInterface extends MCPTextStream {
 	/**
-	 * Read the next serialized message, or the serialized terminating response.
+	 * Reads the next serialized message, or the serialized terminating response.
 	 *
 	 * @returns The next message as a string, or the terminal as the iteration's `return`
 	 */
 	next(): Promise<IteratorResult<string, string>>
 	/**
-	 * End the exchange because the consumer already has its answer.
+	 * Ends the exchange because the consumer already has its answer.
 	 *
 	 * @remarks
 	 * The typed exchange ends with NO terminal: a string is not a {@link JSONRPCResponse}, and
@@ -1579,20 +1579,20 @@ export interface MCPTextStreamControllerInterface extends MCPTextStream {
 	 */
 	return(value: string | PromiseLike<string>): Promise<IteratorResult<string, string>>
 	/**
-	 * End the exchange with a failure the consumer is raising.
+	 * Ends the exchange with a failure the consumer is raising.
 	 *
 	 * @param error - The failure to end the exchange with
 	 * @returns Never — the returned promise always rejects with the supplied failure
 	 */
 	throw(error: unknown): Promise<IteratorResult<string, string>>
 	/**
-	 * End the exchange permanently, with no terminal response, through the typed stream.
+	 * Ends the exchange permanently, with no terminal response, through the typed stream.
 	 *
 	 * @returns Nothing
 	 */
 	stop(): void
 	/**
-	 * End the typed exchange when the scope that owns this face exits.
+	 * Ends the typed exchange when the scope that owns this face exits.
 	 *
 	 * @remarks
 	 * Delegates downward exactly as {@link stop} does, so a pump holding only the serialized
@@ -1654,14 +1654,14 @@ export type MCPMethodHandler = (
  */
 export interface MCPMethodManagerInterface {
 	/**
-	 * Register one modern method — replacing any handler already under that name.
+	 * Registers one modern method — replacing any handler already under that name.
 	 *
 	 * @param name - The JSON-RPC method name to answer (e.g. `'tools/call'`)
 	 * @param handler - The handler dispatched for that method
 	 */
 	add(name: string, handler: MCPMethodHandler): void
 	/**
-	 * Find the handler registered for one method name.
+	 * Finds the handler registered for one method name.
 	 *
 	 * @param name - The JSON-RPC method name to resolve
 	 * @returns The registered handler, or `undefined` when the method is unregistered
@@ -1672,7 +1672,7 @@ export interface MCPMethodManagerInterface {
 /**
  * The push observation surface of an {@link MCPServerInterface} — the
  * dispatch moments a fire-and-forget observer (logging, tracing) subscribes to
- * via `server.emitter.on`.
+ * through `server.emitter.on`.
  *
  * @remarks
  * `request` fires at the TOP of every `dispatch` with the method, correlating id
@@ -1844,7 +1844,7 @@ export interface MCPDispatcherInterface {
 	/** The resolved bounds the dispatcher enforces. */
 	readonly limit: Required<MCPLimitOptions>
 	/**
-	 * Dispatch a parsed JSON-RPC request.
+	 * Dispatches a parsed JSON-RPC request.
 	 *
 	 * @param request - The parsed request
 	 * @param options - Optional execution context
@@ -1855,7 +1855,7 @@ export interface MCPDispatcherInterface {
 		options?: MCPDispatchOptions,
 	): Promise<JSONRPCResponse | MCPStreamControllerInterface>
 	/**
-	 * Dispatch a parsed JSON-RPC notification.
+	 * Dispatches a parsed JSON-RPC notification.
 	 *
 	 * @param notification - The parsed notification
 	 * @param options - Optional execution context
@@ -1863,7 +1863,7 @@ export interface MCPDispatcherInterface {
 	 */
 	dispatch(notification: JSONRPCNotification, options?: MCPDispatchOptions): Promise<undefined>
 	/**
-	 * Dispatch an invocation whose arm is not statically known.
+	 * Dispatches an invocation whose arm is not statically known.
 	 *
 	 * @param invocation - The parsed invocation
 	 * @param options - Optional execution context
@@ -1874,7 +1874,7 @@ export interface MCPDispatcherInterface {
 		options?: MCPDispatchOptions,
 	): Promise<JSONRPCResponse | MCPStreamControllerInterface | undefined>
 	/**
-	 * Handle a raw JSON-RPC string.
+	 * Handles a raw JSON-RPC string.
 	 *
 	 * @param message - The raw message
 	 * @param options - Optional execution context
@@ -1932,7 +1932,7 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 	 */
 	readonly limit: Required<MCPLimitOptions>
 	/**
-	 * Dispatch an already-parsed request — run its method and resolve its answer.
+	 * Dispatches an already-parsed request — runs its method and resolves its answer.
 	 *
 	 * @remarks
 	 * A held-open modern method answers with a CONTROLLED stream instead of a response:
@@ -1951,7 +1951,7 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 		options?: MCPDispatchOptions,
 	): Promise<JSONRPCResponse | MCPStreamControllerInterface>
 	/**
-	 * Dispatch an already-parsed notification — run its method and answer nothing.
+	 * Dispatches an already-parsed notification — runs its method and answers nothing.
 	 *
 	 * @param notification - The parsed JSON-RPC notification to dispatch
 	 * @param options - Per-request execution options (see {@link MCPDispatchOptions})
@@ -1959,7 +1959,7 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 	 */
 	dispatch(notification: JSONRPCNotification, options?: MCPDispatchOptions): Promise<undefined>
 	/**
-	 * Dispatch an already-parsed invocation whose arm is not statically known.
+	 * Dispatches an already-parsed invocation whose arm is not statically known.
 	 *
 	 * @remarks
 	 * The union arm a transport uses when it has narrowed a message no further than
@@ -1976,7 +1976,7 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 		options?: MCPDispatchOptions,
 	): Promise<JSONRPCResponse | MCPStreamControllerInterface | undefined>
 	/**
-	 * Handle a raw message string — parse it, dispatch, and serialize the answer.
+	 * Handles a raw message string — parses it, dispatches it, and serializes the answer.
 	 *
 	 * @remarks
 	 * A `JSON.parse` failure resolves a serialized `-32700` (Parse error) response;
@@ -2032,13 +2032,13 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
  * replaceable handler per event is the whole point of it.
  */
 export interface MCPTransportInterface {
-	/** Deliver one outbound JSON-RPC message (already serialized). */
+	/** Delivers one outbound JSON-RPC message (already serialized). */
 	readonly send: (message: string) => void | Promise<void>
-	/** Register the single inbound-message handler — a second call REPLACES the first. */
+	/** Registers the single inbound-message handler — a second call REPLACES the first. */
 	readonly listen: (handler: (message: string) => void) => void
-	/** Register the single closed handler — a second call REPLACES the first. */
+	/** Registers the single closed handler — a second call REPLACES the first. */
 	readonly closed: (handler: () => void) => void
-	/** Close the underlying channel. */
+	/** Closes the underlying channel. */
 	readonly close: () => void | Promise<void>
 }
 
@@ -2054,7 +2054,7 @@ export interface MCPTransportInterface {
 
 /**
  * The observable events of a {@link MCPClientTransportInterface} — the moments the
- * {@link MCPClientInterface} (and any tracer) subscribes to via `transport.emitter.on`.
+ * {@link MCPClientInterface} (and any tracer) subscribes to through `transport.emitter.on`.
  *
  * @remarks
  * - `message` — a JSON-RPC message ARRIVED from the remote server (a response the
@@ -2078,21 +2078,19 @@ export type MCPClientTransportEventMap = {
 }
 
 /**
- * A transport-agnostic carrier for the MCP CLIENT — pumps JSON-RPC messages to a
- * remote server and surfaces the server's replies on its `emitter`'s `message`
- * event, with NO knowledge of the protocol it carries.
+ * A transport-agnostic MCP message carrier — pumps JSON-RPC messages to a peer and
+ * surfaces received messages on its `emitter`'s `message` event, with no knowledge
+ * of the protocol role on either side.
  *
  * @remarks
- * The mirror of the server's "a transport pumps strings through `handle`": here the
- * {@link MCPClientInterface} hands the transport one {@link JSONRPCMessage} via
- * `send`, and the transport delivers each decoded reply back through the
- * `message` event the client subscribed to. The minimal carrier surface: a
+ * A client hands the transport one {@link JSONRPCMessage} through `send`, and the
+ * transport delivers each decoded reply through the `message` event. Server bridges
+ * use the same carrier for bidirectional WebSocket and stdio channels. The minimal surface is a
  * `start` (open the connection / arm any reader), `send` (write one message),
  * and `close` (tear down). `session` exposes a server-assigned session id once a
  * stateful transport has one (`undefined` for the stateless v1) — reserved for the
- * later sessions tier. Concrete transports (the HTTP transport over `fetch`, a future
- * WebSocket one) live in `src/server/mcp`; the in-process loopback transport in the
- * tests is one too.
+ * later sessions tier. Concrete transports live in the browser and server environments;
+ * the in-process loopback transport in the tests implements the same contract.
  */
 export interface MCPClientTransportInterface {
 	readonly emitter: EmitterInterface<MCPClientTransportEventMap>
@@ -2117,7 +2115,7 @@ export interface MCPClientTransportInterface {
 	 */
 	readonly duplex: boolean
 	/**
-	 * Open the transport — establish the connection and arm any reply reader.
+	 * Opens the transport — establishes the connection and arms any reply reader.
 	 *
 	 * @remarks
 	 * A `start` that REJECTS must first release whatever it had already acquired. The
@@ -2130,7 +2128,7 @@ export interface MCPClientTransportInterface {
 	 */
 	start(): Promise<void>
 	/**
-	 * Send one JSON-RPC message to the remote server.
+	 * Sends one JSON-RPC message to the remote server.
 	 *
 	 * @remarks
 	 * Each decoded reply is surfaced on the `emitter`'s `message` event — `send`
@@ -2154,7 +2152,7 @@ export interface MCPClientTransportInterface {
 	 */
 	send(message: JSONRPCMessage): Promise<void>
 	/**
-	 * Close the transport — end the connection and release resources.
+	 * Closes the transport — ends the connection and releases resources.
 	 *
 	 * @remarks
 	 * A `close` must SETTLE, and its settlements mean different things to its caller: resolving
@@ -2178,7 +2176,7 @@ export interface MCPClientTransportInterface {
 
 /**
  * The push observation surface of an {@link MCPClientInterface} — the moments a
- * fire-and-forget observer (logging, tracing) subscribes to via `client.emitter.on`.
+ * fire-and-forget observer (logging, tracing) subscribes to through `client.emitter.on`.
  *
  * @remarks
  * - `connect` — era negotiation completed and the client is connected: modern after
@@ -2266,9 +2264,9 @@ export interface MCPClientOptions {
  * handler is dropped in the same step.
  */
 export interface MCPCallOptions {
-	/** Cancel this one in-flight request; an already-aborted signal refuses it unsent. */
+	/** Cancels this one in-flight request; an already-aborted signal refuses it unsent. */
 	readonly signal?: AbortSignal
-	/** Receive this request's progress frames; supplying it stamps the progress token. */
+	/** Receives this request's progress frames; supplying it stamps the progress token. */
 	readonly progress?: MCPProgressHandler
 }
 
@@ -2300,7 +2298,7 @@ export type MCPCallOutcome =
 	| MCPInputResult
 
 /**
- * Issue one correlated JSON-RPC request and await the peer's result.
+ * Issues one correlated JSON-RPC request and awaits the peer's result.
  *
  * @remarks
  * The door an {@link MCPTaskClientInterface} reaches the wire through, and the whole of what
@@ -2370,7 +2368,7 @@ export interface MCPTaskClientOptions {
  */
 export interface MCPTaskClientInterface {
 	/**
-	 * Read one durable task's current snapshot.
+	 * Reads one durable task's current snapshot.
 	 *
 	 * @remarks
 	 * REJECTS rather than answering `undefined` for a task it cannot read. The peer's refusal
@@ -2396,7 +2394,7 @@ export interface MCPTaskClientInterface {
 	 */
 	task(id: string): Promise<MCPTaskDetail>
 	/**
-	 * Answer the input requests an `input_required` task is waiting on.
+	 * Answers the input requests an `input_required` task is waiting on.
 	 *
 	 * @remarks
 	 * The responses are keyed by the request keys the task itself published, and they travel
@@ -2415,7 +2413,7 @@ export interface MCPTaskClientInterface {
 	 */
 	update(id: string, responses: Readonly<Record<string, unknown>>): Promise<void>
 	/**
-	 * Ask one durable task to stop.
+	 * Asks one durable task to stop.
 	 *
 	 * @remarks
 	 * ADVISORY, exactly like the server-side port it mirrors: the acknowledgement reports that
@@ -2479,15 +2477,15 @@ export interface MCPTaskClientInterface {
  *   says to ignore it rather than surface it as something a caller might act on.
  * - **Per-request deadline.** A request carrying a deadline races an
  *   `AbortSignal.timeout(timeout)`: a server that never replies REJECTS that pending
- *   request once the deadline fires. The initial discovery probe carries one only where
- *   `timeout` was configured, so a default client's probe — and a public `discover` call on such a
- *   client — waits for its peer indefinitely. The client's
+ *   request once the deadline fires. The initial discovery probe and every public request use a
+ *   deadline. An omitted `timeout` selects {@link DEFAULT_MCP_REQUEST_TIMEOUT}; an explicit
+ *   timeout also caps the probe at {@link DEFAULT_MCP_PROBE_TIMEOUT}. The client's
  *   wait on the transport's `close` carries that same deadline, because it is the one wait neither
  *   the pending-request drain nor the supersession signal can reach; the deadline ends the wait,
  *   not the close, so a retry joins that close rather than issuing a second one.
  * - **Transport-agnostic.** Imports only core siblings — JSON-RPC + the tool vocabulary
  *   + the timeout primitive — with no HTTP and no model; the concrete transport is
- *   injected. Wire fields are narrowed via the contracts guards (no `as`).
+ *   injected. Wire fields are narrowed with the contract guards (no `as`).
  * - **Observable.** The owned `emitter` fires `connect` / `disconnect` /
  *   `notification` / `error`; the emitter isolates a listener throw and routes it to its
  *   `error` handler (the `error` option), never the client.
@@ -2511,18 +2509,7 @@ export interface MCPClientInterface {
 	 */
 	readonly tasks: MCPTaskClientInterface
 	/**
-	 * Subscribe a listener to one of the client's {@link MCPClientEventMap} events —
-	 * the convenience forward to `emitter.on`.
-	 *
-	 * @param event - The event name to subscribe to
-	 * @param handler - The listener for that event's argument tuple
-	 */
-	on<K extends keyof MCPClientEventMap>(
-		event: K,
-		handler: (...args: MCPClientEventMap[K]) => void,
-	): void
-	/**
-	 * Connect to the remote server — open a connection on the transport and negotiate the
+	 * Connects to the remote server — opens a connection on the transport and negotiates the
 	 * modern or legacy wire era without exposing that choice to the caller.
 	 *
 	 * @remarks
@@ -2552,21 +2539,19 @@ export interface MCPClientInterface {
 	 */
 	connect(): Promise<void>
 	/**
-	 * Discover a modern server's supported revisions and capabilities.
+	 * Discovers a modern server's supported revisions and capabilities.
 	 *
 	 * @remarks
 	 * The request carries the modern per-request metadata stamp. Unknown revisions in
 	 * the peer's advertisement are ignored because {@link MCPDiscoverResult} exposes
-	 * only revisions this client can negotiate. It carries the same short probe deadline
-	 * {@link connect}'s own discovery does, which exists only where a `timeout` was configured — so
-	 * on a default client `discover` is UNBOUNDED and waits on a silent peer indefinitely. Configure
-	 * `timeout` to bound it.
+	 * only revisions this client can negotiate. It carries the configured request deadline;
+	 * omitting `timeout` selects {@link DEFAULT_MCP_REQUEST_TIMEOUT}.
 	 *
 	 * @returns The validated modern discovery result
 	 */
 	discover(): Promise<MCPDiscoverResult>
 	/**
-	 * Disconnect from the remote server — reject every pending request and close the
+	 * Disconnects from the remote server — rejects every pending request and closes the
 	 * connection this client opened on its transport.
 	 *
 	 * @remarks
@@ -2583,7 +2568,7 @@ export interface MCPClientInterface {
 	 * `start` — that attempt owns nothing yet and closes what it opens itself. The transport's
 	 * `close` carries the per-request deadline on the WAIT, so a shutdown the transport accepts and
 	 * never answers rejects instead of holding this caller and every later {@link connect} — while
-	 * that close itself keeps running, since the deadline only ends this client's waiting. A `close`
+	 * that close itself keeps running, because the deadline only ends this client's waiting. A `close`
 	 * that faults or goes unanswered rejects this call and leaves the connection owned, so the next
 	 * `disconnect` — or the next {@link connect}, which refuses to open while a close is owed —
 	 * settles it again: joining the close still running when there is one, issuing a fresh `close`
@@ -2599,8 +2584,8 @@ export interface MCPClientInterface {
 	 */
 	disconnect(): Promise<void>
 	/**
-	 * List the remote server's tools, each wrapped as a local {@link ToolInterface}
-	 * whose `execute` runs the remote `tools/call` via {@link call}.
+	 * Lists the remote server's tools, each wrapped as a local {@link ToolInterface}
+	 * whose `execute` runs the remote `tools/call` through {@link call}.
 	 *
 	 * @remarks
 	 * Runs `tools/list` and maps each descriptor: `name` (narrowed to a string),
@@ -2612,7 +2597,7 @@ export interface MCPClientInterface {
 	 */
 	tools(): Promise<readonly ToolInterface[]>
 	/**
-	 * Call a remote tool by name — runs `tools/call` and reports which permitted arm
+	 * Calls a remote tool by name — runs `tools/call` and reports which permitted arm
 	 * the peer answered with.
 	 *
 	 * @remarks

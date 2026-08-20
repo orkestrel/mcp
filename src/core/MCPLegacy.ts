@@ -30,7 +30,7 @@ import { buildInitializeResult, buildJSONRPCError, buildJSONRPCResult } from './
 import { isJSONRPCInvocation, isModernRequest } from './validators.js'
 
 /**
- * Translate the fixed legacy method set onto one modern dispatcher.
+ * Translates the fixed legacy method set onto one modern dispatcher.
  *
  * @remarks
  * This decorator owns no execution engine or result normalizer. Modern invocations
@@ -42,7 +42,7 @@ export class MCPLegacy implements MCPDispatcherInterface {
 	readonly #options: MCPLegacyOptions
 
 	/**
-	 * Create a legacy decorator.
+	 * Creates a legacy decorator.
 	 *
 	 * @param options - The sole dispatcher and legacy handshake identity
 	 */

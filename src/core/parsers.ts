@@ -31,7 +31,7 @@ import {
 } from './validators.js'
 
 /**
- * Narrow an already-parsed value to a {@link JSONRPCMessage}, or `undefined` when
+ * Narrows an already-parsed value to a {@link JSONRPCMessage}, or `undefined` when
  * it is not one.
  *
  * @remarks
@@ -89,7 +89,7 @@ export function parseJSONRPCMessage(
 }
 
 /**
- * Parse the reserved modern request metadata into an {@link MCPRequestContext}.
+ * Parses the reserved modern request metadata into an {@link MCPRequestContext}.
  *
  * @remarks
  * This is the validity step after {@link isModernRequest}: a defined result can
@@ -137,7 +137,7 @@ export function parseRequestContext(
 }
 
 /**
- * Parse the opened value carried by an opaque `requestState` continuation.
+ * Parses the opened value carried by an opaque `requestState` continuation.
  *
  * @remarks
  * This parser does not open the opaque continuation carrier; the configured

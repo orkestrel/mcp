@@ -44,7 +44,7 @@ export class MCPTextStreamController implements MCPTextStreamControllerInterface
 	readonly #stream: MCPStreamControllerInterface
 
 	/**
-	 * Mirror one controlled typed exchange as its serialized sequence.
+	 * Mirrors one controlled typed exchange as its serialized sequence.
 	 *
 	 * @param stream - The controlled typed stream this face serializes and delegates into
 	 */
@@ -53,7 +53,7 @@ export class MCPTextStreamController implements MCPTextStreamControllerInterface
 	}
 
 	/**
-	 * Read the next serialized message, or the serialized terminating response.
+	 * Reads the next serialized message, or the serialized terminating response.
 	 *
 	 * @returns The next message as a string, or the terminal as the iteration's `return`
 	 * @throws Whatever ended the typed exchange, unserialized — an abort is not a message
@@ -65,7 +65,7 @@ export class MCPTextStreamController implements MCPTextStreamControllerInterface
 	}
 
 	/**
-	 * End the exchange because the consumer already has its answer.
+	 * Ends the exchange because the consumer already has its answer.
 	 *
 	 * @remarks
 	 * The typed exchange ends with no terminal, because a string is not a
@@ -82,7 +82,7 @@ export class MCPTextStreamController implements MCPTextStreamControllerInterface
 	}
 
 	/**
-	 * End the exchange with a failure the consumer is raising.
+	 * Ends the exchange with a failure the consumer is raising.
 	 *
 	 * @param error - The failure to end the exchange with
 	 * @returns Never — the returned promise always rejects
@@ -94,7 +94,7 @@ export class MCPTextStreamController implements MCPTextStreamControllerInterface
 	}
 
 	/**
-	 * End the typed exchange permanently, with no terminal response.
+	 * Ends the typed exchange permanently, with no terminal response.
 	 *
 	 * @returns Nothing
 	 */
@@ -103,7 +103,7 @@ export class MCPTextStreamController implements MCPTextStreamControllerInterface
 	}
 
 	/**
-	 * End the typed exchange when the scope that owns this face exits.
+	 * Ends the typed exchange when the scope that owns this face exits.
 	 *
 	 * @remarks
 	 * Delegates downward exactly as {@link stop} does — disposing the serialized arm is
@@ -116,7 +116,7 @@ export class MCPTextStreamController implements MCPTextStreamControllerInterface
 	}
 
 	/**
-	 * Iterate this exchange — the controller is its own iterator.
+	 * Iterates this exchange — the controller is its own iterator.
 	 *
 	 * @returns This controller
 	 */

@@ -5,7 +5,7 @@ import { DEFAULT_MCP_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_COMMENT } from '../consta
 import { createReadableStream } from '../helpers.js'
 
 /**
- * Compose one incoming HTTP request lifetime with one MCP-owned SSE response lifetime.
+ * Composes one incoming HTTP request lifetime with one MCP-owned SSE response lifetime.
  *
  * @remarks
  * The composed {@link signal} observes request abort and EVERY way this response can end
@@ -49,7 +49,7 @@ export class HTTPDisconnect {
 	#pulling = false
 
 	/**
-	 * Create the lifecycle composition for one request and its future SSE response.
+	 * Creates the lifecycle composition for one request and its future SSE response.
 	 *
 	 * @param signal - The incoming request signal
 	 * @param options - Optional keepalive `interval` in milliseconds; an invalid value falls back
@@ -76,7 +76,7 @@ export class HTTPDisconnect {
 	}
 
 	/**
-	 * Bridge one open SSE response through cancellation-aware byte forwarding and keepalives.
+	 * Bridges one open SSE response through cancellation-aware byte forwarding and keepalives.
 	 *
 	 * Consumer cancellation, a read failure while forwarding, and a keepalive tick that finds the
 	 * SSE stream already closed each abort {@link signal}; consumer cancellation also cancels the

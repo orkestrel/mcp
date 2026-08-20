@@ -4,7 +4,7 @@ import { isRecord, isString } from '@orkestrel/contract'
 import { MCP_META_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
 
 /**
- * Infer the wire era for an MCP protocol revision.
+ * Infers the wire era for an MCP protocol revision.
  *
  * @param version - The protocol revision to classify
  * @returns `'modern'` for `2026-07-28`, `'legacy'` for either supported legacy
@@ -23,7 +23,7 @@ export function inferEra(version: string): MCPEra | undefined {
 }
 
 /**
- * Infer the newest supported protocol revision present in a peer's offer.
+ * Infers the newest supported protocol revision present in a peer's offer.
  *
  * @param offered - The protocol revisions offered by the peer
  * @returns The newest locally supported offered revision, or `undefined`
@@ -36,7 +36,7 @@ export function inferVersion(offered: readonly string[]): MCPVersion | undefined
 }
 
 /**
- * Infer the protocol version an outbound message announces itself with — the ONE
+ * Infers the protocol version an outbound message announces itself with — the ONE
  * projection every HTTP client transport stamps `mcp-protocol-version` from.
  *
  * @remarks

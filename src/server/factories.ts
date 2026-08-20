@@ -29,7 +29,7 @@ import { WebSocketClientTransport } from './transports/WebSocketClientTransport.
 import { WebSocketServerTransport } from './transports/WebSocketServerTransport.js'
 
 /**
- * Adapt the installed server token primitives to the host-neutral MCP continuation port.
+ * Adapts the installed server token primitives to the host-neutral MCP continuation port.
  *
  * @param secret - Current signing secret or `[current, ...older]` rotation list
  * @returns A continuation port that seals and opens opaque canonical state strings
@@ -46,7 +46,7 @@ export function createMCPContinuation(secret: TokenSecret): MCPContinuationInter
 }
 
 /**
- * Create the MCP Streamable-HTTP transport routes — mounts a transport-agnostic
+ * Creates the MCP Streamable-HTTP transport routes — mounts a transport-agnostic
  * {@link MCPDispatcherInterface} (the `@src/core` dispatch boundary) on the fetch-standard router
  * spine, pumping each `POST` body through `mcp.dispatch`. Returns the {@link RouteInput}s to
  * hand to `router.add(...)`.
@@ -70,7 +70,7 @@ export function createMCPContinuation(secret: TokenSecret): MCPContinuationInter
  *
  * When `streaming` is enabled (the default) and the client `Accept`s `text/event-stream`,
  * the `200` reply is framed as a Streamable-HTTP SSE response (one `data:` event carrying
- * the JSON-RPC envelope, then the stream ends) via `@orkestrel/server`'s generic
+ * the JSON-RPC envelope, then the stream ends) through `@orkestrel/server`'s generic
  * {@link import('@orkestrel/server').openStream} seam; otherwise it is a plain JSON body.
  *
  * **Sessions are a SEPARATE, plug-and-play middleware.** `createMCPRoutes` mints / reads no
@@ -114,7 +114,7 @@ export function createMCPRoutes<TState = unknown>(
 }
 
 /**
- * Create the HTTP CLIENT transport for an {@link import('@src/core').MCPClientInterface}
+ * Creates the HTTP CLIENT transport for an {@link import('@src/core').MCPClientInterface}
  * — a {@link MCPClientTransportInterface} that drives a REMOTE Streamable-HTTP MCP server
  * over `fetch`. The egress mirror of {@link createMCPRoutes}.
  *
@@ -122,7 +122,7 @@ export function createMCPRoutes<TState = unknown>(
  * Hand it to `createMCPClient({ transport })`: each JSON-RPC message the client sends is
  * `POST`ed to `options.url` with `content-type: application/json` and an `Accept` of
  * both `application/json` and `text/event-stream` (the server answers with EITHER — a
- * plain JSON envelope or a Streamable-HTTP SSE `data:` event, decoded via `@orkestrel/sse`),
+ * plain JSON envelope or a Streamable-HTTP SSE `data:` event, decoded with `@orkestrel/sse`),
  * and the reply is surfaced on the transport's `message` event for the client's id
  * correlation. Add `options.headers` (e.g. an `Authorization` bearer) to reach a guarded
  * server. `start` / `close` hold no connection; against a STATEFUL server it captures the
@@ -133,7 +133,7 @@ export function createMCPRoutes<TState = unknown>(
  *
  * @param options - `url` (the remote endpoint; REQUIRED), optional `headers` merged onto
  *   every request, optional `fetch` (default `globalThis.fetch`), and optional `timeout`
- *   (ms, applied via `AbortSignal.timeout`); see {@link HTTPClientTransportOptions}
+ *   (ms, applied with `AbortSignal.timeout`); see {@link HTTPClientTransportOptions}
  * @returns A working {@link MCPClientTransportInterface} over `fetch`
  *
  * @example
@@ -155,7 +155,7 @@ export function createHTTPClientTransport(
 }
 
 /**
- * Create the MCP WebSocket transport INGRESS — an {@link UpgradeHandler} that exposes a
+ * Creates the MCP WebSocket transport INGRESS — an {@link UpgradeHandler} that exposes a
  * transport-agnostic {@link MCPDispatcherInterface} over a WebSocket, the WebSocket mirror of
  * {@link createMCPRoutes}. Register it on the spine's upgrade seam.
  *
@@ -170,10 +170,10 @@ export function createHTTPClientTransport(
  *   A decline NEVER writes to the socket (it is not yet ours) — the spine owns the unclaimed
  *   outcome.
  * - **Claims (returns `true`)** otherwise: it builds `createNodeWebSocket({ socket, key, head,
- *   protocol })` (SERVER mode → writes the `101` handshake, echoing the `subprotocol`, default
- *   {@link MCP_WEBSOCKET_SUBPROTOCOL} `'mcp'`, and sends UNMASKED frames), wraps it in a
+ *   protocol })` (SERVER mode → writes the `101` handshake, selects the configured subprotocol
+ *   only when the client's offer contains it, and sends UNMASKED frames), wraps it in a
  *   {@link WebSocketServerTransport}, and pipes it through the core {@link
- *   import('@src/core').MCPTransportInterface} port via {@link
+ *   import('@src/core').MCPTransportInterface} port through {@link
  *   import('./helpers.js').bridgeMessageTransport} + {@link import('@src/core').bindServer}:
  *   each inbound REQUEST runs through `mcp.dispatch`, and a defined response is written back
  *   as a frame — a NOTIFICATION sends nothing, and a non-request message (a stray response) is
@@ -212,7 +212,7 @@ export function createWebSocketServer(
 ): UpgradeHandler {
 	const path = options.path ?? DEFAULT_MCP_PATH
 	const subprotocol = options.subprotocol ?? MCP_WEBSOCKET_SUBPROTOCOL
-	// The connections this handler currently owns, each with the detachment its binding returned
+	// The connections this handler owns, each with the detachment its binding returned
 	// — a closure store, like the session middleware's. A transport leaves on its own `close`,
 	// so the map holds exactly the LIVE connections and exactly the bindings still attached.
 	const live = new Map<WebSocketServerTransport, () => void>()
@@ -241,7 +241,17 @@ export function createWebSocketServer(
 		// through the core port: bindServer dispatches each inbound request and writes back a
 		// defined response (a notification sends nothing); a dispatch / send fault surfaces on
 		// `mcp.emitter`'s `error` event.
-		const ws = createNodeWebSocket({ socket, key, head, protocol: subprotocol })
+		const offer = request.headers['sec-websocket-protocol']
+		const protocol =
+			isString(offer) && offer.split(',').some((candidate) => candidate.trim() === subprotocol)
+				? subprotocol
+				: undefined
+		const ws = createNodeWebSocket({
+			socket,
+			key,
+			head,
+			...(protocol === undefined ? {} : { protocol }),
+		})
 		const transport = new WebSocketServerTransport(ws)
 		// The binder's detachment is this handler's to hold: the connection it belongs to is one
 		// this factory minted and nothing outside can reach, so a discarded `unbind` leaves the
@@ -258,7 +268,7 @@ export function createWebSocketServer(
 }
 
 /**
- * Create the WebSocket CLIENT transport for an {@link import('@src/core').MCPClientInterface}
+ * Creates the WebSocket CLIENT transport for an {@link import('@src/core').MCPClientInterface}
  * — a {@link MCPClientTransportInterface} that drives a REMOTE MCP server over a WebSocket. The
  * egress mirror of {@link createWebSocketServer} and the WebSocket sibling of {@link
  * createHTTPClientTransport}.
@@ -267,7 +277,7 @@ export function createWebSocketServer(
  * Hand it to `createMCPClient({ transport })`: `start()` (run by `client.connect()`) performs
  * the RFC 6455 client handshake against `options.url` (accepting a `ws://` / `wss://` or an
  * `http://` / `https://` URL — a `ws(s)` scheme is converted to `http(s)` for the underlying
- * upgrade request), validates the `Sec-WebSocket-Accept` (via `@orkestrel/websocket`'s
+ * upgrade request), validates the `Sec-WebSocket-Accept` (with `@orkestrel/websocket`'s
  * `computeWebSocketAccept`), and opens a persistent bidirectional frame channel; each JSON-RPC
  * message the client `send`s is written as one masked text frame, and each decoded reply is
  * surfaced on the transport's `message` event for the client's id correlation. Add
@@ -296,7 +306,7 @@ export function createWebSocketClientTransport(
 }
 
 /**
- * Create the stdio CLIENT transport for an {@link import('@src/core').MCPClientInterface}
+ * Creates the stdio CLIENT transport for an {@link import('@src/core').MCPClientInterface}
  * — a {@link MCPClientTransportInterface} that spawns and drives a CHILD PROCESS MCP server
  * over newline-delimited JSON-RPC on `stdin`/`stdout`, the stdio sibling of {@link
  * createHTTPClientTransport} and {@link createWebSocketClientTransport}.
@@ -333,7 +343,7 @@ export function createStdioClientTransport(
 }
 
 /**
- * Create the MCP stdio transport INGRESS — pumps a transport-agnostic {@link
+ * Creates the MCP stdio transport INGRESS — pumps a transport-agnostic {@link
  * MCPDispatcherInterface} over newline-delimited JSON-RPC on `stdin`/`stdout` (or an
  * injected stream pair), the stdio mirror of {@link createWebSocketServer}.
  *
@@ -341,7 +351,7 @@ export function createStdioClientTransport(
  * Wraps `options.input` (default `process.stdin`) / `options.output` (default
  * `process.stdout`) in a {@link import('./transports/StdioServerTransport.js').StdioServerTransport}
  * and pipes it through the core {@link import('@src/core').MCPTransportInterface} port
- * via {@link import('./helpers.js').bridgeMessageTransport} + {@link
+ * through {@link import('./helpers.js').bridgeMessageTransport} + {@link
  * import('@src/core').bindServer}: each inbound REQUEST runs through `mcp.dispatch`, and
  * a defined response is written back as a newline-terminated line — a NOTIFICATION
  * writes nothing, and a non-request message is ignored. A `dispatch` / `send` fault

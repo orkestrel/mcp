@@ -5,7 +5,7 @@ import { attempt, cloneJSONValue, isRecord, isString } from '@orkestrel/contract
 import { serializeJSON } from './helpers.js'
 
 /**
- * Snapshot one bounded exact JSON value together with its canonical wire serialization.
+ * Snapshots one bounded exact JSON value together with its canonical wire serialization.
  *
  * The returned value is an owned, deeply frozen graph reconstructed from the canonical text;
  * the frozen tuple shares no mutable structure with the input. Invalid exact-JSON shapes,
@@ -39,7 +39,7 @@ export function snapshotJSON(
 }
 
 /**
- * Snapshot one exact Tool result and the canonical wire text of a defined success value.
+ * Snapshots one exact Tool result and the canonical wire text of a defined success value.
  *
  * A success must have exactly the own enumerable data properties `id`, `name`,
  * `success: true`, and `value`. A failure must instead have exactly `id`, `name`, `success: false`, and a string

@@ -40,7 +40,7 @@ import { createTool, createToolManager } from '@orkestrel/tool'
 const tools = createToolManager()
 tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
 
-const mcp = createMCPServer({ name: 'calculator', version: '1.0.0', tools })
+const mcp = createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
 const routes = createMCPRoutes(mcp) // POST /mcp dispatches JSON-RPC (JSON or SSE per Accept)
 router.add(routes)
 ```
@@ -66,7 +66,7 @@ The SAME `MCPClient` drives a `createWebSocketClientTransport` or
 
 For the full surface — the JSON-RPC dispatch core, the server transports
 (HTTP, WebSocket, stdio), the native session middleware, and usage
-patterns — see [`guides/src/mcp.md`](guides/src/mcp.md).
+patterns — see the [MCP guide](https://github.com/orkestrel/mcp/blob/main/guides/mcp.md).
 
 ## Package
 
@@ -74,7 +74,7 @@ Published per the `exports` field in `package.json`: the
 environment-agnostic core (`.`), the Node-only server surface (`./server`),
 and the browser face (`./browser`), which is ESM only.
 
-[`CHANGELOG.md`](CHANGELOG.md) lives in the repository and is not in the
+[The changelog](https://github.com/orkestrel/mcp/blob/main/CHANGELOG.md) lives in the repository and is not in the
 tarball, because `files` is `["dist/src", "README.md"]`.
 
 ## Proven
@@ -96,7 +96,7 @@ of the IDE class has.
 
 The publication facts, each with its number. Full detail, plus every
 protocol-level gap and non-goal, is in
-[`guides/src/mcp.md`](guides/src/mcp.md#declared-packaging-limits).
+[the MCP guide](https://github.com/orkestrel/mcp/blob/main/guides/mcp.md#declared-packaging-limits).
 
 - **No IDE evidence.** See above. The conformance number is about the wire
   and does not transfer to a host application.
@@ -108,8 +108,8 @@ protocol-level gap and non-goal, is in
   TypeScript 5.9.3 through a transitive pin and this project compiles with
   6.0.3, so `build` prints one notice per built face. It is informational:
   `build` exits 0 and every declaration is emitted.
-- **Source maps ship.** The `.map` files are 1,130 kB of the 2.5 MB
-  unpacked, about 45 percent. They are kept so a consumer debugging a
+- **Source maps ship.** Measured on 2026-08-20, the five `.map` files are
+  1,168,764 of 2,543,024 unpacked bytes (46.0 percent). They are kept so a consumer debugging a
   protocol library steps into real source.
 
 The notice, verbatim:
@@ -120,4 +120,4 @@ The notice, verbatim:
 
 ## License
 
-MIT © [Orkestrel](https://github.com/orkestrel) — see [LICENSE](./LICENSE).
+MIT © [Orkestrel](https://github.com/orkestrel) — see the [license](https://github.com/orkestrel/mcp/blob/main/LICENSE).

@@ -15,7 +15,7 @@ import { MCPLegacy } from './MCPLegacy.js'
 import { MCPServer } from './MCPServer.js'
 
 /**
- * Create a transport-agnostic Model Context Protocol server — exposes a live
+ * Creates a transport-agnostic Model Context Protocol server — exposes a live
  * {@link import('@orkestrel/tool').ToolManagerInterface} and an optional
  * {@link import('./types.js').MCPResourceManagerInterface},
  * {@link import('./types.js').MCPPromptManagerInterface}, and
@@ -28,7 +28,7 @@ import { MCPServer } from './MCPServer.js'
  * and no model. The {@link import('@orkestrel/tool').ToolManagerInterface} already
  * isolates a thrown tool into a `success: false` result (surfaced as an MCP
  * `isError: true` tool result), so a misbehaving tool never crashes a dispatch. Subscribe to the
- * `request` event via `server.emitter.on('request', …)` for tracing.
+ * `request` event through `server.emitter.on('request', …)` for tracing.
  *
  * @param options - `identity` (the server identity), `tools` (the live tool
  *   registry), optional `resources` (the consumer-owned resource registry), optional
@@ -58,7 +58,7 @@ export function createMCPServer(options: MCPServerOptions): MCPServerInterface {
 }
 
 /**
- * Decorate one MCP server with the fixed legacy method translation.
+ * Decorates one MCP server with the fixed legacy method translation.
  *
  * @param server - The sole modern dispatcher and handshake identity source
  * @returns A dispatcher accepting both modern and legacy invocations
@@ -68,7 +68,7 @@ export function createMCPLegacy(server: MCPServerInterface): MCPDispatcherInterf
 }
 
 /**
- * Create a transport-agnostic Model Context Protocol CLIENT — connects to a REMOTE
+ * Creates a transport-agnostic Model Context Protocol CLIENT — connects to a REMOTE
  * MCP server over an injected {@link import('./types.js').MCPClientTransportInterface},
  * runs the `initialize` handshake, and exposes the server's tools as local
  * {@link import('@orkestrel/tool').ToolInterface}s an agent can run.
@@ -82,8 +82,7 @@ export function createMCPLegacy(server: MCPServerInterface): MCPDispatcherInterf
  * locally, so an agent's {@link import('@orkestrel/tool').ToolManagerInterface}
  * isolates it). The transport is injected — a concrete one (the HTTP transport over
  * `fetch`) lives in the published server environment; the client itself is provider-agnostic. Subscribe
- * to `connect` / `disconnect` / `notification` via `client.on(...)` (or
- * `client.emitter.on(...)`).
+ * to `connect` / `disconnect` / `notification` through `client.emitter.on(...)`.
  *
  * @param options - `transport` (the carrier; REQUIRED), an optional `identity`
  *   (the client identity), `timeout` (the per-request deadline), and the reserved `on`
@@ -108,7 +107,7 @@ export function createMCPClient(options: MCPClientOptions): MCPClientInterface {
 }
 
 /**
- * Adapt an {@link MCPTransportInterface} (the environment-agnostic duplex message
+ * Adapts an {@link MCPTransportInterface} (the environment-agnostic duplex message
  * channel) into a {@link MCPClientTransportInterface} — the additive bridge that lets
  * `createMCPClient` run over the new port without any change to `MCPClient`'s
  * existing shape.
@@ -116,7 +115,7 @@ export function createMCPClient(options: MCPClientOptions): MCPClientInterface {
  * @remarks
  * Hand the RESULT to `createMCPClient({ transport })`, then pass the SAME
  * `transport` to {@link import('./helpers.js').bindClient} to complete the inbound
- * wiring: `send` serializes each outbound {@link JSONRPCMessage} and writes it via
+ * wiring: `send` serializes each outbound {@link JSONRPCMessage} and writes it through
  * `transport.send`; `close` closes the underlying
  * `transport`; `start` is a no-op (the duplex channel is already open by the time
  * it is handed in — there is no separate connect step at this layer); `session` is

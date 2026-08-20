@@ -55,7 +55,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   `start()` resolves, because the close is the outcome its caller asked for.
  * - **URL scheme.** `options.url` accepts a `ws://` / `wss://` URL or an `http://` / `https://`
  *   one; a `ws(s)` scheme is converted to `http(s)` for the underlying upgrade request (`wss`
- *   → TLS via `node:https`). Either reaches the same endpoint.
+ *   → TLS through `node:https`). Either reaches the same endpoint.
  * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); every emit
  *   the emitter isolates a listener throw (a buggy observer never corrupts the transport);
  *   `error` is a DOMAIN event (a transport-level fault).
@@ -77,7 +77,7 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 	readonly #ending = (): void => this.#onClose()
 	readonly #failure = (error: unknown): void => this.#emitter.emit('error', error)
 	#socket: NodeWebSocketInterface | undefined = undefined
-	// The upgrade currently on the wire. Nothing else holds it, so a `close` during the
+	// The upgrade on the wire. Nothing else holds it, so a `close` during the
 	// handshake can only cancel through this.
 	#request: ClientRequest | undefined = undefined
 	#closed = false
@@ -211,7 +211,7 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		ws.emitter.on('error', this.#failure)
 	}
 
-	// Unsubscribe from the socket this transport currently holds. The socket itself belongs to
+	// Unsubscribe from the socket this transport holds. The socket itself belongs to
 	// the peer connection, so nothing else on it is touched.
 	#release(): void {
 		const socket = this.#socket

@@ -316,10 +316,10 @@ export function duplexPair(): readonly [Duplex, Duplex] {
 	const toServer = new PassThrough()
 	const toClient = new PassThrough()
 	const server = new DuplexEnd(toServer, toClient)
-	const client = new DuplexEnd(toClient, toServer)
+	const peer = new DuplexEnd(toClient, toServer)
 	server.on('error', () => {})
-	client.on('error', () => {})
-	return [server, client]
+	peer.on('error', () => {})
+	return [server, peer]
 }
 
 /**
@@ -342,15 +342,15 @@ export function flushSocket(): Promise<void> {
  * server-mode wrapper writes (handshake then frames). The returned `frames` array grows
  * as the server sends.
  *
- * @param client - The client end of a {@link duplexPair}
+ * @param peer - The client end of a {@link duplexPair}
  * @returns A handle whose `frames` accumulates each decoded {@link WebSocketFrame}
  */
-export function readClientFrames(client: Duplex): { readonly frames: readonly WebSocketFrame[] } {
+export function readClientFrames(peer: Duplex): { readonly frames: readonly WebSocketFrame[] } {
 	const frames: WebSocketFrame[] = []
 	let buffer = Buffer.alloc(0)
 	let handshook = false
 	const end = Buffer.from('\r\n\r\n')
-	client.on('data', (chunk: Buffer) => {
+	peer.on('data', (chunk: Buffer) => {
 		buffer = Buffer.concat([buffer, chunk])
 		if (!handshook) {
 			const index = buffer.indexOf(end)
@@ -558,10 +558,12 @@ export interface UpgradeOutcome {
 	readonly claimed: boolean
 	/** The `101` status when claimed, else `undefined` (the socket was destroyed un-upgraded). */
 	readonly status: number | undefined
+	/** The subprotocol the server selected, or `undefined` when it selected none. */
+	readonly protocol: string | undefined
 }
 
 /**
- * Drive a real `node:http` protocol upgrade against `base` + `path` and resolve the
+ * Drives a real `node:http` protocol upgrade against `base` + `path` and resolves the
  * {@link UpgradeOutcome} — the shared upgrade-seam driver.
  *
  * @remarks
@@ -597,15 +599,20 @@ export function upgradeRequest(
 		// nothing — just free the client end and report the claim.
 		request.on('upgrade', (response, socket) => {
 			socket.destroy()
-			finish({ claimed: true, status: response.statusCode })
+			const protocol = response.headers['sec-websocket-protocol']
+			finish({
+				claimed: true,
+				status: response.statusCode,
+				protocol: typeof protocol === 'string' ? protocol : undefined,
+			})
 		})
 		// The server declined: it destroyed the un-upgraded socket, so the request errors
 		// (a socket hang-up) — an expected, non-fatal outcome of the decline path.
-		request.on('error', () => finish({ claimed: false, status: undefined }))
+		request.on('error', () => finish({ claimed: false, status: undefined, protocol: undefined }))
 		// A plain (non-101) response would also mean no upgrade happened.
 		request.on('response', (response) => {
 			response.resume()
-			finish({ claimed: false, status: response.statusCode })
+			finish({ claimed: false, status: response.statusCode, protocol: undefined })
 		})
 		request.end()
 	})

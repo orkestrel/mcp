@@ -23,11 +23,12 @@ import type {
 	MCPTextStreamControllerInterface,
 	MCPToolDescriptor,
 	MCPTransportInterface,
-	SubscriptionsListenResult,
-	SubscriptionsListenResultMetaObject,
+	MCPSubscriptionResult,
+	MCPSubscriptionResultMetaObject,
 } from './types.js'
 import {
 	attempt,
+	cloneJSONRecord,
 	isArray,
 	isBoolean,
 	isJSONValue,
@@ -58,7 +59,71 @@ import {
 } from './validators.js'
 
 /**
- * Deterministically serialize one exact JSON value within explicit bounds.
+ * Determines whether a client capability record declares form-mode elicitation.
+ *
+ * @remarks
+ * The protocol's empty `elicitation` object is the implicit form-only declaration.
+ * A non-empty declaration must carry a record-valued `form` member; URL-only support
+ * does not authorize a form request. Total over hostile input.
+ *
+ * @param value - The client capability record to inspect
+ * @returns `true` when form-mode elicitation is declared
+ *
+ * @example
+ * ```ts
+ * isFormElicitationSupported({ elicitation: {} }) // true — implicit form mode
+ * isFormElicitationSupported({ elicitation: { url: {} } }) // false
+ * ```
+ */
+export function isFormElicitationSupported(value: unknown): boolean {
+	const owned = attempt(() => cloneJSONRecord(value))
+	if (!owned.success) return false
+	try {
+		const elicitation = owned.value['elicitation']
+		if (!isRecord(elicitation)) return false
+		if (isRecord(elicitation['form'])) return true
+		return Object.keys(elicitation).length === 0
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Determines whether a client capability record declares the draft Tasks extension.
+ *
+ * @remarks
+ * The declaration lives at `extensions['io.modelcontextprotocol/tasks']` and its value is
+ * an empty object, so this is a PRESENCE check: the extension defines no options, and a
+ * server that read one would be reading a field no client can meaningfully set. The value
+ * must still be a record, because that is the shape the capability record declares — a
+ * `true` or a string there is a client speaking a different protocol, not a shorthand.
+ *
+ * A client declares this PER REQUEST. Nothing here consults a session, because the modern
+ * revision is stateless and a capability declared once at connect time says nothing about
+ * the request in hand. Total over hostile input.
+ *
+ * @param value - The client capability record to inspect
+ * @returns `true` when the tasks extension is declared
+ *
+ * @example
+ * ```ts
+ * isTaskSupported({ extensions: { 'io.modelcontextprotocol/tasks': {} } }) // true
+ * isTaskSupported({ extensions: {} }) // false — the key is the declaration
+ * ```
+ */
+export function isTaskSupported(value: unknown): boolean {
+	const owned = attempt(() => cloneJSONRecord(value))
+	if (!owned.success) return false
+	try {
+		const extensions = owned.value['extensions']
+		return isRecord(extensions) && isRecord(extensions[MCP_EXTENSION_TASKS])
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Serializes one exact JSON value deterministically within explicit bounds.
  *
  * @param value - The unknown value to validate and serialize
  * @param limits - Serialized byte, key, and depth limits
@@ -280,7 +345,7 @@ export function serializeJSON(value: unknown, limits: MCPJSONLimitOptions): stri
 }
 
 /**
- * Compute a lowercase host-neutral SHA-256 digest of one bounded canonical JSON value.
+ * Computes a lowercase host-neutral SHA-256 digest of one bounded canonical JSON value.
  *
  * @param value - The unknown value to validate and digest
  * @param limits - Serialized byte, key, and depth limits
@@ -297,7 +362,7 @@ export async function digestJSON(
 }
 
 /**
- * Build one official progress notification for the original request stream.
+ * Builds one official progress notification for the original request stream.
  *
  * @param token - The request's original opaque progress token
  * @param progress - The finite progress payload
@@ -320,7 +385,7 @@ export function buildProgressNotification(
 }
 
 /**
- * Build one official cancellation notification for a request already sent.
+ * Builds one official cancellation notification for a request already sent.
  *
  * @remarks
  * `requestId` and `reason` are WIRE SPELLINGS carried verbatim from the dated schema's
@@ -359,7 +424,7 @@ export function buildCancelledNotification(id: JSONRPCId, reason?: string): JSON
 }
 
 /**
- * Determine whether one method may answer with a given modern `resultType`.
+ * Determines whether one method may answer with a given modern `resultType`.
  *
  * @remarks
  * The dated protocol lets a `tools/call` answer in more than one way — it COMPLETED, it became a
@@ -367,7 +432,7 @@ export function buildCancelledNotification(id: JSONRPCId, reason?: string): JSON
  * issues has exactly one legal answer. So the arm a peer chose is only meaningful beside
  * the method it answers, and this is the one place that pairing is decided.
  *
- * The rule is deliberately a WHITELIST: an unrecognized `resultType` is refused for every
+ * The rule is deliberately closed: an unrecognized `resultType` is refused for every
  * method, including `tools/call`. A client that carried an arm it cannot name would hand
  * its caller a value whose meaning it invented.
  *
@@ -389,7 +454,7 @@ export function matchesResultType(method: string, resultType: unknown): boolean 
 }
 
 /**
- * Concatenate an MCP tool-call result's text content blocks into one string.
+ * Concatenates an MCP tool-call result's text content blocks into one string.
  *
  * @remarks
  * The inverse of a server splitting a value into text block(s), and TOTAL: a non-record
@@ -416,7 +481,7 @@ export function extractContentText(result: unknown): string {
 }
 
 /**
- * Narrow one `tools/call` answer to the arm the peer chose.
+ * Narrows one `tools/call` answer to the arm the peer chose.
  *
  * @remarks
  * The arms {@link matchesResultType} admits are the whole space this sees, because a
@@ -485,7 +550,7 @@ export function buildCallOutcome(name: string, result: unknown): MCPCallOutcome 
 }
 
 /**
- * Build the canonical Tool call for one validated MCP `tools/call` request.
+ * Builds the canonical Tool call for one validated MCP `tools/call` request.
  *
  * @param request - The original MCP request
  * @param caller - Optional consumer-asserted caller context
@@ -513,7 +578,7 @@ export function buildToolCall(
 // payload (or a response envelope) the server returns — independently testable.
 
 /**
- * Build a JSON-RPC success {@link JSONRPCResultResponse} — the `id` echoed, the
+ * Builds a JSON-RPC success {@link JSONRPCResultResponse} — the `id` echoed, the
  * method's value as `result`.
  *
  * @remarks
@@ -532,7 +597,7 @@ export function buildJSONRPCResult(
 }
 
 /**
- * Build a JSON-RPC error {@link JSONRPCErrorResponse} — the `id` echoed, the failure
+ * Builds a JSON-RPC error {@link JSONRPCErrorResponse} — the `id` echoed, the failure
  * as an `error` object.
  *
  * @remarks
@@ -560,7 +625,7 @@ export function buildJSONRPCError(
 }
 
 /**
- * Resolve the caller-facing dispatch options into the options a dispatched method
+ * Resolves the caller-facing dispatch options into the options a dispatched method
  * receives.
  *
  * @remarks
@@ -598,7 +663,7 @@ export function buildMethodOptions(
 }
 
 /**
- * Map a {@link ToolManagerInterface}'s definitions to MCP `tools/list` descriptors
+ * Maps a {@link ToolManagerInterface}'s definitions to MCP `tools/list` descriptors
  * — renaming `parameters` to the wire's `inputSchema`.
  *
  * @remarks
@@ -626,7 +691,7 @@ export function buildToolDescriptors(manager: ToolManagerInterface): readonly MC
 }
 
 /**
- * Stamp a result with the modern complete-result discriminator and server
+ * Stamps a result with the modern complete-result discriminator and server
  * metadata, plus cache fields when the result is cacheable.
  *
  * @remarks
@@ -686,7 +751,7 @@ export function buildModernResult<T extends object>(
 }
 
 /**
- * Intersect a requested subscription filter with the notification families a server supports.
+ * Intersects a requested subscription filter with the notification families a server supports.
  *
  * @param requested - The notification families requested by the client
  * @param supported - The notification families the server can actually produce
@@ -717,7 +782,7 @@ export function buildSubscriptionFilter(
 }
 
 /**
- * Determine whether a produced notification belongs to an honoured subscription filter.
+ * Determines whether a produced notification belongs to an honoured subscription filter.
  *
  * @param notification - The server notification offered by the configured producer
  * @param filter - The filter acknowledged to the client
@@ -742,7 +807,7 @@ export function matchesSubscriptionNotification(
 }
 
 /**
- * Stamp a subscription notification with the request id reserved for its held-open stream.
+ * Stamps a subscription notification with the request id reserved for its held-open stream.
  *
  * @param notification - The notification to copy and stamp
  * @param id - The `subscriptions/listen` request id
@@ -767,7 +832,7 @@ export function stampSubscriptionNotification(
 }
 
 /**
- * Build the first notification carrying a subscription id for a listen request.
+ * Builds the first notification carrying a subscription id for a listen request.
  *
  * @param notifications - The exact notification filter the server will honour
  * @param id - The `subscriptions/listen` request id
@@ -788,7 +853,7 @@ export function buildSubscriptionAcknowledgement(
 }
 
 /**
- * Build the terminating response for a subscription source that closes gracefully.
+ * Builds the terminating response for a subscription source that closes gracefully.
  *
  * @param id - The `subscriptions/listen` request id
  * @param identity - The server identity included by the modern result stamping site
@@ -798,13 +863,13 @@ export function buildSubscriptionResult(
 	id: JSONRPCId,
 	identity: MCPIdentity,
 ): JSONRPCResultResponse {
-	const metadata: SubscriptionsListenResultMetaObject = { [MCP_META_SUBSCRIPTION]: id }
-	const result: SubscriptionsListenResult = buildModernResult({ _meta: metadata }, identity)
+	const metadata: MCPSubscriptionResultMetaObject = { [MCP_META_SUBSCRIPTION]: id }
+	const result: MCPSubscriptionResult = buildModernResult({ _meta: metadata }, identity)
 	return buildJSONRPCResult(id, result)
 }
 
 /**
- * Build the mandatory modern `server/discover` result.
+ * Builds the mandatory modern `server/discover` result.
  *
  * @remarks
  * `capabilities.resources` and `capabilities.prompts` appear only for servers with their
@@ -858,7 +923,7 @@ export function buildDiscoverResult(options: MCPServerOptions): MCPDiscoverResul
 }
 
 /**
- * Build the MCP `initialize` result — the negotiated protocol version, the
+ * Builds the MCP `initialize` result — the negotiated protocol version, the
  * advertised capabilities, and the server identity.
  *
  * @remarks
@@ -891,7 +956,7 @@ export function buildInitializeResult(
 }
 
 /**
- * Decode one raw inbound message within an explicit bound — the decode a binder performs
+ * Decodes one raw inbound message within an explicit bound — the decode a binder performs
  * before it hands the string on.
  *
  * @remarks
@@ -906,7 +971,7 @@ export function buildInitializeResult(
  * Total — never throws, whatever the input.
  *
  * @param message - The raw inbound JSON-RPC message string
- * @param limits - The byte and depth bounds to decode within (the server's own, via `limit`)
+ * @param limits - The byte and depth bounds to decode within (the server's own, from `limit`)
  * @returns The decoded message, or `undefined` when it is over the bound or is not one
  *
  * @example
@@ -924,7 +989,7 @@ export function decodeBoundedMessage(
 }
 
 /**
- * Read the request id an inbound `notifications/cancelled` names — the inverse of
+ * Reads the request id an inbound `notifications/cancelled` names — the inverse of
  * {@link buildCancelledNotification}.
  *
  * @remarks
@@ -955,7 +1020,7 @@ export function readCancelledId(message: JSONRPCMessage): JSONRPCId | undefined 
 // `return` value and the terminating response IS that value.
 
 /**
- * Pump a controlled serialized exchange onto a transport — every notification in order, then
+ * Pumps a controlled serialized exchange onto a transport — every notification in order, then
  * the terminating response — and END the exchange however the pump leaves.
  *
  * @remarks
@@ -1011,9 +1076,9 @@ export async function sendStream(
 // escapes as an unhandled rejection.
 
 /**
- * Pipe an {@link MCPTransportInterface} into an {@link MCPDispatcherInterface} — every
+ * Pipes an {@link MCPTransportInterface} into an {@link MCPDispatcherInterface} — every
  * inbound message runs through `server.handle`, and a defined reply is written back
- * via `transport.send`.
+ * through `transport.send`.
  *
  * @remarks
  * `server.handle` already turns a malformed message into a serialized `-32700` /
@@ -1126,7 +1191,7 @@ export function bindServer(
 }
 
 /**
- * Pipe an {@link MCPTransportInterface} into an {@link MCPClientInterface} — every
+ * Pipes an {@link MCPTransportInterface} into an {@link MCPClientInterface} — every
  * inbound message is decoded and delivered onto the client's OWN transport
  * (`client.transport.emitter`'s `message` / `close` events), resolving/rejecting the
  * client's correlated pending requests exactly as a direct reply would.

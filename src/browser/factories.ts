@@ -11,7 +11,7 @@ import { MessagePortTransport } from './transports/MessagePortTransport.js'
 import { WebSocketClientTransport } from './transports/WebSocketClientTransport.js'
 
 /**
- * Create the browser-face WebSocket CLIENT transport for an
+ * Creates the browser-face WebSocket CLIENT transport for an
  * {@link import('@src/core').MCPClientInterface} — a {@link MCPClientTransportInterface}
  * that drives a REMOTE MCP server over the native `WebSocket` global, the browser
  * sibling of the Node face's `createWebSocketClientTransport` (`@src/server`).
@@ -48,7 +48,7 @@ export function createWebSocketClientTransport(
 }
 
 /**
- * Create the browser-face HTTP CLIENT transport for an
+ * Creates the browser-face HTTP CLIENT transport for an
  * {@link import('@src/core').MCPClientInterface} — a {@link MCPClientTransportInterface}
  * that drives a REMOTE Streamable-HTTP MCP server over the native `fetch`, the
  * browser sibling of the Node face's `createHTTPClientTransport` (`@src/server`).
@@ -58,7 +58,7 @@ export function createWebSocketClientTransport(
  * sends is `POST`ed to `options.url` with `content-type: application/json` and an
  * `Accept` of both `application/json` and `text/event-stream` (the server answers
  * with EITHER — a plain JSON envelope or a Streamable-HTTP SSE `data:` event,
- * decoded via `@orkestrel/sse`), and the reply is surfaced on the transport's
+ * decoded with `@orkestrel/sse`), and the reply is surfaced on the transport's
  * `message` event for the client's id correlation. Add `options.headers` (e.g. an
  * `Authorization` bearer) to reach a guarded server. `start` / `close` hold no
  * connection; against a STATEFUL server it captures the `mcp-session-id` from
@@ -70,7 +70,7 @@ export function createWebSocketClientTransport(
  *
  * @param options - `url` (the remote endpoint; REQUIRED), optional `headers` merged
  *   onto every request, optional `fetch` (default `globalThis.fetch`), and optional
- *   `timeout` (ms, applied via `AbortSignal.timeout`); see
+ *   `timeout` (ms, applied with `AbortSignal.timeout`); see
  *   {@link HTTPClientTransportOptions}
  * @returns A working {@link MCPClientTransportInterface} over the native `fetch`
  *
@@ -93,7 +93,7 @@ export function createHTTPClientTransport(
 }
 
 /**
- * Create the browser-face `MessagePort` transport — a
+ * Creates the browser-face `MessagePort` transport — a
  * {@link import('@src/core').MCPTransportInterface} over a native `MessagePort`, the
  * SYMMETRIC carrier that works as either a server or a client transport depending on
  * which binder ({@link import('@src/core').bindServer} or
@@ -125,13 +125,13 @@ export function createMessagePortTransport(
 }
 
 /**
- * Adapt a hostable {@link ServeMCPScopeInterface} (`self` in a dedicated Web Worker,
+ * Adapts a hostable {@link ServeMCPScopeInterface} (`self` in a dedicated Web Worker,
  * or any structurally matching double) into a {@link ScopeTransportInterface} — the
  * implicit, portless message channel `serveMCPScope` binds for the
  * dedicated-worker shape.
  *
  * @remarks
- * `send` writes each outbound string via `scope.postMessage`. `listen`/`closed`
+ * `send` writes each outbound string through `scope.postMessage`. `listen`/`closed`
  * register the SINGLE handler `deliver` / the underlying close path route through —
  * `serveMCPScope`'s own `scope` `message`-event listener calls `deliver(event.data)`
  * for every portless, string-payload event (there is no native registration point on
@@ -141,7 +141,7 @@ export function createMessagePortTransport(
  *
  * @param scope - The hostable scope to adapt (structurally, `self` / `globalThis`
  *   inside a dedicated Web Worker)
- * @returns A {@link ScopeTransportInterface} `serveMCPScope` binds and drives via `deliver`
+ * @returns A {@link ScopeTransportInterface} `serveMCPScope` binds and drives through `deliver`
  *
  * @example
  * ```ts

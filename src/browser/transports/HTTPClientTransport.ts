@@ -39,7 +39,7 @@ import { readEventStream } from '../helpers.js'
  *   {@link JSONRPCMessage} on the `message` event the
  *   {@link import('@src/core').MCPClientInterface} subscribes to.
  * - **Both reply framings.** A `200` with an `application/json` body is parsed with
- *   `parseJSONRPCMessage`; a `200` with a `text/event-stream` body is decoded via the
+ *   `parseJSONRPCMessage`; a `200` with a `text/event-stream` body is decoded with the
  *   `@orkestrel/sse` {@link import('@orkestrel/sse').SSEParserInterface} (the browser
  *   face's own `readEventStream`) — the inverse of the server's `openStream` seam, so
  *   the wire round-trips. A `202` Accepted (a notification) carries no body and emits
@@ -81,7 +81,7 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 	readonly #headers: Readonly<Record<string, string>>
 	readonly #fetch: typeof fetch
 	readonly #timeout: number | undefined
-	// The requests currently on the wire, one controller each. `close` is the only thing that can
+	// The requests on the wire, one controller each. `close` is the only thing that can
 	// reach them: a `send` parked on a reply that never ends holds both the request and its
 	// response reader, and no other seam this transport exposes leads back to either.
 	readonly #pending = new Set<AbortController>()
@@ -196,7 +196,7 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 
 	// Decode a reply and emit each carried message. A 202 (notification accepted) has no
 	// body — emit nothing. An `application/json` body is one envelope; a `text/event-stream`
-	// body is decoded via the browser-face `readEventStream` (one or more `data:` events). A
+	// body is decoded with the browser-face `readEventStream` (one or more `data:` events). A
 	// decode failure surfaces on `error` rather than escaping.
 	async #deliver(response: Response): Promise<void> {
 		if (response.status === 202) return

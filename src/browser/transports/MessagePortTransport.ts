@@ -16,7 +16,7 @@ import { isString } from '@orkestrel/contract'
  *   `bindClient`/`createDuplexClientTransport`; which role it plays comes entirely
  *   from the binder it is given to, not from anything this class decides.
  * - **`start()` at construction — bind synchronously.** `MessagePort.start()` is only
- *   REQUIRED when listening via `addEventListener` (as opposed to the `onmessage`
+ *   REQUIRED when listening with `addEventListener` (as opposed to the `onmessage`
  *   setter, which implies it) — this transport uses `addEventListener`, and
  *   `MCPTransportInterface` has no separate open/connect step for the caller to hook
  *   a start into, so the constructor calls `port.start()` immediately: the port
@@ -50,7 +50,7 @@ import { isString } from '@orkestrel/contract'
  *   native "peer closed" signal for a `MessagePort` (unlike a WebSocket's `close`
  *   event) — `closed` fires ONLY from this transport's own `close()`.
  * - **Single-handler-replace (the port contract, `@src/core`'s `MCPTransportInterface`
- *   doc).** `listen`/`closed` each hold the ONE currently registered handler; a
+ *   doc).** `listen`/`closed` each hold the one active handler; a
  *   second call REPLACES the first rather than adding a second subscriber.
  *
  * @example

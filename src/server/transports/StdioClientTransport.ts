@@ -25,7 +25,7 @@ import { dispatchLines } from '../helpers.js'
  * - **Inbound (`message`).** Standard output is drained eagerly through the supervisor's
  *   `readline`-framed `lines` iterable, so a multi-byte UTF-8 sequence split across two reads is
  *   decoded whole and a final line written without a trailing newline still arrives. Each framed
- *   line is decoded and delivered via the shared {@link dispatchLines} helper — a well-formed
+ *   line is decoded and delivered through the shared {@link dispatchLines} helper — a well-formed
  *   {@link JSONRPCMessage} emits `message`, a malformed line emits `error` (never throws).
  * - **Outbound (`send`).** `send(message)` writes one newline-terminated `JSON.stringify`d line
  *   through the supervisor's `send` and AWAITS its answer, so this promise settles only after the
@@ -83,7 +83,7 @@ export class StdioClientTransport implements MCPClientTransportInterface {
 	}
 
 	async start(): Promise<void> {
-		// Already spawned — a second `start()` (e.g. via `connect()`) short-circuits (idempotent).
+		// Already spawned — a second `start()` (such as through `connect()`) short-circuits (idempotent).
 		if (this.#process !== undefined) return
 		this.#closed = false
 		this.#release = Promise.withResolvers<void>()

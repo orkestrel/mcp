@@ -27,7 +27,7 @@ export class MCPError extends Error {
 	readonly context: unknown
 
 	/**
-	 * Create a remote MCP protocol error.
+	 * Creates a remote MCP protocol error.
 	 *
 	 * @param message - The human-readable JSON-RPC error message
 	 * @param code - The machine-readable numeric JSON-RPC error code
@@ -41,7 +41,7 @@ export class MCPError extends Error {
 }
 
 /**
- * Determine whether an unknown value is an {@link MCPError}.
+ * Determines whether an unknown value is an {@link MCPError}.
  *
  * @param value - The unknown value to inspect
  * @returns `true` only when the value is an `MCPError`

@@ -21,7 +21,7 @@ import { isString } from '@orkestrel/contract'
 import { MCP_SESSION_HEADER } from './constants.js'
 
 /**
- * Create a readable stream from its pull and cancellation behaviours.
+ * Creates a readable stream from its pull and cancellation behaviours.
  *
  * @param pull - The behaviour that supplies the stream's next chunk
  * @param cancel - The behaviour that releases the stream after consumer cancellation
@@ -35,7 +35,7 @@ export function createReadableStream<T>(
 }
 
 /**
- * Pump a controlled held-open exchange onto an open SSE stream — one `data:` event per
+ * Pumps a controlled held-open exchange onto an open SSE stream — one `data:` event per
  * notification in order, then the terminating response — and END the exchange however the
  * pump leaves.
  *
@@ -160,7 +160,7 @@ export function allowsOrigin(request: Request, options?: MCPOriginOptions): bool
 }
 
 /**
- * Read the request's `mcp-session-id` header — the session id a stateful transport
+ * Reads the request's `mcp-session-id` header — the session id a stateful transport
  * validates, or `undefined` when absent.
  *
  * @remarks
@@ -179,7 +179,7 @@ export function readSessionHeader(request: Request): string | undefined {
 }
 
 /**
- * Read the request's `Last-Event-ID` header — the SSE resume cursor a client sends when it
+ * Reads the request's `Last-Event-ID` header — the SSE resume cursor a client sends when it
  * reconnects to the resumable `GET {path}` stream, or `undefined` when absent.
  *
  * @remarks
@@ -198,7 +198,7 @@ export function readLastEventId(request: Request): string | undefined {
 }
 
 /**
- * Build the stateful transport's "unknown session" rejection — an HTTP `404` carrying a
+ * Builds the stateful transport's "unknown session" rejection — an HTTP `404` carrying a
  * JSON-RPC error body.
  *
  * @remarks
@@ -219,14 +219,14 @@ export function rejectUnknownSession(): Response {
 }
 
 /**
- * Decode a `fetch` Response's Server-Sent-Events body into the JSON-RPC messages it
+ * Decodes a `fetch` Response's Server-Sent-Events body into the JSON-RPC messages it
  * carried — the CLIENT-side inverse of the server's Streamable-HTTP SSE response.
  *
  * @remarks
  * Reads the whole `response.body` stream chunk-by-chunk through a `TextDecoder({
  * stream: true })` (handling a multi-byte char split across reads) and `@orkestrel/sse`'s
  * {@link SSEParserInterface} (handling a partial line / in-progress event split across
- * reads), then narrows each dispatched event's `data` to a {@link JSONRPCMessage} via
+ * reads), then narrows each dispatched event's `data` to a {@link JSONRPCMessage} with
  * `parseJSONRPCMessage` (so a non-message / non-JSON `data:` event is DROPPED, never
  * thrown — total). It reuses the SAME `SSEParser` the server's `openStream` seam
  * serializes against, so the wire round-trips. A `null` body (no stream) yields no
@@ -262,7 +262,7 @@ export async function readEventStream(response: Response): Promise<readonly JSON
 }
 
 /**
- * Decode one SSE event's `data` string into a {@link JSONRPCMessage}, or `undefined`
+ * Decodes one SSE event's `data` string into a {@link JSONRPCMessage}, or `undefined`
  * when it is not one — the per-event step {@link readEventStream} folds over.
  *
  * @remarks
@@ -282,13 +282,13 @@ export function decodeEvent(data: string): JSONRPCMessage | undefined {
 }
 
 /**
- * Read the path (without the query string) of a raw `node:http` protocol-upgrade request —
+ * Reads the path (without the query string) of a raw `node:http` protocol-upgrade request —
  * the `createWebSocketServer` upgrade-path match.
  *
  * @remarks
  * A `node:http` {@link import('node:http').IncomingMessage}'s `url` is the request TARGET
  * (`'/mcp?x=1'`), narrowed with `isString` (never `as`) and defaulting to `'/'` for an
- * absent target; it is parsed against a dummy base (only the pathname matters for the upgrade
+ * absent target; it is parsed against a placeholder base (only the pathname matters for the upgrade
  * decision) and the `pathname` returned. The upgrade handler compares this against its
  * configured `path` to decide whether to claim the socket. Total — never throws on an
  * adversarial / absent target.
@@ -302,7 +302,7 @@ export function upgradeRequestPath(request: IncomingMessage): string {
 }
 
 /**
- * Fold one more chunk of raw stdio bytes into a newline-framed buffer — the shared
+ * Folds one more chunk of raw stdio bytes into a newline-framed buffer — the shared
  * line-framing step both stdio transports (client and server) read their inbound
  * newline-delimited JSON-RPC messages through.
  *
@@ -327,7 +327,7 @@ export function extractLines(buffer: string, chunk: string): LineExtraction {
 }
 
 /**
- * Decode and deliver each complete newline-framed line onto a {@link
+ * Decodes and delivers each complete newline-framed line onto a {@link
  * MCPClientTransportEventMap} emitter — the shared per-chunk dispatch step both stdio
  * transports run their framed lines through: the server transport frames with {@link
  * extractLines}, the client transport takes its lines from the process supervisor.
@@ -358,7 +358,7 @@ export function dispatchLines(
 }
 
 /**
- * Bridge a message-channel {@link MCPClientTransportInterface} (the shape the stdio and
+ * Bridges a message-channel {@link MCPClientTransportInterface} (the shape the stdio and
  * WebSocket SERVER transports already implement) into the environment-agnostic
  * {@link import('@src/core').MCPTransportInterface} port — the adapter
  * {@link import('./factories.js').createStdioServer} and {@link
@@ -368,7 +368,7 @@ export function dispatchLines(
  *
  * @remarks
  * `send` decodes the already-serialized reply string back to a {@link JSONRPCMessage}
- * and writes it via `transport.send` (the SAME `JSON.stringify` the underlying
+ * and writes it through `transport.send` (the same `JSON.stringify` the underlying
  * transport already performs, so the wire bytes are unchanged). `listen` filters
  * `transport`'s `message` event to INVOCATIONS ONLY — requests and notifications, never a
  * stray response, exactly as the prior hand-rolled pumps did — and re-serializes each one
@@ -388,14 +388,14 @@ export function dispatchLines(
  *
  * @remarks Per {@link import('@src/core').MCPTransportInterface}, `listen`/`closed`
  * each hold THE SINGLE current handler (a second call REPLACES the first, never adds).
- * Since the underlying `transport.emitter` is ADD-based (`on` subscribes, never
+ * Because the underlying `transport.emitter` is ADD-based (`on` subscribes, never
  * replaces), this bridge installs ONE stable emitter listener per event on first use
- * and re-routes it to whichever handler is CURRENTLY registered (`undefined` while
+ * and re-routes it to whichever handler is active (`undefined` while
  * none is), so rebinding never double-dispatches.
  *
  * @remarks A response whose `result` serializes away (e.g. `undefined`) is dropped by
  * the message validators on the wire's decode side — an asymmetry the stdio/WS carrier
- * shares with the streamable-HTTP face, since both round-trip through `JSON.stringify`
+ * shares with the streamable-HTTP face, because both round-trip through `JSON.stringify`
  * / `JSON.parse` before re-validation.
  *
  * @param transport - The message-channel transport to bridge (stdio or WebSocket)

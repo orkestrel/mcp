@@ -31,7 +31,7 @@ import { MessagePortTransport } from './transports/MessagePortTransport.js'
 // `removeEventListener` to share the same reference.
 
 /**
- * Decode one SSE event's `data` string into a {@link JSONRPCMessage}, or `undefined`
+ * Decodes one SSE event's `data` string into a {@link JSONRPCMessage}, or `undefined`
  * when it is not one — the per-event step {@link readEventStream} folds over.
  *
  * @remarks
@@ -52,7 +52,7 @@ export function decodeEvent(data: string): JSONRPCMessage | undefined {
 }
 
 /**
- * Decode a `fetch` Response's Server-Sent-Events body into the JSON-RPC messages it
+ * Decodes a `fetch` Response's Server-Sent-Events body into the JSON-RPC messages it
  * carried — the CLIENT-side inverse of the server's Streamable-HTTP SSE response.
  *
  * @remarks
@@ -60,7 +60,7 @@ export function decodeEvent(data: string): JSONRPCMessage | undefined {
  * stream: true })` (handling a multi-byte char split across reads) and
  * `@orkestrel/sse`'s {@link SSEParserInterface} (handling a partial line / in-progress
  * event split across reads), then narrows each dispatched event's `data` to a
- * {@link JSONRPCMessage} via {@link decodeEvent} (so a non-message / non-JSON `data:`
+ * {@link JSONRPCMessage} through {@link decodeEvent} (so a non-message / non-JSON `data:`
  * event is DROPPED, never thrown — total). A `null` body (no stream) yields no
  * messages; {@link import('./transports/HTTPClientTransport.js').HTTPClientTransport}
  * reads a request/response SSE reply (the server sends one `data:` event then ends),
@@ -92,7 +92,7 @@ export async function readEventStream(response: Response): Promise<readonly JSON
 }
 
 /**
- * Build `serveMCPScope`'s `message`-event listener — the unified
+ * Builds `serveMCPScope`'s `message`-event listener — the unified
  * dispatcher that routes EVERY inbound event on a hostable scope, portless or
  * port-bearing, to the right binding.
  *
@@ -163,7 +163,7 @@ export function createScopeMessageListener(
 }
 
 /**
- * Boot an `MCPServer` inside a hostable worker scope and wire its message events to it.
+ * Boots an `MCPServer` inside a hostable worker scope and wires its message events to it.
  *
  * @remarks
  * Port-bearing events are gated by `options.accept`, deduplicated by port, and receive
@@ -203,7 +203,7 @@ export function serveMCPScope(scope: ServeMCPScopeInterface, options: ServeMCPOp
 }
 
 /**
- * Boot an `MCPServer` inside the current hostable worker scope.
+ * Boots an `MCPServer` inside the current hostable worker scope.
  *
  * @param options - The tools, optional identity, and optional port-event gate
  * @returns The disposer returned by {@link serveMCPScope}

@@ -17,7 +17,7 @@ import { isRecord, isString } from '@orkestrel/contract'
 import { MCP_METHOD_HEADER, MCP_NAME_HEADER, MCP_PROTOCOL_VERSION_HEADER } from './constants.js'
 
 /**
- * Infer the first required MCP HTTP header that is missing or mismatched.
+ * Infers the first required MCP HTTP header that is missing or mismatched.
  *
  * @remarks
  * A modern request derives its protocol, method, and tools/call-only name expectations from
@@ -120,7 +120,7 @@ export function inferHeaderIssue(
 }
 
 /**
- * Infer the legacy revision an `initialize` request negotiates.
+ * Infers the legacy revision an `initialize` request negotiates.
  *
  * @remarks
  * A supported legacy request is pinned exactly. A modern, malformed, absent, or unsupported
@@ -137,7 +137,7 @@ export function inferLegacyVersion(request: JSONRPCInvocation): MCPVersion {
 }
 
 /**
- * Infer the HTTP status for one MCP dispatch outcome without changing its JSON-RPC body.
+ * Infers the HTTP status for one MCP dispatch outcome without changing its JSON-RPC body.
  *
  * @remarks
  * Notifications are accepted with `202`. Legacy response envelopes retain uniform `200`

@@ -67,20 +67,15 @@ import {
 	isString,
 	isUndefined,
 } from '@orkestrel/contract'
-import {
-	MCP_EXTENSION_TASKS,
-	MCP_META_SERVER,
-	MCP_META_VERSION,
-	SUPPORTED_PROTOCOL_VERSIONS,
-} from './constants.js'
+import { MCP_META_SERVER, MCP_META_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
 import { serializeJSON } from './helpers.js'
 
-/** Determine whether a value is an exact finite JSON object. */
+/** Determines whether a value is an exact finite JSON object. */
 export function isJSONObject(value: unknown): value is Readonly<Record<string, JSONValue>> {
 	return attempt(() => cloneJSONRecord(value)).success
 }
 
-/** Determine whether a string follows the dated MCP `_meta` key grammar. */
+/** Determines whether a string follows the dated MCP `_meta` key grammar. */
 export function isMCPMetaKey(value: unknown): value is string {
 	if (!isString(value)) return false
 	const slash = value.indexOf('/')
@@ -96,13 +91,13 @@ export function isMCPMetaKey(value: unknown): value is string {
 	return name.length === 0 || /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(name)
 }
 
-/** Determine whether a value is exact finite MCP metadata with valid keys. */
+/** Determines whether a value is exact finite MCP metadata with valid keys. */
 export function isMCPMetaObject(value: unknown): value is MCPMetaObject {
 	const owned = attempt(() => cloneJSONRecord(value))
 	return owned.success && Object.keys(owned.value).every((key) => isMCPMetaKey(key))
 }
 
-/** Determine whether a value is exact result metadata with a valid reserved server identity. */
+/** Determines whether a value is exact result metadata with a valid reserved server identity. */
 export function isMCPResultMetaObject(value: unknown): value is MCPResultMetaObject {
 	const owned = attempt(() => cloneJSONRecord(value))
 	if (!owned.success || !Object.keys(owned.value).every((key) => isMCPMetaKey(key))) return false
@@ -110,7 +105,7 @@ export function isMCPResultMetaObject(value: unknown): value is MCPResultMetaObj
 	return isUndefined(identity) || isMCPIdentity(identity)
 }
 
-/** Determine whether a value is one dated MCP logging level. */
+/** Determines whether a value is one dated MCP logging level. */
 export function isMCPLoggingLevel(value: unknown): value is MCPLoggingLevel {
 	return (
 		value === 'debug' ||
@@ -125,7 +120,7 @@ export function isMCPLoggingLevel(value: unknown): value is MCPLoggingLevel {
 }
 
 /**
- * Determine whether a value is standard padded base64 as required by JSON Schema `byte` format.
+ * Determines whether a value is standard padded base64 as required by JSON Schema `byte` format.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the value is an empty or completely padded standard base64 encoding
@@ -138,7 +133,7 @@ export function isStandardBase64(value: unknown): value is string {
 }
 
 /**
- * Determine whether a value is one absolute URI under RFC 3986 syntax.
+ * Determines whether a value is one absolute URI under RFC 3986 syntax.
  *
  * @remarks
  * This host-neutral syntax guard does not resolve, normalize, decode, fetch, or apply a
@@ -252,7 +247,7 @@ export function isAbsoluteURI(value: unknown): value is string {
 }
 
 /**
- * Determine whether a value is one RFC 3339 `full-date` naming a real calendar day.
+ * Determines whether a value is one RFC 3339 `full-date` naming a real calendar day.
  *
  * @remarks
  * RFC 3339 §5.6 defines `date-mday` as `01-28`, `29`, `30`, or `31` BASED ON the month and
@@ -290,7 +285,7 @@ export function isRFC3339Date(value: unknown): value is string {
 }
 
 /**
- * Determine whether a value is one RFC 3339 `date-time` naming a real calendar day.
+ * Determines whether a value is one RFC 3339 `date-time` naming a real calendar day.
  *
  * @remarks
  * The `full-date` half is {@link isRFC3339Date}, so an impossible day is refused here for
@@ -321,7 +316,7 @@ export function isRFC3339DateTime(value: unknown): value is string {
 }
 
 /**
- * Determine whether a value is one exact finite MCP progress payload.
+ * Determines whether a value is one exact finite MCP progress payload.
  *
  * @param value - The unknown value to inspect
  * @returns Whether required progress and optional total/message fields match the dated schema
@@ -343,7 +338,7 @@ export function isMCPProgress(value: unknown): value is MCPProgress {
 }
 
 /**
- * Determine whether a value carries valid dated-schema MCP content annotations.
+ * Determines whether a value carries valid dated-schema MCP content annotations.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the value is valid MCP annotations
@@ -373,7 +368,7 @@ export function isMCPAnnotations(value: unknown): value is MCPAnnotations {
 }
 
 /**
- * Determine whether a value is one exact dated-schema MCP icon.
+ * Determines whether a value is one exact dated-schema MCP icon.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the value is a valid MCP icon
@@ -397,7 +392,7 @@ export function isMCPIcon(value: unknown): value is MCPIcon {
 	}
 }
 
-/** Determine whether a value is one complete dated MCP implementation identity. */
+/** Determines whether a value is one complete dated MCP implementation identity. */
 export function isMCPIdentity(value: unknown): value is MCPIdentity {
 	const owned = attempt(() => cloneJSONRecord(value))
 	if (!owned.success) return false
@@ -421,7 +416,7 @@ export function isMCPIdentity(value: unknown): value is MCPIdentity {
 	}
 }
 
-/** Determine whether a value is one exact open dated client-capability declaration. */
+/** Determines whether a value is one exact open dated client-capability declaration. */
 export function isMCPClientCapabilities(value: unknown): value is MCPClientCapabilities {
 	const owned = attempt(() => cloneJSONRecord(value))
 	if (!owned.success) return false
@@ -469,7 +464,7 @@ export function isMCPClientCapabilities(value: unknown): value is MCPClientCapab
 	}
 }
 
-/** Determine whether a value is one exact open dated server-capability declaration. */
+/** Determines whether a value is one exact open dated server-capability declaration. */
 export function isMCPServerCapabilities(value: unknown): value is MCPServerCapabilities {
 	const owned = attempt(() => cloneJSONRecord(value))
 	if (!owned.success) return false
@@ -519,7 +514,7 @@ export function isMCPServerCapabilities(value: unknown): value is MCPServerCapab
 }
 
 /**
- * Determine whether a value is embedded textual MCP resource contents.
+ * Determines whether a value is embedded textual MCP resource contents.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the value is embedded textual resource contents
@@ -544,7 +539,7 @@ export function isMCPTextResource(value: unknown): value is MCPTextResource {
 }
 
 /**
- * Determine whether a value is embedded blob MCP resource contents.
+ * Determines whether a value is embedded blob MCP resource contents.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the value is embedded blob resource contents
@@ -569,7 +564,7 @@ export function isMCPBlobResource(value: unknown): value is MCPBlobResource {
 }
 
 /**
- * Determine whether a value is one `resources/list` descriptor.
+ * Determines whether a value is one `resources/list` descriptor.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the value is a valid resource descriptor
@@ -598,7 +593,7 @@ export function isMCPResource(value: unknown): value is MCPResource {
 }
 
 /**
- * Determine whether a value is one resource-template descriptor.
+ * Determines whether a value is one resource-template descriptor.
  *
  * @remarks
  * This guard validates the descriptor shape. Template expansion and the RFC 6570 feature
@@ -630,7 +625,7 @@ export function isMCPResourceTemplate(value: unknown): value is MCPResourceTempl
 }
 
 /**
- * Determine whether a value is structurally discriminated resource contents.
+ * Determines whether a value is structurally discriminated resource contents.
  *
  * @param value - The unknown value to inspect
  * @returns Whether exactly one of `text` and `blob` is present and valid
@@ -646,7 +641,7 @@ export function isMCPResourceContents(value: unknown): value is MCPResourceConte
 }
 
 /**
- * Determine whether a value carries the shared optional pagination cursor.
+ * Determines whether a value carries the shared optional pagination cursor.
  *
  * @param value - The unknown value to inspect
  * @returns Whether a present `cursor` is a string
@@ -657,7 +652,7 @@ export function isMCPPaginationParams(value: unknown): value is MCPPaginationPar
 }
 
 /**
- * Determine whether a value is one consumer-owned resource page.
+ * Determines whether a value is one consumer-owned resource page.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the resources and optional following cursor are valid
@@ -675,7 +670,7 @@ export function isMCPResourcePage(value: unknown): value is MCPResourcePage {
 }
 
 /**
- * Determine whether a value is one consumer-owned resource-template page.
+ * Determines whether a value is one consumer-owned resource-template page.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the templates and optional following cursor are valid
@@ -693,7 +688,7 @@ export function isMCPResourceTemplatePage(value: unknown): value is MCPResourceT
 }
 
 /**
- * Determine whether a value is a string-valued MCP argument record.
+ * Determines whether a value is a string-valued MCP argument record.
  *
  * @param value - The unknown value to inspect
  * @returns Whether every own argument value is a string
@@ -704,7 +699,7 @@ export function isMCPStringArguments(value: unknown): value is Readonly<Record<s
 }
 
 /**
- * Determine whether a value is one prompt argument descriptor.
+ * Determines whether a value is one prompt argument descriptor.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the prompt argument descriptor is valid
@@ -722,7 +717,7 @@ export function isMCPPromptArgument(value: unknown): value is MCPPromptArgument 
 }
 
 /**
- * Determine whether a value is one `prompts/list` descriptor.
+ * Determines whether a value is one `prompts/list` descriptor.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the prompt descriptor is valid
@@ -746,7 +741,7 @@ export function isMCPPrompt(value: unknown): value is MCPPrompt {
 }
 
 /**
- * Determine whether a value is one prompt message with existing rich content.
+ * Determines whether a value is one prompt message with existing rich content.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the role and content are valid
@@ -761,7 +756,7 @@ export function isMCPPromptMessage(value: unknown): value is MCPPromptMessage {
 }
 
 /**
- * Determine whether a value is one consumer-owned prompt page.
+ * Determines whether a value is one consumer-owned prompt page.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the prompts and optional following cursor are valid
@@ -779,7 +774,7 @@ export function isMCPPromptPage(value: unknown): value is MCPPromptPage {
 }
 
 /**
- * Determine whether a value is one complete `prompts/get` result.
+ * Determines whether a value is one complete `prompts/get` result.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the prompt result and all messages are valid
@@ -799,7 +794,7 @@ export function isMCPPromptGetResult(value: unknown): value is MCPPromptGetResul
 }
 
 /**
- * Determine whether a value is a prompt or resource-template completion reference.
+ * Determines whether a value is a prompt or resource-template completion reference.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the discriminated reference is valid
@@ -814,7 +809,7 @@ export function isMCPCompletionReference(value: unknown): value is MCPCompletion
 }
 
 /**
- * Determine whether a value is one `completion/complete` parameter object.
+ * Determines whether a value is one `completion/complete` parameter object.
  *
  * @param value - The unknown value to inspect
  * @returns Whether its reference, fragment, and optional string context are valid
@@ -844,7 +839,7 @@ export function isMCPCompletionParams(value: unknown): value is MCPCompletionPar
 }
 
 /**
- * Determine whether a value is one host-produced completion candidate set.
+ * Determines whether a value is one host-produced completion candidate set.
  *
  * @param value - The unknown value to inspect
  * @returns Whether its candidates and optional result facts are valid
@@ -864,7 +859,7 @@ export function isMCPCompletion(value: unknown): value is MCPCompletion {
 }
 
 /**
- * Determine whether a value is one complete, capped `completion/complete` result.
+ * Determines whether a value is one complete, capped `completion/complete` result.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the result is complete and carries at most 100 candidates
@@ -881,7 +876,7 @@ export function isMCPCompletionResult(value: unknown): value is MCPCompletionRes
 }
 
 /**
- * Determine whether a value is one exact dated-schema MCP tool content block.
+ * Determines whether a value is one exact dated-schema MCP tool content block.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the value is valid MCP content
@@ -927,7 +922,7 @@ export function isMCPContent(value: unknown): value is MCPContent {
 }
 
 /**
- * Determine whether a value is one modern MCP result.
+ * Determines whether a value is one modern MCP result.
  *
  * @remarks
  * The open contract's guard: a record carrying a string `resultType` and, when
@@ -958,7 +953,7 @@ export function isMCPResult(value: unknown): value is MCPResult {
 }
 
 /**
- * Determine whether a value is one legacy-era MCP result.
+ * Determines whether a value is one legacy-era MCP result.
  *
  * @remarks
  * The legacy revision has no result discriminator, so the absence of `resultType` is
@@ -980,7 +975,7 @@ export function isMCPLegacyResult(value: unknown): value is MCPLegacyResult {
 }
 
 /**
- * Determine whether a value is a complete modern MCP tool result.
+ * Determines whether a value is a complete modern MCP tool result.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the value is a complete MCP call result
@@ -1006,7 +1001,7 @@ export function isMCPCallResult(value: unknown): value is MCPCallResult {
 }
 
 /**
- * Determine whether a value is a modern MCP task-creation result.
+ * Determines whether a value is a modern MCP task-creation result.
  *
  * @remarks
  * The runtime enforcement of {@link MCPTaskManagerInterface.start}'s declared return
@@ -1050,7 +1045,7 @@ export function isMCPTaskResult(value: unknown): value is MCPTaskResult {
 }
 
 /**
- * Determine whether a value is one of the extension's task lifecycle states.
+ * Determines whether a value is one of the extension's task lifecycle states.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the value is an {@link MCPTaskStatus}
@@ -1072,7 +1067,7 @@ export function isMCPTaskStatus(value: unknown): value is MCPTaskStatus {
 }
 
 /**
- * Determine whether a value is one durable task's full snapshot.
+ * Determines whether a value is one durable task's full snapshot.
  *
  * @remarks
  * The runtime enforcement of {@link MCPTaskManagerInterface.task}'s declared return shape,
@@ -1133,7 +1128,7 @@ export function isMCPTaskDetail(value: unknown): value is MCPTaskDetail {
 // `attempt`, so totality is preserved without relying on the JavaScript call stack.
 
 /**
- * Determine whether a value is a string within a UTF-8 byte bound.
+ * Determines whether a value is a string within a UTF-8 byte bound.
  *
  * @param value - The unknown value to inspect
  * @param bytes - The maximum accepted encoded bytes
@@ -1167,7 +1162,7 @@ export function isBoundedString(value: unknown, bytes: number): value is string 
 }
 
 /**
- * Determine whether a value is bounded, cycle-free exact JSON.
+ * Determines whether a value is bounded, cycle-free exact JSON.
  *
  * @remarks
  * Traversal is iterative, ancestor-aware, and contained by {@link attempt}; deep input,
@@ -1188,7 +1183,7 @@ export function isBoundedJSON<T>(value: T, limits: MCPJSONLimitOptions): value i
 }
 
 /**
- * Determine whether a value is a valid JSON-RPC correlation id — a string or a
+ * Determines whether a value is a valid JSON-RPC correlation id — a string or a
  * finite integer.
  *
  * @remarks
@@ -1215,7 +1210,7 @@ export function isJSONRPCId(value: unknown): value is JSONRPCId {
 }
 
 /**
- * Determine whether a value is a supported {@link MCPVersion}.
+ * Determines whether a value is a supported {@link MCPVersion}.
  *
  * @param value - The unknown value to inspect
  * @returns `true` when the value is one of {@link SUPPORTED_PROTOCOL_VERSIONS}
@@ -1225,7 +1220,7 @@ export function isMCPVersion(value: unknown): value is MCPVersion {
 }
 
 /**
- * Determine whether a value is an MCP {@link MCPSubscriptionFilter}.
+ * Determines whether a value is an MCP {@link MCPSubscriptionFilter}.
  *
  * @remarks
  * Every filter field is optional. Boolean notification families accept only booleans, and
@@ -1251,71 +1246,7 @@ export function isMCPSubscriptionFilter(value: unknown): value is MCPSubscriptio
 }
 
 /**
- * Determine whether a client capability record declares form-mode elicitation.
- *
- * @remarks
- * The protocol's empty `elicitation` object is the implicit form-only declaration.
- * A non-empty declaration must carry a record-valued `form` member; URL-only support
- * does not authorize a form request. Total over hostile input.
- *
- * @param value - The client capability record to inspect
- * @returns `true` when form-mode elicitation is declared
- *
- * @example
- * ```ts
- * isFormElicitationSupported({ elicitation: {} }) // true — implicit form mode
- * isFormElicitationSupported({ elicitation: { url: {} } }) // false
- * ```
- */
-export function isFormElicitationSupported(value: unknown): boolean {
-	const owned = attempt(() => cloneJSONRecord(value))
-	if (!owned.success) return false
-	try {
-		const elicitation = owned.value['elicitation']
-		if (!isRecord(elicitation)) return false
-		if (isRecord(elicitation['form'])) return true
-		return Object.keys(elicitation).length === 0
-	} catch {
-		return false
-	}
-}
-
-/**
- * Determine whether a client capability record declares the draft Tasks extension.
- *
- * @remarks
- * The declaration lives at `extensions['io.modelcontextprotocol/tasks']` and its value is
- * an empty object, so this is a PRESENCE check: the extension defines no options, and a
- * server that read one would be reading a field no client can meaningfully set. The value
- * must still be a record, because that is the shape the capability record declares — a
- * `true` or a string there is a client speaking a different protocol, not a shorthand.
- *
- * A client declares this PER REQUEST. Nothing here consults a session, because the modern
- * revision is stateless and a capability declared once at connect time says nothing about
- * the request in hand. Total over hostile input.
- *
- * @param value - The client capability record to inspect
- * @returns `true` when the tasks extension is declared
- *
- * @example
- * ```ts
- * isTaskSupported({ extensions: { 'io.modelcontextprotocol/tasks': {} } }) // true
- * isTaskSupported({ extensions: {} }) // false — the key is the declaration
- * ```
- */
-export function isTaskSupported(value: unknown): boolean {
-	const owned = attempt(() => cloneJSONRecord(value))
-	if (!owned.success) return false
-	try {
-		const extensions = owned.value['extensions']
-		return isRecord(extensions) && isRecord(extensions[MCP_EXTENSION_TASKS])
-	} catch {
-		return false
-	}
-}
-
-/**
- * Determine whether a value is one restricted primitive form-elicitation schema.
+ * Determines whether a value is one restricted primitive form-elicitation schema.
  *
  * @param value - The unknown value to inspect
  * @returns `true` for a supported boolean, numeric, string, or string-array schema
@@ -1416,7 +1347,7 @@ export function isMCPElicitFieldSchema(value: unknown): value is MCPElicitFieldS
 }
 
 /**
- * Determine whether a value is the restricted top-level object schema a form elicitation issues.
+ * Determines whether a value is the restricted top-level object schema a form elicitation issues.
  *
  * @remarks
  * The schema half of {@link isMCPElicitForm}, exported on its own because the issued schema
@@ -1455,7 +1386,7 @@ export function isMCPElicitSchema(value: unknown): value is MCPElicitSchema {
 }
 
 /**
- * Determine whether a value is a form-mode elicitation parameter object.
+ * Determines whether a value is a form-mode elicitation parameter object.
  *
  * @param value - The unknown value to inspect
  * @returns `true` when `value` has the restricted form elicitation shape
@@ -1482,7 +1413,7 @@ export function isMCPElicitForm(value: unknown): value is MCPElicitForm {
 }
 
 /**
- * Determine whether a value is a URL-mode elicitation parameter object.
+ * Determines whether a value is a URL-mode elicitation parameter object.
  *
  * @param value - The unknown value to inspect
  * @returns `true` when `value` has the URL elicitation shape
@@ -1504,7 +1435,7 @@ export function isMCPElicitURL(value: unknown): value is MCPElicitURL {
 }
 
 /**
- * Determine whether a value is an embedded `elicitation/create` request.
+ * Determines whether a value is an embedded `elicitation/create` request.
  *
  * @param value - The unknown value to inspect
  * @returns `true` when `value` is a form- or URL-mode elicitation request
@@ -1530,7 +1461,7 @@ export function isMCPElicitRequest(value: unknown): value is MCPElicitRequest {
 }
 
 /**
- * Determine whether a value is one legal embedded multi-round-trip request.
+ * Determines whether a value is one legal embedded multi-round-trip request.
  *
  * @param value - The unknown value to inspect
  * @returns `true` for elicitation, deprecated sampling, or deprecated roots requests
@@ -1555,7 +1486,7 @@ export function isMCPInputRequest(value: unknown): value is MCPInputRequest {
 }
 
 /**
- * Determine whether a value is a server-keyed map of embedded input requests.
+ * Determines whether a value is a server-keyed map of embedded input requests.
  *
  * @param value - The unknown value to inspect
  * @returns `true` when every own value is a legal {@link MCPInputRequest}
@@ -1576,7 +1507,7 @@ export function isMCPInputRequestMap(value: unknown): value is MCPInputRequestMa
 }
 
 /**
- * Determine whether a value is one elicitation response.
+ * Determines whether a value is one elicitation response.
  *
  * @param value - The unknown value to inspect
  * @returns `true` when action/content have the protocol shape
@@ -1610,7 +1541,7 @@ export function isMCPElicitResult(value: unknown): value is MCPElicitResult {
 }
 
 /**
- * Determine whether accepted elicitation content satisfies the exact schema that was issued.
+ * Determines whether accepted elicitation content satisfies the exact schema that was issued.
  *
  * @remarks
  * {@link isMCPElicitResult} says a response has the SHAPE of a response; this says the
@@ -1744,7 +1675,7 @@ export function isElicitContent(
 }
 
 /**
- * Determine whether a value is an MCP input-required result.
+ * Determines whether a value is an MCP input-required result.
  *
  * @remarks
  * Enforces the at-least-one-of rule at runtime: `inputRequests`, `requestState`, or
@@ -1778,7 +1709,7 @@ export function isMCPInputResult(value: unknown): value is MCPInputResult {
 }
 
 /**
- * Determine whether a parsed value is a {@link JSONRPCRequest}.
+ * Determines whether a parsed value is a {@link JSONRPCRequest}.
  *
  * @remarks
  * A request is a record with `jsonrpc === '2.0'`, a string `method`, and an `id`
@@ -1809,7 +1740,7 @@ export function isJSONRPCRequest(value: unknown): value is JSONRPCRequest {
 }
 
 /**
- * Determine whether a parsed value is a {@link JSONRPCNotification}.
+ * Determines whether a parsed value is a {@link JSONRPCNotification}.
  *
  * @remarks
  * A notification is a request-shaped call carrying NO `id` member — the protocol
@@ -1836,7 +1767,7 @@ export function isJSONRPCNotification(value: unknown): value is JSONRPCNotificat
 }
 
 /**
- * Determine whether a parsed value is a {@link JSONRPCInvocation} — a request or a
+ * Determines whether a parsed value is a {@link JSONRPCInvocation} — a request or a
  * notification.
  *
  * @remarks
@@ -1851,7 +1782,7 @@ export function isJSONRPCInvocation(value: unknown): value is JSONRPCInvocation 
 }
 
 /**
- * Determine whether a parsed value is a {@link JSONRPCResultResponse} — the success
+ * Determines whether a parsed value is a {@link JSONRPCResultResponse} — the success
  * arm of a response.
  *
  * @remarks
@@ -1882,7 +1813,7 @@ export function isJSONRPCResultResponse(value: unknown): value is JSONRPCResultR
 }
 
 /**
- * Determine whether a value is one JSON-RPC `error` member.
+ * Determines whether a value is one JSON-RPC `error` member.
  *
  * @remarks
  * The failure OBJECT, not the envelope carrying it — the shape a failed response owns
@@ -1915,7 +1846,7 @@ export function isJSONRPCError(value: unknown): value is JSONRPCError {
 }
 
 /**
- * Determine whether a parsed value is a {@link JSONRPCErrorResponse} — the failure
+ * Determines whether a parsed value is a {@link JSONRPCErrorResponse} — the failure
  * arm of a response.
  *
  * @remarks
@@ -1944,7 +1875,7 @@ export function isJSONRPCErrorResponse(value: unknown): value is JSONRPCErrorRes
 }
 
 /**
- * Determine whether a parsed value is a {@link JSONRPCResponse}.
+ * Determines whether a parsed value is a {@link JSONRPCResponse}.
  *
  * @remarks
  * The union of the mutually exclusive arms. Total.
@@ -1957,7 +1888,7 @@ export function isJSONRPCResponse(value: unknown): value is JSONRPCResponse {
 }
 
 /**
- * Determine whether a parsed value is a {@link JSONRPCMessage} — an invocation or a
+ * Determines whether a parsed value is a {@link JSONRPCMessage} — an invocation or a
  * response.
  *
  * @remarks
@@ -1971,7 +1902,7 @@ export function isJSONRPCMessage(value: unknown): value is JSONRPCMessage {
 }
 
 /**
- * Determine whether a parsed value is an MCP `initialize` invocation.
+ * Determines whether a parsed value is an MCP `initialize` invocation.
  *
  * @param value - The already-parsed value to test
  * @returns `true` when `value` is a valid `initialize` request or notification
@@ -1988,7 +1919,7 @@ export function isInitializeRequest(value: unknown): value is JSONRPCInvocation 
 }
 
 /**
- * Determine whether a JSON-RPC invocation uses the modern per-request MCP wire shape.
+ * Determines whether a JSON-RPC invocation uses the modern per-request MCP wire shape.
  *
  * @remarks
  * Presence routes and validity answers: this guard checks only that

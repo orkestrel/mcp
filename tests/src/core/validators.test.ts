@@ -21,7 +21,7 @@ import type {
 	MCPResult,
 	MCPToolDescriptor,
 	MCPUnstampedCallResult,
-	SubscriptionsListenResult,
+	MCPSubscriptionResult,
 } from '@src/core'
 import * as core from '@src/core'
 import {
@@ -1973,8 +1973,8 @@ describe('the open MCPResult contract', () => {
 		expectTypeOf<MCPDiscoverResult['resultType']>().toEqualTypeOf<'complete'>()
 		expectTypeOf<MCPListResult>().toExtend<MCPResult>()
 		expectTypeOf<MCPListResult['resultType']>().toEqualTypeOf<'complete'>()
-		expectTypeOf<SubscriptionsListenResult>().toExtend<MCPResult>()
-		expectTypeOf<SubscriptionsListenResult['resultType']>().toEqualTypeOf<'complete'>()
+		expectTypeOf<MCPSubscriptionResult>().toExtend<MCPResult>()
+		expectTypeOf<MCPSubscriptionResult['resultType']>().toEqualTypeOf<'complete'>()
 	})
 
 	it('still narrows a known result to its literal through its own guard', () => {

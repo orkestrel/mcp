@@ -23,7 +23,7 @@ import { dispatchLines, extractLines } from '../helpers.js'
  * - **Inbound (`message`).** `start()` subscribes to `input`'s `data` event; each
  *   chunk is folded through the shared {@link extractLines} line-framing helper
  *   (buffering a partial trailing line across reads), and every complete line is
- *   decoded and delivered via the shared {@link dispatchLines} helper — a
+ *   decoded and delivered through the shared {@link dispatchLines} helper — a
  *   well-formed {@link JSONRPCMessage} re-emits on `message`, a malformed line
  *   emits `error` (never throws). `input`'s `close` bridges to this
  *   transport's `close`.

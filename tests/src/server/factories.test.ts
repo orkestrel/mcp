@@ -541,6 +541,38 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 		})
 		expect(outcome.claimed).toBe(false)
 	})
+
+	it('claims an upgrade without selecting a subprotocol when the client offers none', async () => {
+		const handle = await startWsMCP()
+		const outcome = await upgradeRequest(handle.base, '/mcp', {
+			'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+			'Sec-WebSocket-Version': '13',
+		})
+
+		expect(outcome).toEqual({ claimed: true, status: 101, protocol: undefined })
+	})
+
+	it('claims an upgrade without selecting a subprotocol when the client offers another one', async () => {
+		const handle = await startWsMCP()
+		const outcome = await upgradeRequest(handle.base, '/mcp', {
+			'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+			'Sec-WebSocket-Version': '13',
+			'Sec-WebSocket-Protocol': 'chat, telemetry',
+		})
+
+		expect(outcome).toEqual({ claimed: true, status: 101, protocol: undefined })
+	})
+
+	it('selects the configured subprotocol when the client offers it', async () => {
+		const handle = await startWsMCP()
+		const outcome = await upgradeRequest(handle.base, '/mcp', {
+			'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+			'Sec-WebSocket-Version': '13',
+			'Sec-WebSocket-Protocol': 'chat, mcp, telemetry',
+		})
+
+		expect(outcome).toEqual({ claimed: true, status: 101, protocol: 'mcp' })
+	})
 })
 
 // ── The WebSocket ingress follows the spine's lifecycle ──────────────────────

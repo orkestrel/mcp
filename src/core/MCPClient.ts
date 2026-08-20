@@ -103,7 +103,7 @@ import {
  *   can reach. It bounds the wait rather than the close, which keeps running, so a retry joins it
  *   instead of shutting one connection down twice.
  * - **Transport-agnostic.** Imports only core siblings (JSON-RPC + the tool vocabulary);
- *   the concrete transport is injected. Wire fields are narrowed via the contracts
+ *   the concrete transport is injected. Wire fields are narrowed with the contract
  *   guards (no `as`).
  * - **Observable.** The owned `emitter` fires `connect` / `disconnect` /
  *   `notification` / `error`; the emitter isolates a listener throw and routes it to its
@@ -247,13 +247,6 @@ export class MCPClient implements MCPClientInterface {
 
 	get tasks(): MCPTaskClientInterface {
 		return this.#tasks
-	}
-
-	on<K extends keyof MCPClientEventMap>(
-		event: K,
-		handler: (...args: MCPClientEventMap[K]) => void,
-	): void {
-		this.#emitter.on(event, handler)
 	}
 
 	async connect(): Promise<void> {
@@ -629,7 +622,7 @@ export class MCPClient implements MCPClientInterface {
 
 	// Wrap one remote tool descriptor as a local tool: map `inputSchema` → `parameters`
 	// (the inverse of the server's rename, no `as`), carry `description` when present,
-	// and bind `execute` to a remote `tools/call` via `call`.
+	// and bind `execute` to a remote `tools/call` through `call`.
 	#tool(name: string, descriptor: Readonly<Record<string, unknown>>): ToolInterface {
 		const inputSchema = descriptor['inputSchema']
 		const description = descriptor['description']

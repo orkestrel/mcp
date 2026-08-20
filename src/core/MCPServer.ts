@@ -71,6 +71,8 @@ import {
 	buildToolCall,
 	buildToolDescriptors,
 	digestJSON,
+	isFormElicitationSupported,
+	isTaskSupported,
 	matchesSubscriptionNotification,
 	serializeJSON,
 	stampSubscriptionNotification,
@@ -88,7 +90,6 @@ import {
 	isMCPElicitResult,
 	isBoundedJSON,
 	isBoundedString,
-	isFormElicitationSupported,
 	isJSONRPCNotification,
 	isMCPCallResult,
 	isMCPCompletion,
@@ -104,7 +105,6 @@ import {
 	isMCPSubscriptionFilter,
 	isMCPTaskDetail,
 	isMCPTaskResult,
-	isTaskSupported,
 } from './validators.js'
 
 /**
@@ -128,7 +128,7 @@ import {
  *   every dispatch: the same path a later method or a consumer's own takes, with an
  *   unregistered method still answering `-32601`.
  * - **Provider-agnostic.** Imports only core siblings — JSON-RPC + the tool registry,
- *   no HTTP, no model. Wire fields are narrowed via the contracts guards (no `as`).
+ *   no HTTP, no model. Wire fields are narrowed with the contract guards (no `as`).
  * - **Observable.** The owned `emitter` fires `request` at the top of every
  *   dispatch; the emitter isolates a listener throw and routes it to its `error` handler
  *   (the `error` option), so a listener throw can never escape the dispatch.
@@ -808,7 +808,7 @@ export class MCPServer implements MCPServerInterface {
 	// decided — deferring it would durably store a call whose arguments are not settled, and
 	// the extension says pre-creation input belongs to the original request. Progress runs
 	// LAST because a task and progress are alternative answers to the same request: a deferred call has
-	// no request-scoped stream left to report progress on, since the request ends the moment
+	// no request-scoped stream left to report progress on, because the request ends the moment
 	// the task handle is written.
 	//
 	// The server policy decides first whether this call is a task. A client that cannot accept
@@ -1416,7 +1416,7 @@ export class MCPServer implements MCPServerInterface {
 	//
 	// The snapshot bounds and owns the manager's answer BEFORE the stamp, because the manager is
 	// the untrusted half: `resultType: 'complete'` and the server identity are this server's own
-	// and add a fixed, tiny amount that a consumer's content budget should not have to fund.
+	// and add a fixed, tiny amount outside the consumer's content budget.
 	async #task(
 		request: JSONRPCRequest,
 		tasks: MCPTaskManagerInterface,

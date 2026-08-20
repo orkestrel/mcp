@@ -71,8 +71,8 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		this.#emitter = new Emitter<MCPClientTransportEventMap>()
 		this.#url = options.url
 		const protocols = options.protocols
-		// Default to MCP_WEBSOCKET_SUBPROTOCOL when `protocols` is omitted — matching
-		// createWebSocketServer's unconditional echo. An empty array means "no subprotocol",
+		// Default to MCP_WEBSOCKET_SUBPROTOCOL when `protocols` is omitted; the server selects it
+		// from this offer. An empty array means "no subprotocol",
 		// overriding the default explicitly for foreign servers.
 		this.#protocols =
 			typeof protocols === 'string'
@@ -146,7 +146,7 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		socket.addEventListener('error', this.#failure)
 	}
 
-	// Unsubscribe from the socket this transport currently holds. A closing socket goes on
+	// Unsubscribe from the socket this transport holds. A closing socket goes on
 	// firing its own events, so a bridge left installed on one this transport has released
 	// would report a connection it no longer owns.
 	#release(): void {
