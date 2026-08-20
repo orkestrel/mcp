@@ -41,7 +41,7 @@ export function inferVersion(offered: readonly string[]): MCPVersion | undefined
  *
  * @remarks
  * This is deliberately the SAME read the server's own expectation performs
- * ({@link import('@src/server').inferHeaderIssue}): a modern request's reserved
+ * ({@link import('@orkestrel/mcp/server').inferHeaderIssue}): a modern request's reserved
  * `_meta` version, accepted whenever it is a string. It is NOT
  * {@link import('./parsers.js').parseRequestContext}, and the difference is the whole
  * point. That parser answers a different question — is the modern metadata WELL FORMED —

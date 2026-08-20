@@ -14,7 +14,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  * The browser-face WebSocket CLIENT transport for the Model Context Protocol — a
  * {@link MCPClientTransportInterface} that drives a REMOTE MCP server over the native
  * `WebSocket` global, the browser sibling of the Node face's
- * {@link import('@src/server').WebSocketClientTransport}.
+ * {@link import('@orkestrel/mcp/server').WebSocketClientTransport}.
  *
  * @remarks
  * - **Host-performed handshake.** `start()` opens `new WebSocket(url, protocols)` and

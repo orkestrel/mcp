@@ -85,7 +85,7 @@ export interface HTTPClientTransportOptions {
  * `port` — the channel half to drive (for example, one side of a `new MessageChannel()`, or
  * the port a `message` event's `ports[0]` carried). REQUIRED. The SAME transport
  * works as either a server or a client carrier — the role comes from whether it is
- * handed to `bindServer` or `bindClient`/`createDuplexClientTransport` (`@src/core`).
+ * handed to `bindServer` or `bindClient`/`createDuplexClientTransport` (`@orkestrel/mcp`).
  */
 export interface MessagePortTransportOptions {
 	readonly port: MessagePort
@@ -125,7 +125,7 @@ export interface ServeMCPScopeInterface {
 /**
  * Options for `serveMCP` / `serveMCPScope` — the live {@link ToolManagerInterface} to
  * expose plus the optional server identity, mirroring `createMCPServer`'s
- * `MCPServerOptions` (`@src/core`) but with `name`/`version` OPTIONAL (defaulting to
+ * `MCPServerOptions` (`@orkestrel/mcp`) but with `name`/`version` OPTIONAL (defaulting to
  * {@link import('./constants.js').DEFAULT_MCP_SERVER_NAME} /
  * {@link import('./constants.js').DEFAULT_MCP_SERVER_VERSION}).
  *

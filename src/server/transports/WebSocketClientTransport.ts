@@ -45,7 +45,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   `start()` calls still resolve; exactly one socket is ever bound.
  * - **Inbound (`message`).** Each decoded text frame is `JSON.parse`d (guarded) and narrowed
  *   with `parseJSONRPCMessage` — a {@link JSONRPCMessage} re-emits on this transport's `message`
- *   event (the reply the {@link import('@src/core').MCPClientInterface} correlates by `id`); a
+ *   event (the reply the {@link import('@orkestrel/mcp').MCPClientInterface} correlates by `id`); a
  *   non-JSON / non-message frame surfaces on `error` and is dropped. The socket's `close`
  *   / `error` bridge to this transport's events.
  * - **Outbound (`send`).** `send(message)` writes one masked text frame.

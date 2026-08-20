@@ -81,8 +81,9 @@ import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
  *
  * @example
  * ```ts
- * import { createMCPServer, createToolManager } from '@src/core'
- * import { createMCPRoutes, createMCPSession } from '@src/server'
+ * import { createMCPServer } from '@orkestrel/mcp'
+ * import { createMCPRoutes, createMCPSession } from '@orkestrel/mcp/server'
+ * import { createToolManager } from '@orkestrel/tool'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
  * router.use(createMCPSession({ ttl: 60_000 })) // stateful: mint + validate + resumable GET / DELETE

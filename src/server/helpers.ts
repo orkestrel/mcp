@@ -40,7 +40,7 @@ export function createReadableStream<T>(
  * pump leaves.
  *
  * @remarks
- * The Streamable-HTTP twin of {@link import('@src/core').sendStream}, and it owns exactly what
+ * The Streamable-HTTP twin of {@link import('@orkestrel/mcp').sendStream}, and it owns exactly what
  * that owns. The `finally` releases the exchange on EVERY exit — the normal terminal, a
  * producer that threw, a `write` that threw, and an abort alike — because nothing else will:
  * a request whose client vanished cancels nothing by itself, so an exchange this pump walks
@@ -360,7 +360,7 @@ export function dispatchLines(
 /**
  * Bridges a message-channel {@link MCPClientTransportInterface} (the shape the stdio and
  * WebSocket SERVER transports already implement) into the environment-agnostic
- * {@link import('@src/core').MCPTransportInterface} port — the adapter
+ * {@link import('@orkestrel/mcp').MCPTransportInterface} port — the adapter
  * {@link import('./factories.js').createStdioServer} and {@link
  * import('./factories.js').createWebSocketServer} pipe through `bindServer`, so the
  * request/reply/error pump those factories used to hand-roll identically now
@@ -386,7 +386,7 @@ export function dispatchLines(
  * decode rather than after it. Removing the cost means giving `MCPTransportInterface` a
  * message-shaped face beside its string one, which every transport would then carry.
  *
- * @remarks Per {@link import('@src/core').MCPTransportInterface}, `listen`/`closed`
+ * @remarks Per {@link import('@orkestrel/mcp').MCPTransportInterface}, `listen`/`closed`
  * each hold THE SINGLE current handler (a second call REPLACES the first, never adds).
  * Because the underlying `transport.emitter` is ADD-based (`on` subscribes, never
  * replaces), this bridge installs ONE stable emitter listener per event on first use
@@ -399,11 +399,11 @@ export function dispatchLines(
  * / `JSON.parse` before re-validation.
  *
  * @param transport - The message-channel transport to bridge (stdio or WebSocket)
- * @returns An {@link import('@src/core').MCPTransportInterface} `bindServer` can drive
+ * @returns An {@link import('@orkestrel/mcp').MCPTransportInterface} `bindServer` can drive
  *
  * @example
  * ```ts
- * import { bindServer } from '@src/core'
+ * import { bindServer } from '@orkestrel/mcp'
  *
  * const transport = new StdioServerTransport(process.stdin, process.stdout)
  * bindServer(mcp, bridgeMessageTransport(transport))

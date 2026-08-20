@@ -33,7 +33,7 @@ import { readEventStream } from '../helpers.js'
  *   `Accept` of BOTH `application/json` and `text/event-stream` (so the server may
  *   answer with either framing) — plus any `options.headers` (for example, an `Authorization`
  *   bearer). It then decodes the reply and emits each decoded {@link JSONRPCMessage} on
- *   the `message` event the {@link import('@src/core').MCPClientInterface} subscribes
+ *   the `message` event the {@link import('@orkestrel/mcp').MCPClientInterface} subscribes
  *   to.
  * - **Both reply framings.** A `200` with an `application/json` body is parsed with
  *   `parseJSONRPCMessage`; a `200` with a `text/event-stream` body is decoded with the

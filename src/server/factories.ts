@@ -47,7 +47,7 @@ export function createMCPContinuation(secret: TokenSecret): MCPContinuationInter
 
 /**
  * Creates the MCP Streamable-HTTP transport routes — mounts a transport-agnostic
- * {@link MCPDispatcherInterface} (the `@src/core` dispatch boundary) on the fetch-standard router
+ * {@link MCPDispatcherInterface} (the `@orkestrel/mcp` dispatch boundary) on the fetch-standard router
  * spine, pumping each `POST` body through `mcp.dispatch`. Returns the {@link RouteInput}s to
  * hand to `router.add(...)`.
  *
@@ -92,8 +92,9 @@ export function createMCPContinuation(secret: TokenSecret): MCPContinuationInter
  *
  * @example
  * ```ts
- * import { createMCPLegacy, createMCPServer, createToolManager } from '@src/core'
- * import { createMCPRoutes } from '@src/server'
+ * import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
+ * import { createMCPRoutes } from '@orkestrel/mcp/server'
+ * import { createToolManager } from '@orkestrel/tool'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
  * const routes = createMCPRoutes(createMCPLegacy(mcp)) // both eras; pass `mcp` for modern only
@@ -114,7 +115,7 @@ export function createMCPRoutes<TState = unknown>(
 }
 
 /**
- * Creates the HTTP CLIENT transport for an {@link import('@src/core').MCPClientInterface}
+ * Creates the HTTP CLIENT transport for an {@link import('@orkestrel/mcp').MCPClientInterface}
  * — a {@link MCPClientTransportInterface} that drives a REMOTE Streamable-HTTP MCP server
  * over `fetch`. The egress mirror of {@link createMCPRoutes}.
  *
@@ -138,8 +139,8 @@ export function createMCPRoutes<TState = unknown>(
  *
  * @example
  * ```ts
- * import { createMCPClient } from '@src/core'
- * import { createHTTPClientTransport } from '@src/server'
+ * import { createMCPClient } from '@orkestrel/mcp'
+ * import { createHTTPClientTransport } from '@orkestrel/mcp/server'
  *
  * const client = createMCPClient({
  * 	transport: createHTTPClientTransport({ url: 'http://localhost:3000/mcp' }),
@@ -173,8 +174,8 @@ export function createHTTPClientTransport(
  *   protocol })` (SERVER mode → writes the `101` handshake, selects the configured subprotocol
  *   only when the client's offer contains it, and sends UNMASKED frames), wraps it in a
  *   {@link WebSocketServerTransport}, and pipes it through the core {@link
- *   import('@src/core').MCPTransportInterface} port through {@link
- *   import('./helpers.js').bridgeMessageTransport} + {@link import('@src/core').bindServer}:
+ *   import('@orkestrel/mcp').MCPTransportInterface} port through {@link
+ *   import('./helpers.js').bridgeMessageTransport} + {@link import('@orkestrel/mcp').bindServer}:
  *   each inbound REQUEST runs through `mcp.dispatch`, and a defined response is written back
  *   as a frame — a NOTIFICATION sends nothing, and a non-request message (a stray response) is
  *   ignored. A `dispatch` / `send` fault surfaces on `mcp.emitter`'s `error` event rather than
@@ -199,8 +200,9 @@ export function createHTTPClientTransport(
  *
  * @example
  * ```ts
- * import { createMCPServer, createToolManager } from '@src/core'
- * import { createWebSocketServer } from '@src/server'
+ * import { createMCPServer } from '@orkestrel/mcp'
+ * import { createWebSocketServer } from '@orkestrel/mcp/server'
+ * import { createToolManager } from '@orkestrel/tool'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
  * server.upgrade(createWebSocketServer(mcp, { emitter: server.emitter })) // ws://…/mcp
@@ -268,7 +270,7 @@ export function createWebSocketServer(
 }
 
 /**
- * Creates the WebSocket CLIENT transport for an {@link import('@src/core').MCPClientInterface}
+ * Creates the WebSocket CLIENT transport for an {@link import('@orkestrel/mcp').MCPClientInterface}
  * — a {@link MCPClientTransportInterface} that drives a REMOTE MCP server over a WebSocket. The
  * egress mirror of {@link createWebSocketServer} and the WebSocket sibling of {@link
  * createHTTPClientTransport}.
@@ -289,8 +291,8 @@ export function createWebSocketServer(
  *
  * @example
  * ```ts
- * import { createMCPClient } from '@src/core'
- * import { createWebSocketClientTransport } from '@src/server'
+ * import { createMCPClient } from '@orkestrel/mcp'
+ * import { createWebSocketClientTransport } from '@orkestrel/mcp/server'
  *
  * const client = createMCPClient({
  * 	transport: createWebSocketClientTransport({ url: 'ws://localhost:3000/mcp' }),
@@ -306,7 +308,7 @@ export function createWebSocketClientTransport(
 }
 
 /**
- * Creates the stdio CLIENT transport for an {@link import('@src/core').MCPClientInterface}
+ * Creates the stdio CLIENT transport for an {@link import('@orkestrel/mcp').MCPClientInterface}
  * — a {@link MCPClientTransportInterface} that spawns and drives a CHILD PROCESS MCP server
  * over newline-delimited JSON-RPC on `stdin`/`stdout`, the stdio sibling of {@link
  * createHTTPClientTransport} and {@link createWebSocketClientTransport}.
@@ -326,8 +328,8 @@ export function createWebSocketClientTransport(
  *
  * @example
  * ```ts
- * import { createMCPClient } from '@src/core'
- * import { createStdioClientTransport } from '@src/server'
+ * import { createMCPClient } from '@orkestrel/mcp'
+ * import { createStdioClientTransport } from '@orkestrel/mcp/server'
  *
  * const client = createMCPClient({
  * 	transport: createStdioClientTransport({ command: 'node', args: ['./server.js'] }),
@@ -350,9 +352,9 @@ export function createStdioClientTransport(
  * @remarks
  * Wraps `options.input` (default `process.stdin`) / `options.output` (default
  * `process.stdout`) in a {@link import('./transports/StdioServerTransport.js').StdioServerTransport}
- * and pipes it through the core {@link import('@src/core').MCPTransportInterface} port
+ * and pipes it through the core {@link import('@orkestrel/mcp').MCPTransportInterface} port
  * through {@link import('./helpers.js').bridgeMessageTransport} + {@link
- * import('@src/core').bindServer}: each inbound REQUEST runs through `mcp.dispatch`, and
+ * import('@orkestrel/mcp').bindServer}: each inbound REQUEST runs through `mcp.dispatch`, and
  * a defined response is written back as a newline-terminated line — a NOTIFICATION
  * writes nothing, and a non-request message is ignored. A `dispatch` / `send` fault
  * surfaces on `mcp.emitter`'s `error` event rather than escaping the (async) message
@@ -365,8 +367,9 @@ export function createStdioClientTransport(
  *
  * @example
  * ```ts
- * import { createMCPServer, createToolManager } from '@src/core'
- * import { createStdioServer } from '@src/server'
+ * import { createMCPServer } from '@orkestrel/mcp'
+ * import { createStdioServer } from '@orkestrel/mcp/server'
+ * import { createToolManager } from '@orkestrel/tool'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
  * createStdioServer(mcp).start() // an MCP client now connects over this process's stdio

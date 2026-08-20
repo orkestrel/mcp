@@ -10,8 +10,8 @@ import { isString } from '@orkestrel/contract'
  * @remarks
  * - **Symmetric.** Unlike {@link import('./WebSocketClientTransport.js').WebSocketClientTransport}
  *   / {@link import('./HTTPClientTransport.js').HTTPClientTransport} (CLIENT-only
- *   carriers of `@src/core`'s `MCPClientTransportInterface`), a `MessagePort` is a
- *   plain duplex channel — the SAME class implements `@src/core`'s
+ *   carriers of `@orkestrel/mcp`'s `MCPClientTransportInterface`), a `MessagePort` is a
+ *   plain duplex channel — the SAME class implements `@orkestrel/mcp`'s
  *   `MCPTransportInterface` and is handed to EITHER `bindServer` or
  *   `bindClient`/`createDuplexClientTransport`; which role it plays comes entirely
  *   from the binder it is given to, not from anything this class decides.
@@ -49,7 +49,7 @@ import { isString } from '@orkestrel/contract'
  *   handler exactly once, whether the caller closes it once or twice. There is no
  *   native "peer closed" signal for a `MessagePort` (unlike a WebSocket's `close`
  *   event) — `closed` fires ONLY from this transport's own `close()`.
- * - **Single-handler-replace (the port contract, `@src/core`'s `MCPTransportInterface`
+ * - **Single-handler-replace (the port contract, `@orkestrel/mcp`'s `MCPTransportInterface`
  *   doc).** `listen`/`closed` each hold the one active handler; a
  *   second call REPLACES the first rather than adding a second subscriber.
  *

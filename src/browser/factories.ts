@@ -12,9 +12,9 @@ import { WebSocketClientTransport } from './transports/WebSocketClientTransport.
 
 /**
  * Creates the browser-face WebSocket CLIENT transport for an
- * {@link import('@src/core').MCPClientInterface} — a {@link MCPClientTransportInterface}
+ * {@link import('@orkestrel/mcp').MCPClientInterface} — a {@link MCPClientTransportInterface}
  * that drives a REMOTE MCP server over the native `WebSocket` global, the browser
- * sibling of the Node face's `createWebSocketClientTransport` (`@src/server`).
+ * sibling of the Node face's `createWebSocketClientTransport` (`@orkestrel/mcp/server`).
  *
  * @remarks
  * Hand it to `createMCPClient({ transport })`: `start()` (run by `client.connect()`)
@@ -49,9 +49,9 @@ export function createWebSocketClientTransport(
 
 /**
  * Creates the browser-face HTTP CLIENT transport for an
- * {@link import('@src/core').MCPClientInterface} — a {@link MCPClientTransportInterface}
+ * {@link import('@orkestrel/mcp').MCPClientInterface} — a {@link MCPClientTransportInterface}
  * that drives a REMOTE Streamable-HTTP MCP server over the native `fetch`, the
- * browser sibling of the Node face's `createHTTPClientTransport` (`@src/server`).
+ * browser sibling of the Node face's `createHTTPClientTransport` (`@orkestrel/mcp/server`).
  *
  * @remarks
  * Hand it to `createMCPClient({ transport })`: each JSON-RPC message the client
@@ -94,10 +94,10 @@ export function createHTTPClientTransport(
 
 /**
  * Creates the browser-face `MessagePort` transport — a
- * {@link import('@src/core').MCPTransportInterface} over a native `MessagePort`, the
+ * {@link import('@orkestrel/mcp').MCPTransportInterface} over a native `MessagePort`, the
  * SYMMETRIC carrier that works as either a server or a client transport depending on
- * which binder ({@link import('@src/core').bindServer} or
- * {@link import('@src/core').bindClient}) it is handed to.
+ * which binder ({@link import('@orkestrel/mcp').bindServer} or
+ * {@link import('@orkestrel/mcp').bindClient}) it is handed to.
  *
  * @remarks
  * `port.start()` runs at construction (see {@link MessagePortTransport}'s doc for
@@ -107,7 +107,7 @@ export function createHTTPClientTransport(
  *
  * @param options - `port` (the `MessagePort` half to drive; REQUIRED); see
  *   {@link MessagePortTransportOptions}
- * @returns A working {@link import('@src/core').MCPTransportInterface} over the port
+ * @returns A working {@link import('@orkestrel/mcp').MCPTransportInterface} over the port
  *
  * @example
  * ```ts

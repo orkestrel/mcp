@@ -40,7 +40,8 @@ import { MCPServer } from './MCPServer.js'
  *
  * @example
  * ```ts
- * import { createMCPServer, createTool, createToolManager } from '@src/core'
+ * import { createMCPServer } from '@orkestrel/mcp'
+ * import { createTool, createToolManager } from '@orkestrel/tool'
  *
  * const tools = createToolManager()
  * tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
@@ -91,7 +92,7 @@ export function createMCPLegacy(server: MCPServerInterface): MCPDispatcherInterf
  *
  * @example
  * ```ts
- * import { createMCPClient } from '@src/core'
+ * import { createMCPClient } from '@orkestrel/mcp'
  * import { createHTTPClientTransport } from '@orkestrel/mcp/server'
  *
  * const client = createMCPClient({

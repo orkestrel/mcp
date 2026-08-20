@@ -26,7 +26,7 @@ import { readEventStream } from '../helpers.js'
  * The browser-face HTTP CLIENT transport for the Model Context Protocol — a
  * {@link MCPClientTransportInterface} that drives a REMOTE Streamable-HTTP MCP server
  * over the native `fetch`, the browser sibling of the Node face's
- * {@link import('@src/server').HTTPClientTransport}, honoring the SAME
+ * {@link import('@orkestrel/mcp/server').HTTPClientTransport}, honoring the SAME
  * `mcp-session-id` semantics so it interoperates with an `MCPSession`-based server
  * unchanged.
  *
@@ -37,7 +37,7 @@ import { readEventStream } from '../helpers.js'
  *   answer with either framing) — plus any `options.headers` (for example, an
  *   `Authorization` bearer). It then decodes the reply and emits each decoded
  *   {@link JSONRPCMessage} on the `message` event the
- *   {@link import('@src/core').MCPClientInterface} subscribes to.
+ *   {@link import('@orkestrel/mcp').MCPClientInterface} subscribes to.
  * - **Both reply framings.** A `200` with an `application/json` body is parsed with
  *   `parseJSONRPCMessage`; a `200` with a `text/event-stream` body is decoded with the
  *   `@orkestrel/sse` {@link import('@orkestrel/sse').SSEParserInterface} (the browser

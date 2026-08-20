@@ -25,7 +25,7 @@ import { Emitter } from '@orkestrel/emitter'
  * - **Inbound (`message`).** `start()` subscribes to the socket's `message` event; each text
  *   frame is `JSON.parse`d inside a try/catch and narrowed with `parseJSONRPCMessage` — a
  *   well-formed {@link JSONRPCMessage} is re-emitted on this transport's `message` event (the
- *   parsed envelope the {@link import('@src/core').MCPServerInterface} pump dispatches), while
+ *   parsed envelope the {@link import('@orkestrel/mcp').MCPServerInterface} pump dispatches), while
  *   a non-JSON or non-message frame is surfaced on `error` and DROPPED, never thrown. It
  *   also bridges the socket's `close` → this transport's `close`, and the socket's `error`.
  * - **Outbound (`send`).** `send(message)` writes one text frame
