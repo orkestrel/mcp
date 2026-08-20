@@ -206,3 +206,79 @@ describe('WebSocketServerTransport — close propagation', () => {
 		await transport.close()
 	})
 })
+
+// Release is what a closed transport owes the socket it borrowed. `start()` subscribes to the
+// wrapper's `message` / `close` / `error` events, so a `close()` that leaves them installed
+// keeps a dead bridge on the socket's emitter — and a frame that arrives between `close()`
+// resolving and the peer's close echo still reaches a transport nobody is listening to.
+describe('WebSocketServerTransport — close releases the socket subscriptions', () => {
+	it('close() removes every subscription start() installed on the socket', async () => {
+		const [server] = duplexPair()
+		const ws = createNodeWebSocket({ socket: server, key: CLIENT_KEY })
+		const before = [
+			ws.emitter.count('message'),
+			ws.emitter.count('close'),
+			ws.emitter.count('error'),
+		]
+		const transport = new WebSocketServerTransport(ws)
+		await transport.start()
+		await flushSocket()
+
+		expect([
+			ws.emitter.count('message'),
+			ws.emitter.count('close'),
+			ws.emitter.count('error'),
+		]).toEqual(before.map((count) => count + 1))
+
+		await transport.close()
+
+		expect([
+			ws.emitter.count('message'),
+			ws.emitter.count('close'),
+			ws.emitter.count('error'),
+		]).toEqual(before)
+	})
+
+	it('a frame arriving after close emits no message on the closed transport', async () => {
+		const [server, client] = duplexPair()
+		const ws = createNodeWebSocket({ socket: server, key: CLIENT_KEY })
+		const transport = new WebSocketServerTransport(ws)
+		const messages: JSONRPCMessage[] = []
+		transport.emitter.on('message', (message) => messages.push(message))
+		await transport.start()
+		await flushSocket()
+
+		await transport.close()
+		// The peer has not answered the close frame yet, so its next request is still on the
+		// wire and still decodes — a closed transport must not re-emit it.
+		client.write(jsonFrame(createJSONRPCRequest({ method: 'tools/list', id: 9 })))
+		await flushSocket()
+
+		expect(messages).toEqual([])
+	})
+
+	it('a peer close frame releases the socket subscriptions too', async () => {
+		const [server, client] = duplexPair()
+		const ws = createNodeWebSocket({ socket: server, key: CLIENT_KEY })
+		const before = [
+			ws.emitter.count('message'),
+			ws.emitter.count('close'),
+			ws.emitter.count('error'),
+		]
+		const transport = new WebSocketServerTransport(ws)
+		let closed = 0
+		transport.emitter.on('close', () => (closed += 1))
+		await transport.start()
+		await flushSocket()
+
+		client.write(encodeWebSocketFrame(WEBSOCKET_OPCODE_CLOSE, Buffer.alloc(0), { masked: true }))
+		await flushSocket()
+
+		expect(closed).toBe(1)
+		expect([
+			ws.emitter.count('message'),
+			ws.emitter.count('close'),
+			ws.emitter.count('error'),
+		]).toEqual(before)
+	})
+})

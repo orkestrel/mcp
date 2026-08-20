@@ -31,9 +31,11 @@ import { Emitter } from '@orkestrel/emitter'
  * - **Outbound (`send`).** `send(message)` writes one text frame
  *   (`nodeWs.send(JSON.stringify(message))`); the underlying wrapper no-ops a write on a
  *   non-open socket, so a closed connection drops silently rather than throwing.
- * - **`close()`** closes the underlying socket (the RFC 6455 close handshake) and fires the
- *   transport's `close` event (idempotent — a second `close`, or a socket-driven close, emits
- *   once).
+ * - **`close()`** removes the three subscriptions `start()` installed on the socket, closes the
+ *   underlying socket (the RFC 6455 close handshake), and fires the transport's `close` event
+ *   (idempotent — a second `close`, or a socket-driven close, emits once). A frame that arrives
+ *   between that release and the peer's close echo reaches nothing: the socket-driven close path
+ *   releases the same way, so a closed transport is never subscribed to a live socket.
  * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); the emitter
  *   isolates a listener throw (a buggy observer never corrupts the bridge). `error` is a
  *   DOMAIN event (a transport-level fault), distinct from the emitter's listener-error channel.
@@ -41,6 +43,11 @@ import { Emitter } from '@orkestrel/emitter'
 export class WebSocketServerTransport implements MCPClientTransportInterface {
 	readonly #emitter: Emitter<MCPClientTransportEventMap>
 	readonly #socket: NodeWebSocketInterface
+	// Bound once, as fields, so `close` can remove exactly the subscriptions `start` installed:
+	// an inline arrow is a new function on every call and can never be removed by reference.
+	readonly #frame = (text: string): void => this.#receive(text)
+	readonly #ending = (): void => this.#onClose()
+	readonly #failure = (error: unknown): void => this.#emitter.emit('error', error)
 	#started = false
 	#closed = false
 
@@ -70,9 +77,9 @@ export class WebSocketServerTransport implements MCPClientTransportInterface {
 		// no-op (the single MCPServer pump subscribes once).
 		if (this.#started || this.#closed) return
 		this.#started = true
-		this.#socket.emitter.on('message', (text) => this.#receive(text))
-		this.#socket.emitter.on('close', () => this.#onClose())
-		this.#socket.emitter.on('error', (error) => this.#emitter.emit('error', error))
+		this.#socket.emitter.on('message', this.#frame)
+		this.#socket.emitter.on('close', this.#ending)
+		this.#socket.emitter.on('error', this.#failure)
 	}
 
 	async send(message: JSONRPCMessage): Promise<void> {
@@ -84,6 +91,10 @@ export class WebSocketServerTransport implements MCPClientTransportInterface {
 	async close(): Promise<void> {
 		if (this.#closed) return
 		this.#closed = true
+		// Release BEFORE the close handshake: the peer has not answered yet, so a frame already
+		// on the wire still decodes, and a subscription left behind would re-emit it on a
+		// transport whose `close` has already fired.
+		this.#release()
 		this.#socket.close()
 		this.#emitter.emit('close')
 	}
@@ -113,6 +124,16 @@ export class WebSocketServerTransport implements MCPClientTransportInterface {
 	#onClose(): void {
 		if (this.#closed) return
 		this.#closed = true
+		this.#release()
 		this.#emitter.emit('close')
+	}
+
+	// Hand the socket back exactly as it was found: the wrapper is owned by the ingress that
+	// claimed the upgrade, so this transport removes its own three subscriptions and touches
+	// nothing else on it.
+	#release(): void {
+		this.#socket.emitter.off('message', this.#frame)
+		this.#socket.emitter.off('close', this.#ending)
+		this.#socket.emitter.off('error', this.#failure)
 	}
 }

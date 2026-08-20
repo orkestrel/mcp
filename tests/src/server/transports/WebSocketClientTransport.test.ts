@@ -9,6 +9,11 @@ import { isRecord } from '@orkestrel/contract'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import { createWebSocketClientTransport, createWebSocketServer } from '@src/server'
+import {
+	computeWebSocketAccept,
+	encodeWebSocketFrame,
+	WEBSOCKET_OPCODE_TEXT,
+} from '@orkestrel/websocket'
 import { waitForDelay } from '@orkestrel/test'
 import { createCalculatorServer, MODERN_METADATA } from '../../../setup.js'
 import { createTeardown, startServer, startUpgradeServer } from '../../../setupServer.js'
@@ -256,12 +261,12 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 		expect(closed).toBe(1)
 	})
 
-	it('close() during a suspended start() destroys the arriving socket and re-emits nothing (row 24)', async () => {
+	it('close() during a suspended start() leaves no bound socket and re-emits nothing (row 24)', async () => {
 		// The peer appends one well-formed JSON-RPC text frame to the handshake, so a socket the
-		// transport BOUND re-emits it on `message`; a destroyed one cannot.
+		// transport BOUND re-emits it on `message`; one it never bound cannot.
 		const peer = upgradeTeardown.track(
 			await startUpgradeServer({
-				delay: 25,
+				delay: 60,
 				frame: JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }),
 			}),
 		)
@@ -270,16 +275,35 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 		transport.emitter.on('message', (message) => received.push(message))
 
 		const starting = transport.start()
+		// Wait for the upgrade to REACH the peer, so the close lands on a handshake in progress
+		// rather than on a connection that was never made.
+		await waitForDelay(20)
 		await transport.close() // while the upgrade is still on the wire
 		await starting
-		await waitForDelay(60)
+		await waitForDelay(120)
 
-		expect(peer.count).toBe(1) // the upgrade DID complete — the vector reached the code
-		expect(peer.open).toBe(0) // and the socket nobody wanted was destroyed
+		expect(peer.count).toBe(1) // the upgrade DID reach the peer — the vector reached the code
+		expect(peer.open).toBe(0) // and nothing was left holding that connection open
 		expect(received).toEqual([]) // a socket that was never bound re-emits nothing
 		await expect(transport.send({ jsonrpc: '2.0', id: 2, method: 'ping' })).rejects.toThrow(
 			/not connected/,
 		)
+	})
+
+	it('binds exactly one socket when two start() calls race, destroying the loser', async () => {
+		// Both handshakes complete; the second socket to arrive finds one already installed and
+		// is destroyed rather than bound, so no orphan is left re-emitting frames at nobody.
+		const peer = upgradeTeardown.track(await startUpgradeServer())
+		const transport = createWebSocketClientTransport({ url: `${peer.base}/mcp` })
+
+		await Promise.all([transport.start(), transport.start()])
+		await waitForDelay(60)
+
+		expect(peer.count).toBe(2) // two upgrades were answered
+		expect(peer.open).toBe(1) // exactly one socket survives — the bound one
+		await transport.close()
+		await waitForDelay(60)
+		expect(peer.open).toBe(0)
 	})
 
 	it('rejects start() when the server returns a 101 with a bogus Sec-WebSocket-Accept', async () => {
@@ -292,5 +316,103 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 		await expect(transport.start()).rejects.toThrow(/Sec-WebSocket-Accept mismatch/)
 		// The happy-path connect (a CORRECT accept → start() resolves) is the control, already
 		// proven by the round-trip tests above against the real createWebSocketServer.
+	})
+})
+
+// A raw peer that answers the upgrade with a real `101` and then HOLDS the socket, so the
+// test decides when a frame reaches the client. `send` writes one unmasked text frame (the
+// server-to-client direction, RFC 6455 §5.3), which is how a frame still on the wire when a
+// client closes is reproduced deterministically.
+interface HoldingPeerInterface {
+	readonly base: string
+	send(text: string): void
+	stop(): Promise<void>
+}
+
+async function startHoldingPeer(): Promise<HoldingPeerInterface> {
+	const server = createHTTPServer()
+	const sockets: Duplex[] = []
+	server.on('upgrade', (request, socket) => {
+		const key = request.headers['sec-websocket-key']
+		if (typeof key !== 'string') {
+			socket.destroy()
+			return
+		}
+		sockets.push(socket)
+		// The client destroys its half on close, so this end reads an ECONNRESET — an expected
+		// outcome of the path under test, never an uncaught 'error'.
+		socket.on('error', () => {})
+		socket.resume()
+		socket.write(
+			'HTTP/1.1 101 Switching Protocols\r\n' +
+				'Upgrade: websocket\r\n' +
+				'Connection: Upgrade\r\n' +
+				`Sec-WebSocket-Accept: ${computeWebSocketAccept(key)}\r\n\r\n`,
+		)
+	})
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+	const address: unknown = server.address()
+	const port = isRecord(address) && typeof address.port === 'number' ? address.port : 0
+	rawTeardown.track({ server, sockets })
+	return {
+		base: `http://127.0.0.1:${port}`,
+		send(text: string): void {
+			for (const socket of sockets) {
+				socket.write(encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, text))
+			}
+		},
+		stop(): Promise<void> {
+			return new Promise<void>((resolve) => {
+				for (const socket of sockets) socket.destroy()
+				server.close(() => resolve())
+			})
+		},
+	}
+}
+
+describe('WebSocketClientTransport — close releases what the connect acquired', () => {
+	it('close() during a pending upgrade cancels the request instead of waiting for the peer', async () => {
+		// The peer holds the handshake for 400ms, so an upgrade this transport cannot cancel
+		// leaves `start()` suspended for the peer's whole delay.
+		const peer = upgradeTeardown.track(await startUpgradeServer({ delay: 400 }))
+		const transport = createWebSocketClientTransport({ url: `${peer.base}/mcp` })
+		const starting = transport.start()
+		await waitForDelay(30)
+
+		await transport.close()
+
+		// A cancelled upgrade settles `start()` well before the peer answers; an uncancellable
+		// one settles only when the 101 finally arrives.
+		await expect(
+			Promise.race([
+				starting.then(() => 'settled').catch(() => 'settled'),
+				waitForDelay(120).then(() => 'pending'),
+			]),
+		).resolves.toBe('settled')
+		expect(peer.count).toBe(1) // the upgrade reached the peer
+		expect(peer.open).toBe(0) // and the socket carrying it is gone
+	})
+
+	it('close() releases the socket subscriptions — a later frame emits nothing', async () => {
+		const peer = await startHoldingPeer()
+		const transport = createWebSocketClientTransport({ url: `${peer.base}/mcp` })
+		const messages: JSONRPCMessage[] = []
+		const errors: unknown[] = []
+		transport.emitter.on('message', (message) => messages.push(message))
+		transport.emitter.on('error', (error) => errors.push(error))
+		await transport.start()
+
+		// Control: while the transport is open the peer's frame reaches it.
+		peer.send(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }))
+		await waitForDelay(40)
+		expect(messages).toHaveLength(1)
+
+		await transport.close()
+		// The peer has not answered the close frame, so this one is still decodable wire.
+		peer.send(JSON.stringify({ jsonrpc: '2.0', id: 2, result: {} }))
+		await waitForDelay(40)
+
+		expect(messages).toHaveLength(1)
+		expect(errors).toEqual([])
 	})
 })

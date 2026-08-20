@@ -1,4 +1,4 @@
-import type { MCPDispatcherInterface } from '@src/core'
+import type { JSONRPCMessage, MCPDispatcherInterface } from '@src/core'
 import type { MiddlewareHandler } from '@orkestrel/server'
 import type { ClientSocketInterface, StartedServerInterface } from '../../setupServer.js'
 import { spawn } from 'node:child_process'
@@ -597,6 +597,50 @@ describe('createWebSocketServer — the spine stop closes every socket it claime
 		await expect(handle.server.stop()).resolves.toBeUndefined()
 
 		expect(performance.now() - started).toBeLessThan(1000)
+	}, 20_000)
+})
+
+describe('createWebSocketServer — the spine stop detaches each claimed binding', () => {
+	it('aborts the request in flight and writes no reply for the connection it closed', async () => {
+		const observed: string[] = []
+		const tools = createToolManager()
+		tools.add(createTool({ name: 'slow', execute: () => 0 }))
+		// The execution handler parks on the request's own signal, so the abort the teardown
+		// issues is observable from inside the dispatch it cancels.
+		const mcp = createMCPServer({
+			identity: { name: 'ws-stop', version: '1.0.0' },
+			tools,
+			async execution(context) {
+				await waitForAbort(context.signal)
+				observed.push('aborted')
+				return { id: context.call.id, name: context.call.name, success: true, value: 0 }
+			},
+		})
+		const handle = await startWsMCP(mcp)
+		const transport = createWebSocketClientTransport({
+			url: `${handle.base}${DEFAULT_MCP_PATH}`,
+		})
+		const replies: JSONRPCMessage[] = []
+		transport.emitter.on('message', (message) => replies.push(message))
+		await transport.start()
+		await transport.send(
+			createJSONRPCRequest({
+				method: 'tools/call',
+				id: 'call-1',
+				params: { name: 'slow', arguments: {}, _meta: MODERN_METADATA },
+			}),
+		)
+		await waitForDelay(40)
+		expect(observed).toEqual([])
+
+		await handle.server.stop()
+		await waitForDelay(40)
+
+		// The binding this ingress opened for the socket is detached with the socket: its live
+		// request is aborted, and the answer it was holding is released rather than written.
+		expect(observed).toEqual(['aborted'])
+		expect(replies).toEqual([])
+		await transport.close()
 	}, 20_000)
 })
 

@@ -212,14 +212,19 @@ export function createWebSocketServer(
 ): UpgradeHandler {
 	const path = options.path ?? DEFAULT_MCP_PATH
 	const subprotocol = options.subprotocol ?? MCP_WEBSOCKET_SUBPROTOCOL
-	// The sockets this handler currently owns — a closure store, like the session middleware's.
-	// A transport leaves on its own `close`, so the set holds exactly the LIVE connections.
-	const live = new Set<WebSocketServerTransport>()
-	// The spine is stopping: say the RFC 6455 goodbye on every socket still open. Nothing else
-	// can — node detaches an upgraded socket from the connection set the spine's close walks —
-	// so without this the drain runs to its deadline and the connection is cut mid-protocol.
+	// The connections this handler currently owns, each with the detachment its binding returned
+	// — a closure store, like the session middleware's. A transport leaves on its own `close`,
+	// so the map holds exactly the LIVE connections and exactly the bindings still attached.
+	const live = new Map<WebSocketServerTransport, () => void>()
+	// The spine is stopping: detach each binding, then say the RFC 6455 goodbye on every socket
+	// still open. Nothing else can close them — node detaches an upgraded socket from the
+	// connection set the spine's close walks — so without this the drain runs to its deadline and
+	// the connection is cut mid-protocol.
 	options.emitter.on('stop', () => {
-		for (const transport of live) void transport.close()
+		for (const [transport, unbind] of live) {
+			unbind()
+			void transport.close()
+		}
 	})
 	return (request: IncomingMessage, socket: Duplex, head: Buffer): boolean => {
 		// DECLINE anything that is not our MCP WebSocket upgrade — the spine fans it onward or
@@ -238,9 +243,15 @@ export function createWebSocketServer(
 		// `mcp.emitter`'s `error` event.
 		const ws = createNodeWebSocket({ socket, key, head, protocol: subprotocol })
 		const transport = new WebSocketServerTransport(ws)
-		live.add(transport)
-		transport.emitter.on('close', () => live.delete(transport))
-		bindServer(mcp, bridgeMessageTransport(transport))
+		// The binder's detachment is this handler's to hold: the connection it belongs to is one
+		// this factory minted and nothing outside can reach, so a discarded `unbind` leaves the
+		// binding attached to a transport that has ended with no way left to detach it.
+		const unbind = bindServer(mcp, bridgeMessageTransport(transport))
+		live.set(transport, unbind)
+		transport.emitter.on('close', () => {
+			live.delete(transport)
+			unbind()
+		})
 		void transport.start()
 		return true
 	}

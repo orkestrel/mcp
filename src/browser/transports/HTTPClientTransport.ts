@@ -57,6 +57,11 @@ import { readEventStream } from '../helpers.js'
  *   Before initialize returns, neither captured legacy header is sent.
  *   `close()` clears the captured protocol so a reconnect's `initialize`
  *   POST is headerless; the captured `session` persists across `close()`.
+ * - **`close()` releases what is in flight.** Every `fetch` this transport still has open is
+ *   ABORTED, which cancels the response body a `send` is reading — an SSE reply the server
+ *   never ends would otherwise outlive the transport, with nothing left able to reach it. The
+ *   aborted read surfaces on `error` and the `send` reporting it resolves. `close()` is
+ *   idempotent (one `close` event per connected lifetime), and `start()` opens the next one.
  * - **Total at the boundary (§14).** Every reply is narrowed (`parseJSONRPCMessage`,
  *   the SSE decoder) — a non-message reply is dropped, never asserted; a `fetch` /
  *   decode failure surfaces on the `error` event rather than escaping `send`.
@@ -76,8 +81,13 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 	readonly #headers: Readonly<Record<string, string>>
 	readonly #fetch: typeof fetch
 	readonly #timeout: number | undefined
+	// The requests currently on the wire, one controller each. `close` is the only thing that can
+	// reach them: a `send` parked on a reply that never ends holds both the request and its
+	// response reader, and no other seam this transport exposes leads back to either.
+	readonly #pending = new Set<AbortController>()
 	#session: string | undefined = undefined
 	#protocol: string | undefined = undefined
+	#closed = false
 
 	constructor(options: HTTPClientTransportOptions) {
 		this.#emitter = new Emitter<MCPClientTransportEventMap>()
@@ -103,10 +113,24 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 
 	async start(): Promise<void> {
 		// A request/response transport opens no long-lived connection — `send` issues each
-		// `fetch` on demand. Nothing to arm.
+		// `fetch` on demand. There is nothing to arm; opening the next connected lifetime is all
+		// this does, so a transport an earlier `close` ended sends again from here.
+		this.#closed = false
 	}
 
 	async send(message: JSONRPCMessage): Promise<void> {
+		const request = new AbortController()
+		this.#pending.add(request)
+		try {
+			await this.#exchange(message, request.signal)
+		} finally {
+			this.#pending.delete(request)
+		}
+	}
+
+	// One request/response exchange under `signal`: `close` aborts it, and a `timeout` option
+	// composes with it so whichever fires first ends the same fetch and the same body read.
+	async #exchange(message: JSONRPCMessage, signal: AbortSignal): Promise<void> {
 		let response: Response
 		try {
 			response = await this.#fetch(this.#url, {
@@ -122,7 +146,10 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 					...this.#headers,
 				},
 				body: JSON.stringify(message),
-				...(this.#timeout === undefined ? {} : { signal: AbortSignal.timeout(this.#timeout) }),
+				signal:
+					this.#timeout === undefined
+						? signal
+						: AbortSignal.any([signal, AbortSignal.timeout(this.#timeout)]),
 			})
 		} catch (error) {
 			// A network-level failure (connection refused, DNS) — surface it for observation;
@@ -137,9 +164,15 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 		await this.#deliver(response)
 	}
 
-	// Clear the captured protocol before emitting `close`, so a reconnect's `initialize`
-	// POST carries no `mcp-protocol-version` header (the captured `session` is untouched).
+	// Abort every request still on the wire, then clear the captured protocol before emitting
+	// `close`, so a reconnect's `initialize` POST carries no `mcp-protocol-version` header (the
+	// captured `session` is untouched). Idempotent: a second `close` on a transport this one
+	// already ended releases nothing and emits nothing.
 	async close(): Promise<void> {
+		if (this.#closed) return
+		this.#closed = true
+		for (const request of this.#pending) request.abort()
+		this.#pending.clear()
 		this.#protocol = undefined
 		this.#emitter.emit('close')
 	}

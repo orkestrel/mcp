@@ -273,3 +273,78 @@ describe('StdioServerTransport — lifecycle', () => {
 		await transport.close()
 	})
 })
+
+// The four flow-ownership cases the release rule has to separate. Ownership is read at
+// `start`, before anything is attached (`readableFlowing !== true` means the caller was not
+// already reading), and spent at `close`, after this transport's own `data` listener is gone
+// (a listener still there means a caller reader remains). Each case below fixes one row: a
+// caller flow this transport never started stays flowing, and a reader that arrived after
+// `start` keeps the flow alive too.
+describe('StdioServerTransport — input flow ownership', () => {
+	it('leaves an input the caller had already resumed flowing after close', async () => {
+		const input = new PassThrough()
+		const output = new PassThrough()
+		// A bare `resume()` starts the flow with NO `data` listener, so a listener count read at
+		// `start` reports "nobody is reading" for a stream the caller is already draining.
+		input.resume()
+		expect(input.readableFlowing).toBe(true)
+		const transport = new StdioServerTransport(input, output)
+		await transport.start()
+
+		await transport.close()
+
+		expect(input.readableFlowing).toBe(true)
+	})
+
+	it('leaves an input flowing when the caller attached and detached a reader before start', async () => {
+		const input = new PassThrough()
+		const output = new PassThrough()
+		const reader = (): void => {}
+		input.on('data', reader)
+		input.removeListener('data', reader)
+		// Removing the listener does not stop the flow the attach started.
+		expect(input.readableFlowing).toBe(true)
+		const transport = new StdioServerTransport(input, output)
+		await transport.start()
+
+		await transport.close()
+
+		expect(input.readableFlowing).toBe(true)
+	})
+
+	it('leaves the flow alone when a second reader attached after start', async () => {
+		const input = new PassThrough()
+		const output = new PassThrough()
+		const transport = new StdioServerTransport(input, output)
+		await transport.start()
+		// A caller reader that arrives AFTER `start` is invisible to any reading taken at `start`.
+		const chunks: string[] = []
+		input.on('data', (chunk: Buffer | string) => chunks.push(chunk.toString()))
+
+		await transport.close()
+
+		expect(input.readableFlowing).toBe(true)
+		// The surviving reader still receives data — the release did not starve it.
+		input.write('after close\n')
+		await waitForDelay()
+		expect(chunks).toEqual(['after close\n'])
+	})
+
+	it('pauses an input the caller had explicitly paused before start', async () => {
+		const input = new PassThrough()
+		const output = new PassThrough()
+		input.pause()
+		expect(input.readableFlowing).toBe(false)
+		const transport = new StdioServerTransport(input, output)
+		// Attaching a `data` listener does not restart a stream the caller explicitly paused —
+		// only `resume()` does — so the input is still non-flowing here.
+		await transport.start()
+		expect(input.readableFlowing).toBe(false)
+
+		await transport.close()
+
+		// The caller was not reading and left no reader behind, so this transport hands the
+		// stream back non-flowing — the state that lets a process holding `process.stdin` exit.
+		expect(input.readableFlowing).toBe(false)
+	})
+})

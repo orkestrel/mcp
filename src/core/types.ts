@@ -2166,6 +2166,11 @@ export interface MCPClientTransportInterface {
 	 * gave up waiting JOINS the `close` still running rather than issuing another. It IS called
 	 * again after an earlier `close` REJECTED, because a rejected close ended nothing.
 	 *
+	 * `close` is IDEMPOTENT: a call on a transport an earlier `close` already ended resolves
+	 * without emitting `close` again and without releasing anything a second time. Idempotence
+	 * bounds ONE closed lifetime rather than the object — a transport that reopens on `start`
+	 * arms itself there, and its next `close` ends that connection and emits once for it.
+	 *
 	 * @returns Resolves once the transport is closed
 	 */
 	close(): Promise<void>

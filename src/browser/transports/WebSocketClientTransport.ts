@@ -31,12 +31,12 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   re-emits on this transport's `message` event; a non-text (binary) frame or a
  *   non-JSON / non-message text frame surfaces on `error` and is DROPPED (§14 — never
  *   throws on adversarial wire input).
- * - **`close()`** closes the underlying socket and fires `close` (idempotent); the
- *   socket's native `close` event (a server-initiated close) fires the SAME `close`
- *   exactly once total — `close()` first flips the guard, so the native event never
- *   double-emits. **This transport is not reusable after `close()`** — a `send` issued
- *   after `close()` is silently dropped (not queued, not delivered even on a later
- *   `start()`).
+ * - **`close()`** unsubscribes from the underlying socket, closes it, and fires `close`
+ *   (idempotent); the socket's native `close` event (a server-initiated close) fires the
+ *   SAME `close` exactly once total — `close()` first flips the guard, so the native event
+ *   never double-emits, and the released socket reports its own close to nobody. A `send`
+ *   issued after `close()` is silently dropped (not queued), so a closed transport delivers
+ *   nothing until a `start()` opens a new connection.
  * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); every
  *   emit the emitter isolates a listener throw; `error` is a DOMAIN event (a
  *   transport-level fault).
@@ -52,6 +52,11 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 	readonly #emitter: Emitter<MCPClientTransportEventMap>
 	readonly #url: string
 	readonly #protocols: string | string[] | undefined
+	// Bound once, as fields, so `close` can remove exactly the listeners `#bind` installed: an
+	// inline arrow is a new function on every call and can never be removed by reference.
+	readonly #frame = (event: MessageEvent<unknown>): void => this.#receive(event.data)
+	readonly #ending = (): void => this.#onClose()
+	readonly #failure = (event: Event): void => this.#emitter.emit('error', event)
 	#socket: WebSocket | undefined = undefined
 	#queue: string[] = []
 	#closed = false
@@ -131,6 +136,7 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		if (this.#closed) return
 		this.#closed = true
 		const socket = this.#socket
+		this.#release()
 		this.#socket = undefined
 		if (socket !== undefined) socket.close()
 		this.#emitter.emit('close')
@@ -139,9 +145,20 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 	// Bridge the native socket's events onto the transport: a text frame → `message`
 	// (decoded + narrowed), the socket close → `close`, a socket fault → `error`.
 	#bind(socket: WebSocket): void {
-		socket.addEventListener('message', (event: MessageEvent) => this.#receive(event.data))
-		socket.addEventListener('close', () => this.#onClose())
-		socket.addEventListener('error', (event) => this.#emitter.emit('error', event))
+		socket.addEventListener('message', this.#frame)
+		socket.addEventListener('close', this.#ending)
+		socket.addEventListener('error', this.#failure)
+	}
+
+	// Unsubscribe from the socket this transport currently holds. A closing socket goes on
+	// firing its own events, so a bridge left installed on one this transport has released
+	// would report a connection it no longer owns.
+	#release(): void {
+		const socket = this.#socket
+		if (socket === undefined) return
+		socket.removeEventListener('message', this.#frame)
+		socket.removeEventListener('close', this.#ending)
+		socket.removeEventListener('error', this.#failure)
 	}
 
 	// Write every queued (pre-open) message, in order, as the socket opens.
@@ -173,11 +190,13 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		this.#emitter.emit('message', message)
 	}
 
-	// The socket closed underneath us — fire `close` once (a `close()` call already flipped
-	// `#closed`, so it does not double-emit).
+	// The socket closed underneath us — fire `close` once. Only the socket this transport still
+	// holds can reach here: a superseded one was unsubscribed when it was released, so its own
+	// later close cannot end the connection that replaced it.
 	#onClose(): void {
 		if (this.#closed) return
 		this.#closed = true
+		this.#release()
 		this.#socket = undefined
 		this.#emitter.emit('close')
 	}

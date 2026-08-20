@@ -6,7 +6,7 @@ import type {
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { WebSocketClientTransportOptions } from '../types.js'
-import type { IncomingMessage } from 'node:http'
+import type { ClientRequest, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
@@ -48,7 +48,10 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   non-JSON / non-message frame surfaces on `error` and is dropped (§14). The socket's `close`
  *   / `error` bridge to this transport's events.
  * - **Outbound (`send`).** `send(message)` writes one masked text frame.
- * - **`close()`** closes the underlying socket and fires `close` (idempotent).
+ * - **`close()`** unsubscribes from the socket, closes it, and fires `close` (idempotent). An
+ *   upgrade still on the wire is DESTROYED, so a `close()` during the handshake ends the
+ *   transport at once instead of waiting for a peer that may never answer — the suspended
+ *   `start()` resolves, because the close is the outcome its caller asked for.
  * - **URL scheme.** `options.url` accepts a `ws://` / `wss://` URL or an `http://` / `https://`
  *   one; a `ws(s)` scheme is converted to `http(s)` for the underlying upgrade request (`wss`
  *   → TLS via `node:https`). Either reaches the same endpoint.
@@ -67,7 +70,15 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 	readonly #emitter: Emitter<MCPClientTransportEventMap>
 	readonly #url: string
 	readonly #headers: Readonly<Record<string, string>>
+	// Bound once, as fields, so `close` can remove exactly the subscriptions `#bind` installed:
+	// an inline arrow is a new function on every call and can never be removed by reference.
+	readonly #frame = (text: string): void => this.#receive(text)
+	readonly #ending = (): void => this.#onClose()
+	readonly #failure = (error: unknown): void => this.#emitter.emit('error', error)
 	#socket: NodeWebSocketInterface | undefined = undefined
+	// The upgrade currently on the wire. Nothing else holds it, so a `close` during the
+	// handshake can only cancel through this.
+	#request: ClientRequest | undefined = undefined
 	#closed = false
 
 	constructor(options: WebSocketClientTransportOptions) {
@@ -95,11 +106,40 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		// too (idempotent open).
 		if (this.#socket !== undefined) return
 		this.#closed = false
-		const url = this.#httpURL()
-		const key = randomBytes(16).toString('base64')
+		try {
+			await this.#connect(this.#httpURL(), randomBytes(16).toString('base64'))
+		} finally {
+			// Whatever the handshake did, it is no longer on the wire, so nothing is left for a
+			// later `close` to cancel.
+			this.#request = undefined
+		}
+	}
+
+	async send(message: JSONRPCMessage): Promise<void> {
+		const socket = this.#socket
+		if (socket === undefined) throw new Error('WebSocket transport is not connected')
+		socket.send(JSON.stringify(message))
+	}
+
+	async close(): Promise<void> {
+		if (this.#closed) return
+		this.#closed = true
+		// The upgrade still on the wire is this transport's to cancel. Without it a close during
+		// the handshake waits out the peer, and the socket that finally arrives is destroyed long
+		// after the caller was told the transport had ended.
+		this.#request?.destroy()
+		const socket = this.#socket
+		this.#release()
+		this.#socket = undefined
+		if (socket !== undefined) socket.close()
+		this.#emitter.emit('close')
+	}
+
+	// Run the RFC 6455 client handshake and bind the socket it produces. Split from `start` so
+	// the retained request is cleared on every settlement path, including a rejection.
+	async #connect(url: URL, key: string): Promise<void> {
 		const secure = url.protocol === 'https:'
 		const send = secure ? httpsRequest : httpRequest
-
 		await new Promise<void>((resolve, reject) => {
 			const request = send({
 				hostname: url.hostname,
@@ -114,6 +154,7 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 					...this.#headers,
 				},
 			})
+			this.#request = request
 
 			// The server accepted the upgrade: validate the handshake accept, then wrap the
 			// raw socket in a CLIENT-mode NodeWebSocket (masks its frames).
@@ -147,35 +188,36 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 				response.resume()
 				reject(new Error(`WebSocket upgrade declined with status ${response.statusCode ?? 0}`))
 			})
-			// A connection-level failure (refused, DNS, reset).
-			request.on('error', (error) =>
-				reject(error instanceof Error ? error : new Error(String(error))),
-			)
+			// A connection-level failure (refused, DNS, reset) — or the reset that follows the
+			// `close()` above destroying this request, which IS that close arriving rather than a
+			// fault: the caller asked for the transport to end, and it has.
+			request.on('error', (error) => {
+				if (this.#closed) {
+					resolve()
+					return
+				}
+				reject(error instanceof Error ? error : new Error(String(error)))
+			})
 			request.end()
 		})
-	}
-
-	async send(message: JSONRPCMessage): Promise<void> {
-		const socket = this.#socket
-		if (socket === undefined) throw new Error('WebSocket transport is not connected')
-		socket.send(JSON.stringify(message))
-	}
-
-	async close(): Promise<void> {
-		if (this.#closed) return
-		this.#closed = true
-		const socket = this.#socket
-		this.#socket = undefined
-		if (socket !== undefined) socket.close()
-		this.#emitter.emit('close')
 	}
 
 	// Bridge the upgraded socket's events onto the transport: a text frame → `message`
 	// (decoded + narrowed), the socket close → `close`, a socket fault → `error`.
 	#bind(ws: NodeWebSocketInterface): void {
-		ws.emitter.on('message', (text) => this.#receive(text))
-		ws.emitter.on('close', () => this.#onClose(ws))
-		ws.emitter.on('error', (error) => this.#emitter.emit('error', error))
+		ws.emitter.on('message', this.#frame)
+		ws.emitter.on('close', this.#ending)
+		ws.emitter.on('error', this.#failure)
+	}
+
+	// Unsubscribe from the socket this transport currently holds. The socket itself belongs to
+	// the peer connection, so nothing else on it is touched.
+	#release(): void {
+		const socket = this.#socket
+		if (socket === undefined) return
+		socket.emitter.off('message', this.#frame)
+		socket.emitter.off('close', this.#ending)
+		socket.emitter.off('error', this.#failure)
 	}
 
 	// Decode one inbound text frame: `JSON.parse` → `parseJSONRPCMessage`. A well-formed
@@ -197,12 +239,13 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		this.#emitter.emit('message', message)
 	}
 
-	// The current socket closed underneath us — fire `close` once. A socket an explicit close
-	// superseded may report its own close after `start()` has installed a replacement; peer
-	// identity keeps that old event from clearing the live socket or emitting a second close.
-	#onClose(socket: NodeWebSocketInterface): void {
-		if (this.#closed || this.#socket !== socket) return
+	// The current socket closed underneath us — fire `close` once. Only the socket this
+	// transport still holds can reach here: a superseded one was unsubscribed when it was
+	// released, so its own later close reports to nobody and cannot clear the live socket.
+	#onClose(): void {
+		if (this.#closed) return
 		this.#closed = true
+		this.#release()
 		this.#socket = undefined
 		this.#emitter.emit('close')
 	}

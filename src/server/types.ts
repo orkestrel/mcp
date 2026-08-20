@@ -288,8 +288,10 @@ export interface MCPSessionEntry {
  * - `fetch` — the `fetch` implementation to issue each `POST` with; defaults to
  *   `globalThis.fetch`. Injectable for a test double or a non-global `fetch`.
  * - `timeout` — an optional per-request timeout in milliseconds; when set, each
- *   `fetch` call is issued with `signal: AbortSignal.timeout(timeout)`. Omit for no
- *   transport-level deadline.
+ *   `fetch` call composes that deadline with the transport's own close through
+ *   `AbortSignal.any([close, AbortSignal.timeout(timeout)])`, so whichever fires first
+ *   ends the request. Omit for no transport-level deadline; the close signal is passed
+ *   either way.
  */
 export interface HTTPClientTransportOptions {
 	readonly url: string

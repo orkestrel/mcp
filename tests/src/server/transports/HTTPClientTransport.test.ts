@@ -1,7 +1,7 @@
-import type { MCPClientInterface, MCPServerInterface } from '@src/core'
+import type { JSONRPCMessage, MCPClientInterface, MCPServerInterface } from '@src/core'
 import type { MiddlewareHandler } from '@orkestrel/server'
 import type { StartedServerInterface } from '../../../setupServer.js'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
 	buildJSONRPCResult,
 	inferRequestVersion,
@@ -26,6 +26,9 @@ import {
 	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
 } from '@src/server'
+import { createServer as createHTTPServer } from 'node:http'
+import { waitForDelay } from '@orkestrel/test'
+import { HTTPClientTransport } from '@src/server'
 import { createHeaderProjectionRequest, HEADER_PROJECTION_CONTEXTS } from '../../../setup.js'
 import { createTeardown, startServer } from '../../../setupServer.js'
 
@@ -377,5 +380,100 @@ describe('HTTPClientTransport — lifecycle', () => {
 		await transport.send({ jsonrpc: '2.0', id: 99, method: 'ping', params: {} })
 
 		expect(protocols).toEqual([null, MCP_LEGACY_VERSION, null])
+	})
+})
+
+// A `close()` is a release, not a bookmark: whatever the transport still holds when it is
+// called has to be handed back. For a `fetch` transport that is the request in flight and the
+// response body it is reading — an SSE reply the server never ends holds both open forever,
+// and nothing else in the client can reach them.
+interface EndlessStreamInterface {
+	readonly base: string
+	/** How many requests the server saw the client abandon. */
+	readonly abandoned: number
+	stop(): Promise<void>
+}
+
+// A real `node:http` peer that answers every POST with a `text/event-stream` it never ends:
+// it writes the SSE headers plus one comment line (so `fetch` resolves its Response) and then
+// holds the response open. `abandoned` counts the requests whose client went away, which is
+// what an aborted `fetch` looks like from the server's side.
+async function startEndlessStream(): Promise<EndlessStreamInterface> {
+	let abandoned = 0
+	const server = createHTTPServer((request, response) => {
+		request.on('close', () => {
+			if (!response.writableEnded) abandoned += 1
+		})
+		response.writeHead(200, { 'content-type': 'text/event-stream' })
+		response.write(': open\n\n')
+	})
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+	const address: unknown = server.address()
+	const port = isRecord(address) && typeof address.port === 'number' ? address.port : 0
+	return {
+		base: `http://127.0.0.1:${port}`,
+		get abandoned() {
+			return abandoned
+		},
+		stop(): Promise<void> {
+			return new Promise<void>((resolve) => {
+				server.closeAllConnections()
+				server.close(() => resolve())
+			})
+		},
+	}
+}
+
+const endlessTeardown = createTeardown<EndlessStreamInterface>((peer) => peer.stop())
+
+describe('HTTPClientTransport — close releases the request it has in flight', () => {
+	it('close() aborts a pending send and the server sees the request abandoned', async () => {
+		const peer = endlessTeardown.track(await startEndlessStream())
+		const transport = new HTTPClientTransport({ url: `${peer.base}/mcp` })
+		const sending = transport.send({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+		// Let the request reach the server and its unending SSE body start arriving.
+		await waitForDelay(60)
+
+		await transport.close()
+
+		// The read the transport was parked on is cancelled, so the write it was reporting on
+		// settles instead of outliving the transport.
+		await expect(
+			Promise.race([sending.then(() => 'settled'), waitForDelay(200).then(() => 'unsettled')]),
+		).resolves.toBe('settled')
+		// The cancellation reaches the peer over a real socket, so the server-side reading is
+		// polled rather than read on the same tick the local promise settled.
+		await vi.waitFor(() => expect(peer.abandoned).toBe(1))
+	})
+
+	it('a send issued after a start following close still reaches the server', async () => {
+		const dispatcher = createDispatcher<unknown>()
+		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer()), { streaming: false }))
+		const handle = track(
+			await startServer(createServer<unknown>({ dispatcher, state: () => undefined })),
+		)
+		const transport = new HTTPClientTransport({ url: `${handle.base}/mcp` })
+		const messages: JSONRPCMessage[] = []
+		transport.emitter.on('message', (message) => messages.push(message))
+		await transport.close()
+
+		await transport.start()
+		await transport.send({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+
+		expect(messages).toHaveLength(1)
+	})
+})
+
+describe('HTTPClientTransport — close is idempotent', () => {
+	it('emits close once however many times it is called', async () => {
+		const transport = new HTTPClientTransport({ url: 'http://127.0.0.1:1/mcp' })
+		let closed = 0
+		transport.emitter.on('close', () => (closed += 1))
+
+		await transport.close()
+		await transport.close()
+		await transport.close()
+
+		expect(closed).toBe(1)
 	})
 })

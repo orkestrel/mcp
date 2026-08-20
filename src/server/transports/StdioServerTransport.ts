@@ -4,6 +4,7 @@ import type {
 	JSONRPCMessage,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
+import { Readable } from 'node:stream'
 import { Emitter } from '@orkestrel/emitter'
 import { dispatchLines, extractLines } from '../helpers.js'
 
@@ -29,10 +30,12 @@ import { dispatchLines, extractLines } from '../helpers.js'
  * - **Outbound (`send`).** `send(message)` writes one newline-terminated
  *   `JSON.stringify`d line to `output`.
  * - **`close()`** removes this transport's input subscriptions and fires its `close`
- *   event (idempotent). When this transport started the input flow, `close()` pauses
- *   it after removing the subscriptions. The injected streams are owned by the caller
- *   (typically `process.stdin`/`process.stdout`), so the transport never destroys, ends,
- *   or blanket-clears them.
+ *   event (idempotent). It pauses the input only when the caller was not already reading
+ *   it at `start` (`readableFlowing !== true`) AND no `data` listener remains once this
+ *   transport's own is removed — so a process holding `process.stdin` can exit, and a
+ *   caller's own flow is never stopped underneath it. The injected streams are owned by the
+ *   caller (typically `process.stdin`/`process.stdout`), so the transport never destroys,
+ *   ends, or blanket-clears them.
  * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
  *   fault), distinct from the emitter's own listener-error channel.
@@ -47,7 +50,7 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 	#buffer = ''
 	#started = false
 	#closed = false
-	#ownsFlow = false
+	#flowing = false
 
 	constructor(input: NodeJS.ReadableStream, output: NodeJS.WritableStream) {
 		this.#emitter = new Emitter<MCPClientTransportEventMap>()
@@ -76,7 +79,13 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 		// (the single MCPServer pump subscribes once).
 		if (this.#started || this.#closed) return
 		this.#started = true
-		this.#ownsFlow = this.#input.listenerCount('data') === 0
+		// The input's flow state BEFORE anything is attached. `readableFlowing` is `true` only
+		// for a stream a caller already put in flowing mode, so a `true` here says the caller is
+		// reading and this transport is a guest on a flow it did not start. `null` (untouched)
+		// and `false` (explicitly paused) both say it is not. The declared `NodeJS.ReadableStream`
+		// does not carry that state, so a stream that is not a node `Readable` reads as
+		// not-flowing — the same answer an untouched one gives.
+		this.#flowing = this.#input instanceof Readable && this.#input.readableFlowing === true
 		this.#input.on('data', this.#data)
 		this.#input.on('close', this.#ending)
 		this.#input.on('error', this.#failure)
@@ -116,6 +125,12 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 		this.#input.removeListener('data', this.#data)
 		this.#input.removeListener('close', this.#ending)
 		this.#input.removeListener('error', this.#failure)
-		if (this.#ownsFlow) this.#input.pause()
+		// Two different questions, asked at the two moments where each is answerable: the reading
+		// taken at `start` says whether the caller was already reading, and the listener count
+		// taken HERE — after this transport's own `data` handler is gone — says whether a reader
+		// is left. Pause only when neither is true, so a process holding `process.stdin` can exit
+		// and a caller's flow is never seized. A count alone would pause a stream the caller had
+		// resumed; the start reading alone would starve a reader that arrived after `start`.
+		if (!this.#flowing && this.#input.listenerCount('data') === 0) this.#input.pause()
 	}
 }

@@ -22,7 +22,7 @@ function transport(input, label) {
 }
 
 const CASES = [
-	['sole reader', (i) => {}],
+	['sole reader', () => {}],
 	['caller resumed first', (i) => i.resume()],
 	['caller attached then detached', (i) => { const h = () => {}; i.on('data', h); i.removeListener('data', h) }],
 ]
