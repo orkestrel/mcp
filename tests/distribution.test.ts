@@ -46,6 +46,203 @@ const FACES = Object.freeze([
 /** Files npm includes independently of the manifest's `files` allowlist. */
 const NPM_REQUIRED_FILES = Object.freeze(['LICENSE', 'package.json'])
 
+/** The stdio peer the handshake rows drive: the packed server, reachable at every revision. */
+const HANDSHAKE_PEER = `import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
+import { createStdioServer } from '@orkestrel/mcp/server'
+import { createTool, createToolManager } from '@orkestrel/tool'
+
+const tools = createToolManager()
+tools.add(createTool({ name: 'add', execute: () => 5 }))
+const mcp = createMCPServer({ identity: { name: 'handshake-peer', version: '1.0.0' }, tools })
+createStdioServer(createMCPLegacy(mcp)).start()
+`
+
+/**
+ * The red control's peer: a scripted stdio server with no modern seam.
+ *
+ * It speaks the wire protocol and nothing else — every non-`initialize` request is refused the
+ * way a legacy-era server refuses an unknown method, and `initialize` is answered normally. It
+ * reimplements no behavior this package owns: the client under test is the whole subject, and
+ * this peer exists only to be the era the client must decide about.
+ */
+const HANDSHAKE_LEGACY_PEER = `let buffer = ''
+
+function send(message) {
+	process.stdout.write(JSON.stringify(message) + '\\n')
+}
+
+function answer(request) {
+	if (request.id === undefined) return
+	if (request.method === 'initialize') {
+		send({
+			jsonrpc: '2.0',
+			id: request.id,
+			result: {
+				protocolVersion: request.params.protocolVersion,
+				capabilities: {},
+				serverInfo: { name: 'legacy-only-peer', version: '1.0.0' },
+			},
+		})
+		return
+	}
+	send({
+		jsonrpc: '2.0',
+		id: request.id,
+		error: { code: -32601, message: 'Method not found: ' + request.method },
+	})
+}
+
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+	buffer += chunk
+	let newline = buffer.indexOf('\\n')
+	while (newline !== -1) {
+		const line = buffer.slice(0, newline)
+		buffer = buffer.slice(newline + 1)
+		if (line.length > 0) answer(JSON.parse(line))
+		newline = buffer.indexOf('\\n')
+	}
+})
+`
+
+/**
+ * The peer the refused pin names: it records that it ran, and does nothing else.
+ *
+ * A construction that refuses before the transport starts leaves this file unwritten, so its
+ * absence is what "before any child spawns" means as a measurement rather than as a claim.
+ */
+const HANDSHAKE_MARKER_PEER = `import { writeFileSync } from 'node:fs'
+
+writeFileSync(new URL('./spawned.txt', import.meta.url), 'the refused pin spawned a child\\n')
+`
+
+/**
+ * The driver: one cold-spawned child per row, the client's outbound methods recorded.
+ *
+ * The recorder is a proxy over the REAL transport — it forwards every member and appends each
+ * outbound method name — so a row's reading names the era the client actually chose, not the
+ * era its negotiated revision implies. Each row's options arrive as parsed JSON, so a pin the
+ * supported set excludes reaches the constructor as data rather than as a literal the compiler
+ * would have refused first.
+ */
+const HANDSHAKE_DRIVER = `import { readFileSync, writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { createMCPClient } from '@orkestrel/mcp'
+import { createStdioClientTransport } from '@orkestrel/mcp/server'
+
+function record(transport, methods) {
+	return new Proxy(transport, {
+		get(target, key) {
+			if (key === 'send') {
+				return async (message) => {
+					if (typeof message.method === 'string') methods.push(message.method)
+					await target.send(message)
+				}
+			}
+			const value = Reflect.get(target, key, target)
+			return typeof value === 'function' ? value.bind(target) : value
+		},
+	})
+}
+
+const rows = JSON.parse(readFileSync(new URL('./rows.json', import.meta.url), 'utf8'))
+const readings = []
+
+for (const row of rows) {
+	const methods = []
+	const transport = record(
+		createStdioClientTransport({
+			command: process.execPath,
+			args: [fileURLToPath(new URL('./' + row.peer, import.meta.url))],
+		}),
+		methods,
+	)
+	let client
+	try {
+		client = createMCPClient({
+			transport,
+			identity: { name: 'handshake-driver', version: '1.0.0' },
+			...row.options,
+		})
+	} catch (error) {
+		readings.push({ label: row.label, phase: 'construct', message: error.message, code: error.code, methods })
+		continue
+	}
+	try {
+		await client.connect()
+		readings.push({ label: row.label, phase: 'connect', version: client.version, methods })
+	} catch (error) {
+		readings.push({ label: row.label, phase: 'connect', message: error.message, code: error.code, methods })
+	} finally {
+		try {
+			await client.disconnect()
+		} catch {}
+	}
+}
+
+writeFileSync(new URL('./readings.json', import.meta.url), JSON.stringify(readings))
+`
+
+/**
+ * Each handshake row that must NEGOTIATE, with the revision it lands on and the methods the
+ * client writes to get there.
+ *
+ * The method list is the discriminator: a legacy pin that reached its revision through
+ * `server/discover` would satisfy the revision alone, and the eras differ in what they ask.
+ */
+const HANDSHAKE = Object.freeze([
+	{
+		label: 'unpinned with no deadline',
+		peer: 'peer.mjs',
+		options: {},
+		version: '2026-07-28',
+		methods: ['server/discover'],
+	},
+	{
+		label: 'unpinned with a 15s deadline',
+		peer: 'peer.mjs',
+		options: { timeout: 15_000 },
+		version: '2026-07-28',
+		methods: ['server/discover'],
+	},
+	{
+		label: 'pinned to the modern revision',
+		peer: 'peer.mjs',
+		options: { version: '2026-07-28', timeout: 15_000 },
+		version: '2026-07-28',
+		methods: ['server/discover'],
+	},
+	{
+		label: 'pinned to 2025-11-25',
+		peer: 'peer.mjs',
+		options: { version: '2025-11-25', timeout: 15_000 },
+		version: '2025-11-25',
+		methods: ['initialize', 'notifications/initialized'],
+	},
+	{
+		label: 'pinned to 2025-06-18',
+		peer: 'peer.mjs',
+		options: { version: '2025-06-18', timeout: 15_000 },
+		version: '2025-06-18',
+		methods: ['initialize', 'notifications/initialized'],
+	},
+	{
+		label: 'unpinned against a peer with no modern seam',
+		peer: 'legacy.mjs',
+		options: { timeout: 15_000 },
+		version: '2025-11-25',
+		methods: ['server/discover', 'initialize', 'notifications/initialized'],
+	},
+])
+
+/** Read one reading out of the driver's report, failing loudly rather than asserting on absence. */
+function readHandshake(readings: unknown, label: string): unknown {
+	if (!Array.isArray(readings)) throw new Error('the handshake driver reported no readings')
+	const reading = readings.find((entry) => readField(entry, 'label') === label)
+	if (reading === undefined) throw new Error(`the handshake driver skipped the row: ${label}`)
+	return reading
+}
+
 /**
  * The value declarations one built `.d.ts` entry exposes, deduplicated and sorted.
  *
@@ -125,6 +322,80 @@ function findUnexpectedPackedPaths(
 	return paths.filter((path) => !allowsPackedPath(path, allowlist)).sort()
 }
 
+/**
+ * Pack the package, install the tarball into `consumer`, and provision the runtimes it names.
+ *
+ * Returns the packed inventory so a caller can assert what the tarball carries. Both proofs in
+ * this file need the same consumer, and a second copy of this sequence would be a second thing
+ * to keep honest.
+ */
+function buildPackedConsumer(root: string, scratch: string, consumer: string): readonly string[] {
+	const pack = spawnSync('npm', ['pack', '--json', '--pack-destination', scratch], {
+		cwd: root,
+		encoding: 'utf8',
+	})
+	if (pack.error !== undefined || pack.status !== 0) {
+		throw new Error(`npm pack failed: ${pack.error?.message ?? pack.stderr}`)
+	}
+	const packed: unknown = JSON.parse(pack.stdout)
+	if (!Array.isArray(packed)) throw new Error('npm pack returned no artifact list')
+	const [packedArtifact] = packed
+	const filename = readField(packedArtifact, 'filename')
+	if (typeof filename !== 'string') throw new Error('npm pack returned no artifact filename')
+	const packedPaths = readPackedPaths(packedArtifact)
+	const tarball = join(scratch, filename)
+
+	mkdirSync(consumer, { recursive: true })
+	writeFileSync(
+		join(consumer, 'package.json'),
+		JSON.stringify({ name: 'mcp-distribution-consumer', private: true, type: 'module' }),
+	)
+	const install = spawnSync(
+		'npm',
+		['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball],
+		{ cwd: consumer, encoding: 'utf8' },
+	)
+	const packageRoot = join(consumer, 'node_modules', '@orkestrel', 'mcp')
+	if (install.status !== 0 || install.error !== undefined) {
+		const code = readField(install.error, 'code')
+		const denied = code === 'EPERM' || install.stderr.includes('EPERM')
+		// `--mode release` is how the publish gate runs this file. An install that never happened
+		// is a failure there rather than a fallback: extracting the tarball proves that it unpacks
+		// and says nothing about whether a consumer can install it. An ordinary local run inside a
+		// sandbox that denies a nested install still falls back.
+		if (!denied || import.meta.env.MODE === 'release') {
+			throw new Error(`npm install failed: ${install.error?.message ?? install.stderr}`)
+		}
+		const extraction = join(scratch, 'extraction')
+		mkdirSync(extraction, { recursive: true })
+		const unpack = spawnSync('tar', ['-xzf', tarball, '-C', extraction], { encoding: 'utf8' })
+		if (unpack.error !== undefined || unpack.status !== 0) {
+			throw new Error(`tar extraction failed: ${unpack.error?.message ?? unpack.stderr}`)
+		}
+		mkdirSync(dirname(packageRoot), { recursive: true })
+		cpSync(join(extraction, 'package'), packageRoot, { recursive: true })
+	}
+
+	// Every runtime the package names must be resolvable from the consumer. A denied nested
+	// install leaves them missing, and the peers are the consumer's to supply either way, so
+	// the list is derived from the packed manifest rather than written down twice.
+	const manifest: unknown = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
+	const required = new Set<string>()
+	for (const field of ['dependencies', 'peerDependencies']) {
+		const declared = readField(manifest, field)
+		if (typeof declared !== 'object' || declared === null) continue
+		for (const name of Object.keys(declared)) required.add(name)
+	}
+	const require = createRequire(import.meta.url)
+	for (const dependency of required) {
+		const target = join(consumer, 'node_modules', ...dependency.split('/'))
+		if (existsSync(target)) continue
+		mkdirSync(dirname(target), { recursive: true })
+		cpSync(dirname(require.resolve(`${dependency}/package.json`)), target, { recursive: true })
+	}
+	return packedPaths
+}
+
 it('installs the packed artifact and drives its faces, declarations, and resolution modes', () => {
 	const root = fileURLToPath(new URL('../', import.meta.url))
 	const scratch = mkdtempSync(join(tmpdir(), 'orkestrel-mcp-distribution-'))
@@ -139,79 +410,19 @@ it('installs the packed artifact and drives its faces, declarations, and resolut
 		writeFileSync(controlFile, 'packed inventory negative control\n')
 		const sourceManifest: unknown = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 		const allowlist = readManifestFiles(sourceManifest)
-		const pack = spawnSync('npm', ['pack', '--json', '--pack-destination', scratch], {
-			cwd: root,
-			encoding: 'utf8',
-		})
-		if (pack.error !== undefined || pack.status !== 0) {
-			throw new Error(`npm pack failed: ${pack.error?.message ?? pack.stderr}`)
-		}
-		const packed: unknown = JSON.parse(pack.stdout)
-		if (!Array.isArray(packed)) throw new Error('npm pack returned no artifact list')
-		const [packedArtifact] = packed
-		const filename = readField(packedArtifact, 'filename')
-		if (typeof filename !== 'string') throw new Error('npm pack returned no artifact filename')
-		const packedPaths = readPackedPaths(packedArtifact)
+		const consumer = join(scratch, 'consumer')
+		const packedPaths = buildPackedConsumer(root, scratch, consumer)
+		const packageRoot = join(consumer, 'node_modules', '@orkestrel', 'mcp')
 		expect(findUnexpectedPackedPaths(packedPaths, allowlist)).toEqual([])
 		expect(packedPaths).not.toContain(controlPath)
 		expect(findUnexpectedPackedPaths([...packedPaths, controlPath], allowlist)).toEqual([
 			controlPath,
 		])
-		const tarball = join(scratch, filename)
-
-		const consumer = join(scratch, 'consumer')
-		mkdirSync(consumer)
-		writeFileSync(
-			join(consumer, 'package.json'),
-			JSON.stringify({ name: 'mcp-distribution-consumer', private: true, type: 'module' }),
-		)
-		const install = spawnSync(
-			'npm',
-			['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball],
-			{ cwd: consumer, encoding: 'utf8' },
-		)
-		const packageRoot = join(consumer, 'node_modules', '@orkestrel', 'mcp')
-		if (install.status !== 0 || install.error !== undefined) {
-			const code = readField(install.error, 'code')
-			const denied = code === 'EPERM' || install.stderr.includes('EPERM')
-			// `--mode release` is how the publish gate runs this file. An install that never happened
-			// is a failure there rather than a fallback: extracting the tarball proves that it unpacks
-			// and says nothing about whether a consumer can install it. An ordinary local run inside a
-			// sandbox that denies a nested install still falls back.
-			if (!denied || import.meta.env.MODE === 'release') {
-				throw new Error(`npm install failed: ${install.error?.message ?? install.stderr}`)
-			}
-			const extraction = join(scratch, 'extraction')
-			mkdirSync(extraction)
-			const unpack = spawnSync('tar', ['-xzf', tarball, '-C', extraction], { encoding: 'utf8' })
-			if (unpack.error !== undefined || unpack.status !== 0) {
-				throw new Error(`tar extraction failed: ${unpack.error?.message ?? unpack.stderr}`)
-			}
-			mkdirSync(dirname(packageRoot), { recursive: true })
-			cpSync(join(extraction, 'package'), packageRoot, { recursive: true })
-		}
 
 		const manifest: unknown = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8'))
 		const exportsValue = readField(manifest, 'exports')
 		if (typeof exportsValue !== 'object' || exportsValue === null) {
 			throw new Error('The packed manifest carries no exports')
-		}
-
-		// Every runtime the package names must be resolvable from the consumer. A denied nested
-		// install leaves them missing, and the peers are the consumer's to supply either way, so
-		// the list is derived from the packed manifest rather than written down twice.
-		const required = new Set<string>()
-		for (const field of ['dependencies', 'peerDependencies']) {
-			const declared = readField(manifest, field)
-			if (typeof declared !== 'object' || declared === null) continue
-			for (const name of Object.keys(declared)) required.add(name)
-		}
-		const require = createRequire(import.meta.url)
-		for (const dependency of required) {
-			const target = join(consumer, 'node_modules', ...dependency.split('/'))
-			if (existsSync(target)) continue
-			mkdirSync(dirname(target), { recursive: true })
-			cpSync(dirname(require.resolve(`${dependency}/package.json`)), target, { recursive: true })
 		}
 
 		// Classify every absent export target at the boundary that omitted it.
@@ -257,7 +468,7 @@ it('installs the packed artifact and drives its faces, declarations, and resolut
 		}
 		// The surface each face published on 2026-08-20, pinned so a silent shrink is visible. A
 		// deliberate export change moves these numbers in the same commit.
-		expect(declared.get('core')).toHaveLength(140)
+		expect(declared.get('core')).toHaveLength(139)
 		expect(declared.get('browser')).toHaveLength(19)
 		expect(declared.get('server')).toHaveLength(44)
 
@@ -401,5 +612,87 @@ it('installs the packed artifact and drives its faces, declarations, and resolut
 		if (controlDirectory !== undefined) {
 			rmSync(controlDirectory, { recursive: true, force: true })
 		}
+	}
+})
+
+// The handshake the packed artifact performs, driven from the consumer that installed it. The
+// client and the peer are both the tarball's own code, spawned cold per row, so what these rows
+// read is what a developer who runs `npm install @orkestrel/mcp` gets — not what this
+// repository's source graph resolves to.
+it('negotiates every supported revision from the installed artifact and refuses what a pin excludes', () => {
+	const root = fileURLToPath(new URL('../', import.meta.url))
+	const scratch = mkdtempSync(join(tmpdir(), 'orkestrel-mcp-handshake-'))
+
+	try {
+		const consumer = join(scratch, 'consumer')
+		buildPackedConsumer(root, scratch, consumer)
+
+		writeFileSync(join(consumer, 'peer.mjs'), HANDSHAKE_PEER)
+		writeFileSync(join(consumer, 'legacy.mjs'), HANDSHAKE_LEGACY_PEER)
+		writeFileSync(join(consumer, 'marker.mjs'), HANDSHAKE_MARKER_PEER)
+		writeFileSync(join(consumer, 'handshake.mjs'), HANDSHAKE_DRIVER)
+		const refused = 'pinned outside the supported set'
+		const control = 'pinned to the modern revision against a peer with no modern seam'
+		writeFileSync(
+			join(consumer, 'rows.json'),
+			JSON.stringify([
+				...HANDSHAKE.map((row) => ({ label: row.label, peer: row.peer, options: row.options })),
+				{ label: refused, peer: 'marker.mjs', options: { version: '2020-01-01', timeout: 15_000 } },
+				{
+					label: control,
+					peer: 'legacy.mjs',
+					options: { version: '2026-07-28', timeout: 15_000 },
+				},
+			]),
+		)
+
+		const driven = spawnSync(process.execPath, [join(consumer, 'handshake.mjs')], {
+			cwd: consumer,
+			encoding: 'utf8',
+		})
+		if (driven.error !== undefined || driven.status !== 0) {
+			throw new Error(`the handshake driver failed: ${driven.error?.message ?? driven.stderr}`)
+		}
+		const readings: unknown = JSON.parse(readFileSync(join(consumer, 'readings.json'), 'utf8'))
+
+		// Each row is compared as a whole reading rather than field by field, so a failure names
+		// the row it belongs to instead of reporting a bare revision string against another.
+		for (const row of HANDSHAKE) {
+			const reading = readHandshake(readings, row.label)
+			expect({
+				label: readField(reading, 'label'),
+				version: readField(reading, 'version'),
+				methods: readField(reading, 'methods'),
+				message: readField(reading, 'message'),
+			}).toEqual({
+				label: row.label,
+				version: row.version,
+				methods: row.methods,
+				message: undefined,
+			})
+		}
+
+		// A pin the supported set excludes is refused where it is read, so the transport never
+		// starts and the peer it names never runs. The marker file is what says so.
+		const refusal = readHandshake(readings, refused)
+		expect(readField(refusal, 'phase')).toBe('construct')
+		expect(readField(refusal, 'code')).toBe(-32022)
+		expect(readField(refusal, 'message')).toBe('Unsupported protocol version')
+		expect(readField(refusal, 'methods')).toEqual([])
+		expect(existsSync(join(consumer, 'spawned.txt'))).toBe(false)
+
+		// The red control. The same peer answers the unpinned row in the table earlier — it
+		// negotiates 2025-06-18's successor through the legacy fallback — so this row's failure
+		// is the pin refusing that fallback, and nothing about the peer being unreachable. The
+		// message is the peer's own refusal of `server/discover`, never a deadline: a client that
+		// waited out its timeout instead would report the wait, and this assertion would break.
+		const blocked = readHandshake(readings, control)
+		expect(readField(blocked, 'phase')).toBe('connect')
+		expect(readField(blocked, 'version')).toBeUndefined()
+		expect(readField(blocked, 'code')).toBe(-32601)
+		expect(readField(blocked, 'message')).toBe('Method not found: server/discover')
+		expect(readField(blocked, 'methods')).toEqual(['server/discover'])
+	} finally {
+		rmSync(scratch, { recursive: true, force: true })
 	}
 })

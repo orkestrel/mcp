@@ -449,11 +449,14 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 		expect(await client.call('add', {})).toEqual({ resultType: 'complete', value: 5 })
 	})
 
-	it('CONTROL — a bare server answers modern-shaped initialize with -32601 over a real socket', async () => {
+	it('CONTROL — a bare server refuses initialize at either shape, naming the method, over a real socket', async () => {
 		const handle = await startWsMCP()
 		const transport = track(createWebSocketClientTransport({ url: `${handle.base}/mcp` }))
 
 		await transport.start()
+		// A raw legacy line declares no protocol version, and the modern seam registers no
+		// `initialize`, so the structural guard answers for the method rather than for the
+		// absent declaration.
 		const legacy = new Promise<unknown>((resolve) => transport.emitter.on('message', resolve))
 		await transport.send(
 			createJSONRPCRequest({
@@ -461,8 +464,12 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 				params: { protocolVersion: '2025-06-18' },
 			}),
 		)
-		await expect(legacy).resolves.toMatchObject({ error: { code: -32602 } })
+		await expect(legacy).resolves.toMatchObject({
+			error: { code: -32601, message: 'Method not found: initialize' },
+		})
 
+		// A well-formed modern line reaches the registry and finds the same absence: the
+		// modern-only subtraction is `initialize` itself, not the shape it arrives in.
 		const modern = new Promise<unknown>((resolve) => transport.emitter.on('message', resolve))
 		await transport.send(
 			createJSONRPCRequest({
@@ -470,7 +477,9 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 				params: { _meta: MODERN_METADATA },
 			}),
 		)
-		await expect(modern).resolves.toMatchObject({ error: { code: -32601 } })
+		await expect(modern).resolves.toMatchObject({
+			error: { code: -32601, message: 'Method not found: initialize' },
+		})
 	})
 
 	it('connect → tools/list → tools/call(add): a value round-trips over real WebSocket frames', async () => {
@@ -701,7 +710,10 @@ function send(message) {
 function receive(message) {
 	if (stage === 'initialize') {
 		if (mode === 'bare') {
-			if (message.error?.code !== -32602) fail('bare legacy-shaped initialize was accepted')
+			if (message.error?.code !== -32601) fail('bare raw legacy initialize was not refused -32601')
+			if (message.error?.message !== 'Method not found: initialize') {
+				fail('bare raw legacy initialize refusal did not name initialize: ' + message.error?.message)
+			}
 			stage = 'control'
 			send({
 				jsonrpc: '2.0',
@@ -724,6 +736,9 @@ function receive(message) {
 	}
 	if (stage === 'control') {
 		if (message.error?.code !== -32601) fail('bare modern-shaped initialize did not answer -32601')
+		if (message.error?.message !== 'Method not found: initialize') {
+			fail('bare modern-shaped initialize refusal did not name initialize: ' + message.error?.message)
+		}
 		process.exit(0)
 	}
 	if (message.result?.content?.[0]?.text !== '5') fail('legacy tools/call failed')
@@ -775,7 +790,12 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 		expect(await driveStdioChild(createMCPLegacy(createCalculatorServer()), 'legacy')).toBe(0)
 	})
 
-	it('CONTROL — a bare server answers modern-shaped initialize with -32601 over a spawned child', async () => {
+	// `initialize` belongs to the legacy era alone, so the modern seam registers no handler for
+	// it and the structural guard reports the method's absence rather than a missing protocol
+	// declaration. The child asserts the refusal MESSAGE as well as its code: a bare `-32601`
+	// that named some other method would satisfy the code alone, and the reference clients'
+	// fallback listens for this exact answer.
+	it('CONTROL — a bare server refuses initialize at either shape, naming the method, over a spawned child', async () => {
 		expect(await driveStdioChild(createCalculatorServer(), 'bare')).toBe(0)
 	})
 

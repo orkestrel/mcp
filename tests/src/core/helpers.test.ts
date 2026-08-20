@@ -686,7 +686,7 @@ describe('bindServer', () => {
 				}),
 			),
 		)
-		expect(JSON.parse(await legacy)).toMatchObject({ error: { code: -32602 } })
+		expect(JSON.parse(await legacy)).toMatchObject({ error: { code: -32601 } })
 
 		const modern = new Promise<string>((resolve) => clientTransport.listen(resolve))
 		await clientTransport.send(
