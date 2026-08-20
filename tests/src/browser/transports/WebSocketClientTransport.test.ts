@@ -2,7 +2,7 @@ import type { JSONRPCMessage } from '@src/core'
 import { describe, expect, inject, it } from 'vitest'
 import { WebSocketClientTransport } from '@src/browser'
 import { waitForDelay } from '@orkestrel/test'
-import { MODERN_METADATA } from '../../../setup.js'
+import { MODERN_METADATA, waitForSettlement } from '../../../setup.js'
 
 // src/browser/transports/WebSocketClientTransport.ts — what the browser face owes the socket
 // it borrowed. The round trip against the real Node-face WebSocket server is proven in
@@ -13,13 +13,15 @@ import { MODERN_METADATA } from '../../../setup.js'
 const serverURL = inject('server')
 
 describe('WebSocketClientTransport — close releases the socket it bound', () => {
-	it('close rejects a start whose handshake has not opened', async () => {
+	it('close settles a start whose handshake has not opened', async () => {
 		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
 		const starting = transport.start()
 
 		await transport.close()
 
-		await expect(starting).rejects.toThrow('WebSocket transport closed before connection opened')
+		await expect(
+			waitForSettlement(starting, 50, 'Timed out waiting for close to settle the pending start'),
+		).resolves.toBeUndefined()
 	})
 
 	it('ignores the old socket close after a new socket has replaced it', async () => {

@@ -34,9 +34,10 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  * - **`close()`** unsubscribes from the underlying socket, closes it, and fires `close`
  *   (idempotent); the socket's native `close` event (a server-initiated close) fires the
  *   SAME `close` exactly once total — `close()` first flips the guard, so the native event
- *   never double-emits, and the released socket reports its own close to nobody. A `send`
- *   issued after `close()` is silently dropped (not queued), so a closed transport delivers
- *   nothing until a `start()` opens a new connection.
+ *   never double-emits, and the released socket reports its own close to nobody. Closing before
+ *   the socket opens resolves the pending `start()` rather than leaving it pending, matching the
+ *   Node face. A `send` issued after `close()` is silently dropped (not queued), so a closed
+ *   transport delivers nothing until a `start()` opens a new connection.
  * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); every
  *   emit the emitter isolates a listener throw; `error` is a DOMAIN event (a
  *   transport-level fault).
@@ -128,13 +129,13 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		if (this.#closed) return
 		this.#closed = true
 		const socket = this.#socket
-		const reject = this.#reject
+		const resolve = this.#resolve
 		this.#releaseHandshake()
 		this.#release()
 		this.#socket = undefined
 		if (socket !== undefined) socket.close()
 		this.#emitter.emit('close')
-		reject?.(new Error('WebSocket transport closed before connection opened'))
+		resolve?.()
 	}
 
 	// Bridge the native socket's events onto the transport: a text frame → `message`

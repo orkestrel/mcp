@@ -33,13 +33,12 @@ import { dispatchLines } from '../helpers.js'
  *   rejects — it answers `false` for a channel that was closed, destroyed, or ended, and for a write
  *   that failed — so a `false` answer REJECTS here with the same not-connected error a transport
  *   that was never started raises. A dead peer surfaces at the caller instead of vanishing.
- * - **`close()`** terminates the child through the supervisor's bounded `SIGTERM` → grace →
- *   `SIGKILL` group-kill, releases this transport's line pump without waiting for the child's
- *   stdout iterator, tears down the supervisor, and fires `close` once (idempotent). A descendant
- *   can retain an inherited stdout pipe after the child exits; the pump's release barrier keeps
- *   that substrate limit from keeping this transport's `close()` pending. On a POSIX host the
- *   child leads its own process group, so the group-kill reaches its grandchildren rather than
- *   orphaning them.
+ * - **`close()`** releases this transport's line pump without waiting for the child's stdout
+ *   iterator, then runs the supervisor's bounded `SIGTERM` → grace → `SIGKILL` group-kill and
+ *   teardown before firing `close` once (idempotent). A descendant can retain an inherited stdout
+ *   pipe after the child exits; the pump's release barrier keeps that substrate limit from keeping
+ *   this transport's `close()` pending. On a POSIX host the child leads its own process group, so
+ *   the group-kill reaches its grandchildren rather than orphaning them.
  * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
  *   fault, including the child spawn cause the supervisor surfaces), distinct from the emitter's

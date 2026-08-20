@@ -62,9 +62,12 @@ const LEGACY_OWNERS = Object.freeze([
 	'src/server/types.ts',
 ])
 
-/** Declarations, imports, and barrel exports that make a module own removable legacy ingress. */
+/**
+ * Declarations, named imports from any specifier, and barrel exports that make a module own
+ * removable legacy ingress.
+ */
 const LEGACY_OWNER_PATTERN =
-	/\b(?:export\s+class\s+(?:MCPLegacy|MCPSession)\b|export\s+function\s+(?:createMCPLegacy|createMCPSession)\b|export\s+interface\s+(?:MCPLegacyOptions|MCPSession(?:Options|Interface|State|Entry))\b|import(?:\s+type)?\s*\{[^}]*\b(?:MCPLegacy|MCPSession)\b[^}]*\}\s*from\s*['"]\.\/(?:MCPLegacy|MCPSession)\.js['"]|export\s+\*\s+from\s*['"]\.\/(?:MCPLegacy|MCPSession)\.js['"])/u
+	/\b(?:export\s+class\s+(?:MCPLegacy|MCPSession)\b|export\s+function\s+(?:createMCPLegacy|createMCPSession)\b|export\s+interface\s+(?:MCPLegacyOptions|MCPSession(?:Options|Interface|State|Entry))\b|import(?:\s+type)?\s*\{[^}]*\b(?:MCPLegacy|MCPSession)\b[^}]*\}\s*from\s*['"][^'"]+['"]|export\s+\*\s+from\s*['"]\.\/(?:MCPLegacy|MCPSession)\.js['"])/u
 
 /** Return the source modules carrying a removable legacy-ingress declaration or dependency. */
 function findLegacyOwners(population: Readonly<Record<string, string>>): readonly string[] {
@@ -96,9 +99,11 @@ describe('legacy server-ingress ownership', () => {
 
 	it('reports a planted owner outside the guide membership', () => {
 		const controlPath = 'src/core/LegacyControl.ts'
+		// The membership rule accepts a named entity binding from any specifier. This alias import
+		// sat outside the earlier relative-specifier population and certifies the widened class.
 		const control = {
 			...files,
-			[controlPath]: "import { MCPLegacy } from './MCPLegacy.js'\n",
+			[controlPath]: "import { MCPLegacy } from '@src/core'\n",
 		}
 		expect(findLegacyOwners(control)).toEqual([...LEGACY_OWNERS, controlPath].sort())
 	})

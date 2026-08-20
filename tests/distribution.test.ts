@@ -128,11 +128,14 @@ function findUnexpectedPackedPaths(
 it('installs the packed artifact and drives its faces, declarations, and resolution modes', () => {
 	const root = fileURLToPath(new URL('../', import.meta.url))
 	const scratch = mkdtempSync(join(tmpdir(), 'orkestrel-mcp-distribution-'))
-	const controlDirectory = mkdtempSync(join(root, 'tmp', 'mcp-distribution-control-'))
-	const controlFile = join(controlDirectory, 'unexpected.txt')
-	const controlPath = relative(root, controlFile).replaceAll('\\', '/')
+	let controlDirectory: string | undefined
 
 	try {
+		controlDirectory = mkdtempSync(join(root, 'mcp-distribution-control-'))
+		const controlFile = join(controlDirectory, 'unexpected.txt')
+		const controlPath = relative(root, controlFile).replaceAll('\\', '/')
+		// The control lives at the package root, outside the manifest `files` allowlist, so its
+		// absence from the tarball proves the allowlist without a rival gitignore explanation.
 		writeFileSync(controlFile, 'packed inventory negative control\n')
 		const sourceManifest: unknown = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 		const allowlist = readManifestFiles(sourceManifest)
@@ -395,6 +398,8 @@ it('installs the packed artifact and drives its faces, declarations, and resolut
 		expect(diagnosed).toHaveLength(modes.filter((mode) => !mode.supported).length)
 	} finally {
 		rmSync(scratch, { recursive: true, force: true })
-		rmSync(controlDirectory, { recursive: true, force: true })
+		if (controlDirectory !== undefined) {
+			rmSync(controlDirectory, { recursive: true, force: true })
+		}
 	}
 })

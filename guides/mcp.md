@@ -1593,14 +1593,14 @@ fails for any reason other than an unsupported version. Removing either one chan
 `MCPServer` will answer. It is a design question and not a defect: no clause is unsatisfied, both
 paths are tested, and no unit is scheduled against them.
 
-That module list is a membership rule rather than a reassurance, so it is executed instead
-of asserted: [the package guide suite](../tests/guides.test.ts) computes the legacy-owning
-module set from the tree and requires it to EQUAL that list **in both directions**, so an added
-participant and a stale entry fail the same way. The same suite requires `MCPServer.ts` to carry
-no `MCPLegacy` or `legacy` spelling. What these structural checks cannot reach is legacy
-participation that never spells the entity name — a handler table, a computed concatenation,
-or a branch on a version VALUE. [The dispatch tests](../tests/src/core/MCPLegacy.test.ts) guard
-that class.
+That module list is a membership rule rather than a reassurance. The executed list lives in
+[the package guide suite](../tests/guides.test.ts), which computes the legacy-owning module set
+from the tree and requires it to equal its list in both directions. An added participant and a
+stale suite entry therefore fail the same way; update this guide's descriptive list and the
+suite's executed list together. The same suite requires `MCPServer.ts` to carry no `MCPLegacy`
+or `legacy` spelling. What these structural checks cannot reach is legacy participation that does
+not bind either entity name — a handler table, a computed concatenation, or a branch on a version
+value. [The dispatch tests](../tests/src/core/MCPLegacy.test.ts) guard that class.
 
 **What a legacy client sees differently than it did before this collapse**, because
 legacy now inherits the modern engine's validation instead of running beside it:
@@ -2225,7 +2225,8 @@ they belong to the caller.
 The server preserves the caller's flowing or non-flowing state and every caller-owned listener.
 An unread stream starts with `readableFlowing === null`; Node exposes no public operation that
 restores that untouched state after `data` consumption, so closing this transport leaves that
-case non-flowing with `readableFlowing === false`.
+case non-flowing with `readableFlowing === false`. Attaching a later `data` listener does not
+resume that stream; the caller must call `resume()` before the listener receives data.
 
 `createStdioClientTransport` is the egress mirror — it builds one supervised
 `@orkestrel/process` `Process` over `options.command` / `options.args` /
@@ -2242,9 +2243,10 @@ decode through `dispatchLines` (decode + emit each complete line as `message` or
 `error`) — documented under [HTTP transport § Helpers](#helpers-1) since it
 lives in the shared `helpers.ts`.
 
-Closing the client releases the transport's own line pump before it awaits the supervisor's
-bounded process teardown. A descendant that inherited the child's stdout pipe therefore cannot
-keep the transport close pending after the supervisor's teardown has resolved.
+Closing the client releases the transport's own line pump before the transport awaits the
+supervisor's bounded process teardown. A descendant that inherited the child's stdout pipe
+therefore cannot keep the transport's `close` call pending after the supervisor's teardown has
+resolved.
 
 ```ts
 import { createMCPClient, createMCPServer } from '@orkestrel/mcp'
@@ -2843,7 +2845,8 @@ supervisor down without waiting for a descendant-held stdout pipe.
 caller's flowing or non-flowing state and listeners, and does NOT destroy or end
 the injected streams. An initially unread stream settles at non-flowing because
 Node exposes no public operation that restores `readableFlowing === null` after
-consumption. The transport
+consumption. A later `data` listener does not resume that stream; the caller must
+call `resume()` before the listener receives data. The transport
 `createDuplexClientTransport` adapts forwards its `close` to the wrapped
 `MCPTransportInterface` and holds nothing of its own. That range is the shape of
 the whole rule: a transport releases what IT acquired, never what it was
@@ -4267,7 +4270,9 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     process exit instead of holding `process.stdin` open. It never destroys or
     ends the injected streams; they belong to the caller. An initially unread
     stream closes at `readableFlowing === false`, not `null`, because Node exposes
-    no public operation that restores the untouched state after consumption.
+    no public operation that restores the untouched state after consumption. A
+    later `data` listener does not resume that stream; the caller must call
+    `resume()` before the listener receives data.
     `createStdioClientTransport(options)` builds one supervised
     `@orkestrel/process` `Process` over `options.command` and `options.args`.
     That supervisor spawns with `stdio: ['pipe', 'pipe', 'pipe']`, so the
@@ -4284,10 +4289,10 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     `readline`-framed `lines` iterable and every complete line is decoded onto
     `message` through the shared `dispatchLines` helper (a malformed line emits
     `error`); the child's exit bridges to the transport's `close`. `close()`
-    terminates the child through the supervisor's bounded `SIGTERM` → grace →
-    `SIGKILL` group kill, releases the transport's own line pump, tears the
-    supervisor down without waiting for a descendant-held stdout pipe, and fires
-    `close` once. The stdio transports' `session` is always
+    releases the transport's own line pump, then runs the supervisor's bounded
+    `SIGTERM` → grace → `SIGKILL` group kill and teardown without waiting for a
+    descendant-held stdout pipe, and fires `close` once. The stdio transports'
+    `session` is always
     `undefined` (the process pipe carries no session concept).
 21. **The browser transport carries the SAME `MCPClientTransportInterface`
     contract over native host APIs (`src/browser`).**
@@ -4303,7 +4308,9 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     DROPPED, never thrown); `close()` closes the socket and fires `close`
     exactly once — a server-initiated close (the native `close` event) fires
     the SAME `close` exactly once too, guarded so the transport-initiated and
-    server-initiated closes never double-emit.
+    server-initiated closes never double-emit. Closing before the socket opens
+    resolves the pending `start()` rather than leaving it pending, matching the
+    Node face.
     `createHTTPClientTransport({ url, headers?, fetch?, timeout? })` returns a
     `MCPClientTransportInterface` whose `send` POSTs to `url` over the injectable
     `fetch` (default `globalThis.fetch`) with the SAME `content-type` /
