@@ -1,7 +1,0 @@
-48ded67 Pause the flow this transport started, so the process can exit
-ec65d53 Release what the stdio transport acquired, and call the unbind it discarded
-95ecfd5 Brief M1: a closed stdio transport must let the process exit
---- status ---
-?? .orkestrel/mcp/mcp-audit-brief.md
-?? .orkestrel/mcp/mcp-audit-diff.txt
-?? .orkestrel/mcp/mcp-audit-log.txt
