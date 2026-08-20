@@ -17,7 +17,7 @@ import { dispatchLines, extractLines } from '../helpers.js'
  * import('./WebSocketServerTransport.js').WebSocketServerTransport}.
  *
  * @remarks
- * - **Reuses `MCPClientTransportInterface` (§21).** The same generic carrier the HTTP
+ * - **Reuses `MCPClientTransportInterface`.** The same generic carrier the HTTP
  *   and WebSocket server transports implement — `emitter` (`message` / `close` /
  *   `error`), `start`, `send`, `close`. `session` is `undefined` (the stateless v1).
  * - **Inbound (`message`).** `start()` subscribes to `input`'s `data` event; each
@@ -25,7 +25,7 @@ import { dispatchLines, extractLines } from '../helpers.js'
  *   (buffering a partial trailing line across reads), and every complete line is
  *   decoded and delivered via the shared {@link dispatchLines} helper — a
  *   well-formed {@link JSONRPCMessage} re-emits on `message`, a malformed line
- *   emits `error` (§14, never throws). `input`'s `close` bridges to this
+ *   emits `error` (never throws). `input`'s `close` bridges to this
  *   transport's `close`.
  * - **Outbound (`send`).** `send(message)` writes one newline-terminated
  *   `JSON.stringify`d line to `output`.
@@ -36,7 +36,7 @@ import { dispatchLines, extractLines } from '../helpers.js'
  *   caller's own flow is never stopped underneath it. The injected streams are owned by the
  *   caller (typically `process.stdin`/`process.stdout`), so the transport never destroys,
  *   ends, or blanket-clears them.
- * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
+ * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
  *   fault), distinct from the emitter's own listener-error channel.
  */
@@ -125,7 +125,7 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 		this.#input.removeListener('data', this.#data)
 		this.#input.removeListener('close', this.#ending)
 		this.#input.removeListener('error', this.#failure)
-		// Two different questions, asked at the two moments where each is answerable: the reading
+		// Different questions, asked at the moments where each is answerable: the reading
 		// taken at `start` says whether the caller was already reading, and the listener count
 		// taken HERE — after this transport's own `data` handler is gone — says whether a reader
 		// is left. Pause only when neither is true, so a process holding `process.stdin` can exit

@@ -20,7 +20,7 @@ import * as ts from 'typescript'
 // earlier release installed under `node_modules`, so every assertion below is rooted in the
 // temporary consumer instead.
 //
-// This package publishes THREE faces where its siblings publish two, and the third is deliberately
+// This package publishes a `./browser` face its siblings do not, and it is deliberately
 // asymmetric: `./browser` declares an `import` condition and no `require` one, because a browser
 // build has no CommonJS consumer to serve. That asymmetry is asserted rather than skipped — a
 // `require` of the browser face must be REFUSED, and a face that quietly grew a `require` target
@@ -84,7 +84,7 @@ function readNameList(value: unknown, label: string): readonly string[] {
 	return value
 }
 
-it('installs the packed artifact and drives its three faces, declarations, and resolution modes', () => {
+it('installs the packed artifact and drives its faces, declarations, and resolution modes', () => {
 	const root = fileURLToPath(new URL('../', import.meta.url))
 	const scratch = mkdtempSync(join(tmpdir(), 'orkestrel-mcp-distribution-'))
 
@@ -193,7 +193,7 @@ it('installs the packed artifact and drives its three faces, declarations, and r
 			declared.set(face.name, names)
 		}
 		// The surface each face published on 2026-08-20, pinned so a silent shrink is visible. A
-		// deliberate export change moves these three numbers in the same commit.
+		// deliberate export change moves these numbers in the same commit.
 		expect(declared.get('core')).toHaveLength(140)
 		expect(declared.get('browser')).toHaveLength(19)
 		expect(declared.get('server')).toHaveLength(44)
@@ -262,7 +262,7 @@ it('installs the packed artifact and drives its three faces, declarations, and r
 		}
 
 		// The `moduleResolution` floor `README.md` states, compiled rather than asserted as a
-		// sentence. Each mode builds a program over one consumer file importing all three faces,
+		// sentence. Each mode builds a program over one consumer file importing every face,
 		// with library checking on so the package's own declarations are read instead of skipped.
 		const consumerSource = join(consumer, 'consumer.ts')
 		writeFileSync(

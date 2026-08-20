@@ -13,7 +13,7 @@ import { createJSONRPCRequest } from '../../setup.js'
 // STRICTLY AFTER `afterId` in order (and NOTHING for an unknown / evicted cursor — the spec-sane
 // resume); capacity evicts the OLDEST past the bound; and the OPTIONAL per-event TTL evicts a
 // stale entry lazily. The time-reading methods accept an explicit `now` (default `Date.now()`),
-// so the TTL path is driven with an elapsed clock deterministically (AGENTS §16). The over-the-
+// so the TTL path is driven with an elapsed clock deterministically. The over-the-
 // wire mint / validate / push / replay flow is proven through a real server in middlewares.test.ts.
 
 // A distinct JSON-RPC message per ordinal, so a replayed sequence is identifiable by content.
@@ -21,7 +21,7 @@ function message(n: number): JSONRPCMessage {
 	return createJSONRPCRequest({ method: 'notifications/message', id: n })
 }
 
-// A REAL recording StreamInterface (single-use to this file, so local — AGENTS §16.1): its
+// A REAL recording StreamInterface (single-use to this file, so local): its
 // `write` records each SSEMessage into an unbounded sink, so it reports available capacity;
 // behaviour — a genuine sink standing in for an open GET-SSE stream so `push`'s fan-out is
 // `drain` resolves immediately, `end` closes the sink, and callers read the live `writes` getter.

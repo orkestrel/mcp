@@ -8,12 +8,12 @@ import { DEFAULT_MCP_SERVER_NAME, DEFAULT_MCP_SERVER_VERSION } from './constants
 import { createScopeTransport } from './factories.js'
 import { MessagePortTransport } from './transports/MessagePortTransport.js'
 
-// The MCP browser-transport helpers (AGENTS §4.3 module-scope names — no entity
-// context). `decodeEvent` and `readEventStream` are the browser face's copies of the
-// Node face's SAME-NAMED helpers (`src/server/helpers.ts`) — peer environment faces
-// (AGENTS §2) share no import, so the CLIENT-side SSE decode step (reused by
+// The MCP browser-transport helpers — module-scope names, so they carry no entity
+// context. `decodeEvent` and `readEventStream` are the browser face's copies of the
+// Node face's SAME-NAMED helpers (`src/server/helpers.ts`) — peer environment faces share
+// no import, so the CLIENT-side SSE decode step (reused by
 // `transports/HTTPClientTransport.ts`) is declared once here too. Both are total and
-// narrow at the boundary, never `as` (AGENTS §14): a malformed / non-message SSE
+// narrow at the boundary, never `as`: a malformed / non-message SSE
 // `data:` event is dropped, never thrown.
 //
 // `serveMCPScope` / `serveMCP` are the worker bootstrap. They are reusable exported
@@ -25,7 +25,7 @@ import { MessagePortTransport } from './transports/MessagePortTransport.js'
 // stays in `factories.ts`.
 //
 // `createScopeMessageListener` is the bootstrap's per-event dispatcher, extracted
-// (AGENTS §5 — no function is declared inside another function body) so
+// (no function is declared inside another function body) so
 // `serveMCPScope` merely CALLS it and stores the RETURNED closure (an ordinary
 // value assignment, not an inline function literal) for `addEventListener` /
 // `removeEventListener` to share the same reference.
@@ -37,7 +37,7 @@ import { MessagePortTransport } from './transports/MessagePortTransport.js'
  * @remarks
  * `JSON.parse`s the `data` (the server serializes the JSON-RPC envelope as the
  * event's `data`) inside a try/catch and narrows the parsed value with
- * `parseJSONRPCMessage`. Total (§14): malformed JSON or a non-message value yields
+ * `parseJSONRPCMessage`. Total: malformed JSON or a non-message value yields
  * `undefined`, never throws.
  *
  * @param data - One SSE event's `data` payload
@@ -61,7 +61,7 @@ export function decodeEvent(data: string): JSONRPCMessage | undefined {
  * `@orkestrel/sse`'s {@link SSEParserInterface} (handling a partial line / in-progress
  * event split across reads), then narrows each dispatched event's `data` to a
  * {@link JSONRPCMessage} via {@link decodeEvent} (so a non-message / non-JSON `data:`
- * event is DROPPED, never thrown — total, §14). A `null` body (no stream) yields no
+ * event is DROPPED, never thrown — total). A `null` body (no stream) yields no
  * messages; {@link import('./transports/HTTPClientTransport.js').HTTPClientTransport}
  * reads a request/response SSE reply (the server sends one `data:` event then ends),
  * so this drains to completion.
@@ -116,7 +116,7 @@ export async function readEventStream(response: Response): Promise<readonly JSON
  * (the unified design's deliberate cross-case, needing no upfront shape flag). An event
  * with NO ports and a STRING `data` is pushed onto `scopeTransport.deliver` (the
  * implicit, already-bound scope channel); any other event (no ports, non-string data)
- * is silently dropped — total (§14), never throws.
+ * is silently dropped — total, never throws.
  *
  * @param server - The `MCPServerInterface` every spawned/implicit binding dispatches over
  * @param scopeTransport - The implicit scope channel (already `bindServer`-bound) portless events deliver onto

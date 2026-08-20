@@ -7,7 +7,7 @@ import { createJSONRPCRequest } from '../../../setup.js'
 
 // src/server/transports/StdioServerTransport.ts — the stdio SERVER bridge, driven END TO END
 // over a REAL pair of injectable `node:stream` PassThroughs standing in for
-// `process.stdin`/`process.stdout` (AGENTS §16 — real stream I/O, no mock). The test plays the
+// `process.stdin`/`process.stdout` (real stream I/O, no mock). The test plays the
 // PEER: it writes newline-delimited JSON-RPC lines to the `input` stream (the transport reads)
 // and reads the lines the transport writes to `output`. Proves: a complete input line becomes
 // the parsed `message` event; a partial line buffers across chunks; a malformed line surfaces
@@ -253,7 +253,7 @@ describe('StdioServerTransport — lifecycle', () => {
 		await transport.close()
 	})
 
-	it('isolates a throwing message listener — the bridge survives (§13)', async () => {
+	it('isolates a throwing message listener — the bridge survives', async () => {
 		const input = new PassThrough()
 		const output = new PassThrough()
 		const transport = new StdioServerTransport(input, output)
@@ -274,7 +274,7 @@ describe('StdioServerTransport — lifecycle', () => {
 	})
 })
 
-// The four flow-ownership cases the release rule has to separate. Ownership is read at
+// The flow-ownership cases the release rule has to separate. Ownership is read at
 // `start`, before anything is attached (`readableFlowing !== true` means the caller was not
 // already reading), and spent at `close`, after this transport's own `data` listener is gone
 // (a listener still there means a caller reader remains). Each case below fixes one row: a

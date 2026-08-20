@@ -83,22 +83,22 @@ import {
 } from '../../setup.js'
 
 // MCPServer is the transport-agnostic JSON-RPC 2.0 dispatch core that exposes a live
-// ToolManager over MCP (AGENTS §16 — a REAL ToolManager with real Tools, no mocks; no
+// ToolManager over MCP (a REAL ToolManager with real Tools, no mocks; no
 // HTTP, no live model). Covers dispatch + handle for initialize (version negotiation,
 // capabilities, serverInfo), ping, tools/list (parameters → inputSchema), tools/call
 // (value round-trip, the isError tool mapping, missing-name → -32602), notifications
 // (no id → no response; notifications/initialized), unknown method → -32601, handle's
-// malformed-JSON → -32700 and non-request → -32600, plus the §13 request event +
-// observer-throw safety — and the modern METHOD SEAM: the four built-ins registered on
+// malformed-JSON → -32700 and non-request → -32600, plus the request event +
+// observer-throw safety — and the modern METHOD SEAM: the built-ins registered on
 // the same registry every dispatch resolves from, per-request options reaching a handler,
 // and the held-open stream arm crossing both the typed and the string boundary.
 
 const MCP_EVENTS = ['request'] as const
 
-// The one continuation fixture: a real integrity port over an in-process map, plus the two
+// The one continuation fixture: a real integrity port over an in-process map, plus the
 // observations an MRTR proof needs from it — the exact canonical payloads it was asked to
 // seal, and a settable stall so a test can make a provider await outlive a short TTL without
-// replacing the host clock (AGENTS §16).
+// replacing the host clock.
 class MemoryContinuation implements MCPContinuationInterface {
 	readonly #values = new Map<string, string>()
 	readonly #sealed: string[] = []
@@ -231,7 +231,7 @@ function createElicitation(): MCPElicitation {
 	}
 }
 
-// A REAL held-open modern method (AGENTS §16 — a genuine async generator, not a fake):
+// A REAL held-open modern method (a genuine async generator, not a fake):
 // two progress notifications, then the terminating response as the generator's `return`.
 async function* progress(id: JSONRPCId): MCPStream {
 	yield { jsonrpc: '2.0', method: 'notifications/progress', params: { step: 1 } }
@@ -342,7 +342,7 @@ function responseOf(answer: JSONRPCResponse | MCPStream | undefined): JSONRPCRes
 }
 
 // Narrow a dispatch response to its `result` as a record (the MCP result payloads are
-// always records) — a §14 guard standing in for an assertion, no `as`.
+// always records) — a guard standing in for an assertion, no `as`.
 function resultOf(response: JSONRPCResponse | undefined): Record<string, unknown> {
 	if (response === undefined) throw new Error('expected a response, got undefined')
 	const result = response.result
@@ -655,8 +655,8 @@ describe('MCPServer — published limits', () => {
 })
 
 // The subscription CLOSURE claim, pinned as a conformance claim rather than left implied.
-// Two pages of the dated revision disagree about how a server ends a `subscriptions/listen`
-// exchange: the cancellation page says it MUST send `notifications/cancelled` naming the
+// The cancellation page and the subscriptions page of the dated revision disagree about how a
+// server ends a `subscriptions/listen` exchange: the cancellation page says it MUST send `notifications/cancelled` naming the
 // listen request, while the subscriptions page it cites as its authority says the server
 // SHOULD send the empty `subscriptions/listen` RESULT and attributes the notification to the
 // client alone. The schema carries no subscription-specific variant, so it corroborates
@@ -714,8 +714,8 @@ describe('MCPServer — identity', () => {
 	})
 })
 
-describe('MCPServer — dual-era dispatch', () => {
-	it('keeps the four legacy method responses byte-identical and unstamped', async () => {
+describe('MCPServer — modern-and-legacy dispatch', () => {
+	it('keeps the legacy method responses byte-identical and unstamped', async () => {
 		const mcp = server()
 
 		expect(await mcp.handle('{"jsonrpc":"2.0","method":"initialize","id":1}')).toBe(
@@ -2228,7 +2228,7 @@ describe('MCPServer — the modern method seam', () => {
 			_meta: { [MCP_META_SERVER]: { name: 'test-server', version: '1.2.3' } },
 		})
 	})
-	it('registers the five built-in modern methods on the registry it dispatches from', () => {
+	it('registers the built-in modern methods on the registry it dispatches from', () => {
 		const mcp = server()
 
 		expect(mcp.methods.method('ping')).toBeTypeOf('function')
@@ -2313,7 +2313,7 @@ describe('MCPServer — the modern method seam', () => {
 		expect(seen).toEqual([])
 	})
 
-	// Row 27: a dispatched method never sees an absent signal. A caller with none to offer
+	// A dispatched method never sees an absent signal. A caller with none to offer
 	// still leaves the handler holding a real, never-aborting one, so no handler downstream
 	// has to case on absence.
 	it('resolves a signal for every handler even when the caller supplied none', async () => {
@@ -2448,7 +2448,7 @@ describe('MCPServer — the modern method seam', () => {
 		).toBeUndefined()
 	})
 
-	// Row 34. The seam now says a registered method ANSWERS, and the registry is open — so the
+	// The seam now says a registered method ANSWERS, and the registry is open — so the
 	// one consumer this server cannot assume was typechecked is the one that must not be able
 	// to break it. Before this containment, `dispatch(request)` resolved `undefined` against an
 	// overload promising a response, and a transport with nothing to write held the peer until
@@ -2928,7 +2928,7 @@ describe('MCPServer — handle (string boundary)', () => {
 		)
 	})
 
-	// Row 9: an unreadable id is OMITTED from the envelope, never sent as `null`.
+	// An unreadable id is OMITTED from the envelope, never sent as `null`.
 	it('returns a -32700 parse-error response that omits the id it could not read', async () => {
 		const reply = await server().handle('{ not json )')
 
@@ -2966,7 +2966,7 @@ describe('MCPServer — handle (string boundary)', () => {
 	})
 })
 
-describe('MCPServer — request event (§13)', () => {
+describe('MCPServer — request event', () => {
 	it('fires request with the method and id at the top of dispatch', async () => {
 		const mcp = server()
 		const events = recordEmitterEvents(mcp.emitter, MCP_EVENTS)
@@ -3033,7 +3033,7 @@ describe('MCPServer — request event (§13)', () => {
 // W02-A — egress. The modern wire retires `-32000`: every internal fault a modern request
 // can provoke answers `-32603` and reports its caught value on the server's `error` event,
 // while the legacy branch keeps `-32000` untouched. The sweeps below are written against
-// the INVARIANT rather than against seven line numbers, because a migration proved one
+// the INVARIANT rather than against line numbers, because a migration proved one
 // site at a time is a migration that has not been proved.
 
 // One modern fault scenario: the server that produces it and the request that provokes it.
@@ -3133,8 +3133,8 @@ async function* parkingSource(): AsyncGenerator<JSONRPCNotification> {
 // Membership was measured by line-scoped mutation rather than assumed: each modern
 // `-32603` emission was flipped to `-32000` on its own, and every one of them fails a
 // scenario below — except the type-narrowing floor in `#normalize`, which is unreachable at
-// runtime and says so where it lives. A sweep that visits nine of ten sites and cannot name
-// the tenth is a sweep that does not know what it covers.
+// runtime and says so where it lives. A sweep that visits most sites and cannot name the
+// one it missed is a sweep that does not know what it covers.
 function modernFaults(): readonly FaultScenario[] {
 	const listen: JSONRPCRequest = createJSONRPCRequest({
 		method: 'subscriptions/listen',
@@ -3687,7 +3687,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 		admitted.stop()
 	})
 
-	// The negative control the two proofs above cannot do without: the same instrument aimed
+	// The negative control the proofs above cannot do without: the same instrument aimed
 	// at a server whose capacity is genuinely spent must REFUSE, or a passing admission proves
 	// only that the limit was never enforced.
 	it('still refuses a second subscription while the first is genuinely live', async () => {
@@ -3775,7 +3775,7 @@ describe('MCPServer — W02-A: what the egress boundary keeps doing', () => {
 		expect(handled).toEqual(methods.map(() => undefined))
 	})
 
-	// Row 14's vectors under the migrated codes: a provider's output is reached through
+	// Those vectors under the migrated codes: a provider's output is reached through
 	// property access that can be revoked or can answer differently each time, and neither
 	// escapes the boundary as a throw or as a second reading.
 	it('contains a revoked and a drifting executor result as one detail-free -32603', async () => {
@@ -3811,7 +3811,7 @@ describe('MCPServer — W02-A: what the egress boundary keeps doing', () => {
 		}
 	})
 
-	// Row 44 at the seam a consumer owns: a REGISTERED handler's own generator is controlled
+	// At the seam a consumer owns: a REGISTERED handler's own generator is controlled
 	// too, so a producer that never settles cannot hold the answer open forever.
 	it('controls a consumer’s own generator, so stopping it settles against a parked producer', async () => {
 		const mcp = server()
@@ -3832,7 +3832,7 @@ describe('MCPServer — W02-A: what the egress boundary keeps doing', () => {
 // Ordering is proved by NEGATIVE CALL COUNTERS, never by response codes. A refusal answers
 // the same code whether the provider ran before it or after it, so a code assertion cannot
 // separate "rejected after calling the principal resolver" from "rejected before calling
-// it" — only a count can, and that separation is the whole claim of rows 22, 25, 27 and 39.
+// it" — only a count can, and that separation is the whole claim of those controls.
 
 // The modern metadata of a client that DOES declare form elicitation, so the capability gate
 // is open and the ordering proofs measure something other than the gate.
@@ -3854,7 +3854,7 @@ const APPROVAL_SCHEMA: MCPElicitSchema = {
 
 // One MRTR server wired for observation: every provider call keeps what it saw, the
 // continuation port keeps every payload it was asked to protect, and the tool records the
-// arguments it actually ran with. Real providers and a real ToolManager throughout (§16).
+// arguments it actually ran with. Real providers and a real ToolManager throughout.
 interface InputProbeInterface {
 	readonly server: MCPServerInterface
 	readonly continuation: MemoryContinuation
@@ -3929,7 +3929,7 @@ function formCall(id: JSONRPCId, params: Readonly<Record<string, unknown>> = {})
 	})
 }
 
-// Narrow one produced round to the two values a client must echo back, plus what was issued.
+// Narrow one produced round to the values a client must echo back, plus what was issued.
 function roundOf(response: JSONRPCResponse | undefined): {
 	readonly key: string
 	readonly requestState: string
@@ -3957,7 +3957,7 @@ function sealedState(probe: InputProbeInterface, index: number): MCPInputState {
 }
 
 describe('MCPServer — W02-B: admission and the owned argument record', () => {
-	// Row 3, the sleeper. Two argument-less calls share ONE frozen record, so a tool that
+	// The sleeper: two argument-less calls share ONE frozen record, so a tool that
 	// writes to its own `arguments` now fails — wire-visible as a tool failure with no
 	// protocol change to point at.
 	it('shares one frozen empty argument record, and a tool writing to it fails', async () => {
@@ -3999,7 +3999,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 		expect(resultOf(mutated)['isError']).toBe(true)
 	})
 
-	// Rows 4 and 36: ONE argument reference reaches the digest, the selector, the canonical
+	// ONE argument reference reaches the digest, the selector, the canonical
 	// call, and the executor. Identity is the claim — a resnapshot anywhere would hand the
 	// selector a different object from the one the tool runs with.
 	it('carries one argument reference through digest, selector, call, and execution', async () => {
@@ -4030,7 +4030,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 		expect(Object.isFrozen(calls[0])).toBe(true)
 	})
 
-	// Row 1: the clone is taken before any observer or await, so a caller mutating its own
+	// The clone is taken before any observer or await, so a caller mutating its own
 	// request object while a provider is parked changes nothing the server later reads.
 	it('owns the dispatched request before any observer, so deferred mutation changes nothing', async () => {
 		const observed: Array<readonly [string, JSONRPCId | undefined, string]> = []
@@ -4068,7 +4068,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 		expect(resultOf(answer)['structuredContent']).toEqual({ value: 'original' })
 	})
 
-	// Row 6, both directions: the `request` event fires ahead of the `_meta` bound check, so
+	// Both directions: the `request` event fires ahead of the `_meta` bound check, so
 	// an observer sees a call the bound check is about to refuse exactly as it sees one that
 	// passes. Only SCALARS escape — method, id, era, nothing read out of the request graph.
 	it('fires request before the _meta bound check, in both directions, carrying only scalars', async () => {
@@ -4103,7 +4103,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 		}
 	})
 
-	// Row 7: `caller` is consumer-asserted and never verified, so it is carried by IDENTITY —
+	// `caller` is consumer-asserted and never verified, so it is carried by IDENTITY —
 	// a revoked proxy reaches the handler intact precisely because nothing read it.
 	it('carries a revoked-proxy caller to a handler by identity', async () => {
 		const revocable = Proxy.revocable<Record<string, unknown>>({ subject: 'agent' }, {})
@@ -4121,7 +4121,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 		expect(seen[0]).toBe(revocable.proxy)
 	})
 
-	// Row 8: `__proto__`, `constructor`, and `prototype` are legal own JSON keys. Bounding
+	// `__proto__`, `constructor`, and `prototype` are legal own JSON keys. Bounding
 	// first and owning second makes them inert DATA rather than a pollution vector — at both
 	// doors, because `dispatch` and `handle` are different code paths.
 	it('treats hostile own keys as inert data at both doors', async () => {
@@ -4152,7 +4152,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 })
 
 describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
-	// Row 22. The selector may run before the capability is known to be needed — only a
+	// The selector may run before the capability is known to be needed — only a
 	// selector that ASKS for input makes the client's form capability relevant. Once it has
 	// asked, the capability is checked BEFORE the principal resolver, and the counter is the
 	// proof: a `-32021` says nothing about whether the resolver already ran.
@@ -4178,7 +4178,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(probe.continuation.sealed).toHaveLength(0)
 	})
 
-	// Row 23: the selector's output is owned and frozen the moment it is produced, so a
+	// The selector's output is owned and frozen the moment it is produced, so a
 	// provider that mutates what it returned changes neither what the client is asked nor
 	// what the sealed state binds.
 	it('owns the selector’s elicitation and schema immediately', async () => {
@@ -4225,7 +4225,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(state?.state).toEqual({ round: 1 })
 	})
 
-	// Rows 24 and 31 together, because neither is worth anything alone: the state carries the
+	// The carried state and its verification together, because neither is worth anything alone: the state carries the
 	// EXACT issued schema, and the accepted response is checked against THAT schema rather
 	// than against the shape of a response in general.
 	it('binds the issued schema into protected state and enforces it on the accepted response', async () => {
@@ -4275,7 +4275,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(probe.executions).toHaveLength(1)
 	})
 
-	// Row 25: on a RETRY the capability gate stands ahead of BOTH providers, so a client that
+	// On a RETRY the capability gate stands ahead of BOTH providers, so a client that
 	// never declared form elicitation costs neither a continuation open nor a principal call.
 	it('checks the form capability before the continuation port and the principal resolver', async () => {
 		const probe = inputProbe()
@@ -4304,7 +4304,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(probe.principals).toHaveLength(principals)
 	})
 
-	// Row 26. Two different failures at the continuation port, two different answers: a
+	// Distinct failures at the continuation port, distinct answers: a
 	// carrier the port cannot recover is the CLIENT's invalid state (`-32602`); a port that
 	// opens successfully onto a payload this server never authored is the PROVIDER's contract
 	// failure (`-32603`, detail-free, reported once on `error`).
@@ -4338,7 +4338,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(faults.error.count).toBe(1)
 	})
 
-	// Row 27: every structural binding is verified before the principal resolver runs. The
+	// Every structural binding is verified before the principal resolver runs. The
 	// counter is the claim — a structurally invalid retry answers `-32602` either way.
 	it('verifies every structural binding before resolving the principal', async () => {
 		const probe = inputProbe()
@@ -4377,7 +4377,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(probe.executions).toHaveLength(0)
 	})
 
-	// Rows 28 and 33 over three rounds. The ORIGINAL id stays bound while key, expiry, and
+	// Over three rounds. The ORIGINAL id stays bound while key, expiry, and
 	// schema are re-minted each round — two rounds cannot tell these apart, because round 2
 	// binds round 1's id under either rule. Round 3 is where sealing the CURRENT id starts
 	// binding round 2's id instead of round 1's.
@@ -4422,7 +4422,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(probe.executions).toHaveLength(1)
 	})
 
-	// Row 30: extra response keys are IGNORED — the server assigned exactly one key and cares
+	// Extra response keys are IGNORED — the server assigned exactly one key and cares
 	// about exactly that one. Omitting the issued key remains a refusal.
 	it('ignores extra inputResponses keys and still requires the issued one', async () => {
 		const probe = inputProbe()
@@ -4455,7 +4455,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(probe.executions).toHaveLength(1)
 	})
 
-	// Rows 32 and 34: expiry is rechecked after the selector's await — the LAST provider await
+	// Expiry is rechecked after the selector's await — the LAST provider await
 	// before execution — so a continuation that lapsed while the selector was parked never
 	// reaches the tool.
 	it('rechecks expiry after the selector’s await, so an expired continuation never executes', async () => {
@@ -4477,7 +4477,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(probe.executions).toHaveLength(0)
 	})
 
-	// Row 32's other half: a further round reseals, and the PRIOR window is rechecked after
+	// The other half of that claim: a further round reseals, and the PRIOR window is rechecked after
 	// that seal — a port that took longer than the window it was extending must not hand back
 	// a round built on a continuation that has already lapsed.
 	it('rechecks the prior expiry after the seal await', async () => {
@@ -4538,7 +4538,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		)
 	})
 
-	// Row 37, the NEGATIVE CONTROL for a rule this package deliberately does NOT have. There
+	// The NEGATIVE CONTROL for a rule this package deliberately does NOT have. There
 	// is no consume-once, no session binding, no timer, and no replay store: the same
 	// protected state answers twice under two fresh ids. If single use is ever introduced —
 	// as an accident or as a design change — this is the row that fires.
@@ -4569,7 +4569,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(probe.executions).toHaveLength(2)
 	})
 
-	// Row 35: a throwing selector or principal resolver is contained — one detail-free
+	// A throwing selector or principal resolver is contained — one detail-free
 	// `-32603` on the wire, the caught value on `error`, exactly once.
 	it('contains a throwing selector and principal as one detail-free -32603 reported once', async () => {
 		for (const failing of ['elicit', 'principal'] as const) {
@@ -4599,7 +4599,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		}
 	})
 
-	// Row 40: `input_required` is produced by the built-in `tools/call` and by nothing else,
+	// `input_required` is produced by the built-in `tools/call` and by nothing else,
 	// even under an input policy that would ask on every call it reached.
 	it('produces input_required from the built-in tools/call alone', async () => {
 		const probe = inputProbe()
@@ -4616,9 +4616,9 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 })
 
 describe('MCPServer — W02-B: custom carriers and the resolved-option seam', () => {
-	// Rows 38 and 39. The blanket non-tool rejection is gone, so a REGISTERED `prompts/get`
+	// The blanket non-tool rejection is gone, so a REGISTERED `prompts/get`
 	// receives its continuation carrier as an owned frozen record and owns its own
-	// continuation semantics. Row 39's negative half is a call COUNTER, not a response code:
+	// continuation semantics. The negative half is a call COUNTER, not a response code:
 	// a carrier core refuses at the door never reaches the handler at all.
 	it('delivers an owned carrier to a registered prompts/get and refuses malformed ones first', async () => {
 		const seen: JSONRPCInvocation[] = []
@@ -4699,12 +4699,12 @@ describe('MCPServer — W02-B: custom carriers and the resolved-option seam', ()
 		expect(seen).toHaveLength(1)
 	})
 
-	// Row 50, and two claims, deliberately kept apart because one instrument cannot carry both.
+	// Separate claims, deliberately kept apart because one instrument cannot carry them together.
 	// The arity check guards the PARAMETER at the registration seam: every member declares the
-	// resolved options, so the registry has one shape rather than four that happen to agree.
+	// resolved options, so the registry has one shape rather than several that happen to agree.
 	// It says nothing about what any member then does with the value — substituting a different
 	// options object survives it — which is why the resolved VALUE is proved separately, at the
-	// two built-ins that own provider hooks, caller identity and signal together.
+	// built-ins that own provider hooks, caller identity and signal together.
 	it('resolves options into every built-in registration', async () => {
 		const listened: MCPMethodOptions[] = []
 		const probe = inputProbe()
@@ -4748,7 +4748,7 @@ describe('MCPServer — W02-B: custom carriers and the resolved-option seam', ()
 	})
 })
 
-// ── W03-A: the draft Tasks extension ────────────────────────────────────────
+// ── W03-A: the draft Tasks extension ─────────────────────────────────────────
 //
 // The extension puts the whole task lifecycle on the CONSUMER's side of a port, so what
 // is under test here is a decision and an answer: does this server defer, and does it
@@ -4808,7 +4808,7 @@ function taskServer(
 	})
 }
 
-// A manager that answers one fixed creation and nothing else — the inert stub for the two
+// A manager that answers one fixed creation and nothing else — the inert stub for the
 // scenarios about what MCP does with what a manager returned.
 function fixedTaskManager(created: MCPTask): MCPTaskManagerInterface {
 	return {
@@ -5018,7 +5018,7 @@ describe('MCPServer — W03-A: the draft Tasks extension', () => {
 		expect(tasks.starts[0]?.[2].caller).toBe('asserted')
 	})
 
-	// THE FIXTURE PAIR the port's TSDoc obligation closes on. The two managers differ in one
+	// THE FIXTURE PAIR the port's TSDoc obligation closes on. The managers differ in one
 	// flag and are driven identically, including the abort every transport performs the
 	// instant the answer is written. A `completed` in the first case would mean the hazard
 	// the TSDoc names does not exist and the paragraph should be deleted.
@@ -5230,7 +5230,7 @@ describe('MCPServer — W03-A: the draft Tasks extension', () => {
 		expect(plain['capabilities']).toEqual({ tools: {} })
 	})
 
-	// Row 9's real claim: an opt-in extension that is not opted into changes nothing. The
+	// The real claim: an opt-in extension that is not opted into changes nothing. The
 	// CONFIGURED half is the control drawn from outside the unconfigured population — without
 	// it, a registration that never happened at all would pass this test unremarked.
 	it('leaves an unconfigured server answering exactly what it answered before', async () => {
@@ -5262,7 +5262,7 @@ describe('MCPServer — W03-A: the draft Tasks extension', () => {
 			JSONRPC_METHOD_NOT_FOUND,
 		])
 		// Registered, and therefore refusing for a REASON rather than for absence: this client
-		// declared no extension, so every one of the three answers the capability code.
+		// declared no extension, so every one of them answers the capability code.
 		expect(registered).toEqual([
 			MCP_MISSING_CAPABILITY,
 			MCP_MISSING_CAPABILITY,
@@ -5271,9 +5271,9 @@ describe('MCPServer — W03-A: the draft Tasks extension', () => {
 	})
 })
 
-// ── W03-B: the durable task lifecycle ───────────────────────────────────────
+// ── W03-B: the durable task lifecycle ────────────────────────────────────────
 //
-// Three unary methods over a port this package cannot see inside. What is under test is
+// Unary methods over a port this package cannot see inside. What is under test is
 // therefore never the task's behaviour — it is the REFUSAL TAXONOMY, and the faithfulness of
 // what crosses the seam in each direction. Every control is drawn from outside the population
 // its claim describes: `ttlMs: null` for a purge rule written against finite numbers, a
@@ -5318,7 +5318,7 @@ function deferredWriteTaskManager(): MCPTaskManagerInterface {
 	}
 }
 
-// A manager that mints the handle FROM the key and deduplicates on the bare key — two of the
+// A manager that mints the handle FROM the key and deduplicates on the bare key —
 // obligations `start`'s TSDoc states and this package cannot enforce, violated together
 // because one fixture demonstrates both consequences.
 function guessableTaskManager(): MCPTaskManagerInterface {
@@ -5355,7 +5355,7 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 
 		// `complete`, not `task`. Only CREATION announces a task; reading one is an ordinary
 		// completed call whose payload happens to be a task — and reasoning by symmetry from
-		// `MCPTaskResult` would have got this wrong on all three methods.
+		// `MCPTaskResult` would have got this wrong on every method.
 		expect(answer['resultType']).toBe('complete')
 		expect(answer['taskId']).toBe(taskId)
 		expect(answer['status']).toBe('input_required')
@@ -5417,8 +5417,8 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 		])
 	})
 
-	// THE SHARP CONTROL. Never-existed, purged, and unauthorized are three different facts in
-	// three different stores, and the wire must not be able to tell them apart. Byte equality of
+	// THE SHARP CONTROL. Never-existed, purged, and unauthorized are different facts in
+	// different stores, and the wire must not be able to tell them apart. Byte equality of
 	// the whole serialized envelope is the assertion, not equality of the code: a differing
 	// message is exactly the enumeration oracle a bearer `taskId` cannot afford.
 	it('answers never-existed, purged, and unauthorized with one byte-identical refusal', async () => {
@@ -5442,7 +5442,7 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 
 		expect(new Set(wire).size).toBe(1)
 		expect(responseOf(responses[0])?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
-		// The last store really did hold that task — this is indistinguishability, not three
+		// The last store really did hold that task — this is indistinguishability, not
 		// managers that all happened to be empty.
 		expect(
 			await guarded.task(theirs, { signal: AbortSignal.abort(), caller: 'owner-1' }),
@@ -5694,7 +5694,7 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 					taskRequest(
 						'tasks/update',
 						// One key the task published, one it never did, and one that is nobody's:
-						// MCP holds none of the task's keys, so all three travel and the manager
+						// MCP holds none of the task's keys, so each travels and the manager
 						// does the ignoring.
 						{ taskId, inputResponses: { approval: { action: 'accept' }, unrelated: 1, '': null } },
 						'update-1',
@@ -5708,7 +5708,7 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 			resultType: 'complete',
 			_meta: { [MCP_META_SERVER]: { name: 'test-server', version: '1.2.3' } },
 		})
-		// The provider ignored the two it did not know, and the task moved on the one it did.
+		// The provider ignored the keys it did not know, and the task moved on the one it did.
 		expect((await tasks.task(taskId))?.status).toBe('working')
 	})
 
@@ -5816,7 +5816,7 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 
 	// `update` and `abort` both answer `void`, so neither can report an unknown task and neither
 	// can be where authorization is decided. The read that precedes them is, and its refusal is
-	// the one `tasks/get` answers — byte-identical across all three methods.
+	// the one `tasks/get` answers — byte-identical across every method.
 	it('refuses an update and a cancellation of an unresolved task identically to a read', async () => {
 		const guarded = new TestTaskManager({ owner: 'owner-1' })
 		const mcp = taskServer({ tasks: guarded, defer: () => 'operation-1' })
@@ -5840,7 +5840,7 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 		)
 	})
 
-	// The same probe, attacked. A read the two void-returning methods ACCEPT is a write they
+	// The same probe, attacked. A read the void-returning methods ACCEPT is a write they
 	// AUTHORIZED, so the probe has to be as strong as the one `tasks/get` runs rather than a
 	// bare `=== undefined`. Both vectors sit outside the `undefined` this port declares and
 	// inside what an implementation of it can really answer: `null`, which is what JavaScript
@@ -5884,8 +5884,8 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 })
 
 describe('MCPServer — W03-B: the capability gate on every tasks method', () => {
-	// The `-32021` payload, and the reason there is ONE code rather than two: the elicitation
-	// refusal and this one are two instances of the same condition, told apart by their data.
+	// The `-32021` payload, and the reason there is ONE code rather than a separate one: the
+	// elicitation refusal and this one are instances of the same condition, told apart by their data.
 	it('refuses a non-declaring client with the generic capability code and the tasks payload', async () => {
 		const mcp = taskServer({ tasks: new TestTaskManager(), defer: () => undefined })
 
@@ -5907,8 +5907,8 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 		expect(new Set(refusals.map((error) => JSON.stringify(error))).size).toBe(1)
 	})
 
-	// The same code, a different payload — which is the whole of how a client tells the two
-	// instances apart, and the reason a second numeral would have described one fact twice.
+	// The same code, a different payload — which is the whole of how a client tells the
+	// instances apart, and the reason a separate numeral would have described one fact twice.
 	it('distinguishes the elicitation instance from the tasks instance by payload alone', async () => {
 		const elicited = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
@@ -6152,7 +6152,7 @@ describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () 
 		expect(seen.every((options) => options.signal instanceof AbortSignal)).toBe(true)
 	})
 
-	// A notification is answered by nothing, whatever its method — the three registrations carry
+	// A notification is answered by nothing, whatever its method — the registrations carry
 	// the same narrowing every other built-in does rather than a second dispatch rule.
 	it('answers a tasks notification with nothing at all', async () => {
 		const tasks = new TestTaskManager()

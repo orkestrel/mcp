@@ -12,8 +12,8 @@ import { duplexPair, flushSocket, readClientFrames } from '../../../setupServer.
 
 // src/server/mcp/WebSocketServerTransport.ts — the per-connection JSON-RPC-over-WebSocket
 // SERVER bridge, driven END TO END over an in-memory `node:stream` Duplex PAIR (the shared
-// `duplexPair` / `flushSocket` / `readClientFrames` harness, AGENTS §16.1 — the same one the
-// NodeWebSocket wrapper test uses; a REAL bidirectional socket, no mock — §16). The setup: a
+// `duplexPair` / `flushSocket` / `readClientFrames` harness — the same one the
+// NodeWebSocket wrapper test uses; a REAL bidirectional socket, no mock). The setup: a
 // server-mode `NodeWebSocket` over the server end, wrapped in a `WebSocketServerTransport`;
 // the test plays the CLIENT — it writes MASKED JSON-RPC text frames (the wrapper decodes
 // them) and reads the server's UNMASKED response frames (decoding each payload as JSON).
@@ -181,7 +181,7 @@ describe('WebSocketServerTransport — close propagation', () => {
 		await transport.close()
 	})
 
-	it('isolates a throwing message listener — the bridge survives (§13)', async () => {
+	it('isolates a throwing message listener — the bridge survives', async () => {
 		const [server, client] = duplexPair()
 		const ws = createNodeWebSocket({ socket: server, key: CLIENT_KEY })
 		const transport = new WebSocketServerTransport(ws)

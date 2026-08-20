@@ -362,7 +362,7 @@ export function buildCancelledNotification(id: JSONRPCId, reason?: string): JSON
  * Determine whether one method may answer with a given modern `resultType`.
  *
  * @remarks
- * The dated protocol lets a `tools/call` answer three ways — it COMPLETED, it became a
+ * The dated protocol lets a `tools/call` answer in more than one way — it COMPLETED, it became a
  * durable task, or it needs another round trip — while every other method this client
  * issues has exactly one legal answer. So the arm a peer chose is only meaningful beside
  * the method it answers, and this is the one place that pairing is decided.
@@ -419,9 +419,9 @@ export function extractContentText(result: unknown): string {
  * Narrow one `tools/call` answer to the arm the peer chose.
  *
  * @remarks
- * The three arms {@link matchesResultType} admits are the whole space this sees, because a
+ * The arms {@link matchesResultType} admits are the whole space this sees, because a
  * `resultType` the client cannot name is refused at correlation. What is left is validating
- * the two arms the protocol gives a shape to, and deriving the tool's value from the one it
+ * the arms the protocol gives a shape to, and deriving the tool's value from the one it
  * does not:
  *
  * - A peer's `structuredContent` is PREFERRED over the content blocks, because it is the
@@ -508,7 +508,7 @@ export function buildToolCall(
 	}
 }
 
-// Pure dispatch builders (AGENTS §5: the dispatch branches stay exported helpers,
+// Pure dispatch builders (the dispatch branches stay exported helpers,
 // not hidden privates). Each turns a piece of MCP state into the JSON-RPC `result`
 // payload (or a response envelope) the server returns — independently testable.
 
@@ -899,11 +899,11 @@ export function buildInitializeResult(
  * `JSON.parse`d at all: a decoder that parses before it measures has already spent the work
  * the bound exists to refuse. A message over the bound, malformed JSON, and a well-formed
  * value that is not a JSON-RPC message are one answer — `undefined` — because a binder does
- * exactly the same thing with all three: nothing, and let
+ * exactly the same thing with each of them: nothing, and let
  * {@link import('./types.js').MCPServerInterface.handle} produce the wire refusal from the
  * same bound.
  *
- * Total (§14) — never throws, whatever the input.
+ * Total — never throws, whatever the input.
  *
  * @param message - The raw inbound JSON-RPC message string
  * @param limits - The byte and depth bounds to decode within (the server's own, via `limit`)
@@ -932,7 +932,7 @@ export function decodeBoundedMessage(
  * real {@link JSONRPCId}: `null` is not one, and neither is an absent member, so a
  * malformed frame reads as "cancels nothing" rather than as an error. Anything that is not a
  * `notifications/cancelled` notification — a response, a request that happens to use the
- * method name, another notification — reads the same way. Total (§14).
+ * method name, another notification — reads the same way. Total.
  *
  * @param message - The decoded inbound message to read
  * @returns The id of the request being cancelled, or `undefined` when the message cancels nothing
@@ -1034,7 +1034,7 @@ export async function sendStream(
  * **This binder OWNS every exchange it starts, and ends each one on every exit.** It holds one
  * `AbortController` per live request, keyed by the request's id and deleted whenever that
  * request leaves — normally, by a throw, or by cancellation — and it supplies that signal to
- * `handle` as {@link import('./types.js').MCPDispatchOptions}. Three consequences follow.
+ * `handle` as {@link import('./types.js').MCPDispatchOptions}. These consequences follow.
  * An inbound `notifications/cancelled` ABORTS the request it names, which is how the message-
  * based cancellation path reaches a tool on the carriers that have one (stdio, WebSocket,
  * `MessagePort`); a cancelled request writes NO response, because a peer that asked for a call
@@ -1140,7 +1140,7 @@ export function bindServer(
  * this binder then completes the inbound half by decoding each message and pushing it
  * onto `client.transport.emitter` (an {@link import('@orkestrel/emitter').EmitterInterface}
  * exposes `emit`, so no client modification is needed). A malformed / non-JSON-RPC
- * inbound message is DROPPED (§14, total — never throws); a delivery fault is routed to
+ * inbound message is DROPPED (total — never throws); a delivery fault is routed to
  * `client.transport.emitter`'s `error` event (never rethrown). The returned unbind
  * DETACHES this binder (further inbound messages and the transport's `closed` signal are
  * ignored) WITHOUT closing the transport.
@@ -1158,7 +1158,7 @@ export function bindServer(
  * itself when a caller's `signal` aborts, on a carrier declaring `duplex`. Adding a registry
  * here would be a second correlation table for ids the client is already correlating, and two
  * tables for one fact drift. The one obligation this binder does carry is delivery: a
- * malformed / non-JSON-RPC inbound message is DROPPED (§14, total — never throws).
+ * malformed / non-JSON-RPC inbound message is DROPPED (total — never throws).
  *
  * @param client - The transport-agnostic client whose transport to deliver messages onto
  * @param transport - The duplex channel to pipe the client over

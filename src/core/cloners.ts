@@ -41,8 +41,8 @@ export function snapshotJSON(
 /**
  * Snapshot one exact Tool result and the canonical wire text of a defined success value.
  *
- * A success must have exactly four own enumerable data properties: `id`, `name`, `success: true`,
- * and `value`. A failure must instead have exactly `id`, `name`, `success: false`, and a string
+ * A success must have exactly the own enumerable data properties `id`, `name`,
+ * `success: true`, and `value`. A failure must instead have exactly `id`, `name`, `success: false`, and a string
  * `error`. The returned result and tuple are frozen. Only a defined success value crosses the
  * bounded JSON ownership seam; it becomes an owned deeply frozen value and receives canonical
  * text. Value-less successes and failures pair with `undefined` text. Non-records, symbol keys,

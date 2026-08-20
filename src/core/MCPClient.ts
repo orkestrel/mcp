@@ -105,7 +105,7 @@ import {
  * - **Transport-agnostic.** Imports only core siblings (JSON-RPC + the tool vocabulary);
  *   the concrete transport is injected. Wire fields are narrowed via the contracts
  *   guards (no `as`).
- * - **Observable (§13).** The owned `emitter` fires `connect` / `disconnect` /
+ * - **Observable.** The owned `emitter` fires `connect` / `disconnect` /
  *   `notification` / `error`; the emitter isolates a listener throw and routes it to its
  *   `error` handler (the `error` option), so a listener throw can never escape.
  *
@@ -137,7 +137,7 @@ export class MCPClient implements MCPClientInterface {
 	readonly #tasks: MCPTaskClientInterface
 	// The in-flight requests, keyed by JSON-RPC id, each holding its promise settlers —
 	// resolved on the matching response, rejected on an error response, the deadline, an
-	// abort, or `disconnect`. Genuinely private glue (§5): the settler shape lives inline here.
+	// abort, or `disconnect`. Genuinely private glue: the settler shape lives inline here.
 	//
 	// The entry is also where every per-request REGISTRATION lives, and that placement is the
 	// whole reason the exits nobody enumerates are already covered. `#settle` is the single
@@ -186,7 +186,7 @@ export class MCPClient implements MCPClientInterface {
 	#closing: Promise<void> | undefined = undefined
 	// The in-flight connect attempt: the negotiation a second caller JOINS, and the generation
 	// it was published under, so a caller can tell an attempt it may join from one a teardown
-	// already superseded and must merely outwait. Genuinely private glue (§5), like `#pending`'s
+	// already superseded and must merely outwait. Genuinely private glue, like `#pending`'s
 	// settler shape.
 	#connecting: { readonly negotiation: Promise<void>; readonly generation: number } | undefined =
 		undefined
@@ -372,7 +372,7 @@ export class MCPClient implements MCPClientInterface {
 	async disconnect(): Promise<void> {
 		const closing = this.#disconnecting
 		if (closing !== undefined) return closing
-		// Three things are worth tearing down: an announced connection, an attempt still in
+		// These are worth tearing down: an announced connection, an attempt still in
 		// flight, and a connection whose `close()` faulted or never answered — that one is still
 		// owned, and both this path and the next `connect()` can reach it.
 		if (!this.#connected && this.#connecting === undefined && this.#owner === undefined) return
@@ -381,7 +381,7 @@ export class MCPClient implements MCPClientInterface {
 
 	async tools(): Promise<readonly ToolInterface[]> {
 		const result = await this.#request('tools/list', undefined, this.#timeout)
-		// The wire shape is `{ tools: MCPToolDescriptor[] }` — narrow it (§14): a
+		// The wire shape is `{ tools: MCPToolDescriptor[] }` — narrow it: a
 		// non-record / non-array `tools` yields no tools rather than throwing.
 		if (!isRecord(result) || !isArray(result['tools'])) return []
 		const tools: ToolInterface[] = []
@@ -414,9 +414,9 @@ export class MCPClient implements MCPClientInterface {
 	// server never answers. The transport `send` is awaited so a write failure rejects
 	// here rather than leaving a pending request to time out.
 	//
-	// `options` carries the CALLER's two per-request registrations, and both are recorded on
+	// `options` carries the CALLER's per-request registrations, and each is recorded on
 	// the pending entry rather than around this call, so the single `#settle` door releases
-	// them on every exit — including the two nobody enumerates, a rejecting `send` and the
+	// them on every exit — including the exits nobody enumerates, a rejecting `send` and the
 	// teardown's drain. The request's own id doubles as its progress token: it is already
 	// unique per request, already travels this exact channel, and needs no second counter to
 	// drift against.
@@ -647,7 +647,7 @@ export class MCPClient implements MCPClientInterface {
 		return new Tool(options)
 	}
 
-	// The agent-facing edge of `call`. A wrapped tool owes its caller a VALUE, and the two
+	// The agent-facing edge of `call`. A wrapped tool owes its caller a VALUE, and the
 	// deferred arms have none: the request is over and the answer is somewhere the agent
 	// cannot wait for. Throwing is the one shape an agent's registry already absorbs — it
 	// becomes a `success: false` result the model can read — where returning `undefined`
@@ -743,7 +743,7 @@ export class MCPClient implements MCPClientInterface {
 				} catch (fault) {
 					// The connection did not close — or never confirmed that it had — so its ownership
 					// is not discarded: `disconnect` and the next `connect` are the paths left that can
-					// close it. Two failures owed to two audiences: this observer learns the transport
+					// close it. Distinct failures owed to distinct audiences: this observer learns the transport
 					// fault, and the caller below still learns why the connection did not happen.
 					this.#owner = generation
 					this.#emitter.emit('error', fault)
@@ -813,7 +813,7 @@ export class MCPClient implements MCPClientInterface {
 	// The transport's own `close()` — the one await nothing else in this client can reach. The drain
 	// settles a pending request, a request deadline settles one the peer ignores, and the
 	// supersession signal settles a raw write; a shutdown the transport accepts and never answers is
-	// deaf to all three, and while a teardown is published it would hold `disconnect` AND every
+	// deaf to each of them, and while a teardown is published it would hold `disconnect` AND every
 	// later `connect` for the process's life. So the WAIT carries the same deadline every other
 	// transport wait carries — the wait, never the close, which keeps running and may still end the
 	// connection. That difference is the whole design here: a fault means the shutdown did NOT
@@ -880,8 +880,8 @@ export class MCPClient implements MCPClientInterface {
 		if (!isMCPVersion(protocol) || inferEra(protocol) !== 'legacy') {
 			throw new Error(`MCP server negotiated unsupported protocol version '${protocol}'`)
 		}
-		// Two re-asks, asking different questions: the first keeps a superseded attempt from
-		// writing to a transport a `disconnect` is already closing, the second keeps it from
+		// The re-asks ask different questions: one keeps a superseded attempt from
+		// writing to a transport a `disconnect` is already closing, the other keeps it from
 		// installing after that write. Install only after the handshake's last wire write
 		// lands: a failed notification must leave nothing behind for the rejecting
 		// `connect()` to strand.
@@ -908,8 +908,8 @@ export class MCPClient implements MCPClientInterface {
 		this.#settle(id, new Error(`MCP request '${method}' timed out after ${timeout}ms`), true)
 	}
 
-	// The caller withdrew from ONE request. Two things happen and neither is the other's
-	// precondition: the caller stops waiting, always, on every carrier; and the peer is TOLD,
+	// The caller withdrew from ONE request. What follows are independent effects, neither
+	// the other's precondition: the caller stops waiting, always, on every carrier; and the peer is TOLD,
 	// only where the carrier can carry a client-initiated notification. Cancellation is
 	// ADVISORY in MCP — every receiver obligation is `SHOULD` or `MAY` — so the telling is
 	// courtesy, the local settle is the contract, and a peer that answers anyway is answering

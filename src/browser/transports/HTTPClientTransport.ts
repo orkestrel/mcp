@@ -62,10 +62,10 @@ import { readEventStream } from '../helpers.js'
  *   never ends would otherwise outlive the transport, with nothing left able to reach it. The
  *   aborted read surfaces on `error` and the `send` reporting it resolves. `close()` is
  *   idempotent (one `close` event per connected lifetime), and `start()` opens the next one.
- * - **Total at the boundary (§14).** Every reply is narrowed (`parseJSONRPCMessage`,
+ * - **Total at the boundary.** Every reply is narrowed (`parseJSONRPCMessage`,
  *   the SSE decoder) — a non-message reply is dropped, never asserted; a `fetch` /
  *   decode failure surfaces on the `error` event rather than escaping `send`.
- * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); fires
+ * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); fires
  *   `message` per decoded reply, `error` on a fault, and `close` on `close()`.
  *
  * @example

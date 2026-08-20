@@ -1,4 +1,4 @@
-// The real foreign client driving this package's server end to end (§16 live services).
+// The real foreign client driving this package's server end to end (live services).
 // Protocol tests prove the protocol; this proves the integration, so it spawns a foreign
 // process against a real socket. The runner is resolved from the pinned development
 // dependency and the socket is local, so the run is hermetic and `npm test` gates it.
@@ -15,7 +15,7 @@ import {
 } from './setupConformance.js'
 
 // The recorded baseline, scenario by scenario. A bare total hides a scenario that stopped
-// running, and this number has been wrong twice — both times because the FIXTURE, not the
+// running, and this number has been wrong before — each time because the FIXTURE, not the
 // library, could not answer. Every row below is a check the shipped server passes.
 const EXPECTED: readonly ConformanceScenario[] = [
 	{ name: 'completion-complete', passed: 1, failed: 0 },

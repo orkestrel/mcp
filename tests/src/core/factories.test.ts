@@ -10,13 +10,13 @@ import { describe, expect, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createMemoryTransport } from '../../setup.js'
 
-// A minimal in-memory MCPTransportInterface double (AGENTS §16 — real, not a mock):
+// A minimal in-memory MCPTransportInterface double (real, not a mock):
 // `send` records every outbound string, `close` counts calls; `listen`/`closed` are
 // unused by these adapter-only tests (they exercise createDuplexClientTransport's
 // OWN send/start/close forwarding, not inbound delivery — that is bindClient's job,
 // covered in helpers.test.ts).
 // createMCPServer returns a working MCPServerInterface over a live ToolManager
-// (AGENTS §16 — a real registry, no mocks). The behavioral coverage of dispatch /
+// (a real registry, no mocks). The behavioral coverage of dispatch /
 // handle lives in MCPServer.test.ts; this asserts the factory wires identity, the
 // tools, and the emitter through to a working instance.
 
@@ -62,7 +62,7 @@ describe('createMCPServer', () => {
 		})
 	})
 
-	it('wires the on hooks (the §8 reserved key) to the emitter', async () => {
+	it('wires the on hooks (the reserved `on` key) to the emitter', async () => {
 		const seen: Array<readonly [string, string | number | undefined]> = []
 		const server = createMCPServer({
 			identity: { name: 'demo', version: '1.0.0' },

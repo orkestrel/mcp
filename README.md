@@ -64,16 +64,15 @@ The SAME `MCPClient` drives a `createWebSocketClientTransport` or
 
 ## Guide
 
-For the full surface — the JSON-RPC dispatch core, the three server
-transports (HTTP, WebSocket, stdio), the native session middleware, and
-usage patterns — see [`guides/src/mcp.md`](guides/src/mcp.md).
+For the full surface — the JSON-RPC dispatch core, the server transports
+(HTTP, WebSocket, stdio), the native session middleware, and usage
+patterns — see [`guides/src/mcp.md`](guides/src/mcp.md).
 
 ## Package
 
-Published with two entry points per the `exports` field in `package.json`:
-the environment-agnostic core (`.`) and the Node-only server surface
-(`./server`). The browser face (`./browser`) is ESM only. The tarball is
-625.0 kB packed across 18 files, 2.5 MB unpacked.
+Published per the `exports` field in `package.json`: the
+environment-agnostic core (`.`), the Node-only server surface (`./server`),
+and the browser face (`./browser`), which is ESM only.
 
 [`CHANGELOG.md`](CHANGELOG.md) lives in the repository and is not in the
 tarball, because `files` is `["dist/src", "README.md"]`.
@@ -95,7 +94,7 @@ of the IDE class has.
 
 ## Declared limits
 
-Four publication facts, each with its number. Full detail, plus every
+The publication facts, each with its number. Full detail, plus every
 protocol-level gap and non-goal, is in
 [`guides/src/mcp.md`](guides/src/mcp.md#declared-packaging-limits).
 
@@ -105,11 +104,11 @@ protocol-level gap and non-goal, is in
   condition, so `node16`, `nodenext`, and `bundler` resolution find
   declarations. A consumer on legacy `moduleResolution: node` does not read
   `exports` and sees an untyped package.
-- **A build-time version notice, three times.** API Extractor bundles
+- **A build-time version notice on every built face.** API Extractor bundles
   TypeScript 5.9.3 through a transitive pin and this project compiles with
   6.0.3, so `build` prints one notice per built face. It is informational:
   `build` exits 0 and every declaration is emitted.
-- **Source maps ship.** Five `.map` files are 1,130 kB of the 2.5 MB
+- **Source maps ship.** The `.map` files are 1,130 kB of the 2.5 MB
   unpacked, about 45 percent. They are kept so a consumer debugging a
   protocol library steps into real source.
 

@@ -33,7 +33,7 @@ import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constan
  *   lost (its cursor is OLDER than everything retained); returning `[]` lets the handler then
  *   stream only the fresh pushes that follow `attach` — the spec-sane resume.
  *
- * - **Bounded, append-ordered, plain `Map` (§21).** The log lives in ONE insertion-ordered
+ * - **Bounded, append-ordered, plain `Map`.** The log lives in ONE insertion-ordered
  *   `Map<id, entry>` — insertion order IS append order IS id order, so `replay` and capacity
  *   eviction both walk the map directly. NO database mirror — the log is process-local
  *   transport mechanics, not durable state. `push` first drops every entry older than `ttl`
@@ -47,8 +47,8 @@ import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constan
  *   serializes a message onto the already-open streams.
  *
  * - **Injected clock.** `push` / `replay` accept an optional `now` (epoch ms), defaulting to
- *   `Date.now()` — so a test drives TTL eviction with an elapsed clock rather than a real timer
- *   (AGENTS §16).
+ *   `Date.now()` — so a test drives TTL eviction with an elapsed clock rather than a real
+ *   timer.
  *
  * @example
  * ```ts

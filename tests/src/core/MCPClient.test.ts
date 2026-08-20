@@ -33,7 +33,7 @@ import { createServer } from 'node:http'
 import { waitForDelay } from '@orkestrel/test'
 import { createSignalRecorder } from '../../setup.js'
 
-// MCPClient ↔ a REAL MCPServer over an in-process LOOPBACK transport (AGENTS §16 — a
+// MCPClient ↔ a REAL MCPServer over an in-process LOOPBACK transport (a
 // real server + real ToolManager, no mocks of the unit under test). The loopback's
 // `send` dispatches each message through the server's `dispatch` and emits the response
 // back on its `message` event, so the full `initialize` / `tools/list` / `tools/call`
@@ -137,7 +137,7 @@ function createLoopback(
 interface FixturePeerOptions {
 	// The scripted answer to one request: a correlated response, a transport failure, or nothing.
 	readonly reply: (request: JSONRPCInvocation, count: number) => JSONRPCResponse | Error | undefined
-	// The OPENING step's three seams. `hold` suspends the chosen `start()` through the shared
+	// The OPENING step's seams. `hold` suspends the chosen `start()` through the shared
 	// held-resolver list — a transport whose socket or session is still coming up — until
 	// `release()` drains it; `enter` runs at `start()`'s first statement, before any await, so an
 	// injected transport can re-enter the client at the one position that observes what the client
@@ -336,8 +336,8 @@ function requestId(peer: LoopbackInterface, count: number): string | number {
 	return id
 }
 
-// A carrier whose `tools/call` write FAILS, in one of the two shapes a failing write can
-// take — and the two are one keyword apart. `throws` picks it: `true` is a non-`async` `send`
+// A carrier whose `tools/call` write FAILS, in one of the shapes a failing write can
+// take — and they are one keyword apart. `throws` picks it: `true` is a non-`async` `send`
 // that throws SYNCHRONOUSLY, which `MCPClientTransportInterface` forbids; `false` is the same
 // non-`async` `send` returning a REJECTED promise, which is what the contract requires. The
 // carrier is `duplex` either way, so a cancellation frame CAN reach it and its absence means
@@ -580,7 +580,7 @@ function serverWithTools(): MCPDispatcherInterface {
 	)
 }
 
-describe('MCPClient — connect (dual-era negotiation)', () => {
+describe('MCPClient — connect (modern-and-legacy negotiation)', () => {
 	it('opens the transport, discovers modern support, and reports the newest common version', async () => {
 		const loopback = createLoopback(serverWithTools())
 		const client = createMCPClient({
@@ -751,7 +751,7 @@ describe('MCPClient — modern discovery and fallback', () => {
 		expect(peer.sent).toEqual(['server/discover'])
 	})
 
-	it('makes no third discovery attempt when the one retry also returns -32022', async () => {
+	it('makes no further discovery attempt when the one retry also returns -32022', async () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
@@ -1444,7 +1444,7 @@ describe('MCPClient — id correlation', () => {
 describe('MCPClient — per-request timeout', () => {
 	it('rejects a request the server never answers, after the deadline', async () => {
 		// Gate `tools/list` so its response is withheld — the request stays pending until the
-		// tiny per-request deadline fires (§16 short timers).
+		// tiny per-request deadline fires (short timers).
 		const loopback = createLoopback(serverWithTools(), (method) => method === 'tools/list')
 		const client = createMCPClient({ transport: loopback, timeout: 30 })
 		await client.connect() // `initialize` is NOT gated, so connect succeeds
@@ -2014,8 +2014,8 @@ describe('MCPClient — connect/disconnect ordering', () => {
 	})
 
 	it("surfaces a failing close from an attempt's own unwind and keeps that session reachable", async () => {
-		// The attempt-side twin of the teardown's close fault, and two failures owed to two
-		// different audiences: the caller gets the negotiation's error (why the connection did not
+		// The attempt-side twin of the teardown's close fault, and distinct failures owed to
+		// distinct audiences: the caller gets the negotiation's error (why the connection did not
 		// happen), the `error` event gets the transport fault (a session that is still open).
 		// Ownership survives the fault, so `disconnect` can still reach that session.
 		const peer = createFixturePeer({
@@ -2392,7 +2392,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 	}, 2_000)
 
 	it('settles an attempt whose own close never returns, on a path no injected start can reach', async () => {
-		// The third transport await, and the one the supersession signal does not cover: a modern
+		// The remaining transport await, and the one the supersession signal does not cover: a modern
 		// negotiation that finds no common revision unwinds into its own `close()`, and that close
 		// never returns. No `start()` seam is involved — a peer that answers discovery and then
 		// never drains reaches it — so the attempt is left unsettled on a path the opening step does
@@ -2492,7 +2492,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 	}, 2_000)
 
 	it('issues a fresh close when the one it stopped waiting for finally rejects', async () => {
-		// The third answer a retained close can give, and the one that keeps the debt: it rejects,
+		// The remaining answer a retained close can give, and the one that keeps the debt: it rejects,
 		// long after the deadline. A rejection is the only report that the connection did NOT end, so
 		// the claim must survive it AND the dead close must stop being joinable — a client that
 		// discharged the claim here would open beside a connection nothing ever closed, and one that
@@ -2554,7 +2554,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 	}, 2_000)
 })
 
-// The FOURTH obligation `MCPClientTransportInterface` states and `MCPClient` cannot enforce:
+// The `send` obligation `MCPClientTransportInterface` states and `MCPClient` cannot enforce:
 // a failing `send` REJECTS, it never throws synchronously. Both tests here are CONTRACT tests
 // like the `start` one above — they pass before and after the documentation, because the remedy
 // is a sentence on the transport, not machinery in `#request`. Every transport this package
@@ -2603,7 +2603,7 @@ describe('MCPClientTransportInterface — a failing send rejects, never throws',
 	})
 })
 
-describe('MCPClient — §13 observer safety', () => {
+describe('MCPClient — observer safety', () => {
 	it('a throwing connect listener cannot corrupt connect, and routes to the error handler', async () => {
 		const loopback = createLoopback(serverWithTools())
 		const errors: Array<readonly [unknown, string]> = []
@@ -2764,8 +2764,8 @@ describe('MCPClient — call() result polymorphism', () => {
 		expect(outcome.requestState).toBe('opaque-state')
 	})
 
-	it('CONTROL — a fourth, unknown resultType is refused even on tools/call', async () => {
-		// The class the three-arm narrowing structurally cannot handle. Carrying it would
+	it('CONTROL — an unknown resultType is refused even on tools/call', async () => {
+		// The class the arm narrowing structurally cannot handle. Carrying it would
 		// hand a caller an arm whose meaning this client invented.
 		const peer = callPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined

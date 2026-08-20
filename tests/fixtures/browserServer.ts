@@ -204,7 +204,7 @@ export function createRawWebSocketHandler(): UpgradeHandler {
 export async function start(): Promise<BrowserFixtureInterface> {
 	const mcp = createCalculatorServer()
 	// applyBrowserCORS is a permissive test double: it approves every requesting Origin, so
-	// this fixture explicitly delegates the two built-in enforcement sites to that upstream layer.
+	// this fixture explicitly delegates the built-in enforcement sites to that upstream layer.
 	const origin: MCPOriginOptions = { enabled: false }
 	const dispatcher = createDispatcher<MCPSessionState>()
 	dispatcher.add(createMCPRoutes<MCPSessionState>(mcp, { origin }))

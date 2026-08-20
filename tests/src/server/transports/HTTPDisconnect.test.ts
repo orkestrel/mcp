@@ -125,7 +125,7 @@ describe('HTTPDisconnect', () => {
 		}
 	})
 
-	// Row 10 — the pump-failure path. `#abort()` used to abort the LISTENER-DETACH controller,
+	// The pump-failure path. `#abort()` used to abort the LISTENER-DETACH controller,
 	// so the composed signal stayed live and the handler, the controlled stream, and the
 	// producer behind them all kept running for a response that could no longer be written.
 	it('aborts the composed signal when forwarding the upstream body fails', async () => {
@@ -144,7 +144,7 @@ describe('HTTPDisconnect', () => {
 		expect(disconnect.signal.aborted).toBe(true)
 	})
 
-	// Row 11 — a SEPARATE proof, because the keepalive reaches `#abort()` through a different
+	// A SEPARATE proof, because the keepalive reaches `#abort()` through a different
 	// door than the pump does. One chunk is written first so the forwarding queue is full and
 	// the pump is NOT parked on a read: that is the dead-writer shape, where the interval is
 	// the only observer left to notice that the SSE stream underneath has gone.
@@ -206,7 +206,7 @@ describe('HTTPDisconnect', () => {
 		}
 	})
 
-	// The control, drawn from OUTSIDE the population the two rows above cover: a disconnect
+	// The control, drawn from OUTSIDE the population the preceding rows cover: a disconnect
 	// that is never bridged has no timer, no listener, and no reachable `#abort()`. Its signal
 	// must be reported LIVE — otherwise an always-aborted assertion would be indistinguishable
 	// from a correct one.
@@ -218,7 +218,7 @@ describe('HTTPDisconnect', () => {
 		expect(disconnect.signal.aborted).toBe(false)
 	})
 
-	// ── W05-B row 25 — the keepalive interval is a BOUND, not a suggestion ─────
+	// ── The keepalive interval is a BOUND, not a suggestion ──────────────────
 	//
 	// The interval reached `setInterval` raw, and this class's own TSDoc called that deliberate:
 	// "applies the configured interval directly without normalization". `interval: 0` therefore
@@ -249,8 +249,8 @@ describe('HTTPDisconnect', () => {
 		expect(stream.comments).toEqual([])
 	})
 
-	// The control, from OUTSIDE the population the two rows above cover: a LEGITIMATE interval,
-	// which must still tick. A bound that refused every value would satisfy both assertions above
+	// The control, from OUTSIDE the population the preceding rows cover: a LEGITIMATE interval,
+	// which must still tick. A bound that refused every value would satisfy the preceding assertions
 	// while silently removing the liveness tick the whole class exists for.
 	it('still ticks on a legitimate interval', async () => {
 		const stream = createStreamStub({ pending: true })
@@ -293,12 +293,12 @@ describe('HTTPDisconnect', () => {
 		}
 	})
 
-	// ── The single-response lifecycle, enforced rather than only documented ────
+	// ── The single-response lifecycle, enforced rather than only documented ──
 	//
 	// The class doc has always said "This is a single-response lifecycle object, not a reusable
 	// bridge", and nothing held a caller to it. `HTTPDisconnect` is exported and its own
 	// `@example` shows a consumer constructing and bridging directly, so the second call was
-	// reachable — and it did two things at once. It overwrote `#timer`, which left the FIRST
+	// reachable — and it did more than one thing at once. It overwrote `#timer`, which left the FIRST
 	// interval running with no handle anywhere that could clear it (a ref'd timer, alive for the
 	// process's life). And the first bridge's terminal aborts `#lifecycle`, so the second
 	// bridge's abort listener registered against an already-aborted signal and was never added
@@ -337,9 +337,9 @@ describe('HTTPDisconnect', () => {
 		expect(second.comments).toEqual([])
 	})
 
-	// The control, drawn from OUTSIDE the population the two rows above cover: a FIRST bridge is
+	// The control, drawn from OUTSIDE the population the preceding rows cover: a FIRST bridge is
 	// never refused, and the stream it was given still ticks. A guard that refused every call
-	// would satisfy both rows above while removing the class's whole reason to exist.
+	// would satisfy the preceding rows while removing the class's whole reason to exist.
 	it('CONTROL — a first bridge on a fresh disconnect is accepted and ticks', async () => {
 		const stream = createStreamStub({ pending: true })
 		const disconnect = new HTTPDisconnect(new AbortController().signal, { interval: 10 })

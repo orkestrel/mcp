@@ -1,5 +1,5 @@
 // The live-service harness for `@modelcontextprotocol/conformance` — the real foreign
-// client that drives this package's server over a real socket (§16 live services).
+// client that drives this package's server over a real socket (live services).
 //
 // This file exists as TYPESCRIPT for one reason. The fixture below is the host half of
 // every port `MCPServerOptions` publishes, so it is typed against the real exported
@@ -85,7 +85,7 @@ export interface ConformanceResult {
 // ── The tool fixture ─────────────────────────────────────────────────────────
 
 /**
- * The rich content the four content-block scenarios ask for VERBATIM.
+ * The rich content the content-block scenarios ask for VERBATIM.
  *
  * @remarks
  * A plain `execute` return is an ordinary domain value, and the server normalizes one
@@ -205,7 +205,7 @@ export function buildConformanceTools(): ToolManagerInterface {
 
 // ── The resource fixture ─────────────────────────────────────────────────────
 //
-// The three host-owned registries the resource, prompt, and completion ports project.
+// The host-owned registries the resource, prompt, and completion ports project.
 // Each is an ordinary in-memory object — deliberately NOT a workspace and not a template
 // engine — because the ports are ports: what backs them is the host's decision and this
 // file is one host's answer.
@@ -365,7 +365,7 @@ export function buildConformanceMessages(
 
 // ── The completion fixture ───────────────────────────────────────────────────
 //
-// Completion is a top-level capability, independent of the other two: the host owns
+// Completion is a top-level capability, independent of the resource and prompt ports: the host owns
 // reference lookup for BOTH arms, because the party that expands a template is the party
 // that knows its variables. A reference this host does not recognize answers `undefined`,
 // which MCP maps to `-32602` rather than inventing an empty candidate list.
@@ -463,7 +463,7 @@ export function buildConformanceOptions(): MCPServerOptions {
 		execution: async (context) => {
 			// The request-scoped reporter exists only when the caller sent a `progressToken`, and
 			// reporting is the executor's job rather than the server's — the port hands the reporter
-			// over and the work decides what a step is. `tools-call-with-progress` specifies the three
+			// over and the work decides what a step is. `tools-call-with-progress` specifies the
 			// steps below exactly (0/100, 50/100, 100/100) and counts them, so the fixture reports
 			// what the scenario asks for rather than a shape of its own.
 			if (context.progress !== undefined) {

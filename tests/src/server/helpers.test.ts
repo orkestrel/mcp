@@ -29,7 +29,7 @@ import {
 import { createJSONRPCRequest, probeOwnership } from '../../setup.js'
 import { createRequestStub, createStreamStub } from '../../setupServer.js'
 
-// The two held-open fixtures these pump tests replay: one notification then a terminal, and a
+// The held-open fixtures these pump tests replay: one notification then a terminal, and a
 // producer that fails before it ever reaches one.
 const STREAM_NOTIFICATION: JSONRPCNotification = Object.freeze({
 	jsonrpc: '2.0',
@@ -78,7 +78,7 @@ function rpcMessage(overrides?: Parameters<typeof createJSONRPCRequest>[0]): JSO
 
 // A fetch-standard Request carrying (or omitting) the given headers — the shape every
 // pure fetch-standard reader below (`acceptsEventStream` / `readSessionHeader` /
-// `readLastEventId`) takes directly, no stub crossing needed (§14 — `Request` IS the
+// `readLastEventId`) takes directly, no stub crossing needed (`Request` IS the
 // boundary type now).
 function requestWithHeaders(headers?: Record<string, string>): Request {
 	return new Request('http://localhost/mcp', headers !== undefined ? { headers } : {})
@@ -87,7 +87,7 @@ function requestWithHeaders(headers?: Record<string, string>): Request {
 // src/server/helpers.ts — `acceptsEventStream`, the pure `Accept`-header reader the MCP
 // transport uses to pick a Streamable-HTTP SSE response over a plain JSON body. It reads
 // only `request.headers.get('accept')` and narrows with a `null` check (the live
-// over-the-wire SSE path is proven through a real server in factories.test.ts, AGENTS §16).
+// over-the-wire SSE path is proven through a real server in factories.test.ts).
 
 describe('acceptsEventStream — does the client opt into SSE?', () => {
 	it('is true when Accept contains text/event-stream', () => {
@@ -400,7 +400,7 @@ describe('inferHeaderIssue — one diagnosis across modern and legacy headers', 
 // src/server/helpers.ts — `readSessionHeader`, the pure reader the STATEFUL transport
 // uses to look up a request's `mcp-session-id`. Total — a missing header reads as
 // `undefined` (the over-the-wire mint/validate path is proven through a real server in
-// middlewares.test.ts, §16).
+// middlewares.test.ts).
 
 describe('readSessionHeader — the request mcp-session-id, or undefined', () => {
 	it('returns the session id when present', () => {
@@ -431,7 +431,7 @@ describe('readLastEventId — the resume cursor, or undefined', () => {
 // src/server/helpers.ts — `rejectUnknownSession`, the stateful transport's shared "unknown
 // session" reply (the POST validation AND the GET / DELETE routes all call it). Total —
 // never throws; the exact envelope is pinned here, the over-the-wire 404 is proven through
-// a real server in middlewares.test.ts (§16).
+// a real server in middlewares.test.ts.
 
 describe('rejectUnknownSession — the 404 + JSON-RPC "Session not found" body', () => {
 	it('sends a 404 carrying the JSON-RPC invalid-request error body', async () => {
@@ -511,7 +511,7 @@ describe('readEventStream — decode a Response SSE body into JSON-RPC messages'
 // `createWebSocketServer` uses to match a raw `node:http` upgrade request's path against its
 // configured mount path. It reads only `request.url` and narrows with `isString`, so the
 // shared `createRequestStub` carrying a `url` exercises every branch (the live over-the-wire
-// upgrade path is proven through a real spine in factories.test.ts, §16). Total — an absent
+// upgrade path is proven through a real spine in factories.test.ts). Total — an absent
 // target reads as `'/'`, a query string is stripped.
 
 describe('upgradeRequestPath — the upgrade request path (no query)', () => {
@@ -563,7 +563,7 @@ describe('sendEventStream — writes the exchange out and always ends it', () =>
 			await sendEventStream(stream, createStreamStub({ write: failure }))
 		})
 
-		// Total (§14): the write fault is contained, so the consumer sees no failure at all —
+		// Total: the write fault is contained, so the consumer sees no failure at all —
 		// which is exactly why the released slot is the only evidence that it ended.
 		expect(outcome.failure).toBeUndefined()
 		expect(outcome.released).toBe(true)

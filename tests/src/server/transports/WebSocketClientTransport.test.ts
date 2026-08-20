@@ -21,7 +21,7 @@ import { createTeardown, startServer, startUpgradeServer } from '../../../setupS
 // src/server/mcp/WebSocketClientTransport.ts — the WebSocket CLIENT transport (the egress
 // mirror of createWebSocketServer), proven END TO END against the shipped createWebSocketServer
 // over a REAL `node:http` server + a REAL MCPServer over a real ToolManager (stub tools, NO live
-// model — AGENTS §16). The contract the assertions pin down: `start()` performs the RFC 6455
+// model). The contract the assertions pin down: `start()` performs the RFC 6455
 // handshake (validating the Sec-WebSocket-Accept) and opens a persistent frame channel; an
 // MCPClient over it connects + discovers + calls the remote tools over real WS frames; a remote
 // tool failure → a local throw; a `ws://` and an `http://` url both reach the endpoint; an
@@ -43,7 +43,7 @@ interface RawServerHandle {
 // an UPGRADED socket is detached from the server's tracked-connection set, so neither `close`'s
 // drain nor `closeAllConnections()` reaches it; destroy each captured socket FIRST, then `close`
 // (whose callback now fires promptly, since no connection remains).
-// A third registrar for the raw upgrade RECORDER the D2 rows drive (rows 23-24): it completes
+// Another registrar for the raw upgrade RECORDER the D2 controls drive: it completes
 // real handshakes and tallies the sockets it upgraded, so it owns its own `stop`.
 const upgradeTeardown = createTeardown<TestUpgradeInterface>((peer) => peer.stop())
 
@@ -171,7 +171,7 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 		await client.disconnect()
 	})
 
-	// ── W05-B rows 23-24 — D2: `start()` re-asks after the suspension ──────────
+	// ── D2: `start()` re-asks after the suspension ───────────────────────────
 	//
 	// `start()` guards on `#socket === undefined`, then SUSPENDS across a real TCP connect and
 	// HTTP upgrade before installing the socket it built. Every state it checked is stale by the
@@ -179,7 +179,7 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 	// the transport. The observable is the peer's own tally — an upgraded socket nobody owns is
 	// never closed by anyone, so it stays open forever, and that is exactly what an orphan is.
 
-	it('two concurrent start()s bind one socket and orphan none (row 23)', async () => {
+	it('two concurrent start()s bind one socket and orphan none', async () => {
 		// The handshake is held open, so both upgrades are genuinely in flight at the same time
 		// and both `start()` calls have already passed the `#socket === undefined` guard.
 		const peer = upgradeTeardown.track(await startUpgradeServer({ delay: 25 }))
@@ -261,7 +261,7 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 		expect(closed).toBe(1)
 	})
 
-	it('close() during a suspended start() leaves no bound socket and re-emits nothing (row 24)', async () => {
+	it('close() during a suspended start() leaves no bound socket and re-emits nothing', async () => {
 		// The peer appends one well-formed JSON-RPC text frame to the handshake, so a socket the
 		// transport BOUND re-emits it on `message`; one it never bound cannot.
 		const peer = upgradeTeardown.track(

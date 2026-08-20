@@ -47,7 +47,7 @@ import {
 
 // src/server/factories.ts — createMCPRoutes, the stateless Streamable-HTTP MCP
 // transport, proven over a REAL @orkestrel/server + a REAL MCPServer over a REAL
-// ToolManager (stub tools, NO live model) driven with `fetch` (AGENTS §16). The
+// ToolManager (stub tools, NO live model) driven with `fetch`. The
 // contract the assertions pin down: POST dispatches JSON-RPC; a TRANSPORT failure
 // (malformed JSON / a non-request) is HTTP 400 + a JSON-RPC error body; a DISPATCH
 // result (success OR an in-band JSON-RPC error like method-not-found) is HTTP 200 +
@@ -108,7 +108,7 @@ async function startMCP(options?: {
 	return track(await startServer(server))
 }
 
-describe('createMCPRoutes — dispatch the four MCP methods', () => {
+describe('createMCPRoutes — dispatch the MCP methods', () => {
 	it('exposes a raw server as modern-only and a decorated server as both eras', async () => {
 		const dispatcher = createDispatcher<unknown>()
 		dispatcher.add(createMCPRoutes(createCalculatorServer(), { streaming: false }))
@@ -551,7 +551,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 // therefore closes every socket it still owns on the spine's `stop` event, with the RFC 6455
 // close handshake `WebSocketServerTransport.close()` already performs — the clean goodbye the
 // drain window exists for. Each row here drives a REAL socket against a REAL spine and reads
-// the actual wire (AGENTS §16): the frame the server sent, not a report that it sent one.
+// the actual wire: the frame the server sent, not a report that it sent one.
 //
 // The timing bound is deliberately loose (a second against a 10s drain budget): the claim is
 // "the drain settles on the close" versus "the drain runs out", and those are three orders of
@@ -734,7 +734,7 @@ send({
 
 // createStdioServer — the new seam: it now pipes its transport through the core
 // bindServer port (via bridgeMessageTransport) rather than a hand-rolled pump. Proven
-// over REAL PassThrough streams + a REAL MCPServer (AGENTS §16) — the request → reply
+// over REAL PassThrough streams + a REAL MCPServer — the request → reply
 // line round trip, a notification writing nothing, and a dispatch fault (an unknown
 // method reply, the in-band case; the transport-fault case is pinned at the core
 // binder level in tests/src/core/helpers.test.ts) all behave exactly as before.
@@ -825,7 +825,7 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 		handle.stop()
 	})
 
-	// Row 15/16 over a REAL carrier: an inbound `notifications/cancelled` on a transport that
+	// Over a REAL carrier: an inbound `notifications/cancelled` on a transport that
 	// has one (stdio) aborts the named request, the TOOL observes it through the execution
 	// handler's own signal, and the cancelled request writes no line back.
 	it('honours an inbound cancellation: the tool sees the abort and no reply line is written', async () => {

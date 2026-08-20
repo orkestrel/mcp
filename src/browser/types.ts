@@ -1,8 +1,8 @@
 import type { MCPTransportInterface } from '@src/core'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 
-// The MCP browser-transport surface — the source of truth (AGENTS §2). Two CLIENT
-// transports for the Model Context Protocol, both driving a REMOTE server from a page
+// The MCP browser-transport surface — the source of truth. The CLIENT
+// transports for the Model Context Protocol both drive a REMOTE server from a page
 // / Web Worker / Service Worker: the native `WebSocket` transport
 // (`transports/WebSocketClientTransport.ts`) and the `fetch` + `@orkestrel/sse`
 // streamable-HTTP transport (`transports/HTTPClientTransport.ts`) — the browser
@@ -12,7 +12,7 @@ import type { ToolManagerInterface } from '@orkestrel/tool'
 // handshake and the HTTP request/response plumbing, so this face carries none of the
 // Node client's `node:crypto` / `node:http(s)` machinery.
 //
-// `MessagePortTransport` (below) is the genuinely new capability: unlike the two
+// `MessagePortTransport` (below) is the genuinely new capability: unlike the
 // CLIENT-only carriers above, a `MessagePort` is SYMMETRIC — the same class is handed
 // to EITHER `bindServer` or `bindClient` (`@src/core`), the role coming from which
 // binder it is given to. `ServeMCPOptions` / `ServeMCPScopeInterface` back the
@@ -109,7 +109,7 @@ export interface ScopeTransportInterface extends MCPTransportInterface {
  * dedicated Web Worker or a Service Worker (or any double matching this shape).
  *
  * @remarks
- * Only the three members `serveMCPScope` actually touches: `postMessage` (the
+ * Only the members `serveMCPScope` actually touches: `postMessage` (the
  * dedicated-worker implicit reply channel), and `addEventListener` /
  * `removeEventListener` for `'message'` (every inbound event, portless or
  * port-bearing, arrives through the SAME listener — see {@link ServeMCPOptions}'s

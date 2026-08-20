@@ -15,7 +15,7 @@ import { describe, expect, it } from 'vitest'
 import { buildNestedRecord } from '../../setup.js'
 
 // parseJSONRPCMessage narrows an already-parsed value to a JSONRPCMessage or
-// undefined (AGENTS §14 — total; the raw-string JSON.parse happens in
+// undefined (total; the raw-string JSON.parse happens in
 // MCPServer.handle). Its sound partner is the COMPOSITE isJSONRPCMessage(v) &&
 // isBoundedJSON(v, limits): every defined result satisfies the guard, and every
 // composite-valid input is admitted. The guard alone carries no size or depth bound, so
@@ -120,7 +120,7 @@ describe('parseJSONRPCMessage', () => {
 		// The negative control for the corpus above. That corpus contains no guard-valid value
 		// the bounds reject, so it can prove the parser discriminates AMONG the values it admits
 		// and nothing about the population boundary itself. This value sits outside it: exact
-		// enough for the guard, depth-excessive for the composite. The block reads TWO bounds —
+		// enough for the guard, depth-excessive for the composite. The block reads separate bounds —
 		// isBoundedJSON takes the local `limits`, while parseJSONRPCMessage takes none and reads
 		// DEFAULT_MCP_LIMITS through the parser's own default — so widening either reddens the
 		// assertion that reads it. The threshold is asserted below rather than described: for a
@@ -149,8 +149,8 @@ describe('parseJSONRPCMessage', () => {
 
 		// The byte sibling of the depth control above, and the only place anywhere that puts the
 		// parser's DEFAULT byte bound under control: every other byte assertion supplies explicit
-		// limits, so raising the default alone left all of them green while eleven of thirteen
-		// call sites silently lost their size bound. This value sits inside the default depth
+		// limits, so raising the default alone left all of them green while most call sites
+		// silently lost their size bound. This value sits inside the default depth
 		// bound and outside the default byte bound. Unlike the depth control above — whose payload
 		// is a literal — this payload is derived from DEFAULT_MCP_LIMITS.content, so it is
 		// invariant to that constant's VALUE in both directions: what turns it red is decoupling
@@ -176,7 +176,7 @@ describe('parseJSONRPCMessage', () => {
 		// narrowing that would need an assertion.
 		expect(JSON.stringify(parsed)).toBe('{"id":1,"jsonrpc":"2.0","method":"ping"}')
 		expect(zero !== undefined && 'method' in zero && Object.is(zero.id, 0)).toBe(true)
-		// Integer-like keys are the population the two assertions above cannot reach. The
+		// Integer-like keys are the population the assertions above cannot reach. The
 		// canonical TEXT sorts '10' before '9' lexicographically, but JSON.parse rebuilds an
 		// object whose own keys enumerate in ascending numeric order, so the nested `params`
 		// re-stringifies as {"9":2,"10":1} while its canonical bytes are {"10":1,"9":2}. The

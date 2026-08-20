@@ -9,7 +9,7 @@ import { buildJSONRPCResult, MCPMethodManager } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
 // MCPMethodManager is the modern method registry MCPServer dispatches through — a
-// name-keyed store of real handlers (AGENTS §16: real functions, no mocks). Covers
+// name-keyed store of real handlers (real functions, no mocks). Covers
 // registration, resolution, the unregistered lookup, replacement under an existing name,
 // and the fact that resolution hands back the EXACT function that was registered.
 //

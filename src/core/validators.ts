@@ -1050,7 +1050,7 @@ export function isMCPTaskResult(value: unknown): value is MCPTaskResult {
 }
 
 /**
- * Determine whether a value is one of the extension's five task lifecycle states.
+ * Determine whether a value is one of the extension's task lifecycle states.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the value is an {@link MCPTaskStatus}
@@ -1125,7 +1125,7 @@ export function isMCPTaskDetail(value: unknown): value is MCPTaskDetail {
 	}
 }
 
-// AGENTS §14: every guard here is a TOTAL function over the already-`JSON.parse`d
+// Every guard here is a TOTAL function over the already-`JSON.parse`d
 // value — adversarial input returns `false`, never throws. The raw-string
 // `JSON.parse` (which CAN throw) happens in `MCPServer.handle` inside a try/catch;
 // these guards only ever see a parsed `unknown`. Recursive structure is walked
@@ -1196,7 +1196,7 @@ export function isBoundedJSON<T>(value: T, limits: MCPJSONLimitOptions): value i
  * absence is what makes a call a notification) and `null` is not one either (MCP
  * omits an unreadable id rather than nulling it). A runtime numeric id must be a
  * finite integer; an empty string is a legal id, because the dated schema imposes
- * no minimum length. Total (§14): any other input returns `false`.
+ * no minimum length. Total: any other input returns `false`.
  *
  * @param value - The already-parsed value to test
  * @returns `true` when `value` is a string or a finite integer
@@ -1632,7 +1632,7 @@ export function isMCPElicitResult(value: unknown): value is MCPElicitResult {
  * that answers more than it was asked is not refused for it. A `schema` that is not itself a
  * valid {@link MCPElicitSchema} admits NOTHING — an unenforceable schema is never a permissive
  * one — which is why `schema` is accepted as `unknown` and checked rather than trusted. Total
- * (§14) over hostile content and hostile schemas alike.
+ * over hostile content and hostile schemas alike.
  *
  * @param value - The accepted response content to check
  * @param schema - The exact {@link MCPElicitSchema} that was issued with the elicitation
@@ -1784,9 +1784,9 @@ export function isMCPInputResult(value: unknown): value is MCPInputResult {
  * A request is a record with `jsonrpc === '2.0'`, a string `method`, and an `id`
  * that {@link isJSONRPCId} accepts. An id-less call is NOT a request — it is a
  * {@link JSONRPCNotification}, which {@link isJSONRPCNotification} answers for. The
- * two guards are mutually exclusive on every input: this one requires a valid `id`
+ * guards are mutually exclusive on every input: this one requires a valid `id`
  * value, that one requires no own `id` member at all. `params`, when present, must
- * be a record. Total (§14): any other input returns `false`.
+ * be a record. Total: any other input returns `false`.
  *
  * @param value - The already-parsed value to test
  * @returns `true` when `value` is a valid JSON-RPC request
@@ -1814,7 +1814,7 @@ export function isJSONRPCRequest(value: unknown): value is JSONRPCRequest {
  * @remarks
  * A notification is a request-shaped call carrying NO `id` member — the protocol
  * forbids one, because nothing answers a notification. `params`, when present, must
- * be a record. Total (§14): any other input returns `false`.
+ * be a record. Total: any other input returns `false`.
  *
  * @param value - The already-parsed value to test
  * @returns `true` when `value` is a valid JSON-RPC notification
@@ -1841,7 +1841,7 @@ export function isJSONRPCNotification(value: unknown): value is JSONRPCNotificat
  *
  * @remarks
  * The union of {@link isJSONRPCRequest} and {@link isJSONRPCNotification}, which are
- * mutually exclusive, so a positive answer names exactly one arm. Total (§14).
+ * mutually exclusive, so a positive answer names exactly one arm. Total.
  *
  * @param value - The already-parsed value to test
  * @returns `true` when `value` is a valid JSON-RPC request or notification
@@ -1860,7 +1860,7 @@ export function isJSONRPCInvocation(value: unknown): value is JSONRPCInvocation 
  * which is what makes this guard and {@link isJSONRPCErrorResponse} mutually
  * exclusive on every input. `result` itself must be an object: either a modern
  * {@link isMCPResult} or a legacy {@link isMCPLegacyResult}, never a bare primitive.
- * Total (§14).
+ * Total.
  *
  * @param value - The already-parsed value to test
  * @returns `true` when `value` is a valid JSON-RPC result response
@@ -1887,17 +1887,17 @@ export function isJSONRPCResultResponse(value: unknown): value is JSONRPCResultR
  * @remarks
  * The failure OBJECT, not the envelope carrying it — the shape a failed response owns
  * under `error`, and the shape a `failed` {@link MCPTaskDetail} owns under the same name,
- * which is why it is one guard rather than the same three checks written twice.
+ * which is why it is one guard rather than the same checks written twice.
  *
  * It is deliberately STRUCTURAL rather than exact-JSON: `data` is declared `unknown`, so
  * requiring the whole object to survive a JSON clone would refuse a legal error that
  * carried a non-JSON payload. Both callers here hand it an already-owned value.
  *
- * That choice is why the two key reads are guarded. Every sibling guard clones first, and a
+ * That choice is why the key reads are guarded. Every sibling guard clones first, and a
  * clone reads each key once behind a boundary that already owns totality; this one is the
  * family's only DIRECT reader, so it meets `code` and `message` exactly as the value defines
  * them — including as accessors that throw. Reading a named key off an unowned value is
- * itself the hostile step, and it is bounded here rather than allowed to escape. Total (§14).
+ * itself the hostile step, and it is bounded here rather than allowed to escape. Total.
  *
  * @param value - The already-parsed value to test
  * @returns `true` when `value` carries an integer `code` and a string `message`
@@ -1922,7 +1922,7 @@ export function isJSONRPCError(value: unknown): value is JSONRPCError {
  * `id` is OPTIONAL here and only here: a peer that could not read the failed
  * request's id OMITS the member rather than sending `null`, so an absent `id` is
  * valid and a `null` one is not. The envelope must own an `error` and must NOT own a
- * `result`. `error` carries an integer `code` and a string `message`. Total (§14).
+ * `result`. `error` carries an integer `code` and a string `message`. Total.
  *
  * @param value - The already-parsed value to test
  * @returns `true` when `value` is a valid JSON-RPC error response
@@ -1947,7 +1947,7 @@ export function isJSONRPCErrorResponse(value: unknown): value is JSONRPCErrorRes
  * Determine whether a parsed value is a {@link JSONRPCResponse}.
  *
  * @remarks
- * The union of the two mutually exclusive arms. Total (§14).
+ * The union of the mutually exclusive arms. Total.
  *
  * @param value - The already-parsed value to test
  * @returns `true` when `value` is a valid JSON-RPC response
@@ -1961,7 +1961,7 @@ export function isJSONRPCResponse(value: unknown): value is JSONRPCResponse {
  * response.
  *
  * @remarks
- * The union of {@link isJSONRPCInvocation} and {@link isJSONRPCResponse}. Total (§14).
+ * The union of {@link isJSONRPCInvocation} and {@link isJSONRPCResponse}. Total.
  *
  * @param value - The already-parsed value to test
  * @returns `true` when `value` is a valid JSON-RPC message

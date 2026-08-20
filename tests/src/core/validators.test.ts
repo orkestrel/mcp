@@ -113,7 +113,7 @@ import {
 	GUARD_KEY_NAMES,
 } from '../../setup.js'
 
-// The JSON-RPC 2.0 wire guards (AGENTS §14 — total functions over an already-parsed
+// The JSON-RPC 2.0 wire guards (total functions over an already-parsed
 // `unknown`; adversarial input returns `false`, never throws). A request REQUIRES an
 // `id` and a notification forbids one; a response carries EXACTLY ONE of result / error,
 // and only the error arm may omit its `id`.
@@ -1011,7 +1011,7 @@ describe('isElicitContent', () => {
 	})
 })
 
-// The two RFC 3339 format guards. The membership rule is "a well-formed spelling naming a
+// The RFC 3339 format guards. The membership rule is "a well-formed spelling naming a
 // day that exists", so the rows are drawn from BOTH sides of it: bad shapes (the class a
 // regex already ranges over) and well-formed shapes naming impossible days (the class a
 // shape-only check silently admits).
@@ -1260,7 +1260,7 @@ describe('isJSONRPCRequest / isJSONRPCNotification — mutual exclusivity', () =
 	})
 })
 
-// Row 10 / row 11: the open modern result and the legacy arm are distinguished by ONE
+// The open modern result and the legacy arm are distinguished by ONE
 // fact — whether `resultType` is there — and that is what keeps a concrete result's
 // literal discriminant meaningful while the response arm stays open.
 describe('isMCPResult / isMCPLegacyResult', () => {
@@ -1613,7 +1613,7 @@ describe('draft Tasks extension validators', () => {
 		}
 	})
 
-	it('accepts exactly the five lifecycle states', () => {
+	it('accepts exactly the lifecycle states', () => {
 		for (const status of ['working', 'input_required', 'completed', 'failed', 'cancelled']) {
 			expect(isMCPTaskStatus(status)).toBe(true)
 		}
@@ -1705,7 +1705,7 @@ describe('draft Tasks extension validators', () => {
 })
 
 // The `error` OBJECT, extracted because a failed response and a `failed` task snapshot owe the
-// same three checks and had been writing them twice.
+// same checks and had been writing them twice.
 describe('isJSONRPCError', () => {
 	it('accepts an integer code with a string message and any data payload', () => {
 		expect(isJSONRPCError({ code: -32602, message: 'Invalid params' })).toBe(true)
@@ -1744,7 +1744,7 @@ const TOTALITY_SCHEMA: MCPElicitSchema = Object.freeze({
 	properties: Object.freeze({}),
 })
 
-// Every published guard as a unary call. The three guards taking a second argument are given a
+// Every published guard as a unary call. The guards taking a second argument are given a
 // real one, because a guard starved of its bound would be answering a different question.
 const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = Object.freeze({
 	isAbsoluteURI,
@@ -2020,7 +2020,7 @@ describe('the modern result contracts', () => {
 		expectTypeOf<{ readonly tools: readonly MCPToolDescriptor[] }>().not.toExtend<MCPListResult>()
 	})
 
-	it('makes the modern stamp the only difference between the two call results', () => {
+	it('makes the modern stamp the only difference between the call results', () => {
 		expectTypeOf<MCPCallResult>().toExtend<MCPUnstampedCallResult>()
 		expectTypeOf<MCPUnstampedCallResult>().not.toExtend<MCPCallResult>()
 		expectTypeOf<MCPUnstampedCallResult>().toExtend<MCPLegacyResult>()

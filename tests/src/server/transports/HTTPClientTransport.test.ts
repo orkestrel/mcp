@@ -34,7 +34,7 @@ import { createTeardown, startServer } from '../../../setupServer.js'
 
 // src/server/mcp/HTTPClientTransport.ts — the HTTP CLIENT transport, proven END-TO-END
 // against the SHIPPED server transport (`createMCPRoutes`) over a REAL `node:http` server
-// + a REAL MCPServer over a REAL ToolManager (AGENTS §16 — no mocks, no live model). An
+// + a REAL MCPServer over a REAL ToolManager (no mocks, no live model). An
 // `MCPClient` driving `createHTTPClientTransport` connects, discovers, and calls the
 // remote tools over `fetch`, exercising BOTH reply framings the server can choose: the
 // plain JSON body (`streaming: false`) and the Streamable-HTTP SSE `data:` event
@@ -235,7 +235,7 @@ describe('HTTPClientTransport — lifecycle', () => {
 		])
 	})
 
-	// W06 row 37 — the Node half of the SHARED projection table. The browser face used to
+	// The Node half of the SHARED projection table. The browser face used to
 	// route the same read through `parseRequestContext` and withheld the header on every
 	// context that is modern-by-key-presence but not fully well formed; both faces now
 	// project through `inferRequestVersion`, so this table has one answer per row on both.
@@ -261,7 +261,7 @@ describe('HTTPClientTransport — lifecycle', () => {
 		},
 	)
 
-	// The server's expectation is the third site that reads the same fact, and it is the
+	// The server's expectation is another site that reads the same fact, and it is the
 	// reason the raw read is the correct one: `inferHeaderIssue` demands a header for every
 	// context this projection yields a version for, so agreement here IS the absence of a
 	// refusal. A context the projector answers `undefined` for is one the server does not ask

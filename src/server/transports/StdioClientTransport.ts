@@ -26,7 +26,7 @@ import { dispatchLines } from '../helpers.js'
  *   `readline`-framed `lines` iterable, so a multi-byte UTF-8 sequence split across two reads is
  *   decoded whole and a final line written without a trailing newline still arrives. Each framed
  *   line is decoded and delivered via the shared {@link dispatchLines} helper — a well-formed
- *   {@link JSONRPCMessage} emits `message`, a malformed line emits `error` (§14, never throws).
+ *   {@link JSONRPCMessage} emits `message`, a malformed line emits `error` (never throws).
  * - **Outbound (`send`).** `send(message)` writes one newline-terminated `JSON.stringify`d line
  *   through the supervisor's `send` and AWAITS its answer, so this promise settles only after the
  *   host reports the line handled rather than the moment the write is queued. The supervisor never
@@ -37,7 +37,7 @@ import { dispatchLines } from '../helpers.js'
  *   `SIGKILL` group-kill, awaits its observed exit, tears down the supervisor, and fires `close`
  *   once (idempotent). On a POSIX host the child leads its own process group, so the group-kill
  *   reaches its grandchildren rather than orphaning them.
- * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
+ * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
  *   fault, including the child spawn cause the supervisor surfaces), distinct from the emitter's
  *   own listener-error channel.

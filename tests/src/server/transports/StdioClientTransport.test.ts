@@ -6,7 +6,7 @@ import { StdioClientTransport } from '@src/server'
 
 // src/server/transports/StdioClientTransport.ts — the stdio CLIENT transport, driven END TO
 // END against a REAL spawned child process (a tiny inline `node -e` script standing in for a
-// stdio MCP server — AGENTS §16, a real process, not a mock). The child reads
+// stdio MCP server, a real process, not a mock). The child reads
 // newline-delimited JSON-RPC lines off its stdin and echoes a canned reply per method: `ping`
 // → a result envelope, `boom` → a deliberately malformed (non-JSON) line, anything else → no
 // reply (a notification-shaped silence). Proves: `start()` spawns the child; a reply line

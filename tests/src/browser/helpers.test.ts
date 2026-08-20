@@ -14,7 +14,7 @@ import { waitForDelay } from '@orkestrel/test'
 import { createJSONRPCRequest, MODERN_METADATA, modernRequest } from '../../setup.js'
 
 // serveMCPScope (`src/browser/helpers.ts`) — the exported, scope-parameterized core
-// `serveMCP` wraps over `globalThis`. Driven here with SCOPE DOUBLES (AGENTS §16 — a
+// `serveMCP` wraps over `globalThis`. Driven here with SCOPE DOUBLES (a
 // real object satisfying `ServeMCPScopeInterface`'s structural shape, not a mock of
 // this package's own code) covering BOTH shapes the unified design serves: a
 // dedicated-worker-shaped double (implicit portless channel) and a
@@ -381,10 +381,10 @@ describe('serveMCPScope — hostile inbound', () => {
 // `teardowns`. `serveMCPScope`'s disposer could reach only the second one, so a Service Worker —
 // the shape the doc names, whose closure lives as long as the worker — retained every
 // `MessagePort` it had ever accepted, including ports already closed and unbound, for the
-// worker's life. Two collections over one lifetime is what let one of them be forgotten.
+// worker's life. Separate collections over one lifetime is what let one of them be forgotten.
 //
 // There is now one collection: the teardown map is KEYED by the port it tears down, so
-// membership answers "already bound?" and clearing the map drops both facts at once. The two
+// membership answers "already bound?" and clearing the map drops both facts at once. The
 // rows below drive the exported listener with a caller-owned map, which is the only seam from
 // which either fact is observable at all.
 

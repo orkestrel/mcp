@@ -35,7 +35,8 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   event, and VALIDATES `Sec-WebSocket-Accept === computeWebSocketAccept(key)` (the D2 helper)
  *   — a mismatch (or a non-`101` response, or a request error) REJECTS `start()` and the socket
  *   is destroyed. On success it wraps the raw upgraded socket in `createNodeWebSocket({ socket,
- *   head })` (CLIENT mode — no key → frames are MASKED per §5.3) and bridges its `message`.
+ *   head })` (CLIENT mode — no key → frames are MASKED per RFC 6455 §5.3) and bridges its
+ *   `message`.
  * - **The arriving socket is RE-ASKED for, never assumed.** `start()` suspends across that
  *   connect and upgrade, so it re-checks the transport's state before installing anything: a
  *   concurrent `start()` that already installed a socket, or a {@link close} that ended the
@@ -45,7 +46,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  * - **Inbound (`message`).** Each decoded text frame is `JSON.parse`d (guarded) and narrowed
  *   with `parseJSONRPCMessage` — a {@link JSONRPCMessage} re-emits on this transport's `message`
  *   event (the reply the {@link import('@src/core').MCPClientInterface} correlates by `id`); a
- *   non-JSON / non-message frame surfaces on `error` and is dropped (§14). The socket's `close`
+ *   non-JSON / non-message frame surfaces on `error` and is dropped. The socket's `close`
  *   / `error` bridge to this transport's events.
  * - **Outbound (`send`).** `send(message)` writes one masked text frame.
  * - **`close()`** unsubscribes from the socket, closes it, and fires `close` (idempotent). An
@@ -55,7 +56,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  * - **URL scheme.** `options.url` accepts a `ws://` / `wss://` URL or an `http://` / `https://`
  *   one; a `ws(s)` scheme is converted to `http(s)` for the underlying upgrade request (`wss`
  *   → TLS via `node:https`). Either reaches the same endpoint.
- * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); every emit
+ * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); every emit
  *   the emitter isolates a listener throw (a buggy observer never corrupts the transport);
  *   `error` is a DOMAIN event (a transport-level fault).
  *
@@ -222,7 +223,7 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 
 	// Decode one inbound text frame: `JSON.parse` → `parseJSONRPCMessage`. A well-formed
 	// message re-emits on `message`; a malformed / non-message frame surfaces on `error` and
-	// is dropped (§14 — never throws on adversarial wire input).
+	// is dropped (never throws on adversarial wire input).
 	#receive(text: string): void {
 		let parsed: unknown
 		try {

@@ -1,8 +1,8 @@
-// The MCP browser-transport constants (AGENTS §5 constants file) — the wire-level
+// The MCP browser-transport constants — the wire-level
 // header names the browser-face HTTP client transport echoes, matching the Node
 // face's session, protocol-version, method, and name headers byte-for-byte. The
-// browser face imports nothing from `src/server` (peer environment faces, per
-// AGENTS §2), so the literals are declared once here too — the SAME strings, not
+// browser face imports nothing from `src/server` (peer environment faces share no
+// import), so the literals are declared once here too — the SAME strings, not
 // shared symbols.
 
 /**
@@ -47,7 +47,7 @@ export const DEFAULT_MCP_SERVER_VERSION = '1.0.0'
 
 // The WebSocket subprotocol constant, declared here independently of the Node face's
 // `MCP_WEBSOCKET_SUBPROTOCOL` (`src/server/constants.ts`) — peer environment faces share
-// no import (AGENTS §2), so the same value is declared twice. The browser face's
+// no import, so the same value is declared on each face. The browser face's
 // `WebSocketClientTransport` defaults to this value when `protocols` is omitted, matching
 // `createWebSocketServer`'s unconditional echo.
 

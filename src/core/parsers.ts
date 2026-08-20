@@ -35,7 +35,7 @@ import {
  * it is not one.
  *
  * @remarks
- * Total (§14) — a non-message returns `undefined`, never throws. The input must
+ * Total — a non-message returns `undefined`, never throws. The input must
  * ALREADY be `JSON.parse`d: the raw-string parse (which can throw on malformed
  * JSON) happens in `MCPServer.handle` inside a try/catch that maps a parse failure
  * to a `-32700` response.
@@ -49,7 +49,7 @@ import {
  * result. Identity is not preserved and is not promised.
  *
  * The parser's sound partner is the COMPOSITE `isJSONRPCMessage(value) &&
- * isBoundedJSON(value, limits)`, and against it both halves of the §15 soundness law
+ * isBoundedJSON(value, limits)`, and against it both halves of the soundness law
  * hold by construction:
  *
  * - Every non-`undefined` result satisfies {@link isJSONRPCMessage}, because the guard

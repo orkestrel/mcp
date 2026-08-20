@@ -1,4 +1,4 @@
-// The MCP server-transport surface — the source of truth (AGENTS §2). Two transports
+// The MCP server-transport surface — the source of truth. The transports
 // for the Model Context Protocol over the server spine: the Streamable HTTP transport
 // (route handlers via `createMCPRoutes` + the `fetch` egress `createHTTPClientTransport`)
 // and the WebSocket transport (an ingress `createWebSocketServer` over the spine's
@@ -168,7 +168,7 @@ export interface HTTPTransportOptions<TState = unknown> extends HTTPHandlerOptio
  * - `clock` — the `() => number` epoch-ms clock {@link import('./middlewares.js').createMCPSession}
  *   uses directly for its own session-touch / TTL-sweep bookkeeping; defaults to `Date.now`. The
  *   deterministic clock a TTL test advances explicitly instead of racing a real idle window
- *   against wall-clock (AGENTS §16). Production never sets it.
+ *   against wall-clock. Production never sets it.
  * - `origin` — the same shared origin-validation options supplied to `createMCPRoutes`.
  *   Validation is enabled by default, accepts canonical loopback-literal origins, and rejects
  *   every other present origin outside its exact list before any session is minted. Set
@@ -243,7 +243,7 @@ export interface MCPSessionState {
  * - `message` — the server→client {@link JSONRPCMessage} that was pushed.
  * - `timestamp` — the epoch-ms instant the entry was appended, read by the TTL eviction.
  *
- * A plain value record (no behavior, §4.5) — the unit {@link MCPSessionInterface.replay}
+ * A plain value record (no behavior) — the unit {@link MCPSessionInterface.replay}
  * returns.
  */
 export interface EventStoreEntry {
@@ -349,7 +349,7 @@ export interface WebSocketServerOptions {
  * This face owns its own `node:http(s)` upgrade request, so it can set any header on it. A
  * page cannot — the native `WebSocket` constructor takes a URL and subprotocols and nothing
  * else — so a `headers` key over there would be an option that silently did nothing. Do not
- * "harmonize" the two shapes.
+ * "harmonize" the option shapes.
  */
 export interface WebSocketClientTransportOptions {
 	readonly url: string
@@ -396,7 +396,7 @@ export interface StdioServerOptions {
  * the trailing partial line carried forward as the new `remainder`.
  *
  * @remarks
- * A plain value record (no behavior, §4.5) {@link import('./helpers.js').extractLines}
+ * A plain value record (no behavior) {@link import('./helpers.js').extractLines}
  * returns; the caller threads `remainder` back in as the next call's `buffer`.
  */
 export interface LineExtraction {

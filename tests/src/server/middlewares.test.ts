@@ -40,7 +40,7 @@ import {
 	startServer,
 } from '../../setupServer.js'
 
-// ── createMCPSession — the plug-and-play stateful session middleware ──────────
+// ── createMCPSession — the plug-and-play stateful session middleware ─────────
 //
 // src/server/middlewares.ts — `createMCPSession` is the NATIVE MCP session layer (NO
 // dependency on `@orkestrel/middleware`): a closure `Map` mints a session on `initialize`,
@@ -96,7 +96,7 @@ function authenticateCaller(caller: unknown): MiddlewareHandler<AppState> {
 // Stand up a STATEFUL MCP server: `createMCPSession` in front of a session-agnostic
 // `createMCPRoutes`, plus (optionally) the in-request push-trigger app middleware. `ttl` /
 // `capacity` / `clock` flow to the session middleware (`clock` is the deterministic manual
-// clock the TTL specs advance explicitly — AGENTS §16).
+// clock the TTL specs advance explicitly).
 async function startSession(options?: {
 	readonly ttl?: number
 	readonly capacity?: number
@@ -508,7 +508,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 })
 
-// ── Resumable server→client SSE stream (the GET-SSE push tier) ────────────────
+// ── Resumable server→client SSE stream (the GET-SSE push tier) ───────────────
 //
 // `createMCPSession` registers the resumable `GET {path}` SSE channel: a server-side push ARRIVES
 // on the open stream decoded via the core `SSEParser` (`readSSEStream`) carrying a monotone id, and
@@ -674,7 +674,7 @@ describe('createMCPSession — lazy session TTL eviction', () => {
 	})
 })
 
-// ── W05-B rows 20-22 — `touched` is the instant of the LAST access ───────────
+// ── `touched` is the instant of the LAST access ──────────────────────────────
 //
 // `MCPSessionEntry.touched` is defined as the instant of the last access, and both session
 // paths read the clock BEFORE `await next(forwarded)` and installed the entry AFTER it. Every
@@ -685,7 +685,7 @@ describe('createMCPSession — lazy session TTL eviction', () => {
 // already expired by the time it is stored.
 
 describe('createMCPSession — `touched` is the instant of the last access', () => {
-	// Row 20 — the MINT path. `createMCPSession` stamps `touched` when it mints, suspends across
+	// The MINT path. `createMCPSession` stamps `touched` when it mints, suspends across
 	// the whole `initialize` round trip, then inserts that PRE-suspension instant. A handshake
 	// that takes longer than the ttl is therefore inserted ALREADY EXPIRED, and the very next
 	// request for the id the server just advertised is swept before it is resolved → 404.
@@ -705,7 +705,7 @@ describe('createMCPSession — `touched` is the instant of the last access', () 
 		expect(echoed.status).toBe(200)
 	})
 
-	// Row 21 — the RESOLVED-EXISTING path, which has the same shape at `:140-141` and needs its
+	// The RESOLVED-EXISTING path, which has the same shape at `:140-141` and needs its
 	// own proof: a session that is used CONTINUOUSLY, by requests each of which outlasts the ttl,
 	// must never expire. Its `touched` is re-read after each suspension or every long request
 	// leaves the session one sweep away from death.
@@ -734,7 +734,7 @@ describe('createMCPSession — `touched` is the instant of the last access', () 
 		expect(second.status).toBe(200)
 	})
 
-	// The control, drawn from OUTSIDE the population the two rows above cover. Both of them are
+	// The control, drawn from OUTSIDE the population the preceding rows cover. Those rows are
 	// requests whose handler produces a RESULT; this one is a notification, answered `202` by a
 	// handler that computes nothing and returns no body. A fix that re-stamped only where it
 	// happened to be looking — the result path, the `response.ok` branch, a request carrying an
@@ -761,7 +761,7 @@ describe('createMCPSession — `touched` is the instant of the last access', () 
 		expect(echoed.status).toBe(200)
 	})
 
-	// Row 22 — RETAINED, and asserted rather than inspected, so rows 20 and 21 cannot silently
+	// RETAINED, and asserted rather than inspected, so the mint and resolve paths cannot silently
 	// invert it. The TTL sweep runs BEFORE the id is resolved: an idle-expired session is gone
 	// from the store, not merely refused. Were resolution to run first, the echo would touch the
 	// entry and carry it past its own cutoff — a session that never dies while anyone knocks.
@@ -821,7 +821,7 @@ describe('createMCPSession — `touched` is the instant of the last access', () 
 		expect(after.status).toBe(404)
 	})
 
-	// The other half of row 22's ordering claim: a session INSIDE its window is resolved by the
+	// The other half of the retention ordering claim: a session INSIDE its window is resolved by the
 	// same sweep-then-resolve order and answers normally. Without this, "everything 404s" would
 	// satisfy the assertion above.
 	it('leaves a session inside its window untouched by the sweep', async () => {

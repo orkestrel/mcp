@@ -31,7 +31,7 @@ import { isString } from '@orkestrel/contract'
  *   structured-clones it — a string clones to an identical string, so the wire stays
  *   plain JSON-RPC text like every other transport in this package). Inbound: a
  *   non-string `event.data` (a host or a misbehaving peer posting a structured
- *   object) is IGNORED — dropped silently, never forwarded, never thrown (§14) —
+ *   object) is IGNORED — dropped silently, never forwarded, never thrown —
  *   because `MCPTransportInterface` carries no `error` channel for this port to
  *   surface a non-string frame on (unlike `MCPClientTransportInterface`'s `emitter`);
  *   silently ignoring is the total, contract-shaped choice.
@@ -100,7 +100,7 @@ export class MessagePortTransport implements MCPTransportInterface {
 	}
 
 	// Decode one inbound `postMessage` payload: a non-string `data` is dropped, never
-	// forwarded (§14 — this port carries only plain JSON-RPC text). A string reaches the
+	// forwarded (this port carries only plain JSON-RPC text). A string reaches the
 	// registered `listen` handler unchanged (the string IS the JSON-RPC message; parsing is
 	// entirely the core's concern, per the port contract).
 	#receive(data: unknown): void {

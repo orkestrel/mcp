@@ -171,7 +171,7 @@ describe('createWebSocketClientTransport — the browser client against the Node
 	})
 })
 
-// ── Row 37: ONE header mechanism, proven on the browser face ─────────────────
+// ── ONE header mechanism, proven on the browser face ─────────────────────────
 //
 // The Node face read `_meta[MCP_META_VERSION]` raw; this face routed the same read through
 // `parseRequestContext`, which ALSO requires a valid client-capability declaration and a
@@ -180,7 +180,7 @@ describe('createWebSocketClientTransport — the browser client against the Node
 // face withheld a header the server demanded — and earned `-32602` for it.
 //
 // The table is shared with the Node suite (`HEADER_PROJECTION_CONTEXTS`), so one face
-// cannot answer it differently from the other, and three of its five rows are contexts
+// cannot answer it differently from the other, and some of its rows are contexts
 // that parse on ONLY ONE path. A table where every row agreed would prove nothing.
 
 describe('createHTTPClientTransport — one protocol-version projection, shared with the Node face', () => {
@@ -206,10 +206,10 @@ describe('createHTTPClientTransport — one protocol-version projection, shared 
 		},
 	)
 
-	// The table is only evidence about the divergence if it CONTAINS the divergence. Three
+	// The table is only evidence about the divergence if it CONTAINS the divergence. Some
 	// rows are modern by key presence and refused by `parseRequestContext`: those are exactly
 	// the rows the old browser path answered with no header at all.
-	it('carries contexts that parse on only ONE of the two paths', () => {
+	it('carries contexts that parse on only ONE of the paths', () => {
 		const divergent = HEADER_PROJECTION_CONTEXTS.filter(
 			(context) => !context.parsed && context.version !== undefined,
 		)
@@ -423,9 +423,9 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 })
 
 // ── MessagePort: a genuinely SYMMETRIC MCPTransportInterface, both sides driven by
-// the SAME class over one REAL native `new MessageChannel()` (AGENTS §16 —
-// no mocks) — port1 bound to a REAL server (`bindServer`), port2 driving a REAL
-// client (`bindClient` + `createDuplexClientTransport`) ──────────────────────────
+// the SAME class over one REAL native `new MessageChannel()` (no mocks) — port1
+// bound to a REAL server (`bindServer`), port2 driving a REAL
+// client (`bindClient` + `createDuplexClientTransport`) ───────────────────────
 
 describe('createMessagePortTransport — a symmetric MCPTransportInterface over a real MessageChannel', () => {
 	it('connect → tools/list → tools/call(add): a value round-trips over port1/port2', async () => {
@@ -545,7 +545,7 @@ describe('createMessagePortTransport — a symmetric MCPTransportInterface over 
 	})
 })
 
-// ── Rows 34/35: `duplex` is a property of the CARRIER, not a literal it returns ──
+// ── `duplex` is a property of the CARRIER, not a literal it returns ──────────
 //
 // Every transport declares `duplex`, and `MCPClient` writes a client-initiated
 // `notifications/cancelled` only where the declaration is `true`. Reading the getter back
@@ -559,7 +559,7 @@ describe('createMessagePortTransport — a symmetric MCPTransportInterface over 
 // test it exactly where it has never been wrong.
 
 describe('duplex — driven per carrier, and observed at the peer', () => {
-	it('row 34: the WebSocket carrier declares duplex and really carries the frame', async () => {
+	it('the WebSocket carrier declares duplex and really carries the frame', async () => {
 		const transport = createWebSocketClientTransport({
 			url: `${serverURL}/record`,
 			protocols: MCP_WEBSOCKET_SUBPROTOCOL,
@@ -575,7 +575,7 @@ describe('duplex — driven per carrier, and observed at the peer', () => {
 		await client.disconnect()
 	})
 
-	it('row 34: the Streamable-HTTP carrier declares no such channel and sends nothing', async () => {
+	it('the Streamable-HTTP carrier declares no such channel and sends nothing', async () => {
 		const transport = createHTTPClientTransport({ url: `${serverURL}/mcp` })
 		const client = createMCPClient({ transport })
 		await client.connect()
@@ -589,7 +589,7 @@ describe('duplex — driven per carrier, and observed at the peer', () => {
 		expect(readMethods(frames)).toEqual(['tools/call'])
 	})
 
-	it('row 35: createDuplexClientTransport over a real MessageChannel carries the frame', async () => {
+	it('createDuplexClientTransport over a real MessageChannel carries the frame', async () => {
 		const { port1, port2 } = new MessageChannel()
 		bindServer(createCalculatorServer(), createMessagePortTransport({ port: port1 }))
 		const carrier = createMessagePortTransport({ port: port2 })
@@ -607,7 +607,7 @@ describe('duplex — driven per carrier, and observed at the peer', () => {
 		await client.disconnect()
 	})
 
-	it('row 35: createDuplexClientTransport over a real scope pair carries the frame', async () => {
+	it('createDuplexClientTransport over a real scope pair carries the frame', async () => {
 		const carrier = createScopeCarrier()
 		bindServer(createCalculatorServer(), carrier.server)
 		const transport = createDuplexClientTransport(carrier.client)
@@ -626,7 +626,7 @@ describe('duplex — driven per carrier, and observed at the peer', () => {
 	// THE CONTROL, from outside the population: a real one-way carrier that declares
 	// `duplex: true` and cannot carry. `createDuplexClientTransport` returns the literal for
 	// ANY `MCPTransportInterface`, so closing the peer half after the handshake produces a
-	// carrier whose declaration is a lie — and the driven proof the four cases above pass
+	// carrier whose declaration is a lie — and the driven proof the cases above pass
 	// must come back FALSE for it. An instrument that reported "carried" here could not tell
 	// a duplex carrier from a declaration.
 	it('CONTROL: a lying one-way carrier declares duplex and the driven proof fails for it', async () => {

@@ -1,6 +1,6 @@
 // General, environment-agnostic test helpers — no `node:*`, no `document`/`window`. Loaded by
 // every test project (core, server, guides). Environment-specific harnesses live in
-// `tests/setupServer.ts` (AGENTS §16.1).
+// `tests/setupServer.ts`.
 
 import type { EmitterInterface, EventMap } from '@orkestrel/emitter'
 import type { SSEEvent } from '@orkestrel/sse'
@@ -132,7 +132,7 @@ export type EmitterRecorders<TMap extends EventMap, TName extends keyof TMap> = 
 
 /**
  * Narrow an accumulated `Partial<EmitterRecorders>` to its total mapped form once every
- * listed event has a recorder present — the §14 guard standing in for an assertion in
+ * listed event has a recorder present — the total guard standing in for an assertion in
  * {@link recordEmitterEvents} (whose loop assigns one recorder per name, so this holds; the
  * explicit per-name presence check keeps the narrowing a sound guard, not a cast).
  *
@@ -151,7 +151,7 @@ export function isTotal<TMap extends EventMap, TName extends keyof TMap>(
 
 /**
  * Wire one {@link createRecorder} onto `emitter` for each of the named events — the one
- * generic form of a per-entity `recordXEvents` bundle (AGENTS §16.1). Each recorder
+ * generic form of a per-entity `recordXEvents` bundle. Each recorder
  * subscribes via `emitter.on(name, recorder.handler)` and is returned keyed by its event
  * name, typed with that event's argument tuple — so a test asserts what fired
  * (`events.request.calls`) and with which payload.
@@ -169,7 +169,7 @@ export function recordEmitterEvents<TMap extends EventMap, TName extends keyof T
 	// Accumulate into a `Partial` of the exact mapped shape — every value keeps its precise
 	// per-event tuple type, all keys optional until assigned. The dynamic key list is the
 	// untyped edge: once every listed name is present we narrow `Partial` → total through a
-	// guard, never an assertion (§14).
+	// guard, never an assertion.
 	const recorders: Partial<EmitterRecorders<TMap, TName>> = {}
 	for (const name of events) {
 		const recorder = createRecorder<TMap[typeof name]>()
@@ -203,7 +203,7 @@ export function isMCPMethodHandler(value: unknown): value is MCPMethodHandler {
 	return typeof value === 'function'
 }
 
-// ── Async wait (AGENTS §16.1) ─────────────────────────────────────────────────
+// ── Async wait ───────────────────────────────────────────────────────────────
 
 /**
  * Resolve when a signal aborts — the wakeup a cooperating producer parks on, so a fixture
@@ -252,7 +252,7 @@ export async function waitForSettlement<T>(
 
 // ── JSON-RPC message factory (MCP request shape) ─────────────────────────────
 //
-// AGENTS §16.1: the well-formed JSON-RPC 2.0 request literal the MCP tests repeat
+// the well-formed JSON-RPC 2.0 request literal the MCP tests repeat
 // (`{ jsonrpc: '2.0', method, id }`) folded into one builder with a sensible default plus
 // per-call overrides, so a test names only the `method` / `id` / `params` its scenario
 // varies. A real `JSONRPCRequest` (env-agnostic — only the `@src/core` type), NOT a mock
@@ -262,7 +262,7 @@ export async function waitForSettlement<T>(
  * Build a well-formed {@link JSONRPCRequest} — the default `{ jsonrpc: '2.0', method:
  * 'initialize', id: 1 }` merged with per-call overrides (a different `method` / `id`, or a
  * `params` payload), so the MCP dispatch / transport tests name only the field that
- * matters instead of re-typing the envelope (AGENTS §16.1).
+ * matters instead of re-typing the envelope.
  *
  * @param overrides - Fields to override on the default request (`method` / `id` / `params`)
  * @returns The assembled JSON-RPC request
@@ -292,7 +292,7 @@ export function createJSONRPCNotification(
 /**
  * Build a record nested `depth` levels deep around a `{ leaf: true }` terminal — the shared
  * builder for the JSON depth-bound batteries, so a test names only the nesting its scenario
- * needs instead of hand-writing a literal nobody can count (AGENTS §16.1).
+ * needs instead of hand-writing a literal nobody can count.
  *
  * @param depth - How many record levels to wrap around the terminal leaf
  * @returns A freshly built nested record
@@ -535,16 +535,16 @@ export const MODERN_METADATA: Readonly<Record<string, unknown>> = Object.freeze(
 	[MCP_META_CAPABILITIES]: Object.freeze({}),
 })
 
-// ── Header-projection table (W06 row 37 — ONE mechanism, proven on BOTH faces) ─
+// ── Header-projection table (ONE mechanism, proven on BOTH faces) ────────────
 //
-// The two HTTP client transports each stamp `mcp-protocol-version` on a modern POST, and
+// The HTTP client transports each stamp `mcp-protocol-version` on a modern POST, and
 // they used to disagree about how to read it: the Node face read `_meta` raw while the
 // browser face routed through `parseRequestContext`, which additionally requires a valid
 // client-capability declaration. The server's own expectation (`inferHeaderIssue`) reads
 // raw, so the browser face withheld a header the server demanded and earned `-32602`.
 //
 // This table is shared BY BOTH projects so one row cannot pass on one face and fail on the
-// other, and three of its five rows are contexts that parse on ONLY ONE path — a table
+// other, and some of its rows are contexts that parse on ONLY ONE path — a table
 // where every row agrees would prove nothing about the divergence it exists to catch.
 
 /** One row of the protocol-version projection both HTTP client transports must answer alike. */
@@ -928,14 +928,14 @@ export function inspectOwnerOfLastResort(source: string): readonly string[] {
 
 // ── In-process loopback MCP client transport (env-agnostic scenario builder) ─
 //
-// AGENTS §16.1: the `MCPClientTransportInterface` doc for `@src/core` names "the in-process
+// the `MCPClientTransportInterface` doc for `@src/core` names "the in-process
 // loopback transport in the tests" as one of its concrete forms — this is that shared,
 // general one. It dispatches straight to a REAL `MCPServerInterface` with no wire, no
-// network — a real transport, not a mock (§16). A test needing gated / instrumented
+// network — a real transport, not a mock. A test needing gated / instrumented
 // responses (withholding a reply to drive a timeout) still keeps its own bespoke variant
-// local (AGENTS §16.1 — only a genuinely reusable form is centralized).
+// local (only a genuinely reusable form is centralized).
 
-// ── Duplex instrument (W06 rows 34/35 — DRIVE the declaration, never read it) ─
+// ── Duplex instrument (DRIVE the declaration, never read it) ─────────────────
 //
 // `duplex` is a claim a carrier makes about ITSELF, and getting it wrong is invisible:
 // `send` accepts any message, so a carrier with no client→server notification channel
@@ -1062,7 +1062,7 @@ export function postJSON(
 // `@orkestrel/sse` parser — so a test asserts the EXACT events the seam serialized,
 // proving the encode ↔ decode round-trip. No `node:*` / DOM — web `Response` /
 // `ReadableStream` / `TextDecoder` are global in both the node and the browser test
-// runners (AGENTS §16.1).
+// runners.
 
 /**
  * Drain a `fetch` Response's SSE body to completion, returning every dispatched
@@ -1112,7 +1112,7 @@ export async function* readSSEStream(response: Response): AsyncGenerator<SSEEven
 	}
 }
 
-// ── Deterministic clock (session TTL batteries) ───────────────────────────────
+// ── Deterministic clock (session TTL batteries) ──────────────────────────────
 
 /** A manually-driven epoch-ms clock plus the control to advance it explicitly. */
 export interface ManualClockInterface {
@@ -1123,7 +1123,7 @@ export interface ManualClockInterface {
 }
 
 /**
- * Create a {@link ManualClockInterface} — a manual-time clock-reading seam (AGENTS §16).
+ * Create a {@link ManualClockInterface} — a manual-time clock-reading seam.
  * Injected wherever a `clock: () => number` option is exposed (`createMCPSession`
  * threads a trailing `now`): the test advances the instant explicitly instead of
  * sleeping through a real TTL window, so idle-TTL eviction is deterministic under any
@@ -1202,8 +1202,8 @@ export function createRecordingTransport(mcp: MCPServerInterface): TestTransport
  *
  * @remarks
  * The peer half of every client-side task scenario. Its negative control is
- * {@link createCalculatorServer}, which configures no `task` at all and therefore answers all
- * three `tasks/*` methods `-32601` — a server drawn from OUTSIDE the extension's population,
+ * {@link createCalculatorServer}, which configures no `task` at all and therefore answers
+ * every `tasks/*` method `-32601` — a server drawn from OUTSIDE the extension's population,
  * which is what makes "the client mirrors the server port" falsifiable rather than circular.
  *
  * @param tasks - The durable store the server creates tasks in and reads them back from
@@ -1354,7 +1354,7 @@ export class TestTaskManager implements MCPTaskManagerInterface {
 		return created
 	}
 
-	// The port's `undefined` carries three facts at once, and this manager produces all three:
+	// The port's `undefined` carries several facts at once, and this manager produces each:
 	// a task that never existed, one `purge()` removed, and one belonging to another caller.
 	// Distinguishing them HERE — by throwing for the unauthorized case, say — is what would
 	// turn the store into an enumeration oracle, so it does not.
@@ -1386,7 +1386,7 @@ export class TestTaskManager implements MCPTaskManagerInterface {
 	}
 
 	// One task's work. The signal is present only when this manager was built to bind it,
-	// which is the whole difference between the two halves of the port's TSDoc proof.
+	// which is the whole difference between the halves of the port's TSDoc proof.
 	async #run(id: string, signal: AbortSignal | undefined): Promise<void> {
 		const completed =
 			signal === undefined

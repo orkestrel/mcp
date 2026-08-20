@@ -150,9 +150,9 @@ function createRegistry(): ToolManagerInterface {
  * Mount one core MCP server on every face this package ships.
  *
  * @remarks
- * One `createMCPServer` over one registry, reached three ways: `createMCPRoutes` as
- * `POST /mcp` and `createWebSocketServer` on the upgrade seam of one real
- * `@orkestrel/server` listener, plus the browser face's `MessagePort` carrier. Each opener
+ * One `createMCPServer` over one registry, reached through `createMCPRoutes` as
+ * `POST /mcp`, `createWebSocketServer` on the upgrade seam of one real
+ * `@orkestrel/server` listener, and the browser face's `MessagePort` carrier. Each opener
  * tracks the client it returns, so `stop()` disconnects every carrier before the listener is
  * stopped — a graceful stop waits for open connections to drain, so a socket left behind by a
  * failing assertion would otherwise hold teardown open until the hook times out.
@@ -254,7 +254,7 @@ describe('a core server mounted on the server face and driven by a core client',
 	})
 })
 
-describe('one core server, one live registry, three carriers', () => {
+describe('one core server, one live registry, every carrier', () => {
 	it('serves a tool registered after every client connected, over HTTP, WebSocket, and a MessagePort', async () => {
 		const stack = track(await startStack())
 		const http = stack.http()
@@ -267,8 +267,8 @@ describe('one core server, one live registry, three carriers', () => {
 		await socket.connect()
 		await channel.connect()
 
-		// Registered AFTER all three handshakes: a carrier holding a snapshot of the registry
-		// would answer the two rows below with the pre-connect list and the wrong value.
+		// Registered AFTER every handshake: a carrier holding a snapshot of the registry
+		// would answer the rows below with the pre-connect list and the wrong value.
 		stack.tools.add(createTool({ name: 'late', execute: () => 'registered late' }))
 
 		expect([

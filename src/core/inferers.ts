@@ -54,7 +54,7 @@ export function inferVersion(offered: readonly string[]): MCPVersion | undefined
  * `initialize` handshake the transport captured, not from the message.
  *
  * Header NAMES stay with the transports that own the wire (see `constants.ts`); core owns
- * the value this projection derives, which is the part the two faces disagreed about.
+ * the value this projection derives, which is the part the browser and Node faces disagreed about.
  *
  * @param message - The outbound message about to be written
  * @returns The version to announce, or `undefined` when the message announces none

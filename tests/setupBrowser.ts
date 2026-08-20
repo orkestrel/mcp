@@ -1,5 +1,5 @@
 // Browser-only test infrastructure — DOM, real page globals, and the in-page carrier
-// peers the duplex proof observes. Loaded by the `src:browser` project only (AGENTS §16.1).
+// peers the duplex proof observes. Loaded by the `src:browser` project only.
 
 import type { JSONRPCMessage } from '@src/core'
 import type { ScopeTransportInterface, ServeMCPScopeInterface } from '@src/browser'
@@ -13,12 +13,12 @@ export function buildElement(tag = 'div'): HTMLElement {
 	return element
 }
 
-// ── Peer observation (W06 rows 34/35) ────────────────────────────────────────
+// ── Peer observation ─────────────────────────────────────────────────────────
 //
 // `duplex` is a claim about what reaches the OTHER end, so every one of these returns a
 // drain over what a real peer actually received. None of them stands in for the carrier
 // under test: the port tap is a SECOND listener on a real `MessagePort`, the scope pair is
-// two real `createScopeTransport` halves wired to each other, and the fixture drain reads
+// real `createScopeTransport` halves wired to each other, and the fixture drain reads
 // frames a real Node peer recorded off a real socket.
 
 /**
@@ -58,7 +58,7 @@ export interface TestScopeCarrierInterface {
 }
 
 /**
- * Wire two real {@link createScopeTransport} halves into one in-page duplex carrier.
+ * Wire real {@link createScopeTransport} halves into one in-page duplex carrier.
  *
  * @remarks
  * Each half is the shipped factory over a minimal {@link ServeMCPScopeInterface} whose
@@ -66,7 +66,7 @@ export interface TestScopeCarrierInterface {
  * dedicated worker's implicit channel behaves, with the structured-clone hop removed. No
  * project-owned behaviour is reimplemented: both transports are the real ones.
  *
- * @returns The two wired halves and the server half's frame drain
+ * @returns The wired halves and the server half's frame drain
  *
  * @example
  * ```ts

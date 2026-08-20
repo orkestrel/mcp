@@ -48,7 +48,7 @@ export function createReadableStream<T>(
  * The exchange is released BEFORE the body ends, so the slot is already back when the response
  * completes.
  *
- * Total (§14) — never throws and never rejects. A held-open SSE response has already sent its
+ * Total — never throws and never rejects. A held-open SSE response has already sent its
  * headers and part of its body, so there is no failure the transport could still convert into
  * a different answer; the honest end of a broken stream is a closed one, and the fault itself
  * is already legible on `server.emitter`'s `error` event, which is where a contained fault
@@ -92,7 +92,7 @@ export async function sendEventStream(
 	}
 }
 
-// The MCP server-transport helpers (AGENTS §4.3 module-scope names — no entity context).
+// The MCP server-transport helpers — module-scope names, so they carry no entity context.
 // The server-side reader `acceptsEventStream` reads the request's `Accept` header to
 // decide whether a Streamable-HTTP SSE response is allowed; `readSessionHeader` reads the
 // request's `mcp-session-id` header (the stateful transport's session validation);
@@ -101,7 +101,7 @@ export async function sendEventStream(
 // body back into JSON-RPC messages (the egress mirror, reusing `@orkestrel/sse`'s
 // `SSEParser`); `upgradeRequestPath` reads a raw `node:http` upgrade request's path (the
 // WebSocket transport's upgrade-path match). All are total and narrow at the boundary,
-// never `as` (AGENTS §14) — a missing / non-string Accept reads as "no", a missing session /
+// never `as` — a missing / non-string Accept reads as "no", a missing session /
 // last-event header reads as `undefined`, a non-message SSE `data:` event is dropped, an
 // absent `url` reads as `'/'`.
 
@@ -228,7 +228,7 @@ export function rejectUnknownSession(): Response {
  * {@link SSEParserInterface} (handling a partial line / in-progress event split across
  * reads), then narrows each dispatched event's `data` to a {@link JSONRPCMessage} via
  * `parseJSONRPCMessage` (so a non-message / non-JSON `data:` event is DROPPED, never
- * thrown — total, §14). It reuses the SAME `SSEParser` the server's `openStream` seam
+ * thrown — total). It reuses the SAME `SSEParser` the server's `openStream` seam
  * serializes against, so the wire round-trips. A `null` body (no stream) yields no
  * messages; the {@link import('./transports/HTTPClientTransport.js').HTTPClientTransport}
  * reads a request/response SSE reply (the server sends one `data:` event then ends), so
@@ -250,7 +250,7 @@ export async function readEventStream(response: Response): Promise<readonly JSON
 			if (done) break
 			for (const event of parser.parse(decoder.decode(value, { stream: true }))) {
 				// JSON-parse the event's `data` (the JSON-RPC envelope the server wrote), then
-				// narrow it — a malformed / non-message payload is dropped, never thrown (§14).
+				// narrow it — a malformed / non-message payload is dropped, never thrown.
 				const message = decodeEvent(event.data)
 				if (message !== undefined) messages.push(message)
 			}
@@ -268,7 +268,7 @@ export async function readEventStream(response: Response): Promise<readonly JSON
  * @remarks
  * `JSON.parse`s the `data` (the server serializes the JSON-RPC envelope as the event's
  * `data`) inside a try/catch and narrows the parsed value with `parseJSONRPCMessage`.
- * Total (§14): malformed JSON or a non-message value yields `undefined`, never throws.
+ * Total: malformed JSON or a non-message value yields `undefined`, never throws.
  *
  * @param data - One SSE event's `data` payload
  * @returns The decoded {@link JSONRPCMessage}, or `undefined`
@@ -287,7 +287,7 @@ export function decodeEvent(data: string): JSONRPCMessage | undefined {
  *
  * @remarks
  * A `node:http` {@link import('node:http').IncomingMessage}'s `url` is the request TARGET
- * (`'/mcp?x=1'`), narrowed with `isString` (§14, never `as`) and defaulting to `'/'` for an
+ * (`'/mcp?x=1'`), narrowed with `isString` (never `as`) and defaulting to `'/'` for an
  * absent target; it is parsed against a dummy base (only the pathname matters for the upgrade
  * decision) and the `pathname` returned. The upgrade handler compares this against its
  * configured `path` to decide whether to claim the socket. Total — never throws on an
@@ -336,7 +336,7 @@ export function extractLines(buffer: string, chunk: string): LineExtraction {
  * A blank line is skipped (a stray trailing newline). Every other line is decoded
  * with {@link decodeEvent} (`JSON.parse` + `parseJSONRPCMessage`, guarded); a
  * well-formed {@link JSONRPCMessage} emits `message`, a malformed / non-message line
- * emits `error` (§14 — total, never throws). Pure w.r.t. its own state — the emit is
+ * emits `error` (total, never throws). Pure w.r.t. its own state — the emit is
  * the caller-owned side effect.
  *
  * @param emitter - The transport's {@link EmitterInterface} to emit `message` / `error` onto
@@ -363,7 +363,7 @@ export function dispatchLines(
  * {@link import('@src/core').MCPTransportInterface} port — the adapter
  * {@link import('./factories.js').createStdioServer} and {@link
  * import('./factories.js').createWebSocketServer} pipe through `bindServer`, so the
- * request/reply/error pump those two factories used to hand-roll identically now
+ * request/reply/error pump those factories used to hand-roll identically now
  * lives ONCE in the core binder.
  *
  * @remarks

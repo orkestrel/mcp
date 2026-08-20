@@ -17,10 +17,10 @@ import type {
  * cleanup to the producer — so a cooperating producer is woken rather than waited on —
  * contains every promise the producer settles late, and makes every closure path idempotent.
  *
- * The three closures are deliberately different answers: the source's own return is the
+ * The closures are deliberately different answers: the source's own return is the
  * terminal RESPONSE, `return(value)` is the consumer saying it has the answer already, and
- * {@link stop} is an owner saying there will be no answer at all. Only the first is a
- * message a peer ever sees.
+ * {@link stop} is an owner saying there will be no answer at all. Only the source's own
+ * return is a message a peer ever sees.
  *
  * A producer's own resource cleanup remains the producer's: JavaScript cannot settle work a
  * generator is suspended inside, so the signal is how an uncooperative producer is asked to

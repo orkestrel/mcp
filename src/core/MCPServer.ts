@@ -112,7 +112,7 @@ import {
  * requests over a live {@link ToolManagerInterface}, with NO transport coupling.
  *
  * @remarks
- * - **Two entry points.** `dispatch(invocation)` runs an already-parsed invocation and
+ * - **`dispatch` and `handle`.** `dispatch(invocation)` runs an already-parsed invocation and
  *   resolves a {@link JSONRPCResponse} for a request — or `undefined` for a
  *   {@link JSONRPCNotification}, which carries no `id` and is answered by nothing.
  *   `handle(message)` is the string boundary: it
@@ -129,7 +129,7 @@ import {
  *   unregistered method still answering `-32601`.
  * - **Provider-agnostic.** Imports only core siblings — JSON-RPC + the tool registry,
  *   no HTTP, no model. Wire fields are narrowed via the contracts guards (no `as`).
- * - **Observable (§13).** The owned `emitter` fires `request` at the top of every
+ * - **Observable.** The owned `emitter` fires `request` at the top of every
  *   dispatch; the emitter isolates a listener throw and routes it to its `error` handler
  *   (the `error` option), so a listener throw can never escape the dispatch.
  *
@@ -281,7 +281,7 @@ export class MCPServer implements MCPServerInterface {
 		}
 		const answer = await this.#dispatch(decoded, options ?? {})
 		if (answer === undefined) return undefined
-		// The ONE narrowing point (§4.3): a held-open answer becomes the string mirror of
+		// The ONE narrowing point: a held-open answer becomes the string mirror of
 		// itself, so the string boundary stays a mirror of the typed core.
 		return Symbol.asyncIterator in answer
 			? new MCPTextStreamController(answer)
@@ -297,7 +297,7 @@ export class MCPServer implements MCPServerInterface {
 	// The seam carries the REQUEST arm, so no registration narrows anything: dispatch
 	// short-circuits a notification before this registry is read at all, so every handler here
 	// — and every handler a consumer adds — is invoked only for a call that expects an answer.
-	// Each of these seven registrations once opened with an `invocation.id === undefined`
+	// Each of these registrations once opened with an `invocation.id === undefined`
 	// ternary answering `undefined` for a case that cannot arrive; the seam's own type now says
 	// that, so the guards are gone rather than restated per member.
 	//
@@ -306,7 +306,7 @@ export class MCPServer implements MCPServerInterface {
 	// observe of it: a registry whose members disagree about their own shape is several places
 	// that happen to agree rather than one contract, and the member that never declared it is
 	// the one whoever adds the first await has to re-plumb. `_options` therefore stays here,
-	// where conformance needs it, and is absent from the two live registry reads below, where
+	// where conformance needs it, and is absent from the live registry reads below, where
 	// nothing does.
 	#register(): void {
 		this.#methods.add('ping', async (request, _options) =>
@@ -345,7 +345,7 @@ export class MCPServer implements MCPServerInterface {
 				this.#suggest(request, completion, options),
 			)
 		}
-		// The draft Tasks extension's three methods register ONLY when a consumer configured
+		// The draft Tasks extension's methods register ONLY when a consumer configured
 		// the extension. An unconfigured server never registers them, so they resolve to nothing
 		// and the modern branch answers `-32601` through the same unregistered-method path any
 		// other unknown method takes — the honest reply from a server that does not implement an
@@ -807,7 +807,7 @@ export class MCPServer implements MCPServerInterface {
 	// MRTR runs FIRST because a call still asking its operator a question has not yet been
 	// decided — deferring it would durably store a call whose arguments are not settled, and
 	// the extension says pre-creation input belongs to the original request. Progress runs
-	// LAST because the two are alternative answers to the same request: a deferred call has
+	// LAST because a task and progress are alternative answers to the same request: a deferred call has
 	// no request-scoped stream left to report progress on, since the request ends the moment
 	// the task handle is written.
 	//
@@ -815,7 +815,7 @@ export class MCPServer implements MCPServerInterface {
 	// that selected outcome is then refused before the manager starts work; skipping the policy
 	// would silently bypass deployment task policy rather than merely choose an inline result.
 	//
-	// Nothing about the task's WORK is here: no store, no timer, no status. All three belong
+	// Nothing about the task's WORK is here: no store, no timer, no status. All of them belong
 	// to the manager, which is also the only party that outlives this request.
 	async #defer(
 		request: JSONRPCRequest,
@@ -1249,7 +1249,7 @@ export class MCPServer implements MCPServerInterface {
 		}
 		// Around the seal await, both windows: the one just minted, and the one this round is
 		// extending. A port that took longer to protect the state than the state was good for
-		// must not hand the client a round already dead on arrival. The two windows are also two
+		// must not hand the client a round already dead on arrival. The windows are also
 		// different things to say: a FIRST round has no retry to refuse, and telling that caller
 		// its state failed verification points it at a round it never made.
 		if (expiry <= Date.now() || (previous !== undefined && previous <= Date.now())) {
@@ -1364,7 +1364,7 @@ export class MCPServer implements MCPServerInterface {
 		}
 	}
 
-	// THE SHARED INGRESS of all three `tasks/*` methods: the capability the extension requires
+	// THE SHARED INGRESS of every `tasks/*` method: the capability the extension requires
 	// on every one of them, then the handle they all name. It answers the validated `taskId` or
 	// the refusal that ends the request, and a `string` is the WHOLE discriminator — so nothing
 	// a consumer's manager can produce is ever mistaken for an envelope this server built.
@@ -1373,8 +1373,8 @@ export class MCPServer implements MCPServerInterface {
 	// METHOD rather than to one call's parameters: a client that never declared the extension is
 	// refused before its parameters are read at all. The code is the GENERIC
 	// missing-required-client-capability code, the same one the elicitation path answers — the
-	// two are told apart by `data.requiredCapabilities` alone, because they are two instances of
-	// one condition rather than two conditions. (The extension's own draft prose still shows
+	// tasks and elicitation refusals are told apart by `data.requiredCapabilities` alone, because
+	// they are instances of the same condition rather than distinct conditions. (The extension's own draft prose still shows
 	// `-32003` in examples; the dated core schema fixes `-32021`, and a peer implements the
 	// dated schema.)
 	#named(request: JSONRPCRequest): string | JSONRPCErrorResponse {
@@ -1404,13 +1404,13 @@ export class MCPServer implements MCPServerInterface {
 		return taskId
 	}
 
-	// The built-in `tasks/get` handler — the ONE read of a durable task, and the only one of the
-	// three that puts a manager's value on the wire.
+	// The built-in `tasks/get` handler — the ONE read of a durable task, and the only `tasks/*`
+	// method that puts a manager's value on the wire.
 	//
 	// The refusal for a `taskId` that resolved to nothing is byte-identical here, on
 	// `tasks/update`, and on `tasks/cancel`, and it is the same answer for a task that never
 	// existed, one whose TTL purged it, and one this caller is not entitled to see: the port
-	// answers `undefined` for all three, so this server cannot tell them apart even in
+	// answers `undefined` for each of them, so this server cannot tell them apart even in
 	// principle. That is what makes a `taskId` unprobeable — a second code, or a second message,
 	// would turn the manager's store into an enumeration oracle.
 	//

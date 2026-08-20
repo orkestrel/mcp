@@ -63,7 +63,7 @@ import {
 	waitForAbort,
 } from '../../setup.js'
 
-// An in-memory MCPTransportInterface double (AGENTS §16 — a real duplex channel, no
+// An in-memory MCPTransportInterface double (a real duplex channel, no
 // mocks): `listen`/`closed` each hold THE SINGLE handler (replace semantics, per the
 // port's own contract), `send` records every outbound string (optionally rejecting
 // when `failSend` is set), `deliver` drives inbound data, and `close` drives closure.
@@ -78,7 +78,7 @@ function createMemoryTransportPair(): readonly [
 	return [server, client]
 }
 
-// Held-open fixtures (AGENTS §16.1 — an INERT data-driven stub, not a reimplementation
+// Held-open fixtures (an INERT data-driven stub, not a reimplementation
 // of anything the package owns): `replay` is a real MCPStream over supplied messages,
 // so each stream test names only the sequence its scenario needs.
 const PROGRESS: JSONRPCNotification = Object.freeze({
@@ -114,7 +114,7 @@ async function* parked(options: MCPMethodOptions, ended: string[]): MCPStream {
 }
 
 // A modern request — the reserved metadata key is what selects the modern era.
-// The pure dispatch builders (AGENTS §5 — exported, independently testable). Each
+// The pure dispatch builders (exported, independently testable). Each
 // turns a piece of MCP state into the JSON-RPC result payload (or envelope) the
 // server returns.
 
@@ -153,7 +153,7 @@ describe('buildJSONRPCError', () => {
 		})
 	})
 
-	// Row 9: the id member is ABSENT when none could be read, not present-and-null, so a
+	// The id member is ABSENT when none could be read, not present-and-null, so a
 	// modern peer never receives the `id: null` the base specification would have sent.
 	it('omits the id member entirely when none could be read', () => {
 		const envelope = buildJSONRPCError(undefined, -32700, 'Parse error')
@@ -185,7 +185,7 @@ describe('buildJSONRPCError', () => {
 	})
 })
 
-// Row 27's resolution site. A caller may have no signal to offer; a dispatched method
+// The resolution site. A caller may have no signal to offer; a dispatched method
 // always has one to observe, so absence is resolved ONCE here rather than cased on by
 // every handler, elicitation, principal, and subscription producer downstream.
 describe('buildMethodOptions', () => {
@@ -645,7 +645,7 @@ describe('buildInitializeResult', () => {
 })
 
 // bindServer — pipes an MCPTransportInterface into a REAL MCPServer over a REAL
-// ToolManager (AGENTS §16, no mocks). Covers the round trip, the notification
+// ToolManager (no mocks). Covers the round trip, the notification
 // no-reply path, unbind detaching without closing, a `send` throw surfacing on
 // `server.emitter`'s `error` event (never unhandled), and the transport's own
 // `closed` signal deactivating the binder.
@@ -893,8 +893,8 @@ describe('sendStream', () => {
 
 // ── The standing ruling: whoever is handed a controlled exchange ends it ─────
 //
-// It fired after THREE defects at one seam, the third arriving by the opposite mechanism
-// from the first two: cancellation was not blocked, it was never ISSUED, because no signal
+// It fired after repeated defects at one seam, the last arriving by the opposite mechanism
+// from the earlier ones: cancellation was not blocked, it was never ISSUED, because no signal
 // fires when nobody aborts anything. So the claim under test is about a POPULATION of pumps,
 // and `probeOwnership` is the shared instrument that measures all of them the same way — the
 // live subscription SLOT, which an abandoned exchange holds forever.
@@ -1191,8 +1191,8 @@ describe('bindServer — exchange ownership and inbound cancellation', () => {
 
 	// The registry is closure-private, so the observable is the signal the binder SUPPLIES:
 	// a controller still in the map when the carrier dies is aborted, and one already retired
-	// is not. Ten thousand completed requests, then one still in flight — the second half is
-	// the control proving the instrument can see an abort at all.
+	// is not. Ten thousand completed requests, then one still in flight — the in-flight request
+	// is the control proving the instrument can see an abort at all.
 	it('retires each live-request entry on exit, so a closed carrier aborts only what is still running', async () => {
 		const real = server()
 		const signals: AbortSignal[] = []
@@ -1235,7 +1235,7 @@ describe('bindServer — exchange ownership and inbound cancellation', () => {
 })
 
 // bindClient — completes the inbound wiring for a REAL MCPClient constructed over
-// createDuplexClientTransport (AGENTS §16, no mocks). Covers the connect handshake
+// createDuplexClientTransport (no mocks). Covers the connect handshake
 // round trip, a malformed inbound message being dropped (never throwing), unbind
 // detaching without closing, and the transport's `closed` signal reaching
 // client.transport.emitter.
@@ -1275,7 +1275,7 @@ describe('bindClient', () => {
 		await connecting
 
 		expect(mcp.connected).toBe(true)
-		// notifications/initialized fires as the third, un-replied write.
+		// notifications/initialized fires as the last, un-replied write.
 		expect(transport.sent).toHaveLength(3)
 	})
 
@@ -1374,7 +1374,7 @@ describe('bindClient', () => {
 	})
 })
 
-// Row 19 — the client binder keeps NO live-request registry, and the asymmetry is real
+// The client binder keeps NO live-request registry, and the asymmetry is real
 // rather than an omission: it starts no work, so an inbound cancellation has nothing here to
 // reach. It is delivered as the ordinary message it is, and `MCPClient` — which does own its
 // pending entries — decides what to do with it.
@@ -1421,7 +1421,7 @@ describe('buildCancelledNotification', () => {
 })
 
 describe('matchesResultType', () => {
-	it('admits the three arms tools/call may answer with', () => {
+	it('admits the arms tools/call may answer with', () => {
 		expect(matchesResultType('tools/call', 'complete')).toBe(true)
 		expect(matchesResultType('tools/call', 'task')).toBe(true)
 		expect(matchesResultType('tools/call', 'input_required')).toBe(true)
@@ -1548,7 +1548,7 @@ describe('the resolved method options', () => {
 })
 
 describe('the subscription filter contract', () => {
-	it('pins the four subscription filter keys to their wire spellings', () => {
+	it('pins the subscription filter keys to their wire spellings', () => {
 		expectTypeOf<keyof MCPSubscriptionFilter>().toEqualTypeOf<
 			'toolsListChanged' | 'promptsListChanged' | 'resourcesListChanged' | 'resourceSubscriptions'
 		>()

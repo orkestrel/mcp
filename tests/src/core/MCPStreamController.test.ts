@@ -108,7 +108,7 @@ function projectSource(path: string): string {
 }
 
 describe('controlled exchange ownership', () => {
-	// Row 8 — retained, and retained with evidence rather than by inspection.
+	// Retained, and retained with evidence rather than by inspection.
 	it('gives the controllers no owner of last resort', () => {
 		for (const path of OWNERSHIP_SOURCES) {
 			expect([path, inspectOwnerOfLastResort(projectSource(path))]).toEqual([path, []])

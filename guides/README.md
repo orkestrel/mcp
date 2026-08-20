@@ -1,6 +1,6 @@
 # Guides
 
-A dual-axis index into this repository's guides — by concept, and by directory (AGENTS §22).
+An index into this repository's guides — by concept, and by directory (AGENTS.md § Documentation contract).
 
 ## By concept
 
@@ -49,7 +49,7 @@ repo; it is kept here for the same reason.
 
 [`websocket.md`](websocket.md) is a byte-identical mirror of the
 guide for `@orkestrel/websocket` — a runtime dependency, the RFC 6455
-`NodeWebSocketInterface` wrapper both WebSocket transports compose over. It
+`NodeWebSocketInterface` wrapper the WebSocket transports compose over. It
 documents **that package's** surface, not anything sourced in this repo; it
 is kept here so a reader of this guide can see the WebSocket primitive
 without leaving this guide set.
@@ -76,4 +76,4 @@ can see the primitives it is built from without leaving this guide set.
 
 ## See also
 
-- [`AGENTS.md`](../AGENTS.md) — the rules; §22 documentation-as-contracts.
+- [`AGENTS.md`](../AGENTS.md) — the rules; the documentation contract.

@@ -19,18 +19,18 @@ import {
 
 // The CLIENT half of the draft Tasks extension, over a real MCPServer with the extension
 // configured, reached through a real in-process transport that records every frame it carries
-// and when it carried it (AGENTS §16 — no mocks, no fake clock).
+// and when it carried it (no mocks, no fake clock).
 //
-// Two claims dominate this file and both are stated as controls first:
+// These claims dominate this file, each stated as a control first:
 //
 //  1. `client.tasks` MIRRORS the server port. Its control is a server configured WITHOUT
-//     `task` — a peer from outside the extension's population — where all three methods must
+//     `task` — a peer from outside the extension's population — where every method must
 //     surface `-32601` cleanly instead of inventing a local answer.
 //  2. The package ships NO POLLING LOOP. Its control is a consumer-written scheduler that DOES
 //     poll, run through the same recorder over the same real elapsed window, so the instrument
 //     is proven able to see polling before any silence beside it is read as meaningful. This is
-//     deliberately NOT a source scan: the previous unit's scan enumerated four spellings and a
-//     live engine walked past all four.
+//     deliberately NOT a source scan: the previous unit's scan enumerated spellings a live
+//     engine walked past.
 
 // How long every timing scenario watches the wire, and the hint the peer publishes. The window
 // is many multiples of the interval, so a loop of ANY period at or below the hint leaves frames.
@@ -46,7 +46,7 @@ interface TaskScenario {
 }
 
 // A connected client whose peer defers every `tools/call` into a durable task. The capability
-// declaration is what entitles the client to the three `tasks/*` methods at all: the server
+// declaration is what entitles the client to the `tasks/*` methods at all: the server
 // checks it FIRST, before it reads a single parameter.
 async function connectTaskClient(options: { readonly poll?: number } = {}): Promise<TaskScenario> {
 	const tasks = new TestTaskManager({
@@ -118,7 +118,7 @@ describe('MCPTaskClient — the shape', () => {
 		const stopped = await client.tasks.task(id)
 		expect(stopped.status).toBe('cancelled')
 
-		// The three wire spellings, in the order the calls were made — this client's own
+		// The wire spellings, in the order the calls were made — this client's own
 		// vocabulary says `abort`, and the method on the wire stays the protocol's `tasks/cancel`.
 		expect(transport.frames.map((frame) => frame.method)).toEqual([
 			'server/discover',
@@ -175,7 +175,7 @@ describe('MCPTaskClient — the shape', () => {
 			const failure = await attempt.catch((error: unknown) => error)
 			expect(isMCPError(failure) && failure.code).toBe(JSONRPC_METHOD_NOT_FOUND)
 		}
-		// It ASKED all three times. A client that had refused locally would show none of these,
+		// It ASKED every time. A client that had refused locally would show none of these,
 		// and would have passed this row on a refusal the peer never made.
 		expect(transport.frames.map((frame) => frame.method)).toEqual([
 			'server/discover',
@@ -188,7 +188,7 @@ describe('MCPTaskClient — the shape', () => {
 
 	// The port is a published contract, so it has to be usable without an `MCPClient` behind it.
 	// This also pins the one thing the class is given: a correlated-request door and a deadline.
-	it('issues the three wire methods through the request door it was handed', async () => {
+	it('issues the wire methods through the request door it was handed', async () => {
 		const issued: Array<
 			readonly [string, Readonly<Record<string, unknown>> | undefined, number | undefined]
 		> = []

@@ -1,5 +1,5 @@
 // The consumer-side guides-parity drop-in: runs @orkestrel/guide's checks against this
-// repository's own guides/README.md manifest. The five constants below are this package's
+// repository's own guides/README.md manifest. The constants below are this package's
 // own, and are what a sibling package changes.
 
 import type { JSONRPCMessage } from '@src/core'
@@ -65,7 +65,7 @@ it('manifest lists at least one guide', () => {
 	expect(manifest.length).toBeGreaterThan(0)
 })
 
-// The three published faces in one table. `SOURCES`, the refusal rows, the live population rows,
+// The published faces in one table. `SOURCES`, the refusal rows, the live population rows,
 // and the package.json export-key check all read it, so a face's scope and its export key have
 // exactly one place to be stated. No row carries a hand-picked foreign symbol; each row's negative
 // control is derived below from what its neighbours really publish.
@@ -135,8 +135,8 @@ describe('public package faces', () => {
 
 	// One refusal row per face, bound against BOTH of its neighbours. A row's control is every name
 	// a neighbour publishes and this face does not, read off the neighbour's live Source: a literal
-	// covers one ordered pair out of six and goes stale silently, while the derived difference
-	// covers all six and cannot. Asserting that difference non-empty is the precondition the
+	// covers one ordered pair and goes stale silently, while the derived difference
+	// covers every pair and cannot. Asserting that difference non-empty is the precondition the
 	// refusal needs to mean anything, and it is also what a widened `module` breaks — a face that
 	// swallows its neighbour's module leaves that neighbour nothing of its own to refuse, so the
 	// row reports an empty control instead of passing on a refusal it has stopped making.
@@ -194,7 +194,8 @@ describe('public package faces', () => {
 	// surprises: those are named bindings Guide is meant to surface and does not, so it is an
 	// upstream `fenceImports` limit rather than a boundary chosen here, and no fence in `guides/`
 	// uses it today. Closing any of these locally would mean a second import reader beside Guide's,
-	// which the roadmap's finding 2 forbids; the remedy that remains is to record the gap where a
+	// which AGENTS.md's ban on a second source-language analyzer forbids; the remedy that remains
+	// is to record the gap where a
 	// reader meets it, here and in that TSDoc. When one of these forms starts being reached, move
 	// that fence to a row asserting the behaviour it now has — the other fences are independent
 	// pins and do not travel with it.
@@ -243,7 +244,7 @@ describe('public package faces', () => {
 		).toEqual(['createMCPRoutes'])
 	})
 
-	// Two jobs, and the second constrains what may be edited here. FIRST, this is the sole place
+	// More than one job, and the face check constrains what may be edited here. FIRST, this is the sole place
 	// Guide's own trivia handling is asserted, so a dependency upgrade is caught here instead of
 	// quietly changing what `findMissingNamedImports` covers: the row characterizes the FAMILY —
 	// every trivia position that costs the raw reading a binding, inside the brace and outside it
@@ -252,13 +253,13 @@ describe('public package faces', () => {
 	// that stops being dropped raw, or stops being recovered projected, belongs in this table on
 	// the day it changes. SECOND, the recovery loop's expectations name `createMCPRoutes` against
 	// `@orkestrel/mcp`, so the core-face invariant stated above this describe applies to them
-	// unchanged. Change a specifier or a symbol here only with that second job in mind.
+	// unchanged. Change a specifier or a symbol here only with that face check in mind.
 	it('characterizes what Guide drops raw and recovers projected, and checks the face', () => {
 		// Inside the brace: the statement is still matched, and the binding alone is lost.
 		expect(
 			fenceImports("import { createMCPRoutes /* server face */ } from '@orkestrel/mcp'"),
 		).toEqual([{ specifier: '@orkestrel/mcp', names: [] }])
-		// Inside the brace, carrying its own `}`, and outside it in three positions the raw
+		// Inside the brace, carrying its own `}`, and outside it in positions the raw
 		// reading admits only as whitespace: the whole statement is lost, not just the binding.
 		for (const fence of [
 			"import { createMCPRoutes /* } */ } from '@orkestrel/mcp'",
@@ -320,12 +321,12 @@ describe('public package faces', () => {
 		).toEqual([])
 	})
 
-	// Two jobs. FIRST, it characterizes Guide: `extractSourceLines` keeps quoted text verbatim, so
+	// More than one job. FIRST, it characterizes Guide: `extractSourceLines` keeps quoted text verbatim, so
 	// for a fence whose import lives inside an ordinary string the projection is the identity, and
 	// an upgrade that started masking string payloads would fail here and take the
 	// `findMissingNamedImports` @remarks with it. SECOND, the expectation names `createMCPRoutes`
 	// against `@orkestrel/mcp`, so the core-face invariant stated above this describe applies to it
-	// unchanged. Change the specifier or the symbol here only with that second job in mind.
+	// unchanged. Change the specifier or the symbol here only with that face check in mind.
 	it('reads an import out of an ordinary string literal and still checks it against the face', () => {
 		for (const fence of [
 			'const snippet = "import { createMCPRoutes } from \'@orkestrel/mcp\'"',
@@ -363,7 +364,7 @@ describe('public package faces', () => {
 	// someone IMPROVES the projection. Guide's reader is lexical rather than a TypeScript parse,
 	// so a slash after a bare `}` reads as division and swallows the rest of the fence; `guarded`
 	// proves an explicit `;` restores it, which is the workaround a guide author needs. This row
-	// does two jobs, so when the limit moves, RE-PIN `hazard` to the behaviour Guide then has —
+	// does more than one job, so when the limit moves, RE-PIN `hazard` to the behaviour Guide then has —
 	// never delete the row. `guarded` names `createMCPRoutes` against `@orkestrel/mcp`, so the
 	// core-face invariant stated above this describe applies to it, and deleting the row to retire
 	// the limit would retire that binding with it.
@@ -399,8 +400,9 @@ describe('public package faces', () => {
 	})
 })
 
-// Two faces declaring the same class, where only the browser barrel re-exports it: the server
-// face strands `HTTPClientTransport`, and reading both faces as one scope hides that.
+// The server and browser faces declare the same class, and only the browser barrel re-exports
+// it: the server face strands `HTTPClientTransport`, and reading both faces as one scope hides
+// that.
 const FIXTURE_FILES: Readonly<Record<string, string>> = Object.freeze({
 	'browser/index.ts': "export * from './HTTPClientTransport.js'\n",
 	'browser/HTTPClientTransport.ts': 'export class HTTPClientTransport {}\n',
@@ -410,7 +412,7 @@ const FIXTURE_FILES: Readonly<Record<string, string>> = Object.freeze({
 })
 
 // The live faces and that fixture run through one carrier, so the negative control shares the
-// live gate's instrument instead of standing beside it. The two kinds of row prove different
+// live gate's instrument instead of standing beside it. The kinds of row prove different
 // things, and only one of them is a scope guard. The FIXTURE rows are the instrument's negative
 // control: `stranded server face` forces it to report a non-empty answer, and reading browser and
 // server as one scope makes that same answer disappear — the masking a widened scope causes. The
@@ -574,7 +576,7 @@ for (const entry of manifest) {
 // ── The stdio client transport's spawn contract, executed ────────────────────
 //
 // A parity assertion proves a documented name resolves. It can never reach a sentence about
-// behaviour, which is how `guides/mcp.md` § stdio transport carried two false ones through a
+// behaviour, which is how `guides/mcp.md` § stdio transport carried false ones through a
 // green gate: that `createStdioClientTransport` spawns through `node:child_process.spawn` with
 // a provided `env` REPLACING `process.env`, and that the child's `stderr` INHERITS the parent's.
 // Both are now stated the other way round in the guide, so both are executed here.
@@ -688,7 +690,7 @@ describe('guides/mcp.md § stdio transport — what the spawned child actually r
 		expect(report['path']).toBe(inherited)
 		// The override layer works, so the merge is a merge and not a plain inherit.
 		expect(report['supplied']).toBe('supplied')
-		// The readout can report absence, so the two assertions above are not an artifact of it
+		// The readout can report absence, so the assertions above are not an artifact of it
 		// always returning something.
 		expect(report['absent']).toBeUndefined()
 	})

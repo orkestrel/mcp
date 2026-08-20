@@ -69,11 +69,11 @@ export const MCP_HEADER_MISMATCH = -32020
  *
  * @remarks
  * The GENERIC code for the whole condition, not one capability's code. This server answers
- * it in two places — a `tools/call` that needs `elicitation`, and a `tasks/*` request whose
- * client never declared `io.modelcontextprotocol/tasks` — and the two are told apart by
+ * it in more than one place — a `tools/call` that needs `elicitation`, and a `tasks/*` request
+ * whose client never declared `io.modelcontextprotocol/tasks` — and they are told apart by
  * `error.data.requiredCapabilities` alone (`{ elicitation: {} }` against
- * `{ extensions: { 'io.modelcontextprotocol/tasks': {} } }`). They are two instances of one
- * condition, so a second numeral would describe the same fact twice. The Tasks extension's
+ * `{ extensions: { 'io.modelcontextprotocol/tasks': {} } }`). They are instances of the same
+ * condition, so a separate numeral would describe the same fact twice. The Tasks extension's
  * own draft prose still shows `-32003` in examples; the dated core schema fixes this code,
  * and the dated schema is what a peer implements against.
  */

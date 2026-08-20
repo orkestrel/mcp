@@ -12,7 +12,7 @@ import type { ToolCall, ToolInterface, ToolManagerInterface, ToolResult } from '
 // same call with NO `id`, answered by nothing). A RESPONSE is either a result arm or
 // an error arm, never both.
 //
-// Four members below are declared `?: never`. That is not an optional value: it is
+// Several members below are declared `?: never`. That is not an optional value: it is
 // the protocol's own prohibition expressed in the type system, so the shape a
 // carrier must not have cannot be built or assigned. `id?: never` is why a stream
 // cannot yield a request, and `result?: never` / `error?: never` are why a response
@@ -63,7 +63,7 @@ export interface JSONRPCNotification {
  * One inbound JSON-RPC call — the common dispatch input.
  *
  * @remarks
- * Narrow the two apart on the id: `invocation.id === undefined` is the notification
+ * Narrow the arms apart on the id: `invocation.id === undefined` is the notification
  * arm, and anything else is a {@link JSONRPCRequest}.
  */
 export type JSONRPCInvocation = JSONRPCRequest | JSONRPCNotification
@@ -122,7 +122,7 @@ export interface JSONRPCErrorResponse {
  * A JSON-RPC 2.0 response — the answer to one {@link JSONRPCRequest}.
  *
  * @remarks
- * The two arms are mutually exclusive in the type and in their guards. Narrow them
+ * The arms are mutually exclusive in the type and in their guards. Narrow them
  * apart with `response.error === undefined`.
  */
 export type JSONRPCResponse = JSONRPCResultResponse | JSONRPCErrorResponse
@@ -246,12 +246,12 @@ export type MCPServerCapabilities = Readonly<Record<string, MCPMetaObject>> & {
  * The wire era selected by an MCP request's structure.
  *
  * @remarks
- * Two literals, and NOT the boolean a two-value union usually should be: this is a
- * genuine protocol discriminant, not a behavioural switch. It names which of two
- * published wire shapes a request took — a fact the request already carries — and it
+ * `'modern'` and `'legacy'`, and NOT the boolean such a union usually should be: this is
+ * a genuine protocol discriminant, not a behavioural switch. It names which
+ * published wire shape a request took — a fact the request already carries — and it
  * is emitted on {@link MCPServerEventMap}'s `request` event, where an observer logs
  * or partitions by it. A boolean `modern` would publish the same fact under a name
- * that stops being readable the day a third era exists.
+ * that stops being readable the day another era exists.
  */
 export type MCPEra = 'modern' | 'legacy'
 
@@ -413,7 +413,7 @@ export type MCPContent =
  * The name states the whole distinction: this is the tool-call result WITHOUT
  * `resultType`, which is the only shape the legacy revision has for one.
  * {@link MCPCallResult} is this payload plus the modern `'complete'` stamp, so
- * stamping is the one difference between the two eras' answers to `tools/call`.
+ * stamping is the one difference between the modern and legacy answers to `tools/call`.
  * Its sole producer is `MCPServer`'s legacy branch, and it is removed with that
  * branch.
  *
@@ -573,7 +573,7 @@ export type MCPInputRequestMap = Readonly<Record<string, MCPInputRequest>>
  * An incomplete modern result carrying input requests, protected request state, or both.
  *
  * @remarks
- * The two-arm union enforces the protocol's at-least-one-of rule at the type boundary:
+ * The union enforces the protocol's at-least-one-of rule at the type boundary:
  * every value has `inputRequests`, `requestState`, or both.
  */
 export type MCPInputResult =
@@ -720,7 +720,7 @@ export type MCPExecutionHandler = (
 	context: MCPExecutionContext,
 ) => ToolResult | MCPCallResult | Promise<ToolResult | MCPCallResult>
 
-// THE TASKS EXTENSION — the third and last `tools/call` policy, beside the input
+// THE TASKS EXTENSION — a `tools/call` policy, beside the input
 // mechanism and the execution handler above. A TASK is a durable operation that
 // OUTLIVES the request that created it: the server answers `resultType: 'task'`
 // immediately, and the client comes back for the outcome later.
@@ -764,7 +764,7 @@ export type MCPTaskStatus = 'working' | 'input_required' | 'completed' | 'failed
  * Every field name here is a WIRE SPELLING carried verbatim from the extension's
  * schema, so the compound-member prohibition does not reach them; the type NAME is
  * this library's own. `ttlMs` is `null` — not absent — when the task has no expiry,
- * because the schema distinguishes the two. `createdAt` and `lastUpdatedAt` are
+ * because the schema distinguishes absence from `null`. `createdAt` and `lastUpdatedAt` are
  * described as ISO 8601 instants, though the generated schema validates only a
  * string, so this package carries whatever the manager produced without reformatting
  * it. `pollIntervalMs` is the manager's hint about how often the client should ask
@@ -854,7 +854,7 @@ export interface MCPTaskContext {
  * states the non-goal.
  *
  * {@link task} answers `undefined` for a task that never existed, one whose TTL purged
- * it, AND one this caller is not entitled to see. The three are indistinguishable ON
+ * it, AND one this caller is not entitled to see. They are indistinguishable ON
  * PURPOSE: they all become the same `-32602`, so a `taskId` cannot be probed for
  * existence. A manager that distinguishes them — by throwing for the unauthorized case,
  * say — turns its own store into an enumeration oracle no matter what this package does.
@@ -868,7 +868,7 @@ export interface MCPTaskManagerInterface {
 	 * Create — or return the existing — durable task for one stable operation key.
 	 *
 	 * @remarks
-	 * Three obligations this package cannot enforce, and one consequence that is easy
+	 * The obligations this package cannot enforce, and one consequence that is easy
 	 * to miss:
 	 *
 	 * - **Durability before return.** The returned task MUST already be retrievable by
@@ -896,7 +896,7 @@ export interface MCPTaskManagerInterface {
 	 * Read one task's current snapshot.
 	 *
 	 * @remarks
-	 * ALL THREE `tasks/*` methods run through here first, not only `tasks/get`. {@link update}
+	 * EVERY `tasks/*` method runs through here first, not only `tasks/get`. {@link update}
 	 * and {@link abort} answer `void`, so neither has a way to say "no such task" and neither
 	 * can be the place authorization is decided; this is. Expect one read of the named task
 	 * before every update and every cancellation, and expect an `undefined` answer to end that
@@ -1428,9 +1428,9 @@ export interface MCPSubscriptionOptions {
  *
  * Held-open closure is a RESULT in the modern revision, not an out-of-band event, so it
  * arrives where a result arrives — the generator's `return`. Consuming a stream and
- * consuming a unary response therefore end the same way, and a transport narrows the two
- * apart at ONE point (`Symbol.asyncIterator in answer`), at the place that already pumps
- * messages onto the wire. The third parameter is stated explicitly because a stream
+ * consuming a unary response therefore end the same way, and a transport narrows a stream
+ * from a response at ONE point (`Symbol.asyncIterator in answer`), at the place that already pumps
+ * messages onto the wire. The `TNext` type parameter is stated explicitly because a stream
  * accepts nothing back from its consumer.
  */
 export type MCPStream = AsyncGenerator<JSONRPCNotification, JSONRPCResponse, unknown>
@@ -1670,17 +1670,17 @@ export interface MCPMethodManagerInterface {
 }
 
 /**
- * The push observation surface (§13) of an {@link MCPServerInterface} — the
+ * The push observation surface of an {@link MCPServerInterface} — the
  * dispatch moments a fire-and-forget observer (logging, tracing) subscribes to
  * via `server.emitter.on`.
  *
  * @remarks
  * `request` fires at the TOP of every `dispatch` with the method, correlating id
  * (ABSENT for a notification, which has none), and structurally selected wire era, BEFORE the
- * method runs — so an observer sees every inbound call. Listener isolation is the emitter's (§13): a
+ * method runs — so an observer sees every inbound call. Listener isolation is the emitter's: a
  * listener throw is routed to the emitter's `error` handler (the `error` option),
  * never onto this map, so a buggy observer can never corrupt a dispatch. Declared as
- * a `type` alias (§4.5) so the type-literal satisfies `EventMap` structurally.
+ * a `type` alias so the type-literal satisfies `EventMap` structurally.
  */
 export type MCPServerEventMap = {
 	/**
@@ -1748,7 +1748,7 @@ export interface MCPJSONLimitOptions {
 /**
  * Options for `createMCPServer` — the server {@link MCPIdentity}, the live
  * {@link ToolManagerInterface} it exposes, optional `instructions`, and the
- * reserved `on` hooks (§8).
+ * reserved `on` hooks.
  *
  * @remarks
  * `identity` identifies the server in the `initialize` handshake (`serverInfo`).
@@ -1756,14 +1756,14 @@ export interface MCPJSONLimitOptions {
  * over — its `definitions()` advertise the tools and its `execute()` runs a call
  * (the manager already isolates a tool throw into a `success: false` result, so
  * the server adds none). `resources` is the optional consumer-owned registry the
- * three modern resource methods project without taking ownership of storage. `prompts`
+ * modern resource methods project without taking ownership of storage. `prompts`
  * supplies the equivalent prompt registry for `prompts/list` and `prompts/get`.
  * `completion` supplies independent host-owned lookup and candidate generation for
  * `completion/complete`; the server never parses or expands a resource-template URI.
  * `instructions` is the optional human guidance exposed
  * by `server/discover`. `cache` configures the modern cache stamps: `ttl` is the
  * freshness lifetime in milliseconds and `scope` defaults to `'private'`. `on`
- * is the §8 reserved key: initial listeners for the server's
+ * is the reserved `on` key: initial listeners for the server's
  * {@link MCPServerEventMap}, wired at construction. `input` enables modern
  * `tools/call` multi-round trips: the consumer decides when input is needed and
  * supplies principal/continuation/TTL policy, while MCP assigns the request key and
@@ -1775,7 +1775,7 @@ export interface MCPJSONLimitOptions {
  */
 export interface MCPServerOptions {
 	readonly on?: EmitterHooks<MCPServerEventMap>
-	/** The emitter's listener-error handler (AGENTS §13) — a listener throw routes here, not to a domain event. */
+	/** The emitter's listener-error handler — a listener throw routes here, not to a domain event. */
 	readonly error?: EmitterErrorHandler
 	readonly identity: MCPIdentity
 	/** The live tool registry the server exposes over `tools/list` / `tools/call`. */
@@ -1834,8 +1834,8 @@ export interface MCPLegacyOptions {
  * The minimal transport-facing MCP dispatch surface.
  *
  * @remarks
- * A transport-facing dispatcher needs the resolved message limit and the two dispatch
- * doors. It also shares the server emitter because a binder that owns a message pump has
+ * A transport-facing dispatcher needs the resolved message limit and the `dispatch` and
+ * `handle` doors. It also shares the server emitter because a binder that owns a message pump has
  * no response channel for a contained transport fault and must report that fault as an event.
  */
 export interface MCPDispatcherInterface {
@@ -1893,10 +1893,10 @@ export interface MCPDispatcherInterface {
  * pumps strings through `handle`).
  *
  * @remarks
- * - **Two entry points.** `dispatch(invocation)` is the TYPED core: it takes an
+ * - **`dispatch` and `handle`.** `dispatch(invocation)` is the TYPED core: it takes an
  *   already-parsed {@link JSONRPCInvocation}, runs the method, and resolves a
  *   {@link JSONRPCResponse} — or an {@link MCPStream} for a held-open modern method — for
- *   a {@link JSONRPCRequest}, and `undefined` for a {@link JSONRPCNotification}. Its two
+ *   a {@link JSONRPCRequest}, and `undefined` for a {@link JSONRPCNotification}. Its
  *   overloads say exactly that, so a caller dispatching a request never handles an
  *   `undefined` answer and a caller dispatching a notification never handles a response.
  *   `handle(message)` is the STRING boundary: it `JSON.parse`s the raw message, narrows it
@@ -1911,9 +1911,9 @@ export interface MCPDispatcherInterface {
  *   still answers `-32601`.
  * - **Provider-agnostic.** Imports only core siblings; it speaks JSON-RPC + the
  *   tool registry, with no HTTP, no model, and no backend coupling.
- * - **Observable (§13).** The owned `emitter` ({@link MCPServerEventMap}) fires
+ * - **Observable.** The owned `emitter` ({@link MCPServerEventMap}) fires
  *   `request` per dispatch; the emitter isolates a listener throw and routes it to its
- *   `error` handler (the `error` option, §13), never the dispatch.
+ *   `error` handler (the `error` option), never the dispatch.
  */
 export interface MCPServerInterface extends MCPDispatcherInterface {
 	readonly identity: MCPIdentity
@@ -1928,7 +1928,7 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 	 * code in front of the server needs the SAME number: a binder that decodes an inbound
 	 * message before handing it on must refuse at the byte the server would have refused at,
 	 * and the alternative — a second configured copy of one bound, on the binder's own options
-	 * — is two numbers that will disagree the first time one of them is changed.
+	 * — is a second number that will disagree the first time either is changed.
 	 */
 	readonly limit: Required<MCPLimitOptions>
 	/**
@@ -1936,7 +1936,7 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 	 *
 	 * @remarks
 	 * A held-open modern method answers with a CONTROLLED stream instead of a response:
-	 * narrow the two apart with `Symbol.asyncIterator in answer`. Whatever the method
+	 * narrow a stream from a response with `Symbol.asyncIterator in answer`. Whatever the method
 	 * produced, what leaves here is an {@link MCPStreamControllerInterface} — dispatch is
 	 * the one wrapping seam — so a caller may end the exchange promptly without waiting on
 	 * the producer. `options` is optional, so a caller that cannot abort simply never
@@ -1990,7 +1990,7 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 	 * The vague-verb prohibition (`process`, `handle`) governs STANDALONE helpers,
 	 * which carry no entity to supply their object. Here the entity does: `server.handle`
 	 * reads as "the server handles this message", and it is the string-boundary twin of
-	 * {@link dispatch} — one verb per entry point, the same act at two levels of parsing.
+	 * {@link dispatch} — one verb per entry point, the same act at the typed and string levels.
 	 *
 	 * @param message - The raw JSON-RPC message string
 	 * @param options - Per-request execution options (see {@link MCPDispatchOptions})
@@ -2053,7 +2053,7 @@ export interface MCPTransportInterface {
 // coupling.
 
 /**
- * The observable events of a {@link MCPClientTransportInterface} (§13) — the moments the
+ * The observable events of a {@link MCPClientTransportInterface} — the moments the
  * {@link MCPClientInterface} (and any tracer) subscribes to via `transport.emitter.on`.
  *
  * @remarks
@@ -2063,9 +2063,9 @@ export interface MCPTransportInterface {
  *   `data:` event) and emits the parsed {@link JSONRPCMessage}.
  * - `close` — the transport's connection ended (a stream closed, `close()` ran).
  * - `error` — a transport-level fault (a malformed message, a network error); the
- *   payload is typed `unknown` (§13). This is a DOMAIN event, distinct from the emitter's
+ *   payload is typed `unknown`. This is a DOMAIN event, distinct from the emitter's
  *   own listener-error channel: a listener throw is routed to the emitter's `error` handler
- *   (the `error` option), never onto this map. Declared as a `type` alias (§4.5) so the
+ *   (the `error` option), never onto this map. Declared as a `type` alias so the
  *   type-literal satisfies `EventMap` structurally.
  */
 export type MCPClientTransportEventMap = {
@@ -2073,7 +2073,7 @@ export type MCPClientTransportEventMap = {
 	readonly message: readonly [message: JSONRPCMessage]
 	/** The transport's connection ended. */
 	readonly close: readonly []
-	/** A transport-level fault — the caught error (typed `unknown`, §13). */
+	/** A transport-level fault — the caught error (typed `unknown`). */
 	readonly error: readonly [error: unknown]
 }
 
@@ -2086,7 +2086,7 @@ export type MCPClientTransportEventMap = {
  * The mirror of the server's "a transport pumps strings through `handle`": here the
  * {@link MCPClientInterface} hands the transport one {@link JSONRPCMessage} via
  * `send`, and the transport delivers each decoded reply back through the
- * `message` event the client subscribed to. The minimal carrier surface (§21): a
+ * `message` event the client subscribed to. The minimal carrier surface: a
  * `start` (open the connection / arm any reader), `send` (write one message),
  * and `close` (tear down). `session` exposes a server-assigned session id once a
  * stateful transport has one (`undefined` for the stateless v1) — reserved for the
@@ -2157,7 +2157,7 @@ export interface MCPClientTransportInterface {
 	 * Close the transport — end the connection and release resources.
 	 *
 	 * @remarks
-	 * A `close` must SETTLE, and its two settlements mean different things to its caller: resolving
+	 * A `close` must SETTLE, and its settlements mean different things to its caller: resolving
 	 * says the connection ended, rejecting says it did not. The
 	 * {@link MCPClientInterface}'s only other bound is a deadline, which reports that the shutdown
 	 * did not ANSWER and never that it did not happen — so a `close` that resolves or rejects hours
@@ -2177,7 +2177,7 @@ export interface MCPClientTransportInterface {
 }
 
 /**
- * The push observation surface (§13) of an {@link MCPClientInterface} — the moments a
+ * The push observation surface of an {@link MCPClientInterface} — the moments a
  * fire-and-forget observer (logging, tracing) subscribes to via `client.emitter.on`.
  *
  * @remarks
@@ -2191,10 +2191,10 @@ export interface MCPClientTransportInterface {
  *   `notifications/progress` frame claimed by an in-flight request's progress handler is
  *   delivered there instead, and a RESPONSE correlating to nothing pending is discarded
  *   rather than forwarded here, because it answers a request that has already settled.
- * - `error` — a client-level fault surfaced for observation (typed `unknown`, §13). This is
+ * - `error` — a client-level fault surfaced for observation (typed `unknown`). This is
  *   a DOMAIN event, distinct from the emitter's own listener-error channel: a listener throw
  *   is routed to the emitter's `error` handler (the `error` option), never onto this map.
- *   Declared as a `type` alias (§4.5) so the literal satisfies `EventMap`.
+ *   Declared as a `type` alias so the literal satisfies `EventMap`.
  */
 export type MCPClientEventMap = {
 	/** Era negotiation completed — the client is connected. */
@@ -2203,14 +2203,14 @@ export type MCPClientEventMap = {
 	readonly disconnect: readonly []
 	/** A server-initiated notification arrived (not a response to a pending request). */
 	readonly notification: readonly [message: JSONRPCMessage]
-	/** A client-level fault surfaced for observation (typed `unknown`, §13). */
+	/** A client-level fault surfaced for observation (typed `unknown`). */
 	readonly error: readonly [error: unknown]
 }
 
 /**
  * Options for `createMCPClient` — the {@link MCPClientTransportInterface} to drive, the
  * optional client {@link MCPIdentity}, the per-request `timeout`, and the reserved
- * `on` hooks (§8).
+ * `on` hooks.
  *
  * @remarks
  * - `transport` — the carrier the client drives a remote MCP server over (REQUIRED;
@@ -2228,12 +2228,12 @@ export type MCPClientEventMap = {
  *   shutdown the transport accepts and never answers rejects its caller instead of wedging the
  *   client — which makes a short `timeout` a short shutdown grace as well as a short request
  *   deadline. Defaults to {@link import('./constants.js').DEFAULT_MCP_REQUEST_TIMEOUT}.
- * - `on` — the §8 reserved key: initial listeners for the client's
+ * - `on` — the reserved `on` key: initial listeners for the client's
  *   {@link MCPClientEventMap}, wired at construction.
  */
 export interface MCPClientOptions {
 	readonly on?: EmitterHooks<MCPClientEventMap>
-	/** The emitter's listener-error handler (AGENTS §13) — a listener throw routes here, not to a domain event. */
+	/** The emitter's listener-error handler — a listener throw routes here, not to a domain event. */
 	readonly error?: EmitterErrorHandler
 	readonly transport: MCPClientTransportInterface
 	readonly identity?: MCPIdentity
@@ -2273,7 +2273,7 @@ export interface MCPCallOptions {
 }
 
 /**
- * What one remote `tools/call` answered — the three arms the dated protocol permits.
+ * What one remote `tools/call` answered — the arms the dated protocol permits.
  *
  * @remarks
  * The peer chooses the arm, so the caller narrows on `resultType`:
@@ -2287,7 +2287,7 @@ export interface MCPCallOptions {
  *   is over and the work is not; the outcome arrives later through the task's own methods.
  * - {@link MCPInputResult} — the call needs another round trip before it can finish.
  *
- * A fourth `resultType` is refused rather than surfaced: this union is what the client
+ * An unknown `resultType` is refused rather than surfaced: this union is what the client
  * can carry, and an arm it cannot name is one it cannot hand a caller safely.
  */
 export type MCPCallOutcome =
@@ -2349,7 +2349,7 @@ export interface MCPTaskClientOptions {
  * The mirror of {@link MCPTaskManagerInterface} minus `start`, because creating a task is
  * never the client's decision: the extension gives a client no flag and no parameter to ask
  * for one, and a task exists only because the SERVER deferred a `tools/call` it received. The
- * three methods that remain are the three `tasks/*` methods on the wire.
+ * methods that remain are the `tasks/*` methods on the wire.
  *
  * There is deliberately NO plural accessor, for the same reason the server-side port has none:
  * the extension defines no `tasks/list`, and an accessor that could enumerate tasks would
@@ -2365,7 +2365,7 @@ export interface MCPTaskClientOptions {
  * existing `notification` event at zero new mechanism.
  *
  * Every method authorizes on the peer's side, so a task belonging to another principal is
- * indistinguishable from one that never existed and one whose TTL purged it — all three are
+ * indistinguishable from one that never existed and one whose TTL purged it — each is
  * the same `-32602`, deliberately.
  */
 export interface MCPTaskClientInterface {
@@ -2488,9 +2488,9 @@ export interface MCPTaskClientInterface {
  * - **Transport-agnostic.** Imports only core siblings — JSON-RPC + the tool vocabulary
  *   + the timeout primitive — with no HTTP and no model; the concrete transport is
  *   injected. Wire fields are narrowed via the contracts guards (no `as`).
- * - **Observable (§13).** The owned `emitter` fires `connect` / `disconnect` /
+ * - **Observable.** The owned `emitter` fires `connect` / `disconnect` /
  *   `notification` / `error`; the emitter isolates a listener throw and routes it to its
- *   `error` handler (the `error` option, §13), never the client.
+ *   `error` handler (the `error` option), never the client.
  */
 export interface MCPClientInterface {
 	readonly emitter: EmitterInterface<MCPClientEventMap>
@@ -2504,15 +2504,15 @@ export interface MCPClientInterface {
 	 * The draft Tasks extension's client half — reading, answering, and stopping a durable task.
 	 *
 	 * @remarks
-	 * Always present, because the three `tasks/*` methods are ordinary requests a client may
+	 * Always present, because the `tasks/*` methods are ordinary requests a client may
 	 * issue at any time; whether they SUCCEED is the peer's decision, and a server that did not
-	 * configure the extension answers all three `-32601`. Nothing here is advertised, cached, or
+	 * configure the extension answers each of them `-32601`. Nothing here is advertised, cached, or
 	 * polled — see {@link MCPTaskClientInterface} for why the schedule stays the consumer's.
 	 */
 	readonly tasks: MCPTaskClientInterface
 	/**
 	 * Subscribe a listener to one of the client's {@link MCPClientEventMap} events —
-	 * the convenience forward to `emitter.on` (§13).
+	 * the convenience forward to `emitter.on`.
 	 *
 	 * @param event - The event name to subscribe to
 	 * @param handler - The listener for that event's argument tuple
@@ -2612,8 +2612,8 @@ export interface MCPClientInterface {
 	 */
 	tools(): Promise<readonly ToolInterface[]>
 	/**
-	 * Call a remote tool by name — runs `tools/call` and reports which of the three
-	 * permitted arms the peer answered with.
+	 * Call a remote tool by name — runs `tools/call` and reports which permitted arm
+	 * the peer answered with.
 	 *
 	 * @remarks
 	 * The answer is an {@link MCPCallOutcome} because the peer, not the caller, decides

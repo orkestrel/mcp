@@ -16,7 +16,7 @@ import { Emitter } from '@orkestrel/emitter'
  * {@link import('./WebSocketClientTransport.js').WebSocketClientTransport} reuses.
  *
  * @remarks
- * - **Reuses `MCPClientTransportInterface` (§21).** It IS the same generic carrier the HTTP
+ * - **Reuses `MCPClientTransportInterface`.** It IS the same generic carrier the HTTP
  *   client transport implements — `emitter` (`message` / `close` / `error`), `start`,
  *   `send`, `close` — so the WebSocket server and client both speak ONE transport contract,
  *   no near-duplicate sibling interface. `session` is `undefined` (the stateless v1; a
@@ -26,17 +26,17 @@ import { Emitter } from '@orkestrel/emitter'
  *   frame is `JSON.parse`d inside a try/catch and narrowed with `parseJSONRPCMessage` — a
  *   well-formed {@link JSONRPCMessage} is re-emitted on this transport's `message` event (the
  *   parsed envelope the {@link import('@src/core').MCPServerInterface} pump dispatches), while
- *   a non-JSON or non-message frame is surfaced on `error` and DROPPED, never thrown (§14). It
+ *   a non-JSON or non-message frame is surfaced on `error` and DROPPED, never thrown. It
  *   also bridges the socket's `close` → this transport's `close`, and the socket's `error`.
  * - **Outbound (`send`).** `send(message)` writes one text frame
  *   (`nodeWs.send(JSON.stringify(message))`); the underlying wrapper no-ops a write on a
  *   non-open socket, so a closed connection drops silently rather than throwing.
- * - **`close()`** removes the three subscriptions `start()` installed on the socket, closes the
+ * - **`close()`** removes the subscriptions `start()` installed on the socket, closes the
  *   underlying socket (the RFC 6455 close handshake), and fires the transport's `close` event
  *   (idempotent — a second `close`, or a socket-driven close, emits once). A frame that arrives
  *   between that release and the peer's close echo reaches nothing: the socket-driven close path
  *   releases the same way, so a closed transport is never subscribed to a live socket.
- * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); the emitter
+ * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); the emitter
  *   isolates a listener throw (a buggy observer never corrupts the bridge). `error` is a
  *   DOMAIN event (a transport-level fault), distinct from the emitter's listener-error channel.
  */
@@ -101,7 +101,7 @@ export class WebSocketServerTransport implements MCPClientTransportInterface {
 
 	// Decode one inbound text frame: `JSON.parse` → `parseJSONRPCMessage`. A well-formed
 	// message re-emits on `message`; a malformed / non-message frame surfaces on `error` and
-	// is dropped (§14 — the bridge never throws on adversarial wire input).
+	// is dropped (the bridge never throws on adversarial wire input).
 	#receive(text: string): void {
 		let parsed: unknown
 		try {
@@ -129,7 +129,7 @@ export class WebSocketServerTransport implements MCPClientTransportInterface {
 	}
 
 	// Hand the socket back exactly as it was found: the wrapper is owned by the ingress that
-	// claimed the upgrade, so this transport removes its own three subscriptions and touches
+	// claimed the upgrade, so this transport removes its own subscriptions and touches
 	// nothing else on it.
 	#release(): void {
 		this.#socket.emitter.off('message', this.#frame)

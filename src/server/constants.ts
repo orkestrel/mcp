@@ -1,4 +1,4 @@
-// The MCP HTTP-transport constants (AGENTS §5 constants file) — the wire-level header
+// The MCP HTTP-transport constants — the wire-level header
 // names, the default mount path, and the folded event-log bounds. The HEADER names are
 // the Streamable-HTTP transport's session /
 // protocol-version headers. `createMCPSession` owns the optional session id, while

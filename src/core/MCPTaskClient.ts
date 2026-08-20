@@ -9,7 +9,7 @@ import { MCPError } from './errors.js'
 import { isMCPTaskDetail } from './validators.js'
 
 /**
- * The CLIENT half of the draft Tasks extension — the three `tasks/*` methods over one
+ * The CLIENT half of the draft Tasks extension — the `tasks/*` methods over one
  * correlated-request door, exposed as an {@link import('./types.js').MCPClientInterface}'s
  * `tasks`.
  *
@@ -29,7 +29,7 @@ import { isMCPTaskDetail } from './validators.js'
  *   client's id space, pending table, deadline policy, and `disconnect` drain rather than
  *   opening a second path to the same peer.
  * - **The peer authorizes.** Nothing is checked locally. A server that never configured the
- *   extension answers all three `-32601`, and a task that never existed, one whose TTL purged
+ *   extension answers each of them `-32601`, and a task that never existed, one whose TTL purged
  *   it, and one belonging to another principal are all the same `-32602` — a refusal this
  *   client passes on rather than resolving into a distinction the peer refused to publish.
  *

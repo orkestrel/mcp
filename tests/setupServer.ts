@@ -1,6 +1,5 @@
 // Server-test setup — node-only helpers, loaded after `setup.ts` for the node `guides`
-// (and `src:server`) projects. `node:*` imports belong here, never in `setup.ts`
-// (AGENTS §16.1).
+// (and `src:server`) projects. `node:*` imports belong here, never in `setup.ts`.
 
 import type { IncomingMessage, Server } from 'node:http'
 import type { MCPClientInterface, MCPClientTransportInterface } from '@src/core'
@@ -124,17 +123,17 @@ export function findMissingNamedImports(
 	return Object.freeze(missing)
 }
 
-// ── HTTP request stub (the §14 boundary-narrowing pattern) ───────────────────
+// ── HTTP request stub (the boundary-narrowing pattern) ───────────────────────
 //
-// AGENTS §16.1: the minimal `IncomingMessage` stub the pure node-only http readers build
+// the minimal `IncomingMessage` stub the pure node-only http readers build
 // on — only the fields a reader touches (`url` / `method` / `headers` / `socket`),
-// crossed into the parameter through a structural guard (never an `as`, §14).
+// crossed into the parameter through a structural guard (never an `as`).
 
 /**
  * A structural guard narrowing an `unknown` stub to {@link
  * import('node:http').IncomingMessage} — the readers only read `url` / `method` /
  * `headers` (and, for the peer IP, `socket`), so a partial shape carrying `headers`
- * crosses the boundary through this guard with no assertion (AGENTS §14).
+ * crosses the boundary through this guard with no assertion.
  *
  * @param value - The candidate stub
  * @returns Whether `value` is shaped enough to stand in for an `IncomingMessage`
@@ -144,10 +143,10 @@ export function isIncomingMessage(value: unknown): value is IncomingMessage {
 }
 
 /**
- * Build a minimal `node:http`-shaped request stub for the pure request readers (AGENTS
- * §16.1) — only the fields each reader touches, defaulting `headers` / `socket` to empty
+ * Build a minimal `node:http`-shaped request stub for the pure request readers — only the
+ * fields each reader touches, defaulting `headers` / `socket` to empty
  * so `upgradeRequestPath` and a peer-IP read both have something to read. Crosses into
- * the `IncomingMessage` parameter through {@link isIncomingMessage} (no `as`, §14).
+ * the `IncomingMessage` parameter through {@link isIncomingMessage} (no `as`).
  *
  * @param fields - The request fields to set (`url` / `method` / `headers` / `socket`);
  *   each omitted field falls back to a sensible empty default
@@ -171,11 +170,11 @@ export function createRequestStub(fields?: {
 
 // ── Fault-injectable SSE stream (a REAL StreamInterface, not a mock) ─────────
 //
-// `openStream` is the real seam and is used wherever the happy path is the claim. Two
+// `openStream` is the real seam and is used wherever the happy path is the claim. The
 // terminals it cannot be driven into from outside are exactly the ones the ownership and
 // disconnect rows are about: a `write` that throws mid-stream, and a response body that
 // raises while it is being forwarded. This is a minimal real implementation of the same
-// interface with those two faults as data (AGENTS §16.1 — an inert, customizable stub).
+// interface with those faults as data (an inert, customizable stub).
 
 /** Which fault a {@link createStreamStub} stream raises, if any. */
 export interface TestStreamOptions {
@@ -260,9 +259,9 @@ export function createStreamStub(options?: TestStreamOptions): TestStreamInterfa
 
 // ── In-memory WebSocket Duplex pair (the RFC 6455 wire + transport tests) ────
 //
-// AGENTS §16.1: the cross-wired in-memory `node:stream` Duplex PAIR the WebSocket
+// the cross-wired in-memory `node:stream` Duplex PAIR the WebSocket
 // transport tests drive — a REAL bidirectional socket (two PassThroughs, one per
-// direction), NOT a mock (§16). `duplexPair` makes a `[server, client]`; `flushSocket`
+// direction), NOT a mock. `duplexPair` makes a `[server, client]`; `flushSocket`
 // waits for synchronous frame writes to propagate across the pair; `readClientFrames`
 // is the inverse of what a server writes (strip the 101 handshake, then decode every
 // complete frame off the running buffer).
@@ -271,8 +270,8 @@ export function createStreamStub(options?: TestStreamOptions): TestStreamInterfa
 // forward into the partner's inbound `PassThrough` and whose reads drain its OWN
 // inbound one. Two of these, sharing each other's channel, form a genuine bidirectional
 // stream — bytes written to one arrive as `data` on the other — exercising real Node
-// stream I/O without a socket or a mock (AGENTS §16). Module-private (the runtime-
-// self-contained §5 analogue: a test-only stream shim with no standalone reuse beyond
+// stream I/O without a socket or a mock. Module-private (the runtime-
+// self-contained analogue: a test-only stream shim with no standalone reuse beyond
 // `duplexPair`); the pair factory is the surface.
 class DuplexEnd extends Duplex {
 	readonly #inbound: PassThrough
@@ -306,7 +305,7 @@ class DuplexEnd extends Duplex {
 
 /**
  * Create a cross-wired in-memory `node:stream` Duplex PAIR — a real bidirectional
- * socket for the WebSocket transport tests (AGENTS §16.1). The server end gets `[0]`,
+ * socket for the WebSocket transport tests. The server end gets `[0]`,
  * the client end `[1]`, sharing two `PassThrough` channels (one per direction); bytes
  * written to one arrive as `data` on the other. No socket, no mock — genuine Node
  * stream I/O.
@@ -325,7 +324,7 @@ export function duplexPair(): readonly [Duplex, Duplex] {
 
 /**
  * Resolve on the socket pair's next tick or two — long enough for synchronous frame
- * writes to propagate through the {@link duplexPair} PassThroughs (AGENTS §16.1).
+ * writes to propagate through the {@link duplexPair} PassThroughs.
  * Deterministic (no real timer dependence on load), so a WebSocket test awaits it after
  * a `send` rather than polling.
  *
@@ -339,7 +338,7 @@ export function flushSocket(): Promise<void> {
  * Collect a {@link duplexPair} client end's incoming frames — FIRST stripping the
  * server's HTTP `101` handshake response (the leading text up to `\r\n\r\n`), THEN
  * decoding every complete frame off the running buffer with `@orkestrel/websocket`'s
- * `parseWebSocketFrame` (AGENTS §16.1). The real client reader: the inverse of what a
+ * `parseWebSocketFrame`. The real client reader: the inverse of what a
  * server-mode wrapper writes (handshake then frames). The returned `frames` array grows
  * as the server sends.
  *
@@ -380,8 +379,8 @@ export interface ClientSocketInterface {
 }
 
 /**
- * Open a raw RFC 6455 client socket against a real server and decode what it sends back
- * (AGENTS §16.1) — a genuine TCP peer, no wrapper and no mock.
+ * Open a raw RFC 6455 client socket against a real server and decode what it sends back —
+ * a genuine TCP peer, no wrapper and no mock.
  *
  * @remarks
  * Connects to `base`, writes a valid upgrade `GET` for `path`, and resolves once the
@@ -418,9 +417,9 @@ export async function openClientSocket(base: string, path: string): Promise<Clie
 	}
 }
 
-// ── Teardown registrar (tracked-resource cleanup) ─────────────────────────────
+// ── Teardown registrar (tracked-resource cleanup) ────────────────────────────
 //
-// AGENTS §16.1: the duplicated `const tracked = []` + `afterEach(dispose-all)` +
+// the duplicated `const tracked = []` + `afterEach(dispose-all)` +
 // `track(item)` trio every node-resource suite hand-rolls — folded into one registrar.
 // The caller supplies the disposer (`h => h.stop()`); the registrar holds the tracked
 // list AND wires its OWN `afterEach` to dispose every tracked item (awaiting async
@@ -435,7 +434,7 @@ export interface TeardownInterface<T> {
 /**
  * Create a {@link TeardownInterface} that disposes every tracked item after each test —
  * the one general form of the `tracked[]` + `afterEach` + `track` pattern the server
- * suites repeat (AGENTS §16.1). Call it at a suite's top level: it registers its OWN
+ * suites repeat. Call it at a suite's top level: it registers its OWN
  * `afterEach` immediately, draining the tracked list and running `dispose` on each item
  * (awaiting a returned promise), so a started server is `stop()`ed even when an
  * assertion throws mid-test. The disposer is the caller's (`(handle) => handle.stop()`),
@@ -473,9 +472,9 @@ export function createTeardown<T>(
 
 // ── HTTP spine test harness (node-only, real `@orkestrel/server`) ────────────
 //
-// AGENTS §16.1: the started-server fixture the MCP HTTP tests share lives here, not
+// the started-server fixture the MCP HTTP tests share lives here, not
 // duplicated per file. Each test starts a REAL server on an ephemeral port and drives
-// it with the global `fetch` over a real socket — no mocking (§16). The returned handle
+// it with the global `fetch` over a real socket — no mocking. The returned handle
 // carries the bound base URL plus a `stop` thunk every test calls in `afterEach` so no
 // listener leaks across files.
 
@@ -526,8 +525,8 @@ export type TestResource = StartedServerInterface | MCPClientInterface | MCPClie
  *
  * @remarks
  * Each member is identified by the one release method it declares (`stop` / `disconnect` /
- * `close`), so the check is a structural narrowing rather than an assertion (§14). Every
- * one of the three is idempotent, so a test that already released its client inline — the
+ * `close`), so the check is a structural narrowing rather than an assertion. Every
+ * one of them is idempotent, so a test that already released its client inline — the
  * disconnect being the CLAIM there rather than cleanup — tears down exactly once and the
  * second call returns immediately.
  *
@@ -548,11 +547,10 @@ export function closeResource(resource: TestResource): Promise<void> {
 
 // ── Raw HTTP upgrade driver (the WebSocket transport's upgrade seam) ─────────
 //
-// AGENTS §16.1: the `Server.upgrade(...)` seam tests drive a REAL `node:http` protocol
+// the `Server.upgrade(...)` seam tests drive a REAL `node:http` protocol
 // upgrade — a client request with `Connection: Upgrade` + `Upgrade: websocket` headers
 // — and observe whether the server CLAIMED the socket (it answered `101` and the
-// client's `'upgrade'` event fired) or DECLINED it. A real socket exchange, no mock
-// (§16).
+// client's `'upgrade'` event fired) or DECLINED it. A real socket exchange, no mock.
 
 /** The outcome of an {@link upgradeRequest} — whether the server claimed the upgrade. */
 export interface UpgradeOutcome {
@@ -564,7 +562,7 @@ export interface UpgradeOutcome {
 
 /**
  * Drive a real `node:http` protocol upgrade against `base` + `path` and resolve the
- * {@link UpgradeOutcome} — the shared upgrade-seam driver (AGENTS §16.1).
+ * {@link UpgradeOutcome} — the shared upgrade-seam driver.
  *
  * @remarks
  * Sends `Connection: Upgrade` + `Upgrade: websocket` (plus any extra `headers`) and
@@ -620,7 +618,7 @@ export function upgradeRequest(
 // instantaneous cannot tell "re-read after the await" from "read at request start". This
 // middleware is that seam. Composed BEHIND the middleware under test, it advances the
 // INJECTED manual clock before delegating, so the layer in front really does suspend
-// across a measurable span. The host clock is never replaced (AGENTS §16).
+// across a measurable span. The host clock is never replaced.
 
 /**
  * Create a middleware that advances a manual clock before delegating downstream.
@@ -652,7 +650,7 @@ export function createClockMiddleware<TState>(
  * @remarks
  * The seam for interleaving: while one request is parked here, the middleware in front of it
  * is genuinely suspended, so a second request can reach the same state and the test can pin
- * which of the two wins. A short real delay, never a replaced clock (AGENTS §16).
+ * which of the two wins. A short real delay, never a replaced clock.
  *
  * @typeParam TState - The consumer's route state type
  * @param ms - How long each request is held before it continues downstream
@@ -671,7 +669,7 @@ export function createDelayMiddleware<TState>(ms: number): MiddlewareHandler<TSt
 // upgrade, so every claim about what it does with an ARRIVING socket needs a peer that
 // can hold the handshake open and then report what became of each socket it upgraded.
 // `createWebSocketServer` is a whole MCP server and reports neither, so this is a
-// protocol-faithful fixture instead (AGENTS §16): it writes a REAL RFC 6455 `101` with a
+// protocol-faithful fixture instead: it writes a REAL RFC 6455 `101` with a
 // correctly computed `Sec-WebSocket-Accept`, optionally after a delay and optionally with
 // one unmasked text frame appended, and it counts the sockets it upgraded against the
 // sockets that are still open.

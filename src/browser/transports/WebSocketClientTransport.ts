@@ -29,7 +29,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  * - **Inbound (`message`).** Each decoded text frame is `JSON.parse`d (guarded) and
  *   narrowed with `parseJSONRPCMessage` — a well-formed {@link JSONRPCMessage}
  *   re-emits on this transport's `message` event; a non-text (binary) frame or a
- *   non-JSON / non-message text frame surfaces on `error` and is DROPPED (§14 — never
+ *   non-JSON / non-message text frame surfaces on `error` and is DROPPED (never
  *   throws on adversarial wire input).
  * - **`close()`** unsubscribes from the underlying socket, closes it, and fires `close`
  *   (idempotent); the socket's native `close` event (a server-initiated close) fires the
@@ -37,7 +37,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   never double-emits, and the released socket reports its own close to nobody. A `send`
  *   issued after `close()` is silently dropped (not queued), so a closed transport delivers
  *   nothing until a `start()` opens a new connection.
- * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); every
+ * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); every
  *   emit the emitter isolates a listener throw; `error` is a DOMAIN event (a
  *   transport-level fault).
  *
@@ -168,8 +168,8 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 
 	// Decode one inbound frame: a non-text (binary) frame is rejected without a throw; a
 	// text frame is `JSON.parse`d → `parseJSONRPCMessage`. A well-formed message re-emits on
-	// `message`; a malformed / non-message frame surfaces on `error` and is dropped (§14 —
-	// never throws on adversarial wire input).
+	// `message`; a malformed / non-message frame surfaces on `error` and is dropped
+	// (never throws on adversarial wire input).
 	#receive(data: unknown): void {
 		if (!isString(data)) {
 			this.#emitter.emit('error', new Error('non-text WebSocket frame'))
