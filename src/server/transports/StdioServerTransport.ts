@@ -29,9 +29,10 @@ import { dispatchLines, extractLines } from '../helpers.js'
  * - **Outbound (`send`).** `send(message)` writes one newline-terminated
  *   `JSON.stringify`d line to `output`.
  * - **`close()`** removes this transport's input subscriptions and fires its `close`
- *   event (idempotent). The injected streams are owned by the caller (typically
- *   `process.stdin`/`process.stdout`), so the transport never closes, pauses, ends, or
- *   blanket-clears them.
+ *   event (idempotent). When this transport started the input flow, `close()` pauses
+ *   it after removing the subscriptions. The injected streams are owned by the caller
+ *   (typically `process.stdin`/`process.stdout`), so the transport never destroys, ends,
+ *   or blanket-clears them.
  * - **Observable (§13).** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
  *   fault), distinct from the emitter's own listener-error channel.
@@ -46,6 +47,7 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 	#buffer = ''
 	#started = false
 	#closed = false
+	#ownsFlow = false
 
 	constructor(input: NodeJS.ReadableStream, output: NodeJS.WritableStream) {
 		this.#emitter = new Emitter<MCPClientTransportEventMap>()
@@ -74,6 +76,7 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 		// (the single MCPServer pump subscribes once).
 		if (this.#started || this.#closed) return
 		this.#started = true
+		this.#ownsFlow = this.#input.listenerCount('data') === 0
 		this.#input.on('data', this.#data)
 		this.#input.on('close', this.#ending)
 		this.#input.on('error', this.#failure)
@@ -113,5 +116,6 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 		this.#input.removeListener('data', this.#data)
 		this.#input.removeListener('close', this.#ending)
 		this.#input.removeListener('error', this.#failure)
+		if (this.#ownsFlow) this.#input.pause()
 	}
 }

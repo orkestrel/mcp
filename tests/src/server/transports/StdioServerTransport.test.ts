@@ -160,12 +160,25 @@ describe('StdioServerTransport — send writes response lines the peer decodes',
 })
 
 describe('StdioServerTransport — lifecycle', () => {
+	it('pauses the input after close when the transport started the flow', async () => {
+		const input = new PassThrough()
+		const output = new PassThrough()
+		const transport = new StdioServerTransport(input, output)
+		await transport.start()
+
+		expect(input.readableFlowing).toBe(true)
+		await transport.close()
+
+		expect(input.readableFlowing).toBe(false)
+	})
+
 	it('restores the caller-owned input listener counts when close() releases the transport', async () => {
 		const input = new PassThrough()
 		const output = new PassThrough()
 		input.on('data', () => {})
 		input.on('close', () => {})
 		input.on('error', () => {})
+		expect(input.readableFlowing).toBe(true)
 		const before = [
 			input.listenerCount('data'),
 			input.listenerCount('close'),
@@ -187,6 +200,7 @@ describe('StdioServerTransport — lifecycle', () => {
 			input.listenerCount('close'),
 			input.listenerCount('error'),
 		]).toEqual(before)
+		expect(input.readableFlowing).toBe(true)
 		expect(input.destroyed).toBe(false)
 		expect(input.writableEnded).toBe(false)
 	})
