@@ -1566,11 +1566,13 @@ row naming `MCPLegacy` or `createMCPLegacy` — this section, the `createMCPLega
 the `MCPLegacy` Entities row, the `MCPDispatcherInterface` and `MCPLegacyOptions` Surface rows,
 the `#### MCPDispatcherInterface` Methods block, and the cross-references that point here.
 Removing the code and keeping a row that names a deleted export fails this package's own parity
-gate, which requires every backticked API in this guide to resolve to a real public export.
+gate. It checks every Surface row against the public barrels in both directions and checks every
+named import in a TypeScript fence against its published package face.
 
-`MCPServer` is not on that list and holds nothing that would put it there: no era branch, no
-import of a legacy module, and no literal spelling a legacy method or header name — which is
-precisely why the modern engine still compiles once the layer is deleted. `isModernRequest`,
+`MCPServer` is not on that list: it imports no `MCPLegacy` module and carries no `MCPLegacy` or
+`legacy` spelling. Its modern dispatcher still spells protocol methods shared with the decorator;
+method text alone is not legacy ownership. The modern engine therefore still compiles once the
+layer is deleted. `isModernRequest`,
 `inferEra`, `isInitializeRequest`, `MCPLegacyResult`, `MCP_PROTOCOL_VERSION`, and
 `MCP_LEGACY_VERSION` **survive**, because the modern engine reads them to decide what a request IS, not to serve a
 legacy one.
@@ -1592,14 +1594,13 @@ fails for any reason other than an unsupported version. Removing either one chan
 paths are tested, and no unit is scheduled against them.
 
 That module list is a membership rule rather than a reassurance, so it is executed instead
-of asserted: [the repository law suite](../tests/policy.test.ts) computes the legacy-owning
-module set from the tree and requires it to EQUAL that list **in both directions**, so a new
-participant and a stale entry fail the same way. The same suite checks the `MCPServer` clause as
-separate facts. What neither check can reach is recorded beside them, in the suite and in
-`tests/setupPolicy.ts`: legacy participation that never spells the entity name or the method
-name — a handler table, a computed concatenation, a branch on a version VALUE — is invisible to
-a structural rule, and [the dispatch tests](../tests/src/core/MCPLegacy.test.ts) are the guard
-for that class.
+of asserted: [the package guide suite](../tests/guides.test.ts) computes the legacy-owning
+module set from the tree and requires it to EQUAL that list **in both directions**, so an added
+participant and a stale entry fail the same way. The same suite requires `MCPServer.ts` to carry
+no `MCPLegacy` or `legacy` spelling. What these structural checks cannot reach is legacy
+participation that never spells the entity name — a handler table, a computed concatenation,
+or a branch on a version VALUE. [The dispatch tests](../tests/src/core/MCPLegacy.test.ts) guard
+that class.
 
 **What a legacy client sees differently than it did before this collapse**, because
 legacy now inherits the modern engine's validation instead of running beside it:
@@ -2221,6 +2222,11 @@ remains. A stopped server therefore lets the process exit rather than holding
 `process.stdin` open, and the injected streams are never destroyed or ended —
 they belong to the caller.
 
+The server preserves the caller's flowing or non-flowing state and every caller-owned listener.
+An unread stream starts with `readableFlowing === null`; Node exposes no public operation that
+restores that untouched state after `data` consumption, so closing this transport leaves that
+case non-flowing with `readableFlowing === false`.
+
 `createStdioClientTransport` is the egress mirror — it builds one supervised
 `@orkestrel/process` `Process` over `options.command` / `options.args` /
 `options.env`, and that supervisor spawns the child with
@@ -2235,6 +2241,10 @@ frames from the supervisor's `readline`-backed `lines` iterable instead. Both
 decode through `dispatchLines` (decode + emit each complete line as `message` or
 `error`) — documented under [HTTP transport § Helpers](#helpers-1) since it
 lives in the shared `helpers.ts`.
+
+Closing the client releases the transport's own line pump before it awaits the supervisor's
+bounded process teardown. A descendant that inherited the child's stdout pipe therefore cannot
+keep the transport close pending after the supervisor's teardown has resolved.
 
 ```ts
 import { createMCPClient, createMCPServer } from '@orkestrel/mcp'
@@ -2826,12 +2836,14 @@ the negotiated protocol version. The `WebSocketClientTransport`s unsubscribe
 from the socket before closing it, and the Node one also destroys an upgrade
 request still on the wire. `WebSocketServerTransport` unsubscribes before it
 runs the close handshake, so a frame already in flight cannot re-emit on a
-transport that has closed. `StdioClientTransport` terminates its child through
-the supervisor's bounded group kill, awaits the observed exit, and tears the
-supervisor down. `StdioServerTransport` removes the listeners it put on
-`input` and pauses `input` when — and only when — it started a non-flowing
-stream and no other `data` listener remains; it does NOT destroy or end the
-injected streams, because those belong to the caller. The transport
+transport that has closed. `StdioClientTransport` releases its own line pump,
+terminates its child through the supervisor's bounded group kill, and tears the
+supervisor down without waiting for a descendant-held stdout pipe.
+`StdioServerTransport` removes the listeners it put on `input`, preserves the
+caller's flowing or non-flowing state and listeners, and does NOT destroy or end
+the injected streams. An initially unread stream settles at non-flowing because
+Node exposes no public operation that restores `readableFlowing === null` after
+consumption. The transport
 `createDuplexClientTransport` adapts forwards its `close` to the wrapped
 `MCPTransportInterface` and holds nothing of its own. That range is the shape of
 the whole rule: a transport releases what IT acquired, never what it was
@@ -3359,7 +3371,7 @@ closed — while ordinary upstream completion closes the response without invent
 - [Session middleware integration](../tests/src/server/middlewares.test.ts)
 - [Guide/source/public-barrel parity, and what the spawned stdio child actually receives](../tests/guides.test.ts)
 - [The packed artifact a consumer installs, across its faces and its ESM and CommonJS builds](../tests/distribution.test.ts)
-- [Repository law, including the legacy-removability boundary](../tests/policy.test.ts)
+- [Package guide law, including the legacy-removability boundary](../tests/guides.test.ts)
 
 ## Declared non-goals
 
@@ -3804,9 +3816,11 @@ transport` tables) is a real export of the mcp layer (`src/core` or
    an unknown method — all silent); `handle` returns `undefined`. Neither era
    branch ever runs for a call without an `id`.
 4. **The legacy methods, and they live in `MCPLegacy`.** The decorator owns the
-   whole fixed set; `MCPServer` holds no era branch, imports no legacy module, and
-   spells no legacy method or header name, each checked structurally by
-   [the repository law suite](../tests/policy.test.ts). `ping`, `tools/list`, and
+   whole fixed set. [The package guide suite](../tests/guides.test.ts) checks every
+   declared legacy-ingress owner against the removal membership in both directions
+   and requires `MCPServer.ts` to carry no `MCPLegacy` or `legacy` spelling.
+   Dispatch tests separately prove that unstamped legacy requests never take a
+   server-owned era branch. `ping`, `tools/list`, and
    `tools/call` are TRANSLATED onto the modern engine — they acquire modern request
    metadata, run through the same dispatcher, and are projected back unstamped — so
    they inherit the modern engine's execution port, cancellation, bounds, and
@@ -4247,10 +4261,13 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     nothing); a non-request message is ignored; a `dispatch` / `send` fault
     surfaces on the transport's `error` event. `stop()` unbinds that pump and
     closes the transport, which removes the listeners `start()` put on
-    `input` and pauses `input` only when this transport started a non-flowing
-    stream AND no other `data` listener remains — so a stopped server lets the
+    `input`, preserves the caller's flowing or non-flowing state and listeners,
+    and pauses `input` only when this transport started a non-flowing stream
+    AND no other `data` listener remains — so a stopped server lets the
     process exit instead of holding `process.stdin` open. It never destroys or
-    ends the injected streams; they belong to the caller.
+    ends the injected streams; they belong to the caller. An initially unread
+    stream closes at `readableFlowing === false`, not `null`, because Node exposes
+    no public operation that restores the untouched state after consumption.
     `createStdioClientTransport(options)` builds one supervised
     `@orkestrel/process` `Process` over `options.command` and `options.args`.
     That supervisor spawns with `stdio: ['pipe', 'pipe', 'pipe']`, so the
@@ -4268,8 +4285,9 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     `message` through the shared `dispatchLines` helper (a malformed line emits
     `error`); the child's exit bridges to the transport's `close`. `close()`
     terminates the child through the supervisor's bounded `SIGTERM` → grace →
-    `SIGKILL` group kill, awaits its observed exit, tears the supervisor down,
-    and fires `close` once. The stdio transports' `session` is always
+    `SIGKILL` group kill, releases the transport's own line pump, tears the
+    supervisor down without waiting for a descendant-held stdout pipe, and fires
+    `close` once. The stdio transports' `session` is always
     `undefined` (the process pipe carries no session concept).
 21. **The browser transport carries the SAME `MCPClientTransportInterface`
     contract over native host APIs (`src/browser`).**

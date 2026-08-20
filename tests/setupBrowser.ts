@@ -17,7 +17,7 @@ export function buildElement(tag = 'div'): HTMLElement {
 //
 // `duplex` is a claim about what reaches the OTHER end, so every one of these returns a
 // drain over what a real peer actually received. None of them stands in for the carrier
-// under test: the port tap is a SECOND listener on a real `MessagePort`, the scope pair is
+// under test: the port tap is an added listener on a real `MessagePort`, the scope pair is
 // real `createScopeTransport` halves wired to each other, and the fixture drain reads
 // frames a real Node peer recorded off a real socket.
 

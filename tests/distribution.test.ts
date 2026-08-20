@@ -9,7 +9,7 @@ import {
 	writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
@@ -42,6 +42,9 @@ const FACES = Object.freeze([
 		commonJS: true,
 	},
 ])
+
+/** Files npm includes independently of the manifest's `files` allowlist. */
+const NPM_REQUIRED_FILES = Object.freeze(['LICENSE', 'package.json'])
 
 /**
  * The value declarations one built `.d.ts` entry exposes, deduplicated and sorted.
@@ -84,11 +87,55 @@ function readNameList(value: unknown, label: string): readonly string[] {
 	return value
 }
 
+/** Read the package-relative paths reported by `npm pack --json`. */
+function readPackedPaths(value: unknown): readonly string[] {
+	const entries = readField(value, 'files')
+	if (!Array.isArray(entries)) throw new Error('npm pack returned no file inventory')
+	const paths: string[] = []
+	for (const entry of entries) {
+		const path = readField(entry, 'path')
+		if (typeof path !== 'string') throw new Error('npm pack returned an invalid file inventory')
+		paths.push(path)
+	}
+	return paths.sort()
+}
+
+/** Read the manifest paths that admit package content. */
+function readManifestFiles(value: unknown): readonly string[] {
+	const entries = readField(value, 'files')
+	if (!Array.isArray(entries) || !entries.every((entry) => typeof entry === 'string')) {
+		throw new Error('The package manifest carries no file allowlist')
+	}
+	return entries
+}
+
+/** Report whether one packed path belongs to the manifest or npm's required metadata. */
+function allowsPackedPath(path: string, allowlist: readonly string[]): boolean {
+	if (NPM_REQUIRED_FILES.includes(path)) return true
+	return allowlist.some(
+		(entry) => path === entry || path.startsWith(`${entry.replace(/\/$/u, '')}/`),
+	)
+}
+
+/** Return every packed path outside the manifest and npm-required population. */
+function findUnexpectedPackedPaths(
+	paths: readonly string[],
+	allowlist: readonly string[],
+): readonly string[] {
+	return paths.filter((path) => !allowsPackedPath(path, allowlist)).sort()
+}
+
 it('installs the packed artifact and drives its faces, declarations, and resolution modes', () => {
 	const root = fileURLToPath(new URL('../', import.meta.url))
 	const scratch = mkdtempSync(join(tmpdir(), 'orkestrel-mcp-distribution-'))
+	const controlDirectory = mkdtempSync(join(root, 'tmp', 'mcp-distribution-control-'))
+	const controlFile = join(controlDirectory, 'unexpected.txt')
+	const controlPath = relative(root, controlFile).replaceAll('\\', '/')
 
 	try {
+		writeFileSync(controlFile, 'packed inventory negative control\n')
+		const sourceManifest: unknown = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+		const allowlist = readManifestFiles(sourceManifest)
 		const pack = spawnSync('npm', ['pack', '--json', '--pack-destination', scratch], {
 			cwd: root,
 			encoding: 'utf8',
@@ -101,6 +148,12 @@ it('installs the packed artifact and drives its faces, declarations, and resolut
 		const [packedArtifact] = packed
 		const filename = readField(packedArtifact, 'filename')
 		if (typeof filename !== 'string') throw new Error('npm pack returned no artifact filename')
+		const packedPaths = readPackedPaths(packedArtifact)
+		expect(findUnexpectedPackedPaths(packedPaths, allowlist)).toEqual([])
+		expect(packedPaths).not.toContain(controlPath)
+		expect(findUnexpectedPackedPaths([...packedPaths, controlPath], allowlist)).toEqual([
+			controlPath,
+		])
 		const tarball = join(scratch, filename)
 
 		const consumer = join(scratch, 'consumer')
@@ -158,22 +211,29 @@ it('installs the packed artifact and drives its faces, declarations, and resolut
 			cpSync(dirname(require.resolve(`${dependency}/package.json`)), target, { recursive: true })
 		}
 
-		// Every `exports` target names a file the tarball actually carries.
+		// Classify every absent export target at the boundary that omitted it.
 		const targets: unknown[] = [exportsValue]
-		const missingTargets: string[] = []
+		const targetIssues: string[] = []
 		let targetCount = 0
 		while (targets.length > 0) {
 			const target = targets.pop()
 			if (typeof target === 'string') {
 				if (target.startsWith('./')) {
-					if (!existsSync(join(packageRoot, target.slice(2)))) missingTargets.push(target)
+					const path = target.slice(2)
+					if (!allowsPackedPath(path, allowlist)) {
+						targetIssues.push(`manifest excludes export target: ${target}`)
+					} else if (!existsSync(join(root, path))) {
+						targetIssues.push(`build output misses export target: ${target}`)
+					} else if (!packedPaths.includes(path)) {
+						targetIssues.push(`packed inventory misses export target: ${target}`)
+					}
 					targetCount += 1
 				}
 				continue
 			}
 			if (typeof target === 'object' && target !== null) targets.push(...Object.values(target))
 		}
-		expect(missingTargets).toEqual([])
+		expect(targetIssues).toEqual([])
 		expect(targetCount).toBeGreaterThan(0)
 
 		// The `require` map, read from the consumer. `./browser` is refused for the same reason
@@ -335,5 +395,6 @@ it('installs the packed artifact and drives its faces, declarations, and resolut
 		expect(diagnosed).toHaveLength(modes.filter((mode) => !mode.supported).length)
 	} finally {
 		rmSync(scratch, { recursive: true, force: true })
+		rmSync(controlDirectory, { recursive: true, force: true })
 	}
 })

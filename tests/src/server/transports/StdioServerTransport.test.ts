@@ -160,15 +160,18 @@ describe('StdioServerTransport — send writes response lines the peer decodes',
 })
 
 describe('StdioServerTransport — lifecycle', () => {
-	it('pauses the input after close when the transport started the flow', async () => {
+	it('leaves a previously unread input non-flowing after close', async () => {
 		const input = new PassThrough()
 		const output = new PassThrough()
+		expect(input.readableFlowing).toBeNull()
 		const transport = new StdioServerTransport(input, output)
 		await transport.start()
 
 		expect(input.readableFlowing).toBe(true)
 		await transport.close()
 
+		// Attaching `data` starts consumption, and Node exposes no public operation that restores
+		// `readableFlowing` to `null`. The transport returns the stream to the non-flowing state.
 		expect(input.readableFlowing).toBe(false)
 	})
 

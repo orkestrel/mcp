@@ -42,13 +42,37 @@ const MODULES = Object.freeze({
  *
  * A class that one-class-per-file evicted from its single consumer cannot become a local, so
  * it stays exported without being public. Naming it here is what makes that intentional rather
- * than forgotten — and the second assertion below fails when a name here stops being stranded,
+ * than forgotten — and the internal-membership assertion fails when a name stops being stranded,
  * so the list cannot rot.
  */
 const INTERNAL: readonly string[] = Object.freeze([])
 
 /** Root-level files this package's guides link to. `readInventory` walks directories only. */
 const ROOT_FILES = Object.freeze(['AGENTS.md'])
+
+/** Source modules that own removable legacy server ingress. */
+const LEGACY_OWNERS = Object.freeze([
+	'src/core/MCPLegacy.ts',
+	'src/core/factories.ts',
+	'src/core/index.ts',
+	'src/core/types.ts',
+	'src/server/MCPSession.ts',
+	'src/server/index.ts',
+	'src/server/middlewares.ts',
+	'src/server/types.ts',
+])
+
+/** Declarations, imports, and barrel exports that make a module own removable legacy ingress. */
+const LEGACY_OWNER_PATTERN =
+	/\b(?:export\s+class\s+(?:MCPLegacy|MCPSession)\b|export\s+function\s+(?:createMCPLegacy|createMCPSession)\b|export\s+interface\s+(?:MCPLegacyOptions|MCPSession(?:Options|Interface|State|Entry))\b|import(?:\s+type)?\s*\{[^}]*\b(?:MCPLegacy|MCPSession)\b[^}]*\}\s*from\s*['"]\.\/(?:MCPLegacy|MCPSession)\.js['"]|export\s+\*\s+from\s*['"]\.\/(?:MCPLegacy|MCPSession)\.js['"])/u
+
+/** Return the source modules carrying a removable legacy-ingress declaration or dependency. */
+function findLegacyOwners(population: Readonly<Record<string, string>>): readonly string[] {
+	return Object.entries(population)
+		.filter(([path, source]) => path.startsWith('src/') && LEGACY_OWNER_PATTERN.test(source))
+		.map(([path]) => path)
+		.sort()
+}
 
 const root = new URL('../', import.meta.url)
 const files: Record<string, string> = {
@@ -63,6 +87,31 @@ const sourceManager = createSourceManager({ files, modules: MODULES })
 
 it('manifest lists at least one guide', () => {
 	expect(manifest.length).toBeGreaterThan(0)
+})
+
+describe('legacy server-ingress ownership', () => {
+	it('matches the guide membership in both directions', () => {
+		expect(findLegacyOwners(files)).toEqual(LEGACY_OWNERS)
+	})
+
+	it('reports a planted owner outside the guide membership', () => {
+		const controlPath = 'src/core/LegacyControl.ts'
+		const control = {
+			...files,
+			[controlPath]: "import { MCPLegacy } from './MCPLegacy.js'\n",
+		}
+		expect(findLegacyOwners(control)).toEqual([...LEGACY_OWNERS, controlPath].sort())
+	})
+
+	it('keeps MCPServer free of legacy ownership spellings', () => {
+		const source = requireValue(
+			files['src/core/MCPServer.ts'],
+			'Missing file: src/core/MCPServer.ts',
+		)
+		const pattern = /\b(?:MCPLegacy|legacy)\b/iu
+		expect(source).not.toMatch(pattern)
+		expect(`${source}\nconst era = 'legacy'\n`).toMatch(pattern)
+	})
 })
 
 // The published faces in one table. `SOURCES`, the refusal rows, the live population rows,
@@ -244,14 +293,14 @@ describe('public package faces', () => {
 		).toEqual(['createMCPRoutes'])
 	})
 
-	// More than one job, and the face check constrains what may be edited here. FIRST, this is the sole place
-	// Guide's own trivia handling is asserted, so a dependency upgrade is caught here instead of
+	// This row owns Guide's trivia contract and retains the core-face check that constrains edits.
+	// Guide's own trivia handling is asserted here, so a dependency upgrade is caught here instead of
 	// quietly changing what `findMissingNamedImports` covers: the row characterizes the FAMILY —
 	// every trivia position that costs the raw reading a binding, inside the brace and outside it
 	// — and pairs each with the projected reading that recovers it. The raw and projected columns
 	// differing is what makes the projection load-bearing rather than decorative, and a position
 	// that stops being dropped raw, or stops being recovered projected, belongs in this table on
-	// the day it changes. SECOND, the recovery loop's expectations name `createMCPRoutes` against
+	// the day it changes. The recovery loop's face contract names `createMCPRoutes` against
 	// `@orkestrel/mcp`, so the core-face invariant stated above this describe applies to them
 	// unchanged. Change a specifier or a symbol here only with that face check in mind.
 	it('characterizes what Guide drops raw and recovers projected, and checks the face', () => {
@@ -321,10 +370,11 @@ describe('public package faces', () => {
 		).toEqual([])
 	})
 
-	// More than one job. FIRST, it characterizes Guide: `extractSourceLines` keeps quoted text verbatim, so
+	// This row owns Guide's string-projection contract and retains its core-face check.
+	// `extractSourceLines` keeps quoted text verbatim, so
 	// for a fence whose import lives inside an ordinary string the projection is the identity, and
 	// an upgrade that started masking string payloads would fail here and take the
-	// `findMissingNamedImports` @remarks with it. SECOND, the expectation names `createMCPRoutes`
+	// `findMissingNamedImports` @remarks with it. The face contract names `createMCPRoutes`
 	// against `@orkestrel/mcp`, so the core-face invariant stated above this describe applies to it
 	// unchanged. Change the specifier or the symbol here only with that face check in mind.
 	it('reads an import out of an ordinary string literal and still checks it against the face', () => {
@@ -342,7 +392,7 @@ describe('public package faces', () => {
 	// that a string-embedded import ENTERS the check; it can never show what entering amounts to
 	// when `sources.get` misses, so on its own it reads as a promise of a face. This fence sits
 	// outside that rule: an unmapped foreign specifier, kept verbatim by the projection exactly as
-	// the sibling row proves, surfaced by `fenceImports` as the first expectation records, reached
+	// the sibling row proves, surfaced by `fenceImports` as its explicit expectation records, reached
 	// by neither refusal, and therefore compared against NO face. The `[]` is that absence, not a
 	// clean bill. The sibling row is what catches a projection that started masking ordinary-string
 	// payloads — its `['createMCPRoutes']` collapses to `[]` if that ever happens, and this row would
@@ -359,7 +409,7 @@ describe('public package faces', () => {
 		expect(findMissingNamedImports(fence, SOURCES, '@orkestrel/mcp')).toEqual([])
 	})
 
-	// A second recorded limit, and the `hazard` expectation is the gap rather than a guarantee: it
+	// A recorded reader limit, where the `hazard` expectation is the gap rather than a guarantee: it
 	// asserts `[]` for a fence whose real import has disappeared, so this row goes red only if
 	// someone IMPROVES the projection. Guide's reader is lexical rather than a TypeScript parse,
 	// so a slash after a bare `}` reads as division and swallows the rest of the fence; `guarded`

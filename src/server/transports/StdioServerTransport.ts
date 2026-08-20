@@ -33,9 +33,12 @@ import { dispatchLines, extractLines } from '../helpers.js'
  *   event (idempotent). It pauses the input only when the caller was not already reading
  *   it at `start` (`readableFlowing !== true`) AND no `data` listener remains once this
  *   transport's own is removed — so a process holding `process.stdin` can exit, and a
- *   caller's own flow is never stopped underneath it. The injected streams are owned by the
- *   caller (typically `process.stdin`/`process.stdout`), so the transport never destroys,
- *   ends, or blanket-clears them.
+ *   caller's own flow is never stopped underneath it. The transport preserves flowing versus
+ *   non-flowing state and restores every caller-owned listener. A Node stream that had never been
+ *   read starts with `readableFlowing === null` and is left non-flowing (`false`), because Node
+ *   exposes no public operation that restores `null` after data consumption starts. The injected
+ *   streams are owned by the caller (typically `process.stdin`/`process.stdout`), so the transport
+ *   never destroys, ends, or blanket-clears them.
  * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
  *   fault), distinct from the emitter's own listener-error channel.

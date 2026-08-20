@@ -34,9 +34,12 @@ import { dispatchLines } from '../helpers.js'
  *   that failed — so a `false` answer REJECTS here with the same not-connected error a transport
  *   that was never started raises. A dead peer surfaces at the caller instead of vanishing.
  * - **`close()`** terminates the child through the supervisor's bounded `SIGTERM` → grace →
- *   `SIGKILL` group-kill, awaits its observed exit, tears down the supervisor, and fires `close`
- *   once (idempotent). On a POSIX host the child leads its own process group, so the group-kill
- *   reaches its grandchildren rather than orphaning them.
+ *   `SIGKILL` group-kill, releases this transport's line pump without waiting for the child's
+ *   stdout iterator, tears down the supervisor, and fires `close` once (idempotent). A descendant
+ *   can retain an inherited stdout pipe after the child exits; the pump's release barrier keeps
+ *   that substrate limit from keeping this transport's `close()` pending. On a POSIX host the
+ *   child leads its own process group, so the group-kill reaches its grandchildren rather than
+ *   orphaning them.
  * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
  *   fault, including the child spawn cause the supervisor surfaces), distinct from the emitter's
@@ -55,6 +58,8 @@ export class StdioClientTransport implements MCPClientTransportInterface {
 	readonly #args: readonly string[]
 	readonly #env: Readonly<Record<string, string>> | undefined
 	#process: Process | undefined = undefined
+	#release = Promise.withResolvers<void>()
+	#pumping: Promise<void> = Promise.resolve()
 	#closed = false
 
 	constructor(options: StdioClientTransportOptions) {
@@ -82,6 +87,7 @@ export class StdioClientTransport implements MCPClientTransportInterface {
 		// Already spawned — a second `start()` (e.g. via `connect()`) short-circuits (idempotent).
 		if (this.#process !== undefined) return
 		this.#closed = false
+		this.#release = Promise.withResolvers<void>()
 		const child = new Process({
 			command: {
 				file: this.#command,
@@ -95,7 +101,7 @@ export class StdioClientTransport implements MCPClientTransportInterface {
 		this.#process = child
 		child.emitter.on('error', (cause) => this.#emitter.emit('error', cause))
 		void child.exit.then(() => this.#onExit(child))
-		void this.#pump(child)
+		this.#pumping = this.#pump(child, this.#release.promise)
 	}
 
 	async send(message: JSONRPCMessage): Promise<void> {
@@ -111,18 +117,24 @@ export class StdioClientTransport implements MCPClientTransportInterface {
 		if (this.#closed) return
 		this.#closed = true
 		const child = this.#process
+		const pumping = this.#pumping
+		this.#release.resolve()
 		this.#process = undefined
 		if (child !== undefined) await child.destroy()
+		await pumping
 		this.#emitter.emit('close')
 	}
 
 	// Drain the supervisor's newline-framed stdout lines, decoding + delivering every complete line
 	// onto this transport's emitter. A child an explicit close or a replacement superseded stops
 	// dispatching: peer identity keeps a stale iteration from emitting onto the live child.
-	async #pump(child: Process): Promise<void> {
-		for await (const line of child.lines) {
+	async #pump(child: Process, release: Promise<void>): Promise<void> {
+		const iterator = child.lines[Symbol.asyncIterator]()
+		while (true) {
+			const next = await Promise.race([iterator.next(), release])
+			if (next === undefined || next.done) return
 			if (this.#process !== child) return
-			dispatchLines(this.#emitter, [line])
+			dispatchLines(this.#emitter, [next.value])
 		}
 	}
 

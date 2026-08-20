@@ -1,6 +1,7 @@
 import type { JSONRPCMessage } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { createJSONRPCRequest } from '../../../setup.js'
+import { isRecord } from '@orkestrel/contract'
+import { createJSONRPCRequest, waitForSettlement } from '../../../setup.js'
 import { waitForDelay } from '@orkestrel/test'
 import { StdioClientTransport } from '@src/server'
 
@@ -42,6 +43,18 @@ const DEAF_CHILD_SCRIPT = `
 setInterval(() => {}, 1000)
 `
 
+// The child reports a descendant pid and exits. The detached descendant inherits stdout, keeping
+// the supervisor's line iterator outstanding after the child has gone.
+const DESCENDANT_PIPE_SCRIPT = `
+const { spawn } = require('node:child_process')
+const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+	detached: true,
+	stdio: ['ignore', 'inherit', 'ignore'],
+})
+descendant.unref()
+process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'descendant', result: { pid: descendant.pid } }) + '\\n')
+`
+
 // Comfortably above both a Windows stdio pipe buffer and a 64 KiB POSIX one, so the write below
 // cannot be swallowed whole by the host and answered before the child has read anything.
 const UNREAD_PAYLOAD = 'x'.repeat(256 * 1024)
@@ -52,6 +65,13 @@ function spawnClient(): StdioClientTransport {
 
 function spawnDeafClient(): StdioClientTransport {
 	return new StdioClientTransport({ command: process.execPath, args: ['-e', DEAF_CHILD_SCRIPT] })
+}
+
+function spawnDescendantClient(): StdioClientTransport {
+	return new StdioClientTransport({
+		command: process.execPath,
+		args: ['-e', DESCENDANT_PIPE_SCRIPT],
+	})
 }
 
 describe('StdioClientTransport — drives a real child process over stdio', () => {
@@ -145,6 +165,43 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		expect(closed).toBe(1)
 		await transport.close()
 		expect(closed).toBe(1)
+	})
+
+	it('close() settles while a descendant retains the child stdout pipe', async () => {
+		const transport = spawnDescendantClient()
+		const arrived = new Promise<JSONRPCMessage>((resolve) => {
+			transport.emitter.on('message', resolve)
+		})
+		let pid: number | undefined
+		try {
+			await transport.start()
+			const message = await waitForSettlement(
+				arrived,
+				5_000,
+				'Timed out waiting for the descendant report',
+			)
+			if (!('result' in message) || !isRecord(message.result)) {
+				throw new Error('The descendant report carries no result')
+			}
+			const value = message.result['pid']
+			if (typeof value !== 'number') throw new Error('The descendant report carries no pid')
+			pid = value
+
+			await expect(
+				waitForSettlement(
+					transport.close(),
+					1_000,
+					'Timed out closing while the descendant retained stdout',
+				),
+			).resolves.toBeUndefined()
+		} finally {
+			await transport.close()
+			if (pid !== undefined) {
+				try {
+					process.kill(pid)
+				} catch {}
+			}
+		}
 	})
 
 	it('ignores the old child close after a new child has replaced it', async () => {
