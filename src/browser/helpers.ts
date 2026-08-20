@@ -170,7 +170,9 @@ export function createScopeMessageListener(
  * their own `MessagePortTransport` binding. Portless string events use the scope's
  * implicit channel. The returned disposer removes the listener, unbinds the implicit
  * channel, closes every accepted port binding, and drops the ports themselves — the
- * bindings are held in one map keyed by port, so nothing survives the clear.
+ * bindings are held in one map keyed by port, so nothing survives the clear. The served
+ * endpoint is modern-only: it answers a legacy `initialize` with `-32601`. A dual-era
+ * worker composes `bindServer(createMCPLegacy(mcp), …)` instead of this function.
  *
  * @param scope - The hostable worker scope to wire
  * @param options - The tools, optional identity, and optional port-event gate
@@ -204,6 +206,10 @@ export function serveMCPScope(scope: ServeMCPScopeInterface, options: ServeMCPOp
 
 /**
  * Boots an `MCPServer` inside the current hostable worker scope.
+ *
+ * @remarks
+ * The served endpoint is modern-only: it answers a legacy `initialize` with `-32601`. A
+ * dual-era worker composes `bindServer(createMCPLegacy(mcp), …)` instead of this function.
  *
  * @param options - The tools, optional identity, and optional port-event gate
  * @returns The disposer returned by {@link serveMCPScope}

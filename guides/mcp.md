@@ -1555,7 +1555,7 @@ const mcp = createMCPServer({
 })
 
 createMCPRoutes(createMCPLegacy(mcp)) // 2026-07-28 AND the two legacy revisions
-createMCPRoutes(mcp) // modern only — a legacy request falls off the modern seam as -32601
+createMCPRoutes(mcp) // modern only — a legacy `initialize` falls off the modern seam as -32601
 ```
 
 That pair is the removability proof a developer can feel: the layer is a value you pass or do
@@ -1658,17 +1658,17 @@ cannot represent.
 
 ### Entities
 
-| API                       | Kind  | Summary                                                                                                                                             |
-| ------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MCPServer`               | class | The transport-agnostic JSON-RPC dispatch core over a `ToolManagerInterface` — `dispatch` (typed) + `handle` (string).                               |
-| `MCPLegacy`               | class | The removable legacy decorator over ONE `MCPDispatcherInterface` — translates the dated revisions onto the modern engine and owns none.             |
-| `MCPMethodManager`        | class | The modern method registry `MCPServer` registers its built-ins on and resolves every modern method from — `add` + `method`.                         |
-| `MCPProgressReporter`     | class | One request-scoped, single-slot progress handoff with backpressure between one producer and one serial consumer.                                    |
-| `MCPStreamController`     | class | The one cancellation engine every held-open answer leaves `dispatch` through — one pending source read, prompt closure, contained late promises.    |
-| `MCPTextStreamController` | class | The serialized mirror of a controlled stream — translation only, delegating every lifecycle decision into the typed exchange beneath it.            |
-| `MCPClient`               | class | The transport-agnostic modern-and-legacy JSON-RPC client over a `MCPClientTransportInterface` — negotiate once, then `discover` / `tools` / `call`. |
-| `MCPTaskClient`           | class | The draft Tasks extension's client half over one correlated-request door — `task` / `update` / `abort`, no plural accessor and no schedule.         |
-| `MCPError`                | class | A remote JSON-RPC error preserving its numeric `code` and optional `error.data` as `context`.                                                       |
+| API                       | Kind  | Summary                                                                                                                                                                     |
+| ------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MCPServer`               | class | The transport-agnostic JSON-RPC dispatch core over a `ToolManagerInterface` — `dispatch` (typed) + `handle` (string).                                                       |
+| `MCPLegacy`               | class | The removable legacy decorator over ONE `MCPDispatcherInterface` — translates the dated revisions onto the modern engine and owns none.                                     |
+| `MCPMethodManager`        | class | The modern method registry `MCPServer` registers its built-ins on and resolves every modern method from — `add` + `method`.                                                 |
+| `MCPProgressReporter`     | class | One request-scoped, single-slot progress handoff with backpressure between one producer and one serial consumer.                                                            |
+| `MCPStreamController`     | class | The one cancellation engine every held-open answer leaves `dispatch` through — one pending source read, prompt closure, contained late promises.                            |
+| `MCPTextStreamController` | class | The serialized mirror of a controlled stream — translation only, delegating every lifecycle decision into the typed exchange beneath it.                                    |
+| `MCPClient`               | class | The transport-agnostic modern-and-legacy JSON-RPC client over a `MCPClientTransportInterface` — negotiate once, then `discover` / `tools` / `call`.                         |
+| `MCPTaskClient`           | class | The draft Tasks extension's client half over one correlated-request door — `task` / `update` / `abort`, no plural accessor and no schedule.                                 |
+| `MCPError`                | class | A Model Context Protocol error preserving its numeric `code` and optional `context` — a remote JSON-RPC `error.data`, or the locally detected incompatibility's own detail. |
 
 ### Constants
 
@@ -2431,10 +2431,10 @@ The `serveWorker` analog (the bootstrap binders in `src/browser/helpers.ts`) —
 inside a hostable scope and wire its message events to it. Each returns a disposer rather than an
 entity, so they sit beside `createScopeMessageListener` in `helpers.ts`, not in `factories.ts`.
 
-| API             | Kind     | Summary                                                                                                                        |
-| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `serveMCP`      | function | Boot an `MCPServer` inside the CURRENT scope (`globalThis`) — exactly `serveMCPScope(globalThis, options)`. Returns a dispose. |
-| `serveMCPScope` | function | The scope-parameterized core `serveMCP` wraps — testable directly with a scope double. Returns an idempotent dispose.          |
+| API             | Kind     | Summary                                                                                                                                                                                  |
+| --------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serveMCP`      | function | Boot an `MCPServer` inside the CURRENT scope (`globalThis`) — exactly `serveMCPScope(globalThis, options)`. Modern-only: a legacy `initialize` falls off as `-32601`. Returns a dispose. |
+| `serveMCPScope` | function | The scope-parameterized core `serveMCP` wraps — testable directly with a scope double. Modern-only: a legacy `initialize` falls off as `-32601`. Returns an idempotent dispose.          |
 
 #### Entities
 
@@ -3292,7 +3292,9 @@ dispatchLines(emitter, lines) // emits `message` for the complete line above
 `serveMCP` is the drop-in entry for a REAL Web Worker's `main.ts` — boot an
 `MCPServer` over the worker's own implicit `postMessage` channel (a dedicated
 worker) or over each connecting client's `MessagePort` (a Service Worker),
-with no upfront shape flag:
+with no upfront shape flag. The registry it serves is modern only: it answers
+every modern client, and a legacy `initialize` falls off as `-32601`. A
+dual-era worker composes `bindServer(createMCPLegacy(mcp), …)` instead:
 
 ```ts
 // worker's entry module:
@@ -3307,7 +3309,7 @@ dispose()
 ```
 
 > **Trust boundary — mechanism, not policy.** `serveMCP` exposes the ENTIRE
-> `tools` registry to every client that delivers a port-bearing message, with NO
+> `tools` registry to every modern client that delivers a port-bearing message, with NO
 > built-in origin or identity check. In a Service Worker every same-origin
 > context the SW controls (any window, worker, or iframe) can
 > `controller.postMessage(msg, [port])` and receive a fully-bound server with

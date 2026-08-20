@@ -189,6 +189,11 @@ writeFileSync(new URL('./readings.json', import.meta.url), JSON.stringify(readin
  *
  * The method list is the discriminator: a legacy pin that reached its revision through
  * `server/discover` would satisfy the revision alone, and the eras differ in what they ask.
+ *
+ * The pin branches a conforming peer cannot exercise — the lying-peer legacy mismatch, the
+ * discovery-omitting modern pin, and the applied probe deadline — are bound red-then-green by
+ * the client proofs in `tests/src/core/MCPClient.test.ts`, so this matrix's subject is
+ * end-to-end negotiation of the installed artifact.
  */
 const HANDSHAKE = Object.freeze([
 	{
@@ -199,7 +204,7 @@ const HANDSHAKE = Object.freeze([
 		methods: ['server/discover'],
 	},
 	{
-		label: 'unpinned with a 15s deadline',
+		label: 'unpinned with a configured deadline',
 		peer: 'peer.mjs',
 		options: { timeout: 15_000 },
 		version: '2026-07-28',
