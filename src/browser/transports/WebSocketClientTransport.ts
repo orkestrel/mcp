@@ -57,7 +57,12 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 	readonly #frame = (event: MessageEvent<unknown>): void => this.#receive(event.data)
 	readonly #ending = (): void => this.#onClose()
 	readonly #failure = (event: Event): void => this.#emitter.emit('error', event)
+	readonly #opening = (): void => this.#onOpen()
+	readonly #rejection = (): void => this.#onHandshakeError()
 	#socket: WebSocket | undefined = undefined
+	#handshake: WebSocket | undefined = undefined
+	#resolve: (() => void) | undefined = undefined
+	#reject: ((error: Error) => void) | undefined = undefined
 	#queue: string[] = []
 	#closed = false
 
@@ -101,24 +106,11 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		this.#socket = socket
 		this.#bind(socket)
 		await new Promise<void>((resolve, reject) => {
-			socket.addEventListener(
-				'open',
-				() => {
-					this.#flush(socket)
-					resolve()
-				},
-				{ once: true },
-			)
-			socket.addEventListener(
-				'error',
-				() => {
-					if (socket.readyState !== WebSocket.OPEN) {
-						this.#socket = undefined
-						reject(new Error('WebSocket connection failed'))
-					}
-				},
-				{ once: true },
-			)
+			this.#handshake = socket
+			this.#resolve = resolve
+			this.#reject = reject
+			socket.addEventListener('open', this.#opening)
+			socket.addEventListener('error', this.#rejection)
 		})
 	}
 
@@ -136,10 +128,13 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		if (this.#closed) return
 		this.#closed = true
 		const socket = this.#socket
+		const reject = this.#reject
+		this.#releaseHandshake()
 		this.#release()
 		this.#socket = undefined
 		if (socket !== undefined) socket.close()
 		this.#emitter.emit('close')
+		reject?.(new Error('WebSocket transport closed before connection opened'))
 	}
 
 	// Bridge the native socket's events onto the transport: a text frame → `message`
@@ -161,9 +156,38 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		socket.removeEventListener('error', this.#failure)
 	}
 
+	#releaseHandshake(): void {
+		const socket = this.#handshake
+		if (socket === undefined) return
+		socket.removeEventListener('open', this.#opening)
+		socket.removeEventListener('error', this.#rejection)
+		this.#handshake = undefined
+		this.#resolve = undefined
+		this.#reject = undefined
+	}
+
 	// Write every queued (pre-open) message, in order, as the socket opens.
 	#flush(socket: WebSocket): void {
 		for (const text of this.#queue.splice(0)) socket.send(text)
+	}
+
+	#onOpen(): void {
+		const socket = this.#handshake
+		const resolve = this.#resolve
+		if (socket === undefined || resolve === undefined) return
+		this.#releaseHandshake()
+		this.#flush(socket)
+		resolve()
+	}
+
+	#onHandshakeError(): void {
+		const socket = this.#handshake
+		const reject = this.#reject
+		if (socket === undefined || reject === undefined || socket.readyState === WebSocket.OPEN) return
+		this.#releaseHandshake()
+		this.#release()
+		this.#socket = undefined
+		reject(new Error('WebSocket connection failed'))
 	}
 
 	// Decode one inbound frame: a non-text (binary) frame is rejected without a throw; a

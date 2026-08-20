@@ -66,16 +66,16 @@ import { isString } from '@orkestrel/contract'
  */
 export class MessagePortTransport implements MCPTransportInterface {
 	readonly #port: MessagePort
+	readonly #message = (event: MessageEvent): void => this.#receive(event.data)
+	readonly #malformed = (): void => {}
 	#onMessage: ((message: string) => void) | undefined = undefined
 	#onClosed: (() => void) | undefined = undefined
 	#closed = false
 
 	constructor(options: MessagePortTransportOptions) {
 		this.#port = options.port
-		this.#port.addEventListener('message', (event: MessageEvent) => this.#receive(event.data))
-		this.#port.addEventListener('messageerror', () => {
-			// Intentionally ignored — one bad frame, not a dead channel; see class doc.
-		})
+		this.#port.addEventListener('message', this.#message)
+		this.#port.addEventListener('messageerror', this.#malformed)
 		this.#port.start()
 	}
 
@@ -95,8 +95,13 @@ export class MessagePortTransport implements MCPTransportInterface {
 	close(): void {
 		if (this.#closed) return
 		this.#closed = true
+		const onClosed = this.#onClosed
+		this.#onMessage = undefined
+		this.#onClosed = undefined
+		this.#port.removeEventListener('message', this.#message)
+		this.#port.removeEventListener('messageerror', this.#malformed)
 		this.#port.close()
-		this.#onClosed?.()
+		onClosed?.()
 	}
 
 	// Decode one inbound `postMessage` payload: a non-string `data` is dropped, never

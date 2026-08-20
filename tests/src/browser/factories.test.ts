@@ -497,6 +497,18 @@ describe('createMessagePortTransport — a symmetric MCPTransportInterface over 
 		expect(received).toEqual([])
 	})
 
+	it('close detaches its port listeners and clears registered callbacks', async () => {
+		const { port1 } = new MessageChannel()
+		const transport = createMessagePortTransport({ port: port1 })
+		const received: string[] = []
+		transport.listen((message) => received.push(message))
+
+		await transport.close()
+		port1.dispatchEvent(new MessageEvent('message', { data: 'after close' }))
+
+		expect(received).toEqual([])
+	})
+
 	it('close() fires the registered closed handler exactly once, even called twice', async () => {
 		const { port1 } = new MessageChannel()
 		const transport = createMessagePortTransport({ port: port1 })

@@ -13,6 +13,15 @@ import { MODERN_METADATA } from '../../../setup.js'
 const serverURL = inject('server')
 
 describe('WebSocketClientTransport — close releases the socket it bound', () => {
+	it('close rejects a start whose handshake has not opened', async () => {
+		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
+		const starting = transport.start()
+
+		await transport.close()
+
+		await expect(starting).rejects.toThrow('WebSocket transport closed before connection opened')
+	})
+
 	it('ignores the old socket close after a new socket has replaced it', async () => {
 		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
 		const messages: JSONRPCMessage[] = []
