@@ -81,13 +81,14 @@ import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
  *
  * @example
  * ```ts
- * import { createMCPServer } from '@orkestrel/mcp'
+ * import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
  * import { createMCPRoutes, createMCPSession } from '@orkestrel/mcp/server'
  * import { createToolManager } from '@orkestrel/tool'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
  * router.use(createMCPSession({ ttl: 60_000 })) // stateful: mint + validate + resumable GET / DELETE
- * router.add(createMCPRoutes(mcp)) // the route stays session-agnostic
+ * // The route stays session-agnostic:
+ * router.add(createMCPRoutes(createMCPLegacy(mcp))) // answers `initialize` too; pass `mcp` alone for modern-only
  * ```
  */
 export function createMCPSession<TState extends MCPSessionState>(

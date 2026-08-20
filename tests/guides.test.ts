@@ -2,14 +2,15 @@
 // repository's own guides/README.md manifest. The constants below are this package's
 // own, and are what a sibling package changes.
 
-import type { JSONRPCMessage } from '@src/core'
-import { createMCPServer } from '@src/core'
+import type { JSONRPCMessage, MCPDispatcherInterface } from '@src/core'
+import { createMCPLegacy, createMCPServer } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
 import { fstatSync, readFileSync } from 'node:fs'
-import { createStdioClientTransport } from '@src/server'
+import { PassThrough } from 'node:stream'
+import { createStdioClientTransport, createStdioServer } from '@src/server'
 import {
 	createGuide,
 	createSource,
@@ -808,5 +809,85 @@ describe('guides/mcp.md § stdio transport — what the spawned child actually r
 		const report = await reportThroughReplacingSpawn()
 
 		expect(report['stderr']).toBe(readOwnStderr())
+	})
+})
+
+// ── The flagship stdio composition, executed ─────────────────────────────────
+//
+// `guides/mcp.md` § stdio transport wires `createStdioServer(createMCPLegacy(mcp)).start()` and
+// its trailing comment claims two things: that the composition answers `initialize`, and that
+// passing `mcp` alone subtracts exactly that. Parity proves both names resolve and neither
+// sentence. So the fence's composition is transcribed here and driven over the injectable stream
+// pair the same factory documents — the same dispatcher value, reached through the same call.
+//
+// The bare dispatcher is the control, and it is the comment's own subtraction: it sits outside
+// the decorated population, and it answers the refusal the modern seam owes an unregistered
+// method instead of a handshake.
+
+/** The dated handshake a legacy MCP client opens with, framed as the transport frames it. */
+const LEGACY_INITIALIZE =
+	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"guide","version":"1.0.0"}}}'
+
+/** Read one newline-framed reply off a stdio server's injected output stream. */
+async function readStdioReply(output: PassThrough): Promise<unknown> {
+	let buffer = ''
+	const line = new Promise<string>((resolve) => {
+		output.setEncoding('utf8')
+		output.on('data', (chunk: string) => {
+			buffer += chunk
+			const newline = buffer.indexOf('\n')
+			if (newline !== -1) resolve(buffer.slice(0, newline))
+		})
+	})
+	const text = await waitForSettlement(line, 10_000, 'Timed out waiting for the stdio server reply')
+	return JSON.parse(text)
+}
+
+/** Drive one framed request through a `createStdioServer` pump over injected streams. */
+async function driveStdioServer(mcp: MCPDispatcherInterface, request: string): Promise<unknown> {
+	const input = new PassThrough()
+	const output = new PassThrough()
+	const stdio = createStdioServer(mcp, { input, output })
+	stdio.start()
+	try {
+		const reply = readStdioReply(output)
+		input.write(`${request}\n`)
+		return await reply
+	} finally {
+		stdio.stop()
+	}
+}
+
+/** The fence's own server: the docs identity over an empty tool registry. */
+function createGuideServer(): ReturnType<typeof createMCPServer> {
+	return createMCPServer({
+		identity: { name: 'docs', version: '1.0.0' },
+		tools: createToolManager(),
+	})
+}
+
+describe('guides/mcp.md § stdio transport — what the composed server answers', () => {
+	it('answers a legacy initialize, as the composed fence claims', async () => {
+		const answer = await driveStdioServer(createMCPLegacy(createGuideServer()), LEGACY_INITIALIZE)
+
+		expect(answer).toEqual({
+			jsonrpc: '2.0',
+			id: 1,
+			result: {
+				protocolVersion: '2025-11-25',
+				capabilities: { tools: {} },
+				serverInfo: { name: 'docs', version: '1.0.0' },
+			},
+		})
+	})
+
+	it('CONTROL — the bare dispatcher the comment names refuses that same handshake', async () => {
+		const answer = await driveStdioServer(createGuideServer(), LEGACY_INITIALIZE)
+
+		expect(answer).toEqual({
+			jsonrpc: '2.0',
+			id: 1,
+			error: { code: -32601, message: 'Method not found: initialize' },
+		})
 	})
 })

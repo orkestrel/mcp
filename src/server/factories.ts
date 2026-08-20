@@ -97,7 +97,7 @@ export function createMCPContinuation(secret: TokenSecret): MCPContinuationInter
  * import { createToolManager } from '@orkestrel/tool'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
- * const routes = createMCPRoutes(createMCPLegacy(mcp)) // both eras; pass `mcp` for modern only
+ * const routes = createMCPRoutes(createMCPLegacy(mcp)) // answers `initialize` too; pass `mcp` alone for modern-only
  * ```
  */
 export function createMCPRoutes<TState = unknown>(
@@ -200,12 +200,13 @@ export function createHTTPClientTransport(
  *
  * @example
  * ```ts
- * import { createMCPServer } from '@orkestrel/mcp'
+ * import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
  * import { createWebSocketServer } from '@orkestrel/mcp/server'
  * import { createToolManager } from '@orkestrel/tool'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
- * server.upgrade(createWebSocketServer(mcp, { emitter: server.emitter })) // ws://…/mcp
+ * // Claims the MCP upgrade at ws://…/mcp:
+ * server.upgrade(createWebSocketServer(createMCPLegacy(mcp), { emitter: server.emitter })) // answers `initialize` too; pass `mcp` alone for modern-only
  * ```
  */
 export function createWebSocketServer(
@@ -367,12 +368,13 @@ export function createStdioClientTransport(
  *
  * @example
  * ```ts
- * import { createMCPServer } from '@orkestrel/mcp'
+ * import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
  * import { createStdioServer } from '@orkestrel/mcp/server'
  * import { createToolManager } from '@orkestrel/tool'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
- * createStdioServer(mcp).start() // an MCP client now connects over this process's stdio
+ * // An MCP client now connects over this process's stdio:
+ * createStdioServer(createMCPLegacy(mcp)).start() // answers `initialize` too; pass `mcp` alone for modern-only
  * ```
  */
 export function createStdioServer(

@@ -33,7 +33,7 @@ npm install @orkestrel/mcp
 Expose a tool registry over MCP, mounted on the HTTP spine:
 
 ```ts
-import { createMCPServer } from '@orkestrel/mcp'
+import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createMCPRoutes } from '@orkestrel/mcp/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
 
@@ -41,7 +41,8 @@ const tools = createToolManager()
 tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
 
 const mcp = createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
-const routes = createMCPRoutes(mcp) // POST /mcp dispatches JSON-RPC (JSON or SSE per Accept)
+// POST /mcp dispatches JSON-RPC (JSON or SSE per Accept):
+const routes = createMCPRoutes(createMCPLegacy(mcp)) // answers `initialize` too; pass `mcp` alone for modern-only
 router.add(routes)
 ```
 

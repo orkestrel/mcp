@@ -1963,7 +1963,7 @@ The core `limit.message` bound applies specifically where a transport supplies a
 `MCPServer.handle`; the HTTP route owns and parses its Fetch `Request` body before typed dispatch.
 
 ```ts
-import { createMCPServer } from '@orkestrel/mcp'
+import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createMCPRoutes } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/tool'
 
@@ -1971,7 +1971,8 @@ const mcp = createMCPServer({
 	identity: { name: 'docs', version: '1.0.0' },
 	tools: createToolManager(),
 })
-const routes = createMCPRoutes(mcp) // POST /mcp dispatches JSON-RPC (JSON or SSE per Accept)
+// POST /mcp dispatches JSON-RPC (JSON or SSE per Accept):
+const routes = createMCPRoutes(createMCPLegacy(mcp)) // answers `initialize` too; pass `mcp` alone for modern-only
 ```
 
 #### Carry asserted caller context from HTTP middleware
@@ -2181,7 +2182,7 @@ vanished is no longer held, and closing a dead one is a no-op, so a departed cli
 neither throws nor delays the stop.
 
 ```ts
-import { createMCPClient, createMCPServer } from '@orkestrel/mcp'
+import { createMCPClient, createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createWebSocketClientTransport, createWebSocketServer } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/tool'
 
@@ -2190,13 +2191,13 @@ const mcp = createMCPServer({
 	tools: createToolManager(),
 })
 // Claims an MCP WebSocket upgrade to /mcp, and closes those sockets when the spine stops.
-server.upgrade(createWebSocketServer(mcp, { emitter: server.emitter }))
+server.upgrade(createWebSocketServer(createMCPLegacy(mcp), { emitter: server.emitter })) // answers `initialize` too; pass `mcp` alone for modern-only
 
 // An MCP client connects over the SAME MCPClient, a WebSocket transport instead of HTTP:
 const client = createMCPClient({
 	transport: createWebSocketClientTransport({ url: `ws://127.0.0.1:${port}/mcp` }),
 })
-await client.connect() // the RFC 6455 handshake, then the MCP initialize over frames
+await client.connect() // the RFC 6455 handshake, then modern `server/discover` over frames
 ```
 
 #### Factories
@@ -2275,7 +2276,7 @@ therefore cannot keep the transport's `close` call pending after the supervisor'
 resolved.
 
 ```ts
-import { createMCPClient, createMCPServer } from '@orkestrel/mcp'
+import { createMCPClient, createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createStdioClientTransport, createStdioServer } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/tool'
 
@@ -2283,14 +2284,15 @@ const mcp = createMCPServer({
 	identity: { name: 'docs', version: '1.0.0' },
 	tools: createToolManager(),
 })
-createStdioServer(mcp).start() // an MCP client now connects over this process's stdio
+// An MCP client now connects over this process's stdio:
+createStdioServer(createMCPLegacy(mcp)).start() // answers `initialize` too; pass `mcp` alone for modern-only
 
 // A client spawns a stdio MCP server as a child process and drives it the same way:
 const client = createMCPClient({
 	transport: createStdioClientTransport({ command: 'node', args: ['./server.js'] }),
 })
 await client.connect()
-client.version // the negotiated legacy revision
+client.version // the revision negotiated with that child — legacy where it serves no modern seam
 const tools = await client.tools()
 ```
 
@@ -2405,7 +2407,7 @@ const ws = createMCPClient({
 	// createWebSocketServer selects from the offered list. Override only for foreign servers.
 	transport: createWebSocketClientTransport({ url: 'ws://localhost:3000/mcp' }),
 })
-await ws.connect() // the browser handshakes, then the MCP initialize runs over WS frames
+await ws.connect() // the browser handshakes, then modern `server/discover` runs over WS frames
 
 const http = createMCPClient({
 	transport: createHTTPClientTransport({ url: 'http://localhost:3000/mcp' }),
@@ -2753,6 +2755,22 @@ The `tasks` data member is the draft Tasks extension's client half — see
 | `tools`      | `Promise<readonly ToolInterface[]>` | Runs `tools/list` and wraps each descriptor as a local `ToolInterface` (`inputSchema` → `parameters`; `execute` calls back through `call`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `call`       | `Promise<MCPCallOutcome>`           | Run a remote `tools/call` and report the arm the peer chose: `'complete'` carries the tool's value (`structuredContent` preferred by presence, else the text blocks parsed as JSON), `'task'` carries the durable handle, and `'input_required'` is SURFACED but cannot be continued from this client — the arm is reported faithfully and there is no supported way to answer it, which is [a declared gap](#declared-conformance-gaps). `isError: true` THROWS, and an unknown `resultType` is refused. `options.signal` cancels THIS request only; `options.progress` receives its progress frames.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
+**`version` is an exact pin, and pinning is how a caller refuses a dated revision.** An unpinned
+`connect` takes whatever the peer serves. It discovers modern first and falls back to the legacy
+`initialize` handshake when the peer serves no modern seam, offering `2025-11-25` and accepting
+whatever supported legacy revision the reply names, so an unpinned client can land on a dated
+revision. Pass `version` to refuse that. The pin is exact rather than a floor: a modern pin connects
+only where discovery advertises that same revision, and takes no legacy fallback; a legacy pin
+connects only where the `initialize` reply names that same revision, and is refused before
+`notifications/initialized` is written and before the connected state installs. A `version` outside
+`SUPPORTED_PROTOCOL_VERSIONS` throws `MCPError` `MCP_UNSUPPORTED_VERSION` from `createMCPClient`
+itself — before the emitter and the transport subscription exist — carrying
+`{ supported, requested }`, so an unsupported pin never reaches a connection at all. A supported pin
+the peer cannot serve rejects `connect` with the same code and names what the peer offered instead:
+`supported`, the revisions discovery advertised, for a modern pin; `negotiated`, the revision the
+handshake replied with, for a legacy one. There is no separate downgrade signal, because `version`
+already carries the fact: read it after `connect` to learn which revision the connection runs on.
+
 Discovery is cloned as one exact owned snapshot before semantic validation. `ttlMs` is a
 nonnegative integer, every advertised revision entry is a string, unknown revision strings are
 ignored when forming the supported intersection, and the returned result and retained revision
@@ -3022,7 +3040,7 @@ for stateful resumable streaming; omit it for the byte-identical stateless
 default.
 
 ```ts
-import { createMCPServer } from '@orkestrel/mcp'
+import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import type { MCPOriginOptions } from '@orkestrel/mcp/server'
 import { createMCPRoutes, createMCPSession } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/tool'
@@ -3033,7 +3051,8 @@ const mcp = createMCPServer({
 })
 const origin: MCPOriginOptions = { origins: ['https://app.example'] }
 router.use(createMCPSession({ ttl: 60_000, origin })) // stateful: mint + validate + resumable GET / DELETE
-router.add(createMCPRoutes(mcp, { origin })) // both enforcement sites consume the same policy
+// Both enforcement sites consume the same policy, and a session is minted on an `initialize` POST:
+router.add(createMCPRoutes(createMCPLegacy(mcp), { origin })) // answers `initialize` too; pass `mcp` alone for modern-only
 ```
 
 ### Drive a remote server over HTTP, WebSocket, or stdio
@@ -3413,7 +3432,7 @@ closed — while ordinary upstream completion closes the response without invent
 - [HTTP response lifecycle composition](../tests/src/server/transports/HTTPDisconnect.test.ts)
 - [HTTP handler integration](../tests/src/server/handlers.test.ts)
 - [Session middleware integration](../tests/src/server/middlewares.test.ts)
-- [Guide/source/public-barrel parity, and what the spawned stdio child actually receives](../tests/guides.test.ts)
+- [Guide/source/public-barrel parity, what the spawned stdio child actually receives, and how the composed stdio server answers a legacy `initialize`](../tests/guides.test.ts)
 - [The packed artifact a consumer installs, across its faces and its ESM and CommonJS builds](../tests/distribution.test.ts)
 - [Package guide law, including the legacy-removability boundary](../tests/guides.test.ts)
 
@@ -4077,8 +4096,9 @@ on? })` drives a REMOTE server over an injected `MCPClientTransportInterface`
     the second failure is never retried. `-32601`, `-32600`, or an unrecognized HTTP 400
     send failure falls back to legacy `initialize`, except when modern
     `'2026-07-28'` is pinned. The selected era is cached for the instance's
-    lifetime. A legacy result's absent, malformed, modern, or unsupported
-    `protocolVersion` rejects; a rejecting `connect()` closes the connection that
+    lifetime. A legacy result's absent, malformed, modern, unsupported, or
+    pin-mismatched `protocolVersion` rejects, as does a discovery advertisement
+    that omits a pinned modern revision; a rejecting `connect()` closes the connection that
     attempt opened, unless the `disconnect` that superseded it closed that
     connection first. A valid legacy revision and the connected
     state are installed only after `notifications/initialized` is written, so a
@@ -4143,7 +4163,20 @@ on? })` drives a REMOTE server over an injected `MCPClientTransportInterface`
     hanging. The discovery probe carries the same request deadline: an omitted
     `timeout` selects `DEFAULT_MCP_REQUEST_TIMEOUT`, and a configured one
     applies to the probe as to every request. A public `discover()` call uses
-    the ordinary request deadline. A `send` write failure rejects
+    the ordinary request deadline. With no cap on that probe, what a legacy peer
+    costs an unpinned `connect` is set by what that peer does with an unknown
+    method. A reference legacy server answers `server/discover` with a JSON-RPC
+    error rather than silence — `-32601` from the TypeScript SDK server, `-32602`
+    from the Python SDK server, each read from its released 1.x server source on
+    2026-08-20 (see the
+    [TypeScript SDK shared protocol](https://github.com/modelcontextprotocol/typescript-sdk/blob/v1.x/src/shared/protocol.ts)
+    and the
+    [Python SDK server session](https://github.com/modelcontextprotocol/python-sdk/blob/v1.29.0/src/mcp/server/session.py))
+    — and every discovery failure short of `MCP_UNSUPPORTED_VERSION` falls back,
+    so against such a peer the legacy `initialize` follows one round trip behind
+    the probe. A peer that accepts the probe and answers nothing costs the
+    configured deadline before the fallback starts, and the `initialize` after it
+    carries that deadline again. A `send` write failure rejects
     its own pending request. The same `timeout` bounds the client's WAIT on the
     transport's `close`: that await holds no pending entry, so neither the drain
     nor a request deadline reaches it, and a shutdown accepted and never answered

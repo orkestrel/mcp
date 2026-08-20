@@ -111,11 +111,12 @@ export function createHTTPClientTransport(
  *
  * @example
  * ```ts
- * import { bindServer, createMCPServer } from '@orkestrel/mcp'
+ * import { bindServer, createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
  * import { createMessagePortTransport } from '@orkestrel/mcp/browser'
  *
  * const { port1, port2 } = new MessageChannel()
- * bindServer(createMCPServer({ identity: { name: 's', version: '1.0.0' }, tools }), createMessagePortTransport({ port: port1 }))
+ * const mcp = createMCPServer({ identity: { name: 's', version: '1.0.0' }, tools })
+ * bindServer(createMCPLegacy(mcp), createMessagePortTransport({ port: port1 })) // answers `initialize` too; pass `mcp` alone for modern-only
  * ```
  */
 export function createMessagePortTransport(

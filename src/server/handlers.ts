@@ -51,7 +51,7 @@ import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
  * import { createToolManager } from '@orkestrel/tool'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
- * const handler = createMCPPostHandler(createMCPLegacy(mcp), { streaming: true })
+ * const handler = createMCPPostHandler(createMCPLegacy(mcp), { streaming: true }) // answers `initialize` too; pass `mcp` alone for modern-only
  * await handler(new Request('http://localhost/mcp', {
  * 	method: 'POST',
  * 	body: '{"jsonrpc":"2.0","method":"ping","id":1}',
