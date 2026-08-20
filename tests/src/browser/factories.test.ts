@@ -380,7 +380,7 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 		const client = createMCPClient({ transport, version: MCP_MODERN_VERSION })
 
 		await expect(client.connect()).rejects.toThrow(
-			'MCP server supports no compatible protocol version',
+			'MCP server does not support the pinned protocol version',
 		)
 
 		// The capture gate: a further request through the SAME transport instance still
