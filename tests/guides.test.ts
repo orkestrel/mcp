@@ -2,9 +2,12 @@
 // repository's own guides/README.md manifest. The five constants below are this package's
 // own, and are what a sibling package changes.
 
+import type { JSONRPCMessage } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { fstatSync, readFileSync } from 'node:fs'
+import { createStdioClientTransport } from '@src/server'
 import {
 	createGuide,
 	createSource,
@@ -21,6 +24,7 @@ import {
 } from '@orkestrel/guide'
 import { requireValue } from '@orkestrel/test'
 import { readInventory } from '@orkestrel/test/server'
+import { waitForSettlement } from './setup.js'
 import { findMissingNamedImports } from './setupServer.js'
 
 /** Every fence language this package's guides are allowed to use. */
@@ -566,3 +570,147 @@ for (const entry of manifest) {
 		})
 	})
 }
+
+// ── The stdio client transport's spawn contract, executed ────────────────────
+//
+// A parity assertion proves a documented name resolves. It can never reach a sentence about
+// behaviour, which is how `guides/mcp.md` § stdio transport carried two false ones through a
+// green gate: that `createStdioClientTransport` spawns through `node:child_process.spawn` with
+// a provided `env` REPLACING `process.env`, and that the child's `stderr` INHERITS the parent's.
+// Both are now stated the other way round in the guide, so both are executed here.
+//
+// One child reports what it actually received. Every reading is compared against the same
+// reading taken from a raw `node:child_process.spawn` configured the way the old sentences
+// described this transport — `env` replacing and `stderr` inheriting. That control sits outside
+// this package entirely and reports the opposite of every assertion below, which is what makes
+// these assertions evidence rather than a restatement of the source.
+
+/** One request, one JSON-RPC reply carrying what the spawned child's environment and `stderr` are. */
+const REPORT_SCRIPT = `
+const readline = require('node:readline')
+const { fstatSync } = require('node:fs')
+const rl = readline.createInterface({ input: process.stdin })
+rl.on('line', (line) => {
+	const message = JSON.parse(line)
+	if (message.method !== 'report') return
+	const stderr = fstatSync(2)
+	process.stdout.write(JSON.stringify({
+		jsonrpc: '2.0',
+		id: message.id,
+		result: {
+			path: process.env.PATH,
+			supplied: process.env.MCP_GUIDE_SUPPLIED,
+			absent: process.env.MCP_GUIDE_ABSENT,
+			stderr: String(stderr.dev) + ':' + String(stderr.ino),
+		},
+	}) + '\\n')
+})
+`
+
+/** The `env` this guide's claim is about: one key the parent does not carry. */
+const SUPPLIED_ENVIRONMENT = Object.freeze({ MCP_GUIDE_SUPPLIED: 'supplied' })
+
+function readReport(value: unknown): Readonly<Record<string, unknown>> {
+	if (!isRecord(value)) throw new Error('The child returned no JSON-RPC envelope')
+	const result = value['result']
+	if (!isRecord(result)) throw new Error('The child returned no result record')
+	return result
+}
+
+/** The identity of this process's own `stderr`, the thing an inherited descriptor would equal. */
+function readOwnStderr(): string {
+	const own = fstatSync(2)
+	return `${String(own.dev)}:${String(own.ino)}`
+}
+
+async function reportThroughTransport(): Promise<Readonly<Record<string, unknown>>> {
+	const transport = createStdioClientTransport({
+		command: process.execPath,
+		args: ['-e', REPORT_SCRIPT],
+		env: SUPPLIED_ENVIRONMENT,
+	})
+	const arrived = new Promise<JSONRPCMessage>((resolve) => {
+		transport.emitter.on('message', resolve)
+	})
+	try {
+		await transport.start()
+		await transport.send({ jsonrpc: '2.0', id: 1, method: 'report' })
+		const message = await waitForSettlement(
+			arrived,
+			10_000,
+			'Timed out waiting for the spawned child report',
+		)
+		return readReport(message)
+	} finally {
+		await transport.close()
+	}
+}
+
+async function reportThroughReplacingSpawn(): Promise<Readonly<Record<string, unknown>>> {
+	const child = spawn(process.execPath, ['-e', REPORT_SCRIPT], {
+		env: { ...SUPPLIED_ENVIRONMENT },
+		stdio: ['pipe', 'pipe', 'inherit'],
+	})
+	const stdout = child.stdout
+	const stdin = child.stdin
+	if (stdout === null || stdin === null) throw new Error('The control child has no stdio pipes')
+	try {
+		let buffer = ''
+		const line = new Promise<string>((resolve) => {
+			stdout.setEncoding('utf8')
+			stdout.on('data', (chunk: string) => {
+				buffer += chunk
+				const newline = buffer.indexOf('\n')
+				if (newline !== -1) resolve(buffer.slice(0, newline))
+			})
+		})
+		stdin.write('{"jsonrpc":"2.0","id":1,"method":"report"}\n')
+		const text = await waitForSettlement(
+			line,
+			10_000,
+			'Timed out waiting for the control child report',
+		)
+		return readReport(JSON.parse(text))
+	} finally {
+		child.kill()
+	}
+}
+
+describe('guides/mcp.md § stdio transport — what the spawned child actually receives', () => {
+	it('MERGES a provided env over process.env, so the child inherits every key the guide says it does', async () => {
+		const inherited = process.env['PATH']
+		expect(typeof inherited).toBe('string')
+		expect(inherited).not.toBe('')
+
+		const report = await reportThroughTransport()
+
+		// The sentence the guide now carries: an unlisted parent key still reaches the child.
+		expect(report['path']).toBe(inherited)
+		// The override layer works, so the merge is a merge and not a plain inherit.
+		expect(report['supplied']).toBe('supplied')
+		// The readout can report absence, so the two assertions above are not an artifact of it
+		// always returning something.
+		expect(report['absent']).toBeUndefined()
+	})
+
+	it('CONTROL — a raw spawn whose env REPLACES the parent hands the child no PATH at all', async () => {
+		const report = await reportThroughReplacingSpawn()
+
+		expect(report['path']).toBeUndefined()
+		expect(report['supplied']).toBe('supplied')
+	})
+
+	it('PIPES the child stderr, so the parent stderr never receives a byte of it', async () => {
+		const report = await reportThroughTransport()
+
+		// A piped descriptor is a fresh pipe: it cannot be the one this process writes to.
+		expect(typeof report['stderr']).toBe('string')
+		expect(report['stderr']).not.toBe(readOwnStderr())
+	})
+
+	it("CONTROL — a raw spawn with stdio 'inherit' hands the child this process's own stderr", async () => {
+		const report = await reportThroughReplacingSpawn()
+
+		expect(report['stderr']).toBe(readOwnStderr())
+	})
+})

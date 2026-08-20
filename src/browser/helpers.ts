@@ -101,9 +101,15 @@ export async function readEventStream(response: Response): Promise<readonly JSON
  * — when the gate returns `false` the event is dropped entirely (no binding, no reply).
  * Accepted events spawn a fresh `MessagePortTransport` over `event.ports[0]`,
  * `bindServer` `server` onto it, and record a teardown (`unbind` then `transport.close()`)
- * into `teardowns`. A port that was already seen is IGNORED — repeated delivery of the
- * same `MessagePort` would create duplicate bindings over one port (→ duplicated replies),
- * so the listener tracks seen ports and silently drops repeats.
+ * into `teardowns` KEYED BY THAT PORT. A port already present is IGNORED — repeated delivery
+ * of the same `MessagePort` would create duplicate bindings over one port (→ duplicated
+ * replies), so a repeat is silently dropped.
+ *
+ * The key is what makes `teardowns` the ONLY place an accepted port is remembered. A separate
+ * seen-port set would be a second collection over the same lifetime, and the caller's disposer
+ * would have to remember to empty both — so a long-lived scope such as a Service Worker would
+ * retain every port it ever accepted, closed and unbound ones included. Membership answers
+ * "already bound?" and `clear()` drops the binding and the dedup together.
  *
  * This branch fires on EITHER a Service-Worker-shaped scope (its normal per-client
  * channel) or a dedicated-worker-shaped one that happens to receive a port-bearing event
@@ -114,13 +120,13 @@ export async function readEventStream(response: Response): Promise<readonly JSON
  *
  * @param server - The `MCPServerInterface` every spawned/implicit binding dispatches over
  * @param scopeTransport - The implicit scope channel (already `bindServer`-bound) portless events deliver onto
- * @param teardowns - The shared teardown set `serveMCPScope`'s dispose drains; each port-bearing event adds one entry
+ * @param teardowns - The shared teardown map `serveMCPScope`'s dispose drains and clears, keyed by the accepted port; each port-bearing event adds one entry
  * @param options - The `ServeMCPOptions` (for `options.accept`)
  * @returns The `message`-event listener to register (and later remove) on the scope
  *
  * @example
  * ```ts
- * const teardowns = new Set<() => void>()
+ * const teardowns = new Map<MessagePort, () => void>()
  * const scopeTransport = createScopeTransport(scope)
  * bindServer(server, scopeTransport)
  * const onMessage = createScopeMessageListener(server, scopeTransport, teardowns, options)
@@ -130,10 +136,9 @@ export async function readEventStream(response: Response): Promise<readonly JSON
 export function createScopeMessageListener(
 	server: MCPServerInterface,
 	scopeTransport: ScopeTransportInterface,
-	teardowns: Set<() => void>,
+	teardowns: Map<MessagePort, () => void>,
 	options: ServeMCPOptions,
 ): (event: MessageEvent) => void {
-	const seen = new Set<MessagePort>()
 	return (event: MessageEvent): void => {
 		const ports = event.ports
 		if (ports.length > 0) {
@@ -141,12 +146,13 @@ export function createScopeMessageListener(
 			if (options.accept !== undefined && !options.accept(event)) return
 			const port = ports[0]
 			if (port === undefined) return
-			// Deduplicate: repeated delivery of the same port would create duplicate bindings.
-			if (seen.has(port)) return
-			seen.add(port)
+			// Deduplicate off the teardown map itself: repeated delivery of the same port would
+			// create duplicate bindings, and a second collection recording the same fact is one
+			// the disposer can forget to empty.
+			if (teardowns.has(port)) return
 			const transport = new MessagePortTransport({ port })
 			const unbind = bindServer(server, transport)
-			teardowns.add(() => {
+			teardowns.set(port, () => {
 				unbind()
 				transport.close()
 			})
@@ -163,7 +169,8 @@ export function createScopeMessageListener(
  * Port-bearing events are gated by `options.accept`, deduplicated by port, and receive
  * their own `MessagePortTransport` binding. Portless string events use the scope's
  * implicit channel. The returned disposer removes the listener, unbinds the implicit
- * channel, and closes every accepted port binding.
+ * channel, closes every accepted port binding, and drops the ports themselves — the
+ * bindings are held in one map keyed by port, so nothing survives the clear.
  *
  * @param scope - The hostable worker scope to wire
  * @param options - The tools, optional identity, and optional port-event gate
@@ -179,7 +186,7 @@ export function serveMCPScope(scope: ServeMCPScopeInterface, options: ServeMCPOp
 	})
 	const scopeTransport = createScopeTransport(scope)
 	const unbindScope = bindServer(server, scopeTransport)
-	const teardowns = new Set<() => void>()
+	const teardowns = new Map<MessagePort, () => void>()
 	const onMessage = createScopeMessageListener(server, scopeTransport, teardowns, options)
 	scope.addEventListener('message', onMessage)
 	let disposed = false
@@ -188,7 +195,9 @@ export function serveMCPScope(scope: ServeMCPScopeInterface, options: ServeMCPOp
 		disposed = true
 		scope.removeEventListener('message', onMessage)
 		unbindScope()
-		for (const teardown of teardowns) teardown()
+		for (const teardown of teardowns.values()) teardown()
+		// One clear releases the bindings AND the ports they were keyed by, so a scope that
+		// outlives its disposer — a Service Worker — retains neither.
 		teardowns.clear()
 	}
 }

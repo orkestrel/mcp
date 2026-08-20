@@ -292,4 +292,61 @@ describe('HTTPDisconnect', () => {
 			}
 		}
 	})
+
+	// ── The single-response lifecycle, enforced rather than only documented ────
+	//
+	// The class doc has always said "This is a single-response lifecycle object, not a reusable
+	// bridge", and nothing held a caller to it. `HTTPDisconnect` is exported and its own
+	// `@example` shows a consumer constructing and bridging directly, so the second call was
+	// reachable — and it did two things at once. It overwrote `#timer`, which left the FIRST
+	// interval running with no handle anywhere that could clear it (a ref'd timer, alive for the
+	// process's life). And the first bridge's terminal aborts `#lifecycle`, so the second
+	// bridge's abort listener registered against an already-aborted signal and was never added
+	// at all — leaving the second bridge with neither cleanup either.
+
+	it('refuses a second bridge instead of building a second response over one lifecycle', () => {
+		const first = createStreamStub({ pending: true })
+		const second = createStreamStub({ pending: true })
+		const disconnect = new HTTPDisconnect(new AbortController().signal, { interval: 10 })
+
+		expect(disconnect.bridge(first).status).toBe(200)
+		expect(() => disconnect.bridge(second)).toThrow('MCP SSE response is already bridged')
+		// The refusal happens before anything is taken from the second stream, so a caller that
+		// mis-wired one is free to bridge it from its own disconnect.
+		expect(second.response.bodyUsed).toBe(false)
+	})
+
+	it('orphans no keepalive timer: release stops every tick a refused second bridge could have started', async () => {
+		const first = createStreamStub({ pending: true })
+		const second = createStreamStub({ pending: true })
+		const request = new AbortController()
+		const disconnect = new HTTPDisconnect(request.signal, { interval: 10 })
+		disconnect.bridge(first)
+		expect(() => disconnect.bridge(second)).toThrow('MCP SSE response is already bridged')
+
+		await waitForDelay(50)
+		expect(first.comments.length).toBeGreaterThan(0)
+
+		request.abort()
+		const settled = first.comments.length
+		await waitForDelay(50)
+
+		// One armed timer, one handle, one `clearInterval`. A second bridge would have replaced
+		// that handle and left this stream ticking past its own release.
+		expect(first.comments.length).toBe(settled)
+		expect(second.comments).toEqual([])
+	})
+
+	// The control, drawn from OUTSIDE the population the two rows above cover: a FIRST bridge is
+	// never refused, and the stream it was given still ticks. A guard that refused every call
+	// would satisfy both rows above while removing the class's whole reason to exist.
+	it('CONTROL — a first bridge on a fresh disconnect is accepted and ticks', async () => {
+		const stream = createStreamStub({ pending: true })
+		const disconnect = new HTTPDisconnect(new AbortController().signal, { interval: 10 })
+
+		expect(() => disconnect.bridge(stream)).not.toThrow()
+		await waitForDelay(50)
+
+		expect(stream.comments.length).toBeGreaterThan(0)
+	})
 })

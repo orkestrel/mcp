@@ -8,7 +8,7 @@ surfaces its tools as local `ToolInterface`s. No agent runtime is required.
 The dispatch core is transport- and provider-agnostic
 (`src/core` — JSON-RPC 2.0, no HTTP, no `as`); every transport (Streamable
 HTTP over `@orkestrel/router` / `@orkestrel/server`, WebSocket over
-`@orkestrel/websocket`, and stdio over `node:child_process`) lives one layer
+`@orkestrel/websocket`, and stdio over `@orkestrel/process`) lives one layer
 out (`src/server`), each mechanism, not policy. Part of the `@orkestrel` line.
 
 ## Install
@@ -19,8 +19,12 @@ npm install @orkestrel/mcp
 
 ## Requirements
 
-- Node.js >= 24
-- ESM and CommonJS builds ship for both the core and server entry points
+- Node.js >= 22.12.0
+- ESM and CommonJS builds ship for both the core and server entry points; the
+  browser entry point ships ESM only
+- TypeScript `moduleResolution` set to `node16`, `nodenext`, or `bundler`. Under
+  legacy `node` resolution the `./browser` and `./server` subpaths resolve no
+  declarations
 - `@orkestrel/server` and `@orkestrel/router` are peer dependencies (the HTTP
   spine the `./server` transports mount onto)
 

@@ -1,8 +1,14 @@
 import type { ServeMCPScopeInterface } from '@src/browser'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 import { describe, expect, it, vi } from 'vitest'
-import { MCP_META_SERVER } from '@src/core'
-import { DEFAULT_MCP_SERVER_NAME, DEFAULT_MCP_SERVER_VERSION, serveMCPScope } from '@src/browser'
+import { createMCPServer, MCP_META_SERVER } from '@src/core'
+import {
+	createScopeMessageListener,
+	createScopeTransport,
+	DEFAULT_MCP_SERVER_NAME,
+	DEFAULT_MCP_SERVER_VERSION,
+	serveMCPScope,
+} from '@src/browser'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { waitForDelay } from '@orkestrel/test'
 import { createJSONRPCRequest, MODERN_METADATA, modernRequest } from '../../setup.js'
@@ -365,5 +371,51 @@ describe('serveMCPScope — hostile inbound', () => {
 		expectModernReply(double.sent[0], 1)
 
 		dispose()
+	})
+})
+
+// ── createScopeMessageListener — the dedup state and the teardown state are ONE ────
+//
+// The dedup was right and its bookkeeping was not. The listener kept accepted ports in a `seen`
+// set private to its own closure, while the teardown callbacks went into the caller's
+// `teardowns`. `serveMCPScope`'s disposer could reach only the second one, so a Service Worker —
+// the shape the doc names, whose closure lives as long as the worker — retained every
+// `MessagePort` it had ever accepted, including ports already closed and unbound, for the
+// worker's life. Two collections over one lifetime is what let one of them be forgotten.
+//
+// There is now one collection: the teardown map is KEYED by the port it tears down, so
+// membership answers "already bound?" and clearing the map drops both facts at once. The two
+// rows below drive the exported listener with a caller-owned map, which is the only seam from
+// which either fact is observable at all.
+
+describe('createScopeMessageListener — one collection carries both the teardown and the dedup', () => {
+	it('keys each accepted port binding by the port, so no dedup state sits outside the caller-owned map', () => {
+		const double = createScopeDouble()
+		const server = createMCPServer({
+			tools: createCalculatorTools(),
+			identity: { name: DEFAULT_MCP_SERVER_NAME, version: DEFAULT_MCP_SERVER_VERSION },
+		})
+		const scopeTransport = createScopeTransport(double.scope)
+		const teardowns = new Map<MessagePort, () => void>()
+		const onMessage = createScopeMessageListener(server, scopeTransport, teardowns, {
+			tools: createCalculatorTools(),
+		})
+		const { port1 } = new MessageChannel()
+
+		onMessage(new MessageEvent('message', { ports: [port1] }))
+		expect([...teardowns.keys()]).toEqual([port1])
+
+		// The dedup reads that same map, so a repeat delivery adds nothing.
+		onMessage(new MessageEvent('message', { ports: [port1] }))
+		expect(teardowns.size).toBe(1)
+
+		// Clearing the map the way the disposer does drops the dedup state with it: the SAME port
+		// is accepted again afterwards. A private `seen` set would have refused this forever.
+		for (const teardown of teardowns.values()) teardown()
+		teardowns.clear()
+		onMessage(new MessageEvent('message', { ports: [port1] }))
+		expect([...teardowns.keys()]).toEqual([port1])
+
+		for (const teardown of teardowns.values()) teardown()
 	})
 })

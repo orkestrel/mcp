@@ -329,7 +329,8 @@ export function extractLines(buffer: string, chunk: string): LineExtraction {
 /**
  * Decode and deliver each complete newline-framed line onto a {@link
  * MCPClientTransportEventMap} emitter — the shared per-chunk dispatch step both stdio
- * transports (client and server) run their {@link extractLines} output through.
+ * transports run their framed lines through: the server transport frames with {@link
+ * extractLines}, the client transport takes its lines from the process supervisor.
  *
  * @remarks
  * A blank line is skipped (a stray trailing newline). Every other line is decoded
@@ -339,7 +340,7 @@ export function extractLines(buffer: string, chunk: string): LineExtraction {
  * the caller-owned side effect.
  *
  * @param emitter - The transport's {@link EmitterInterface} to emit `message` / `error` onto
- * @param lines - The complete lines (from {@link extractLines}) to decode and deliver
+ * @param lines - The complete lines to decode and deliver
  */
 export function dispatchLines(
 	emitter: EmitterInterface<MCPClientTransportEventMap>,

@@ -19,7 +19,8 @@ import { createReadableStream } from '../helpers.js'
  *
  * {@link bridge} preserves the source response status and headers, forwards its body bytes, and
  * owns keepalive comments plus listener/timer cleanup until upstream completion, request abort,
- * or consumer cancellation. This is a single-response lifecycle object, not a reusable bridge.
+ * or consumer cancellation. This is a single-response lifecycle object, not a reusable bridge:
+ * a second {@link bridge} call THROWS rather than arming a second keepalive over one lifecycle.
  * It supplies no handler or session policy.
  *
  * The keepalive interval is a BUDGET, sanitized like every other numeric knob in this package:
@@ -44,6 +45,7 @@ export class HTTPDisconnect {
 	readonly #interval: number
 	readonly #signal: AbortSignal
 	#timer: ReturnType<typeof setInterval> | undefined
+	#bridged = false
 	#pulling = false
 
 	/**
@@ -83,9 +85,18 @@ export class HTTPDisconnect {
 	 *
 	 * @param stream - The open SSE stream whose response will be consumed by the HTTP writer
 	 * @returns A one-use response preserving status, status text, headers, and SSE body bytes
-	 * @throws When the supplied SSE response has no body
+	 * @throws When this disconnect has already bridged a stream, or the supplied SSE response
+	 *   has no body
 	 */
 	bridge(stream: StreamInterface): Response {
+		// One disconnect composes ONE request with ONE response, and the guard is what makes that
+		// enforced rather than merely documented. A second call used to overwrite `#timer`, which
+		// left the first interval running with no handle able to clear it, and its own abort
+		// listener registered against a `#lifecycle` the first bridge's terminal had already
+		// aborted — so the second bridge carried neither cleanup. Refuse before taking the
+		// reader, so the stream a mis-wired caller passed is still bridgeable elsewhere.
+		if (this.#bridged) throw new Error('MCP SSE response is already bridged')
+		this.#bridged = true
 		const response = stream.response
 		const body = response.body
 		if (body === null) throw new Error('MCP SSE response has no body')

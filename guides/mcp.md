@@ -2211,14 +2211,27 @@ third server transport — newline-delimited JSON-RPC over a process's own
 via `bridgeMessageTransport`, and pipes it through `bindServer` — each inbound
 JSON-RPC request runs through `mcp.dispatch`, writing a defined response back
 as one newline-terminated line (a notification writes nothing).
-`createStdioClientTransport` is the egress mirror — it spawns `options.command`
-(`node:child_process.spawn`) with `options.args` / `options.env`, piping the
-child's `stdin`/`stdout` for the JSON-RPC channel (`stderr` inherits the
-parent's for diagnostics). Both share the newline-framing helpers
-`extractLines` (fold a raw chunk into complete lines + a carried remainder)
-and `dispatchLines` (decode + emit each complete line as `message` or
-`error`) — documented under [HTTP transport § Helpers](#helpers-1) since they
-live in the shared `helpers.ts`.
+The handle's `stop()` unbinds that pump and closes the transport: the three
+listeners `start()` put on `input` are removed, and `input` is paused only when
+this transport started a non-flowing stream and no other `data` listener
+remains. A stopped server therefore lets the process exit rather than holding
+`process.stdin` open, and the injected streams are never destroyed or ended —
+they belong to the caller.
+
+`createStdioClientTransport` is the egress mirror — it builds one supervised
+`@orkestrel/process` `Process` over `options.command` / `options.args` /
+`options.env`, and that supervisor spawns the child with
+`stdio: ['pipe', 'pipe', 'pipe']`: `stdin`/`stdout` carry the JSON-RPC channel
+and `stderr` is piped and retained as a bounded tail on the supervisor, not
+inherited by the parent. `options.env` merges over `process.env` rather than
+replacing it: each named key overrides the inherited value, every unlisted key
+is still inherited, and the child therefore receives every secret this process
+holds. The server side frames its own input with `extractLines` (fold a
+raw chunk into complete lines + a carried remainder); the client side takes its
+frames from the supervisor's `readline`-backed `lines` iterable instead. Both
+decode through `dispatchLines` (decode + emit each complete line as `message` or
+`error`) — documented under [HTTP transport § Helpers](#helpers-1) since it
+lives in the shared `helpers.ts`.
 
 ```ts
 import { createMCPClient, createMCPServer } from '@orkestrel/mcp'
@@ -2242,10 +2255,10 @@ const tools = await client.tools()
 
 #### Factories
 
-| API                          | Kind     | Summary                                                                                                                                                |
-| ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `createStdioClientTransport` | function | Create a `MCPClientTransportInterface` that spawns a CHILD PROCESS MCP server and drives it over its piped stdio.                                      |
-| `createStdioServer`          | function | Pipe an `MCPDispatcherInterface` (via `bindServer`) over newline-delimited JSON-RPC on `stdin`/`stdout` (or injected streams) — `{ start(); stop() }`. |
+| API                          | Kind     | Summary                                                                                                                                                                                                                                                                            |
+| ---------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createStdioClientTransport` | function | Create a `MCPClientTransportInterface` that spawns a CHILD PROCESS MCP server and drives it over its piped stdio.                                                                                                                                                                  |
+| `createStdioServer`          | function | Pipe an `MCPDispatcherInterface` (via `bindServer`) over newline-delimited JSON-RPC on `stdin`/`stdout` (or injected streams) — `{ start(); stop() }`; `stop()` unbinds the pump, drops every listener the transport put on `input`, and releases `input` so the process can exit. |
 
 #### Entities
 
@@ -2264,11 +2277,11 @@ _See `extractLines` / `dispatchLines` under [HTTP transport § Helpers](#helpers
 
 #### Types
 
-| Type                          | Kind      | Shape                                                                                                                                     |
-| ----------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `StdioClientTransportOptions` | interface | `{ command: string; args?: readonly string[]; env?: Record<string, string> }` — the child process to spawn.                               |
-| `StdioServerOptions`          | interface | `{ input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream }` — the injectable stream pair (default `process.stdin`/`stdout`).      |
-| `LineExtraction`              | interface | `{ lines: readonly string[]; remainder: string }` — the result of folding one more chunk into the newline-framed buffer (`extractLines`). |
+| Type                          | Kind      | Shape                                                                                                                                                                                                        |
+| ----------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `StdioClientTransportOptions` | interface | `{ command: string; args?: readonly string[]; env?: Record<string, string> }` — the child process to spawn. `env` MERGES over `process.env`; it never replaces it, so the child inherits every unlisted key. |
+| `StdioServerOptions`          | interface | `{ input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream }` — the injectable stream pair (default `process.stdin`/`stdout`).                                                                         |
+| `LineExtraction`              | interface | `{ lines: readonly string[]; remainder: string }` — the result of folding one more chunk into the newline-framed buffer (`extractLines`).                                                                    |
 
 ### Browser transport
 
@@ -2401,11 +2414,11 @@ entity, so they sit beside `createScopeMessageListener` in `helpers.ts`, not in 
 
 #### Helpers
 
-| API                          | Kind     | Summary                                                                                                                                                                                                                            |
-| ---------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `decodeEvent`                | function | Decode one SSE event's `data` string into a `JSONRPCMessage`, or `undefined` (total).                                                                                                                                              |
-| `readEventStream`            | function | Decode a `fetch` Response's SSE body into the `JSONRPCMessage`s it carried (the egress inverse; total).                                                                                                                            |
-| `createScopeMessageListener` | function | Build `serveMCPScope`'s unified `message`-event listener — a port-bearing event is gated by `accept`, deduped by seen port, then spawns a per-port binding; a portless string-data event delivers onto the implicit scope channel. |
+| API                          | Kind     | Summary                                                                                                                                                                                                                                                                                                         |
+| ---------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `decodeEvent`                | function | Decode one SSE event's `data` string into a `JSONRPCMessage`, or `undefined` (total).                                                                                                                                                                                                                           |
+| `readEventStream`            | function | Decode a `fetch` Response's SSE body into the `JSONRPCMessage`s it carried (the egress inverse; total).                                                                                                                                                                                                         |
+| `createScopeMessageListener` | function | Build `serveMCPScope`'s unified `message`-event listener — a port-bearing event is gated by `accept`, deduped against the caller's `Map<MessagePort, () => void>` of teardowns, then spawns a per-port binding recorded under that port; a portless string-data event delivers onto the implicit scope channel. |
 
 #### Types
 
@@ -2778,11 +2791,11 @@ only thing that reaches the work the request left behind.
 The client's transport-agnostic carrier — `start` opens, `send` writes one
 message (its reply surfaces on `emitter`'s `message`), `close` tears down.
 
-| Method  | Returns         | Behavior                                                                                                                                                                             |
-| ------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `start` | `Promise<void>` | Open the transport and arm any reply reader (a no-op for a request/response transport). A `start` that rejects must first release whatever it had already acquired.                  |
-| `send`  | `Promise<void>` | Write one JSON-RPC message to the remote server; its decoded reply is emitted on the `message` event. A write that fails REJECTS; it never throws synchronously.                     |
-| `close` | `Promise<void>` | Close the transport and release resources (fires `close`). It must SETTLE: resolving says the connection ended, rejecting says it did not, and the client believes only that answer. |
+| Method  | Returns         | Behavior                                                                                                                                                                                                                                         |
+| ------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `start` | `Promise<void>` | Open the transport and arm any reply reader (a no-op for a request/response transport). A `start` that rejects must first release whatever it had already acquired.                                                                              |
+| `send`  | `Promise<void>` | Write one JSON-RPC message to the remote server; its decoded reply is emitted on the `message` event. A write that fails REJECTS; it never throws synchronously.                                                                                 |
+| `close` | `Promise<void>` | Close the transport, release everything it acquired, and fire `close` ONCE. It must SETTLE: resolving says the connection ended, rejecting says it did not, and the client believes only that answer. It is IDEMPOTENT over one closed lifetime. |
 
 Four obligations an implementation carries, because `MCPClient` depends on them
 and cannot enforce them from its side. A `start` that acquires and then rejects
@@ -2795,6 +2808,30 @@ the connection owed for the client's life. And `close` is never called twice
 concurrently for one connection (a caller that gave up waiting joins the close
 still running), but it IS called again after an earlier `close` rejected, since
 a rejected close ended nothing.
+
+`close` is also IDEMPOTENT: a call on a transport an earlier `close` already
+ended resolves without emitting `close` again and without releasing anything a
+second time. Idempotence bounds ONE closed lifetime rather than the object — a
+transport that reopens on `start` arms itself there, and its next `close` ends
+that connection and emits once for it.
+
+"Release resources" is a per-transport promise, so here is what each carrier in
+this package actually gives up. Both `HTTPClientTransport`s abort every
+in-flight `fetch` and response reader they still hold, clear that set, and drop
+the negotiated protocol version. Both `WebSocketClientTransport`s unsubscribe
+from the socket before closing it, and the Node one also destroys an upgrade
+request still on the wire. `WebSocketServerTransport` unsubscribes before it
+runs the close handshake, so a frame already in flight cannot re-emit on a
+transport that has closed. `StdioClientTransport` terminates its child through
+the supervisor's bounded group kill, awaits the observed exit, and tears the
+supervisor down. `StdioServerTransport` removes the three listeners it put on
+`input` and pauses `input` when — and only when — it started a non-flowing
+stream and no other `data` listener remains; it does NOT destroy or end the
+injected streams, because those belong to the caller. The transport
+`createDuplexClientTransport` adapts forwards its `close` to the wrapped
+`MCPTransportInterface` and holds nothing of its own. That range is the shape of
+the whole rule: a transport releases what IT acquired, never what it was
+handed.
 
 The fourth is about `send`, and it is one keyword wide. A failing write must
 REJECT, never throw synchronously. `MCPClient` issues the write inside the same
@@ -2835,9 +2872,9 @@ itself — so the handler, the controlled stream, and the producer behind them l
 response is over. Ordinary upstream completion is the one terminal that only releases the
 bridge's own timer and listener. The timer stops on every terminal path.
 
-| Method   | Returns    | Behavior                                                                                                                                                                                                                                                                 |
-| -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `bridge` | `Response` | Forward an open SSE stream through a keepalive-writing response body; consumer cancellation, a forwarding failure, and a keepalive-detected closed stream each abort the entity's composed signal, while graceful completion does not; stop its timer on every terminal. |
+| Method   | Returns    | Behavior                                                                                                                                                                                                                                                                                                                                                                             |
+| -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `bridge` | `Response` | Forward an open SSE stream through a keepalive-writing response body; consumer cancellation, a forwarding failure, and a keepalive-detected closed stream each abort the entity's composed signal, while graceful completion does not; stop its timer on every terminal. One disconnect bridges ONCE — a second call THROWS, before it takes anything from the stream it was handed. |
 
 ```ts
 import { HTTPDisconnect } from '@orkestrel/mcp/server'
@@ -3316,7 +3353,8 @@ closed — while ordinary upstream completion closes the response without invent
 - [HTTP response lifecycle composition](../tests/src/server/transports/HTTPDisconnect.test.ts)
 - [HTTP handler integration](../tests/src/server/handlers.test.ts)
 - [Session middleware integration](../tests/src/server/middlewares.test.ts)
-- [Guide/source/public-barrel parity](../tests/guides.test.ts)
+- [Guide/source/public-barrel parity, and what the spawned stdio child actually receives](../tests/guides.test.ts)
+- [The packed artifact a consumer installs, across its three faces and both module formats](../tests/distribution.test.ts)
 - [Repository law, including the legacy-removability boundary](../tests/policy.test.ts)
 
 ## Declared non-goals
@@ -3682,15 +3720,22 @@ a consumer adopting this package to back an IDE integration is doing something n
 has tested, and the conformance number does not transfer to it. **Closer:** one
 representative IDE driving this server, recorded exactly the way the conformance run is.
 
-**There is no top-level `types` field, so a consumer on legacy `moduleResolution: node`
-sees an untyped package.** The `exports` map carries a `types` condition on every subpath
-and every condition inside it: `.` under both `import` and `require`, `./browser` under
-`import`, `./server` under both. Every resolver that reads `exports` therefore finds
-declarations, which is `node16`, `nodenext`, and `bundler`. Legacy `node` resolution does
-not read `exports`; it looks for a top-level `types` field, finds none, and treats the
-package as having no declarations at all. **Who it affects:** a consumer whose
-`moduleResolution` is `node`, and nobody else. **Closer:** a top-level `types` entry in
-the manifest, which this package has not added.
+**There is no top-level `types` field, and legacy `moduleResolution: node` reaches only the
+core face.** The `exports` map carries a `types` condition on every subpath and every
+condition inside it: `.` under both `import` and `require`, `./browser` under `import`,
+`./server` under both. Every resolver that reads `exports` therefore finds declarations,
+which is `node16`, `nodenext`, and `bundler`. Legacy `node` resolution does not read
+`exports` at all. It falls back to `main`, finds `dist/src/core/index.d.ts` beside it, and
+types `@orkestrel/mcp` — so the root import compiles. It has no such fallback for a
+subpath, and no `typesVersions` map redirects one, so `@orkestrel/mcp/browser` and
+`@orkestrel/mcp/server` both fail to resolve. A top-level `types` field would not change
+that: it names the root's declarations, which legacy resolution already finds.
+`tests/distribution.test.ts` compiles a consumer importing all three faces under each of
+the four modes, and that consumer is the executed form of this paragraph — `node16`,
+`nodenext`, and `bundler` compile, `node` does not. **Who it affects:** a consumer whose
+`moduleResolution` is `node` and who imports either environment face, and nobody else.
+**Closer:** a `typesVersions` map naming the two subpaths, which this package has not
+added, because the supported floor is `node16`.
 
 **API Extractor bundles TypeScript 5.9.3 while this project compiles with 6.0.3, so
 `build` prints a version notice once per built face — three times.** The exact line is:
@@ -4053,9 +4098,14 @@ application/json` and an `Accept` of BOTH `application/json` and
     and emits nothing. It is TOTAL at the boundary: a non-message reply is
     dropped, never asserted; a `fetch` / decode failure surfaces on the
     `error` event rather than escaping `send`. `fetch` defaults to
-    `globalThis.fetch` (injectable); when `timeout` is set, each `fetch` call
-    passes `signal: AbortSignal.timeout(timeout)`. `start` / `close` hold no
-    long-lived connection. It ECHOES the session (clause 18): an
+    `globalThis.fetch` (injectable). EVERY `fetch` call carries a `signal`,
+    with or without a `timeout`: `send` mints one `AbortController` per
+    exchange and holds it in a pending set, so `close()` aborts the fetch and
+    the body read behind it. With no `timeout` the signal is that controller's
+    alone; with one it is
+    `AbortSignal.any([close, AbortSignal.timeout(timeout)])`, so whichever
+    fires first ends the same fetch and the same read. `start` / `close` hold
+    no long-lived connection. It ECHOES the session (clause 18): an
     `mcp-session-id` response header, when a STATEFUL server sends one (on
     `initialize`), is captured into `session` and then sent as the
     `mcp-session-id` REQUEST header on every SUBSEQUENT request — so an
@@ -4111,14 +4161,21 @@ socket, key, head, protocol })` (SERVER mode → writes the `101` handshake
     `headers`), awaiting the client `'upgrade'` event and VALIDATING
     `Sec-WebSocket-Accept === computeWebSocketAccept(key)`
     (`@orkestrel/websocket`) — a mismatch / a non-`101` response / a request
-    error REJECTS `start()` (the socket destroyed). On success it wraps the
-    upgraded socket in `createNodeWebSocket({ socket, head })` (CLIENT mode —
-    no key → frames MASKED) and bridges its frames as the client's `message`
-    channel (decoded + narrowed via `parseJSONRPCMessage`). `send` writes ONE
-    masked text frame per message; `close()` closes the socket + fires
-    `close` (idempotent). `url` accepts `ws://` / `wss://` OR `http://` /
-    `https://` (a `ws(s)` scheme is converted to `http(s)` for the underlying
-    request; `wss` → TLS via `node:https`).
+    error REJECTS `start()` (the socket destroyed), with ONE exception: a
+    request error raised after this transport's own `close()` RESOLVES
+    `start()` instead, because the caller asked for the transport to end and it
+    has. A handshake that completes after a `close()` or a second `start()`
+    resolves the same way, destroying the socket nobody wants rather than
+    binding a second peer. On success it wraps the upgraded socket in
+    `createNodeWebSocket({ socket, head })` (CLIENT mode — no key → frames
+    MASKED) and bridges its frames as the client's `message` channel (decoded +
+    narrowed via `parseJSONRPCMessage`). `send` writes ONE masked text frame
+    per message; `close()` destroys an upgrade request still on the wire,
+    unsubscribes from the socket, closes it, and fires `close` (idempotent —
+    a second call on the same closed lifetime releases nothing and emits
+    nothing). `url` accepts `ws://` / `wss://` OR `http://` / `https://` (a
+    `ws(s)` scheme is converted to `http(s)` for the underlying request;
+    `wss` → TLS via `node:https`).
 18. **Sessions are an opt-in native middleware on the HTTP transport
     (`src/server`).** `createMCPSession({ path?, ttl?, capacity?, clock?, origin?, keepalive? })`
     returns a `MiddlewareHandler<TState>` (`TState extends MCPSessionState`)
@@ -4183,18 +4240,32 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     `JSONRPCMessage` that is a REQUEST runs through `mcp.dispatch`, a defined
     response written back as a newline-terminated line (a notification writes
     nothing); a non-request message is ignored; a `dispatch` / `send` fault
-    surfaces on the transport's `error` event. `createStdioClientTransport(options)`
-    spawns `options.command` via `node:child_process.spawn(command, args, {
-env, stdio: ['pipe', 'pipe', 'inherit'] })` (an omitted `env` inherits
-    `process.env`; a provided one REPLACES it entirely, `spawn` semantics);
-    `send` writes `JSON.stringify(message) + '\n'` per message to the
-    child's `stdin`; the child's `stdout` is read through the shared
-    `extractLines` / `dispatchLines` helpers (also used by
-    `StdioServerTransport`) to decode complete lines onto `message` (a
-    malformed line emits `error`); the child's exit bridges to the
-    transport's `close`. `close()` kills the child. Both stdio transports'
-    `session` is always `undefined` (the process pipe carries no session
-    concept).
+    surfaces on the transport's `error` event. `stop()` unbinds that pump and
+    closes the transport, which removes the three listeners `start()` put on
+    `input` and pauses `input` only when this transport started a non-flowing
+    stream AND no other `data` listener remains — so a stopped server lets the
+    process exit instead of holding `process.stdin` open. It never destroys or
+    ends the injected streams; they belong to the caller.
+    `createStdioClientTransport(options)` builds one supervised
+    `@orkestrel/process` `Process` over `options.command` and `options.args`.
+    That supervisor spawns with `stdio: ['pipe', 'pipe', 'pipe']`, so the
+    child's `stderr` is PIPED and retained as a bounded tail rather than
+    inherited by the parent. A provided `env` MERGES OVER `process.env` rather
+    than replacing it: each named key overrides the inherited value and every
+    unlisted key is still inherited, so `env: { TOKEN: 'x' }` hands the child
+    the parent's whole environment plus `TOKEN`. This transport exposes no way
+    to withhold `process.env` from the child — spawn only a child you trust
+    with everything this process holds, or scrub the parent environment before
+    spawning. `send` writes `JSON.stringify(message) + '\n'` per message to the
+    child's `stdin` and awaits the supervisor's answer, REJECTING when the
+    channel is gone; the child's `stdout` is drained through the supervisor's
+    `readline`-framed `lines` iterable and every complete line is decoded onto
+    `message` through the shared `dispatchLines` helper (a malformed line emits
+    `error`); the child's exit bridges to the transport's `close`. `close()`
+    terminates the child through the supervisor's bounded `SIGTERM` → grace →
+    `SIGKILL` group kill, awaits its observed exit, tears the supervisor down,
+    and fires `close` once. Both stdio transports' `session` is always
+    `undefined` (the process pipe carries no session concept).
 21. **The browser transport carries the SAME `MCPClientTransportInterface`
     contract over native host APIs (`src/browser`).**
     `createWebSocketClientTransport({ url, protocols? })` returns a
@@ -4255,7 +4326,10 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     port-bearing event; an event with NO ports and a STRING `data` delivers
     onto the implicit scope channel; any other event is dropped. The returned
     dispose is IDEMPOTENT: it removes the scope listener, unbinds the implicit
-    channel, and — for every accepted port — unbinds AND closes it.
+    channel, and — for every accepted port — unbinds AND closes it. Those
+    bindings live in ONE map keyed by the port each belongs to, which is also
+    what the dedup reads, so clearing it releases the bindings and the ports
+    together and a scope that outlives its disposer retains neither.
 23. **Wire names stay verbatim; library names obey the naming laws.** A type that
     models a protocol message carries the wire's own field names unchanged, including
     `jsonrpc`, `_meta`, `resultType`, `ttlMs`, `cacheScope`, `supportedVersions`,
