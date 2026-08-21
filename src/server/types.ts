@@ -30,7 +30,7 @@
 // / `MCPClientTransportInterface` the HTTP pair does — the wire framing differs, the dispatch
 // core does not.
 
-import type { JSONRPCMessage, MCPVersion } from '@src/core'
+import type { JSONRPCMessage, MCPClientTransportInterface, MCPVersion } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { RouteContext } from '@orkestrel/router'
 import type { ServerEventMap, StreamInterface } from '@orkestrel/server'
@@ -372,6 +372,65 @@ export interface StdioClientTransportOptions {
 	readonly command: string
 	readonly args?: readonly string[]
 	readonly env?: Readonly<Record<string, string>>
+}
+
+/**
+ * The contract `createStdioClientTransport` returns — a {@link MCPClientTransportInterface}
+ * that also reports the supervised child's stderr tail, the diagnostic a child that dies at
+ * startup leaves behind.
+ *
+ * @remarks
+ * This contract adds `evidence` and changes nothing else: `emitter`, `session`, `duplex`,
+ * `start`, `send`, and `close` are the shared client-transport surface, unchanged. It sits here
+ * rather than on {@link MCPClientTransportInterface} because a transport that supervises no child —
+ * Streamable HTTP, WebSocket, a `MessagePort` pair — has no such tail, and a member every one
+ * of them answers `undefined` to forever is a stdio detail rather than a shared contract. A
+ * consumer that widens this value back to {@link MCPClientTransportInterface}, including by
+ * reading `client.transport`, loses the reader and must keep the original reference.
+ */
+export interface StdioClientTransportInterface extends MCPClientTransportInterface {
+	/**
+	 * The supervised child's decoded stderr tail — live while a child is held, and the value
+	 * captured at that child's end afterwards.
+	 *
+	 * @remarks
+	 * - **Readings.** `undefined` while no child has run and none has been captured — before the
+	 *   first `start()`. The live tail while a child is held, which reads `''` from the moment
+	 *   that child is spawned until it writes. The captured tail after the child ended, whether
+	 *   it exited on its own or `close()` terminated it, and `''` there for a child that ran and
+	 *   wrote nothing — an empty tail is a real reading of a silent child, distinct from the
+	 *   absent one.
+	 * - **Lifetime.** The tail follows the child that produced it. It is captured at that
+	 *   child's end — inside the exit that fires this transport's `close`, and inside `close()`
+	 *   after the supervisor's teardown resolves — and every later read answers the captured
+	 *   value rather than the supervisor. That capture is what makes the value stable: a
+	 *   detached descendant holding the child's inherited stderr can still write bytes after
+	 *   `close()` resolves, and those bytes never reach it. The next `start()` clears the
+	 *   capture, so a replacement child never reports its predecessor's stderr as current.
+	 *   Lifetimes never overlap: a `start()` issued while a `close()` is still tearing down
+	 *   waits for that teardown's capture before it opens the next one, so an older tail cannot
+	 *   arrive over a newer one however the calls interleave. Read the tail before you open a
+	 *   replacement — a `close` listener that calls `start()` opens the next lifetime itself and
+	 *   clears the value every listener after it would have read.
+	 * - **What the close path carries.** The value captured in `close()` is what the supervisor
+	 *   had received when its bounded termination resolved, not the child's complete output.
+	 *   Windows ends the tree with `taskkill /F /T`, which nothing in the child can intercept: a
+	 *   `SIGTERM` handler never runs there, so the bytes it would have written never exist. A
+	 *   child that ends on its own closes its stderr first, and THAT tail is complete.
+	 * - **Bound.** The supervisor keeps the END of the child's raw stderr bytes, at most
+	 *   `@orkestrel/process`'s {@link import('@orkestrel/process').PROCESS_EVIDENCE} (2048
+	 *   bytes under 0.0.5). A child that writes more than the bound loses its earliest output
+	 *   and keeps its last, which is the half that names why it died. The bound counts raw
+	 *   bytes before decoding rather than characters, so multibyte output yields fewer
+	 *   characters than an ASCII run over the same byte window. The kept bytes never begin
+	 *   inside a multibyte sequence: where the cut lands mid-character the start retreats to
+	 *   that character's first byte, so the tail decodes without a replacement character and
+	 *   can hold a few bytes fewer than the bound.
+	 * - **A spawn fault leaves no tail.** A spawn that produced no child wrote no stderr, so
+	 *   `evidence` reads `''` for that lifetime. Its cause — the host's `ENOENT` for a command
+	 *   that does not resolve — arrives on the `error` event instead.
+	 */
+	readonly evidence: string | undefined
 }
 
 /**

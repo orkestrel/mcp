@@ -8,6 +8,7 @@ import type { TokenSecret, UpgradeHandler } from '@orkestrel/server'
 import type {
 	HTTPClientTransportOptions,
 	HTTPTransportOptions,
+	StdioClientTransportInterface,
 	StdioClientTransportOptions,
 	StdioServerOptions,
 	WebSocketClientTransportOptions,
@@ -310,22 +311,24 @@ export function createWebSocketClientTransport(
 
 /**
  * Creates the stdio CLIENT transport for an {@link import('@orkestrel/mcp').MCPClientInterface}
- * — a {@link MCPClientTransportInterface} that spawns and drives a CHILD PROCESS MCP server
+ * — a {@link StdioClientTransportInterface} that spawns and drives a CHILD PROCESS MCP server
  * over newline-delimited JSON-RPC on `stdin`/`stdout`, the stdio sibling of {@link
  * createHTTPClientTransport} and {@link createWebSocketClientTransport}.
  *
  * @remarks
  * Hand it to `createMCPClient({ transport })`: `start()` (run by `client.connect()`)
  * spawns `options.command` with `options.args` and `options.env`, piping its
- * `stdin`/`stdout` for the JSON-RPC channel (its `stderr` inherits the parent's for
- * diagnostics). Each JSON-RPC message the client `send`s is written as one
+ * `stdin`/`stdout` for the JSON-RPC channel. The child's `stderr` is piped too, and
+ * retained as a bounded tail this transport reports as `evidence` — the parent never
+ * inherits it. Each JSON-RPC message the client `send`s is written as one
  * newline-terminated line to the child's `stdin`; each decoded reply line from the
  * child's `stdout` is surfaced on the transport's `message` event for the client's
  * id correlation.
  *
  * @param options - `command` (the executable to spawn; REQUIRED), optional `args`,
  *   and optional `env`; see {@link StdioClientTransportOptions}
- * @returns A working {@link MCPClientTransportInterface} over a child process's stdio
+ * @returns A working {@link StdioClientTransportInterface} over a child process's stdio,
+ *   whose `evidence` carries the supervised child's bounded stderr tail
  *
  * @example
  * ```ts
@@ -341,7 +344,7 @@ export function createWebSocketClientTransport(
  */
 export function createStdioClientTransport(
 	options: StdioClientTransportOptions,
-): MCPClientTransportInterface {
+): StdioClientTransportInterface {
 	return new StdioClientTransport(options)
 }
 

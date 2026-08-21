@@ -28,7 +28,7 @@ import {
 	resolveLink,
 	symbolKey,
 } from '@orkestrel/guide'
-import { requireValue } from '@orkestrel/test'
+import { requireValue, waitForCondition } from '@orkestrel/test'
 import { createScratch, readInventory } from '@orkestrel/test/server'
 import { waitForSettlement } from './setup.js'
 import { findMissingNamedImports } from './setupServer.js'
@@ -685,7 +685,7 @@ for (const entry of manifest) {
 // this package entirely, which is what makes these assertions evidence rather than a restatement
 // of the source.
 //
-// Two host facts decide what each control can compare:
+// The host facts below decide what each control can compare:
 //
 // - Windows injects a host set — `PATH`, `SYSTEMROOT`, `TEMP`, `USERPROFILE`, and more — into any
 //   explicit environment, so a child of a REPLACING spawn there reads its parent's own `PATH`
@@ -791,6 +791,51 @@ async function reportThroughTransport(): Promise<Readonly<Record<string, unknown
 	} finally {
 		await transport.close()
 	}
+}
+
+/**
+ * Drive the reporting child and answer the tail its transport retained, read after `close()`.
+ *
+ * The child writes {@link STDERR_SENTINEL} to its own `stderr` before it answers, so the reading is
+ * taken after the sentinel has arrived rather than at whatever moment the reply happened to land.
+ */
+async function readEvidenceThroughTransport(): Promise<string | undefined> {
+	const transport = createStdioClientTransport({
+		command: process.execPath,
+		args: ['-e', REPORT_SCRIPT],
+		env: SUPPLIED_ENVIRONMENT,
+	})
+	const arrived = new Promise<JSONRPCMessage>((resolve) => {
+		transport.emitter.on('message', resolve)
+	})
+	try {
+		await transport.start()
+		await transport.send({ jsonrpc: '2.0', id: 1, method: 'report' })
+		await waitForSettlement(arrived, 10_000, 'Timed out waiting for the spawned child report')
+		await waitForCondition(
+			'the reporting child stderr sentinel reaches the transport evidence',
+			() => transport.evidence?.includes(STDERR_SENTINEL) === true,
+			{ budget: 10_000 },
+		)
+	} finally {
+		await transport.close()
+	}
+	return transport.evidence
+}
+
+/** Answer the tail retained for the same child left unasked, so it writes no `stderr` at all. */
+async function readSilentEvidenceThroughTransport(): Promise<string | undefined> {
+	const transport = createStdioClientTransport({
+		command: process.execPath,
+		args: ['-e', REPORT_SCRIPT],
+		env: SUPPLIED_ENVIRONMENT,
+	})
+	try {
+		await transport.start()
+	} finally {
+		await transport.close()
+	}
+	return transport.evidence
 }
 
 /** Drive one raw-spawn control through its stdout pipe and read back the one report line. */
@@ -914,6 +959,17 @@ describe('guides/mcp.md § stdio transport — what the spawned child actually r
 		expect(report['pipe']).toBe(false)
 		// And the bytes it wrote to that descriptor landed in the file this process owns.
 		expect(held.scratch.read(STDERR_FILE)).toBe(STDERR_SENTINEL)
+	})
+
+	it('RETAINS that piped stderr as evidence, so the sentinel survives the transport close', async () => {
+		// The bytes the parent never received are the bytes `evidence` carries. A pipe the guide
+		// documents as retained is only retained if a consumer can still read it after the child is
+		// gone, and this is the reading the guide's evidence sentence rests on.
+		expect(await readEvidenceThroughTransport()).toBe(STDERR_SENTINEL)
+	})
+
+	it('CONTROL — the same child left unasked writes no stderr and reads an empty tail', async () => {
+		expect(await readSilentEvidenceThroughTransport()).toBe('')
 	})
 })
 
