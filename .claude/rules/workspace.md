@@ -106,8 +106,8 @@ Environment rules:
 
 ## Test project matrix
 
-`vite.config.ts` defines Vitest projects on two axes. The first is one project per src/app axis ×
-environment:
+`vite.config.ts` defines Vitest projects on an environment axis and a workspace-proof axis. The
+environment axis is one project per src/app axis × environment:
 
 | Project       | Files                  | Environment         | Setup                                           |
 | ------------- | ---------------------- | ------------------- | ----------------------------------------------- |
@@ -120,7 +120,7 @@ environment:
 | `app:browser` | `tests/app/browser/**` | Playwright Chromium | `setup.ts`, `setupBrowser.ts`                   |
 | `app:server`  | `tests/app/server/**`  | Node                | `setup.ts`, `setupServer.ts`                    |
 
-The second axis is cross-cutting workspace proofs. Each one covers the whole workspace rather than
+The workspace-proof axis is cross-cutting. Each proof covers the whole workspace rather than
 one environment, so each is its own project:
 
 | Project        | Files                        | Proves                                                                                            | Gate                                  |
@@ -138,7 +138,7 @@ one environment, so each is its own project:
   Include every matching file. When registered, emit `test:setup` and run it from `test`. When no
   file matches, emit neither the project nor the script.
 
-`conformance`, `integration`, `distribution`, and `service` are four subjects, not four names for
+`conformance`, `integration`, `distribution`, and `service` are separate subjects, not names for
 one.
 Keep `conformance` in `test`: measure this package against an installed official artifact, and start
 any server the proof drives itself. Keep `integration` in `test`: compose the workspace's public
@@ -155,7 +155,7 @@ script names its project, so no gate runs it; its directory is ignored by git; a
 `.claude/rules/tests.md` governs what may live there.
 
 - Define a cross-cutting project only for a proof the package actually has.
-- A live-service project is the fifth kind. It is the `service` project above, `scripts/service.sh`
+- A live-service project is the `service` project in the preceding table, `scripts/service.sh`
   provisions what it drives, and `.claude/rules/tests.md` governs it. Name it `service` whatever it
   drives.
 - In a publishing workspace, a project leaves the default run when it drives a live external
@@ -241,7 +241,7 @@ Run `show` only **after** formatting. The committed `demo/showcase.html` is gene
 
 Policy instruments:
 
-- Put every rule of the policy law in exactly one of two instruments. `configs/policy.ts` — the
+- Put every rule of the policy law in exactly one instrument. `configs/policy.ts` — the
   oxlint plugin, namespace `policy` — takes the rules a single file's AST decides. The policy sweep
   (`tests/setupPolicy.ts`) takes the rules that are path- or text-shaped, and every rule whose
   subject is suppression itself.
@@ -252,7 +252,7 @@ Policy instruments:
   a named module-scope `report{Noun}` function. Never write rule logic inline in the table. That
   arrow is the sanctioned exception to the in-body function-expression limits in
   `.claude/rules/architecture.md` for exactly that table.
-- Name no individual rule id here. This section fixes the two instruments and how work is assigned
+- Name no individual rule id here. This section fixes the instruments and how work is assigned
   between them; each rule's substance stays with the law it enforces.
 
 ## Text integrity

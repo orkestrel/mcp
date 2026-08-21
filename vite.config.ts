@@ -3,7 +3,7 @@ import { playwright } from '@vitest/browser-playwright'
 import { defineConfig, mergeConfig } from 'vitest/config'
 import manifest from './package.json' with { type: 'json' }
 import tsconfig from './tsconfig.json' with { type: 'json' }
-import { environmentBoundary, outputBoundary } from './configs/helpers.js'
+import { enforceBuildLog, environmentBoundary, outputBoundary } from './configs/helpers.js'
 import { resolveBrowser, resolvePinnedBrowser } from './configs/browsers.js'
 import { fileURLToPath, URL } from 'node:url'
 
@@ -42,6 +42,7 @@ export const srcCore = (options?: UserConfig): UserConfig =>
 				emptyOutDir: true,
 				sourcemap: true,
 				minify: false,
+				rolldownOptions: { onLog: enforceBuildLog },
 			},
 			test: {
 				name: { label: 'src:core', color: 'magenta' },
@@ -71,6 +72,7 @@ export const srcBrowser = (options?: UserConfig): UserConfig =>
 				},
 				outDir: 'dist/src/browser',
 				rolldownOptions: {
+					onLog: enforceBuildLog,
 					external: (id: string) =>
 						id === '@src/core' ||
 						id.startsWith('@orkestrel/') ||
@@ -114,6 +116,7 @@ export const srcServer = (options?: UserConfig): UserConfig =>
 				outDir: 'dist/src/server',
 				target: 'node22',
 				rolldownOptions: {
+					onLog: enforceBuildLog,
 					platform: 'node',
 					external: (id: string) =>
 						id === '@src/core' ||

@@ -120,6 +120,16 @@ describe('root configuration', () => {
 				setup: ['./tests/setup.ts'],
 			})
 		}
+		// The setup project is selected by any proof named `setup*.test.ts` directly under
+		// `tests`, so it is the one derived project whose include is a pattern rather than
+		// the proof's own path. Reading it from the same glob the generator reads keeps a
+		// registered project inside this gate instead of beside it.
+		if (globSync('tests/setup*.test.ts', { cwd: root }).length > 0) {
+			expected.set('setup', {
+				include: 'tests/setup*.test.ts',
+				setup: ['./tests/setup.ts'],
+			})
+		}
 		// The live-service project covers a directory rather than one proof, so its
 		// readiness module is the fact that selects it. A suite beneath
 		// `tests/service` with no setup module is a project nothing configures.
@@ -675,6 +685,7 @@ describe('configuration helpers', () => {
 			'WORKSPACE_ROOT',
 			'containedPath',
 			'decodeAssetSource',
+			'enforceBuildLog',
 			'enforceOutputPath',
 			'environmentAssetSources',
 			'environmentBoundary',
@@ -700,6 +711,34 @@ describe('configuration helpers', () => {
 		]
 		const found = Object.keys(configHelpers)
 		for (const name of required) expect(found).toContain(name)
+	})
+
+	it('fails broken import-meta builds and forwards every other log', () => {
+		expect(() =>
+			configHelpers.enforceBuildLog(
+				'warn',
+				{
+					code: 'EMPTY_IMPORT_META',
+					message: 'The import.meta meta-property is not available in CommonJS output.',
+				},
+				expect.unreachable,
+			),
+		).toThrow(
+			'[orkestrel-build] The import.meta meta-property is not available in CommonJS output.',
+		)
+
+		const levels: string[] = []
+		const messages: string[] = []
+		configHelpers.enforceBuildLog(
+			'warn',
+			{ code: 'CONTROL_WARNING', message: 'The control warning remains visible.' },
+			(level, log) => {
+				levels.push(level)
+				messages.push(typeof log === 'string' ? log : log.message)
+			},
+		)
+		expect(levels).toStrictEqual(['warn'])
+		expect(messages).toStrictEqual(['The control warning remains visible.'])
 	})
 
 	it('resolves contained workspace paths and refuses a real outside sibling', () => {
@@ -813,7 +852,7 @@ describe('configuration helpers', () => {
 		)
 	})
 
-	it('drives both plugins through their real Vite hooks', async () => {
+	it('drives each plugin through its real Vite hooks', async () => {
 		const environments: ReadonlyArray<
 			'src/core' | 'src/browser' | 'src/server' | 'app/core' | 'app/browser' | 'app/server'
 		> = ['src/core', 'src/browser', 'src/server', 'app/core', 'app/browser', 'app/server']

@@ -346,7 +346,7 @@ describe('skill family policy', () => {
 		expect(inspectSkillFamily(process.cwd())).toEqual([])
 	})
 
-	it('parses a folded description containing a colon as exactly two frontmatter keys', () => {
+	it('parses a folded description containing a colon as exactly the name and description keys', () => {
 		const skill = SKILL_POLICY_FOLDED.files.find((file) => file.path.endsWith('/SKILL.md'))
 		const frontmatter = parseSkillFrontmatter(skill?.content ?? '')
 		expect(frontmatter?.keys).toEqual(['name', 'description'])
@@ -375,7 +375,7 @@ describe('skill family policy', () => {
 		expect(inspectPolicyControl(SKILL_POLICY_BACKTICKED)).toEqual([])
 	})
 
-	it('parses a folded description containing two paragraphs', () => {
+	it('parses a folded description containing more than one paragraph', () => {
 		const skill = SKILL_POLICY_PARAGRAPHS.files.find((file) => file.path.endsWith('/SKILL.md'))
 		const frontmatter = parseSkillFrontmatter(skill?.content ?? '')
 		expect(frontmatter?.keys).toEqual(['name', 'description'])

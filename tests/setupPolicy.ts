@@ -114,7 +114,7 @@ export const SKILL_REFERENCE_TEXT = `${SKILL_POLICY_TEXT}\nRead references/examp
 /** Minimal valid provider bridge text for physical bridge controls. */
 export const SKILL_BRIDGE_TEXT = `${SKILL_POLICY_TEXT}\nRead \`.agents/skills/sample/SKILL.md\`.\n`
 
-/** Canonical skill metadata whose three values each carry YAML's escaped apostrophe. */
+/** Canonical skill metadata whose values each carry YAML's escaped apostrophe. */
 export const SKILL_APOSTROPHE_METADATA =
 	"interface:\n  display_name: 'Owner''s Fixture'\n" +
 	"  short_description: 'Exercise the family''s apostrophe rule'\n" +
@@ -184,7 +184,10 @@ export const DATA_SOURCE_FILES: readonly string[] = Object.freeze([
 export const DATA_EXEMPT_FILES: readonly string[] = Object.freeze(['helpers.ts'])
 
 /** Fleet-registered folders whose direct modules each contain one named function. */
-export const FUNCTION_DOMAIN_FOLDERS: readonly string[] = Object.freeze(['app/browser/composables'])
+export const FUNCTION_DOMAIN_FOLDERS: readonly string[] = Object.freeze([
+	'app/browser/composables',
+	'src/server/execution',
+])
 
 /** Every ambient declaration suffix the source glob collects and the parsed population excludes. */
 export const POLICY_AMBIENT_SUFFIXES: readonly string[] = Object.freeze([
@@ -1094,7 +1097,7 @@ export function readSkillReferences(root: string, name: string): readonly string
 }
 
 /**
- * Create metadata in the canonical four-line skill interface shape.
+ * Create metadata in the canonical skill interface shape.
  *
  * @param name - The skill token the default prompt invokes.
  * @returns Canonical skill interface metadata ending in one newline.
@@ -1111,7 +1114,7 @@ export function createSkillMetadata(name: string): string {
 }
 
 /**
- * Parse the default prompt from the canonical four-line skill interface shape.
+ * Parse the default prompt from the canonical skill interface shape.
  *
  * Each value is a non-empty single-quoted scalar in which `''` carries an apostrophe.
  *
@@ -2099,7 +2102,7 @@ export const SKILL_POLICY_BACKTICKED: PolicyControl = Object.freeze({
 	],
 })
 
-/** A folded description whose blank scalar line separates two paragraphs. */
+/** A folded description whose blank scalar line separates its paragraphs. */
 export const SKILL_POLICY_PARAGRAPHS: PolicyControl = Object.freeze({
 	label: 'accepts a folded description containing two paragraphs',
 	membership: 'folded description scalars in discovered skill frontmatter',

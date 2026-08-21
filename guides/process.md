@@ -7,9 +7,9 @@
 > returns without waiting. `ProcessManager` is a keyed registry of live children, launched and
 > stopped by id and observed through its own emitter. No spawn in this package uses an implicit
 > shell, and an argument a batch target could corrupt is refused rather than passed, so a
-> metacharacter in an argument is data rather than syntax. Every contract is host-independent; the
-> Node implementations ship from `@orkestrel/process/server`, and the errors, constants, and types
-> from `@orkestrel/process`.
+> metacharacter in an argument is data rather than syntax. The host-independent contracts, errors,
+> constants, and types ship from `@orkestrel/process`. The Node implementations and Node-side
+> contracts ship from `@orkestrel/process/server`.
 >
 > Source: [`src/core`](../src/core) (the contracts) and [`src/server`](../src/server) (the Node
 > engine).
@@ -64,11 +64,12 @@ The one-shot and fire-and-forget spawns, from `@orkestrel/process/server`.
 The classes each factory constructs, from `@orkestrel/process/server`, and the error type from
 `@orkestrel/process`.
 
-| API              | Kind  | Summary                                                             |
-| ---------------- | ----- | ------------------------------------------------------------------- |
-| `Process`        | class | The supervised child engine — framed lines under a bounded backlog. |
-| `ProcessManager` | class | The keyed registry of live children with auto-eviction on exit.     |
-| `ProcessError`   | class | A child-process failure with a stable machine-readable `code`.      |
+| API              | Kind  | Summary                                                                 |
+| ---------------- | ----- | ----------------------------------------------------------------------- |
+| `Process`        | class | The supervised child engine — framed lines under a bounded backlog.     |
+| `ProcessManager` | class | The keyed registry of live children with auto-eviction on exit.         |
+| `ProcessError`   | class | A child-process failure with a stable machine-readable `code`.          |
+| `Retention`      | class | The bounded stream-head accumulator with delivered and retained totals. |
 
 ### Guards
 
@@ -109,7 +110,7 @@ The resolution and environment building blocks every spawn composes, from
 | `mergeEnvironment`          | function | Merge environment overrides into the environment one child receives.      |
 | `mergePlatformEnvironment`  | function | Merge explicit environment layers under one platform's key rules.         |
 
-### Capture helpers
+### Retention helpers
 
 The byte-bounding and result-assembly building blocks, from `@orkestrel/process/server`.
 
@@ -117,7 +118,6 @@ The byte-bounding and result-assembly building blocks, from `@orkestrel/process/
 | -------------------- | -------- | --------------------------------------------------------------------------- |
 | `trimHead`           | function | Keep at most `limit` leading bytes without splitting a UTF-8 sequence.      |
 | `trimTail`           | function | Keep at most `limit` trailing bytes without splitting a UTF-8 sequence.     |
-| `retainChunk`        | function | Retain one delivered chunk up to a limit and tally what the stream sent.    |
 | `buildExecuteResult` | function | Assemble one frozen `ExecuteResult` from captured bytes and terminal facts. |
 
 ### Termination helpers
@@ -166,47 +166,68 @@ The defaults and host bounds, from `@orkestrel/process`.
 
 The contracts and options, all from `@orkestrel/process`.
 
-| API                       | Kind      | Summary                                                                                              |
-| ------------------------- | --------- | ---------------------------------------------------------------------------------------------------- |
-| `ProcessCommand`          | interface | One spawnable command — `file`, `arguments`, and optional `environment`, `input`, `isolated`.        |
-| `ProcessExit`             | interface | The terminal state — an exit `code`, or the `signal` that ended the child.                           |
-| `SpawnInput`              | interface | The resolved spawn form — the `file`, the `arguments`, and the `verbatim` flag.                      |
-| `ExecutableOptions`       | interface | Lookup inputs for resolving a command file — `workspace` and `environment`.                          |
-| `ProcessEventMap`         | type      | A `Process`'s events — `stderr(chunk)`, `error(cause)`, and `exit(exit)`.                            |
-| `ProcessOptions`          | interface | `Process` construction — `command`, `workspace`, and the optional settings.                          |
-| `ProcessInterface`        | interface | The supervised-child surface — `emitter` / `lines` / `evidence` / `truncated` / `exit` plus methods. |
-| `ExecuteResult`           | interface | A one-shot outcome — the captured output, the exit, and the state flags.                             |
-| `ExecuteInput`            | interface | The captured bytes and terminal facts one settled `ExecuteResult` is built from.                     |
-| `ExecuteOptions`          | interface | `execute` options — workspace, environment, input, timeout, grace, signal, strict, limit.            |
-| `ExecuteSyncOptions`      | interface | `executeSync` options — the same set without `grace` and without `signal`.                           |
-| `DetachOptions`           | interface | `detach` options — the working directory the detached child starts in.                               |
-| `ProcessManagerEventMap`  | type      | A manager's events — `launch(id)` and `exit(id, exit)`.                                              |
-| `ProcessManagerOptions`   | interface | `ProcessManager` construction — initial `on` listeners and an `error` handler.                       |
-| `ProcessManagerInterface` | interface | The registry surface — `emitter` / `count` plus the query, launch, stop, and destroy methods.        |
-| `ProcessErrorCode`        | type      | The failure categories — `spawn`, `timeout`, `duplicate`, `protocol`, or `invalid`.                  |
-| `ProcessErrorContext`     | interface | Structured failure detail — `id`, `command`, `code`, `signal`, or `value`.                           |
-| `ProcessErrorOptions`     | interface | `ProcessError` construction — `code` plus optional `context`, `cause`, `result`.                     |
+| API                       | Kind      | Summary                                                                                                                          |
+| ------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `ProcessCommand`          | interface | One spawnable command — `file`, `arguments`, and optional `environment`, `input`, `isolated`.                                    |
+| `ProcessExit`             | interface | The terminal state — an exit `code`, or the `signal` that ended the child.                                                       |
+| `SpawnInput`              | interface | The resolved spawn form — the `file`, the `arguments`, and the `verbatim` flag.                                                  |
+| `ExecutableOptions`       | interface | Lookup inputs for resolving a command file — `workspace` and `environment`.                                                      |
+| `ProcessEventMap`         | type      | A `Process`'s events — `stderr(chunk)`, `error(cause)`, and `exit(exit)`.                                                        |
+| `ProcessOptions`          | interface | `Process` construction — `command`, `workspace`, and the optional settings.                                                      |
+| `ProcessInterface`        | interface | The supervised-child surface — `pid` / `code` / `signal` / `emitter` / `lines` / `evidence` / `truncated` / `exit` plus methods. |
+| `ExecuteResult`           | interface | A one-shot outcome — the captured output, the exit, and the state flags.                                                         |
+| `ExecuteInput`            | interface | The captured bytes and terminal facts one settled `ExecuteResult` is built from.                                                 |
+| `ExecuteOptions`          | interface | `execute` options — workspace, environment, input, timeout, grace, signal, strict, limit.                                        |
+| `ExecuteSyncOptions`      | interface | `executeSync` options — the same set without `grace` and without `signal`.                                                       |
+| `DetachOptions`           | interface | `detach` options — the working directory the detached child starts in.                                                           |
+| `ProcessManagerEventMap`  | type      | A manager's events — `launch(id)` and `exit(id, exit)`.                                                                          |
+| `ProcessManagerOptions`   | interface | `ProcessManager` construction — initial `on` listeners and an `error` handler.                                                   |
+| `ProcessManagerInterface` | interface | The registry surface — `emitter` / `count` plus the query, launch, stop, and destroy methods.                                    |
+| `ProcessErrorCode`        | type      | The failure categories — `spawn`, `timeout`, `duplicate`, `protocol`, or `invalid`.                                              |
+| `ProcessErrorContext`     | interface | Structured failure detail — `id`, `command`, `code`, `signal`, or `value`.                                                       |
+| `ProcessErrorOptions`     | interface | `ProcessError` construction — `code` plus optional `context`, `cause`, `result`.                                                 |
 
 ### Server contracts
 
-The Node-side contract, from `@orkestrel/process/server`. It names a child process rather than a
-value this package owns, so it stays out of the host-independent face.
+The Node-side contracts, from `@orkestrel/process/server`. They support the Node child boundary and
+capture helper, so they stay out of the host-independent face.
 
-| API            | Kind      | Summary                                                                                                    |
-| -------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
-| `ProcessChild` | interface | The child boundary the termination helpers drive — `pid`, `exitCode`, `signalCode`, `kill`, `once`, `off`. |
+| API                  | Kind      | Summary                                                                                                    |
+| -------------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| `ProcessChild`       | interface | The child boundary the termination helpers drive — `pid`, `exitCode`, `signalCode`, `kill`, `once`, `off`. |
+| `RetentionInterface` | interface | The retention surface — readonly `delivered` and `retained` totals plus `retain(chunk, limit)`.            |
 
 ### Surface notes
 
-The `emitter`, `lines`, `evidence`, `truncated`, and `exit` members of `ProcessInterface`, and the
-`emitter` and `count` members of `ProcessManagerInterface`, are readonly data properties, so they
-stay Surface rows. Their call-signature methods are documented under [Methods](#methods).
+The `pid`, `code`, `signal`, `emitter`, `lines`, `evidence`, `truncated`, and `exit` members of
+`ProcessInterface`, and the `emitter` and `count` members of `ProcessManagerInterface`, are readonly
+data properties, so they stay Surface rows. Their call-signature methods are documented under
+[Methods](#methods).
 
 ## Methods
 
 The public methods of each behavioral interface. `Process` implements `ProcessInterface` exactly, and
 `ProcessManager` implements `ProcessManagerInterface` exactly, so each table doubles as the class's
 instance-method surface.
+
+#### `RetentionInterface`
+
+`Retention` implements `RetentionInterface` exactly. The `retain` method records each delivered buffer
+and returns the retained head slice while room remains under the limit.
+
+| Method   | Returns               | Behavior                                                                 |
+| -------- | --------------------- | ------------------------------------------------------------------------ |
+| `retain` | `Buffer \| undefined` | Record a delivered buffer and return its retained slice, or `undefined`. |
+
+```ts
+import { Buffer } from 'node:buffer'
+import { Retention } from '@orkestrel/process/server'
+
+const retention = new Retention()
+retention.retain(Buffer.from('hello'), 3)?.toString('utf8') // 'hel'
+retention.delivered // 5
+retention.retained // 3
+```
 
 #### `ProcessInterface`
 
@@ -364,7 +385,7 @@ POSIX and Windows terminate differently, and only POSIX has a cooperative phase.
 | Host    | Sequence                                                                                                                                        | `grace`  |
 | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
 | POSIX   | `SIGTERM` to the process group, wait `grace`, then `SIGKILL` to the group — each signal reaching the child directly when no group owns its pid. | used     |
-| Windows | `taskkill /F /T` on the whole tree at once, with a direct kill as a fallback.                                                                   | not used |
+| Windows | `taskkill /F /T` on the whole tree at once, with a direct kill after the utility reports failure.                                               | not used |
 
 Windows has no signal a process group can receive, so `killTree` ends the tree through the
 `taskkill.exe` utility addressed by its absolute `System32` path, which stops a `PATH` override
@@ -379,6 +400,21 @@ pid, it falls back to signalling the child directly, so `killProcess` and `stopC
 non-detached child. On Windows, or when no pid is available, it signals the child alone. Every other
 throw during signalling is swallowed, because the process can exit between the caller's liveness
 check and the call, and the child's native exit stays the authoritative terminal state.
+
+`pid` is the host id of the spawned child, and `code` and `signal` are the terminal pair the host
+recorded for it. The spawn is eager, so `pid` carries a number by the time `createProcess` returns,
+and a spawn that produced no child reports `undefined` for that child's whole lifetime. `code` and
+`signal` are `null` while the child runs; the host records them at the native exit, which arrives
+before the `exit` promise whenever a descendant holds the child's stdio open, so a supervisor inside
+that window reads the terminal state from them. A spawn fault records the host's negative errno as
+the `code`, the same value the `exit` promise carries.
+
+An assigned id survives the exit, so `pid` reports no liveness on its own. Derive liveness as
+`pid !== undefined && code === null && signal === null`, and derive it again before each use of the
+id, because the host reuses a dead child's id and a signal sent to a reused id reaches the process
+that holds it. Address a live child yourself with `process.kill(pid, 'SIGTERM')`; on a POSIX host,
+negate the id to reach the detached child's whole process group, which is the route `killProcess`
+takes.
 
 ```ts
 import { createProcess } from '@orkestrel/process/server'
@@ -433,9 +469,9 @@ argument before spawning.
 One argument cannot survive that command line: `cmd.exe` expands `%NAME%` before it parses quotes,
 so no quoting carries a percent sign through to a batch target. On Windows, `buildSpawn` refuses an
 argument carrying `%` when the resolved target is `.cmd` or `.bat`, with a `ProcessError` coded
-`invalid` carrying the argument on `context.value`. Refusing it is what keeps the arguments-are-data
-guarantee whole: an argument either reaches the child as written or the call fails, and no path
-rewrites one. Off the batch path a percent sign is ordinary text and passes untouched.
+`invalid` carrying the argument on `context.value`. The batch path has two outcomes: an argument
+reaches the child as written or the call fails. No path rewrites one. Off the batch path a percent
+sign is ordinary text and passes untouched.
 
 Because no spawn passes `shell: true`, Node's `DEP0190` deprecation warning — which fires when a
 `.bat` or `.cmd` file is spawned through a shell with arguments — cannot come from this package.
@@ -531,6 +567,10 @@ the exit and the captured output together, without managing a live stream.
 
 `ExecuteSyncOptions` carries the same set without `grace` and without `signal`, because the
 synchronous host offers neither a cooperative termination window nor in-flight cancellation.
+
+Every option and command property is read once, before the child is spawned, in `execute` and in
+`executeSync` alike. The value validated is therefore the value spawned, whatever a getter behind an
+option returns on a later read, and a getter that throws does so while nothing has started.
 
 `input` is standard-input payload and carries no NUL restriction on either option shape:
 
@@ -668,13 +708,14 @@ observe an exit for invites a supervision you would have to build yourself. Use 
 need the pid, the streams, the events, or a bounded stop.
 
 `detach` validates first, so a malformed working directory or command string throws a `ProcessError`
-coded `invalid` before anything is spawned. After the spawn, a host fault is swallowed rather than
+coded `invalid` before anything is spawned. It reads each option once, so the working directory it
+validated is the one the child starts in. After the spawn, a host fault is swallowed rather than
 crashing the caller.
 
 ```ts
 import { detach } from '@orkestrel/process/server'
 
-detach({ file: 'node', arguments: ['daemon.js'] }, { workspace: process.cwd() })
+detach({ file: process.execPath, arguments: ['-e', ''] }, { workspace: process.cwd() })
 ```
 
 ## The keyed registry
@@ -726,9 +767,8 @@ returned, and its fault surfaces through its own `exit` and `error` event rather
 - A `protocol`-coded `ProcessError` after `destroy` has begun. The check runs again after the child
   exists, because reading an option runs your own code and that code can start the teardown; a
   registry being destroyed adopts nothing, so the child it has already spawned is destroyed and the
-  launch is still refused. That later refusal carries a bounded residual: the child is torn down
-  asynchronously, within `grace` plus the confirmation window, and the `destroy` barrier settled
-  before the refusal, so awaiting it does not cover that teardown.
+  launch is still refused. The `protocol` refusal throws synchronously before the `destroy` barrier
+  settles. The barrier does not cover the child's asynchronous teardown.
 - An `invalid`-coded `ProcessError` when an option or command string is malformed. The id is
   reserved before the child is constructed and released when construction throws, so a refused launch
   strands no key.
@@ -903,7 +943,10 @@ whole sequence, host-aware, and it never signals a process it has already seen e
 import { spawn } from 'node:child_process'
 import { stopChild } from '@orkestrel/process/server'
 
-const worker = spawn('node', ['worker.js'], { detached: process.platform !== 'win32' })
+const worker = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 50)'], {
+	detached: process.platform !== 'win32',
+	stdio: 'ignore',
+})
 
 const confirmed = await stopChild(worker, 5_000, 5_000)
 confirmed // true when the native exit arrived
@@ -911,14 +954,17 @@ confirmed // true when the native exit arrived
 
 Drive the pieces yourself only when you want a different sequence — a shorter cooperative window, an
 extra warning signal, a step of your own between them. Guard each step with `isExited`, and drive a
-child `stopChild` has not been called on: a child `stopChild` already confirmed dead is a pid the
-host may have reused, and signalling it reaches whatever holds that pid now.
+child `stopChild` has not been called on: after the host reuses a dead child's process id, signalling
+that id reaches its new process.
 
 ```ts
 import { spawn } from 'node:child_process'
 import { isExited, killProcess, killTree, waitForExit } from '@orkestrel/process/server'
 
-const reporter = spawn('node', ['reporter.js'], { detached: process.platform !== 'win32' })
+const reporter = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 50)'], {
+	detached: process.platform !== 'win32',
+	stdio: 'ignore',
+})
 
 if (!isExited(reporter)) {
 	killProcess(reporter, 'SIGTERM') // POSIX: the whole process group
@@ -953,6 +999,9 @@ isExited(reporter) // whether the native exit arrived
 - **Give `execute` a `timeout` when the command can start a descendant** — an unbounded run waits on
   stdio completion, and a descendant that inherited the child's pipes holds it open past the child's
   own exit.
+- **Derive liveness before you address `pid`** — a live child is
+  `pid !== undefined && code === null && signal === null`, and the host reuses a dead child's id, so
+  a signal sent without that check reaches whatever process holds the id.
 - **Read `evidence` on a failed exit** — the byte-bounded stderr tail is the diagnostic to attach,
   bounded by `evidence` (default `PROCESS_EVIDENCE`).
 - **Observe, do not drive** — subscribe to `emitter` for lifecycle moments; emitting is a pure
@@ -999,15 +1048,25 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   over an open and a closed channel, bounded termination and its confirmation, the POSIX escalation
   from a trapped `SIGTERM` to `SIGKILL`, abort-signal termination, the isolated environment, the
   `invalid` refusals, and `destroy`.
+- [`tests/src/server/Retention.test.ts`](../tests/src/server/Retention.test.ts) — the stream-head
+  accumulator: delivered and retained totals across a truncating stream.
 - [`tests/src/server/ProcessManager.test.ts`](../tests/src/server/ProcessManager.test.ts) — the
   registry: `launch` registration and its `duplicate`, `protocol`, and `invalid` refusals, including
   a teardown started from inside the caller's own option getter, the unforgeable eviction and its
   ordering, the query surface, the `stop` overloads, and emitter-last `destroy`.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the building blocks:
-  `execute`, `executeSync`, and `detach` outcomes, the resolver under `PATHEXT` and an
-  extension-bearing name, each platform input to the quoted batch builder and its percent-sign
-  refusal, the environment merge under each platform input, the UTF-8-safe byte bounds, the
-  validators, and the termination helpers.
+  the resolver under `PATHEXT` and an extension-bearing name, each platform input to the quoted
+  batch builder and its percent-sign refusal, the environment merge under each platform input, the
+  UTF-8-safe byte bounds, the validators, and the termination helpers.
+- [`tests/src/server/execution/execute.test.ts`](../tests/src/server/execution/execute.test.ts) —
+  the asynchronous one-shot run: owned inputs, buffered outcomes, failure delivery, cancellation,
+  timeout, capture bounds, spawn faults, and pre-spawn refusal.
+- [`tests/src/server/execution/executeSync.test.ts`](../tests/src/server/execution/executeSync.test.ts)
+  — the blocking one-shot run: owned inputs, root-only timeout, buffered outcomes, failure delivery,
+  capture bounds, argument integrity, spawn faults, and pre-spawn refusal.
+- [`tests/src/server/execution/detach.test.ts`](../tests/src/server/execution/detach.test.ts) — the
+  fire-and-forget spawn: owned inputs, detached process-group behavior, invalid-input refusal, and
+  the validated working directory.
 - [`tests/guides.test.ts`](../tests/guides.test.ts) — this guide: every documented name resolves,
   every public export is documented, and every flagship fence returns what its comments claim.
 - [`tests/distribution.test.ts`](../tests/distribution.test.ts) — the artifact a consumer installs:

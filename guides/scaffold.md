@@ -1,26 +1,28 @@
 # Scaffold
 
 > Scaffold compiles a workspace specification into an ordered list of files, compares that list to a
-> real directory, and writes the difference. It ships one executable, `scaffold`, and two library
+> real directory, and writes the difference. It ships one executable, `scaffold`, and library
 > entry points: `@orkestrel/scaffold` is the pure compiler and its data contracts, and
 > `@orkestrel/scaffold/server` is the filesystem writer and the network reader. Source:
 > [`src/core/index.ts`](../src/core/index.ts) and [`src/server/index.ts`](../src/server/index.ts).
 
 The package exists because every `@orkestrel` repository shares the same toolchain, the same agent
-instructions, and the same root dotfiles. Keeping thirty copies of those files in agreement by hand
+instructions, and the same root dotfiles. Keeping every copy of those files in agreement by hand
 does not work. Scaffold makes the shared set data — a vendored data root shipped inside the package
-— and gives it three verbs: create a workspace from it, report how a workspace differs from it, and
+— and gives it verbs: create a workspace from it, report how a workspace differs from it, and
 write the difference back.
 
-Every code fence below is illustrative. Nothing runs one, so a trailing `// value` comment inside a
-fence is this guide's claim rather than a measured answer; the driven examples are the ones the
-shipped declarations print. Limits states what that leaves unproven and what covers it instead.
+Every code fence below is illustrative. [`tests/guides.test.ts`](../tests/guides.test.ts)
+transcribes the pure blueprint-default, compile-refusal, and error-narrowing fences and checks their
+literal verdicts. A trailing comment in another fence is this guide's claim rather than a measured
+answer; the driven examples are the ones the shipped declarations print. Limits states what that
+leaves unproven and what covers it instead.
 
 ```sh
 npm install --save-dev @orkestrel/scaffold
 ```
 
-The executable needs Node 22.12 or newer. Run it through `npx` without installing:
+The executable needs Node 22.12 or later. Run it through `npx` without installing:
 
 ```sh
 npx @orkestrel/scaffold --help
@@ -40,7 +42,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `Artifact`          | type | One file in a plan, discriminated by how its content is produced and what scaffold claims of it. |
 | `BuildFormat`       | type | One module format a published library environment builds.                                        |
 | `CatalogEntry`      | type | One package row of the fleet catalog.                                                            |
-| `CompileStage`      | type | The three compile phases, in the order they run.                                                 |
+| `CompileStage`      | type | The compile phases, in the order they run.                                                       |
 | `CompilerEventMap`  | type | The compiler's observation channel.                                                              |
 | `Drift`             | type | How one target path compares to the artifact planned for it.                                     |
 | `Environment`       | type | One environment a generated workspace selects on its `src` or `app` axis.                        |
@@ -100,13 +102,13 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `DEPENDENCY_NAME_PATTERN`         | const | The runtime dependency name syntax: the `@orkestrel` scope and a bare name.                      |
 | `DISTRIBUTION_TEST_PATH`          | const | The packed-package proof whose presence makes a workspace `distribution`.                        |
 | `ENGINES_PATTERN`                 | const | The minimum-Node engine syntax a blueprint declares.                                             |
-| `ENVIRONMENTS`                    | const | The three `Environment` values, frozen.                                                          |
+| `ENVIRONMENTS`                    | const | The `Environment` values, frozen.                                                                |
 | `EXECUTABLE_PATHS`                | const | The vendored paths a target receives with its executable bit set, frozen.                        |
 | `EXTRA_RANGE_PATTERN`             | const | The registry-only semver subset accepted for a development extra's range.                        |
-| `FLOOR_RANGE_PATTERN`             | const | The exact three-component floor accepted for a foreign peer's range.                             |
+| `FLOOR_RANGE_PATTERN`             | const | The exact `major.minor.patch` floor accepted for a foreign peer's range.                         |
 | `FOREIGN_NAME_PATTERN`            | const | The package name syntax for a dependency this package does not publish.                          |
 | `GLOBAL_SETUP_PATH`               | const | The shared Vitest global-setup module whose presence makes a workspace `global`.                 |
-| `GROUPS`                          | const | The seven `Group` values in plan order, frozen.                                                  |
+| `GROUPS`                          | const | The `Group` values in plan order, frozen.                                                        |
 | `GUIDES_TEST_PATH`                | const | The guide-parity proof whose presence selects the planned `guides` project.                      |
 | `HEX_PATTERN`                     | const | Exact lowercase hexadecimal bytes: two digits per byte, and empty content is valid.              |
 | `HOST_PATHS`                      | const | The paths byte-copied from the vendored data root, frozen.                                       |
@@ -136,7 +138,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `SOURCE_BROWSER_DEV_DEPENDENCIES` | const | The development dependencies a published browser `src` environment adds.                         |
 | `SRC_MATRIX`                      | const | The build and export settings each published `src` environment contributes, frozen.              |
 | `TAB_WIDTH`                       | const | Columns one tab occupies when the formatter measures a line, matching `tabWidth`.                |
-| `VERSION_PATTERN`                 | const | The exact three-component version syntax a blueprint declares.                                   |
+| `VERSION_PATTERN`                 | const | The exact `major.minor.patch` version syntax a blueprint declares.                               |
 | `WORKSPACE_OWNED_PATHS`           | const | The vendored paths whose present bytes belong to each workspace, frozen.                         |
 
 #### Guards
@@ -187,7 +189,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `computeBytes`              | function | Count the UTF-8 bytes text encodes to.                                        |
 | `computeHash`               | function | Compute the deterministic content identity of text.                           |
 | `contentToHex`              | function | Encode text as the exact lowercase hexadecimal form of its UTF-8 bytes.       |
-| `extractVersion`            | function | Extract the three numeric components of an exact version.                     |
+| `extractVersion`            | function | Extract the major, minor, and patch components of an exact version.           |
 | `inferDrift`                | function | Infer how one target path compares to the artifact planned for it.            |
 | `inferGroup`                | function | Infer the `Group` a path belongs to.                                          |
 | `manifestToDependencies`    | function | Project a package manifest's text to the `@orkestrel/*` packages it declares. |
@@ -239,7 +241,6 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | Name              | Kind     | Summary                                                                           |
 | ----------------- | -------- | --------------------------------------------------------------------------------- |
 | `createBlueprint` | function | Construct a `Blueprint` from a name and the fields that differ from the defaults. |
-| `createCompiler`  | function | Construct a `Compiler`.                                                           |
 
 #### Classes
 
@@ -351,13 +352,6 @@ Exported from `@orkestrel/scaffold/server`, and reachable from
 | `resolveRealPath`       | function | Resolve a path through the real filesystem, keeping the part that does not exist yet. |
 | `stageHost`             | function | Stage a vendored host root from a real checkout.                                      |
 
-#### Factories
-
-| Name                 | Kind     | Summary                     |
-| -------------------- | -------- | --------------------------- |
-| `createMaterializer` | function | Construct a `Materializer`. |
-| `createUpstream`     | function | Construct an `Upstream`.    |
-
 #### Classes
 
 | Name               | Kind  | Summary                                                                            |
@@ -391,7 +385,7 @@ no interface and is documented directly.
 | `mirror`      | Write fetched dependency guides to their local mirrors.                          |
 | `catalog`     | Rewrite the marker-bounded package table in the target's catalog agent file.     |
 | `declare`     | Rewrite the `@orkestrel/*` range set in the target's manifest.                   |
-| `remove`      | Delete the files the plan does not own.                                          |
+| `remove`      | Re-derive and delete the tracked files the plan does not own.                    |
 | `destroy`     | Tear the materializer down. Every later call throws, and teardown is idempotent. |
 
 #### `UpstreamInterface`
@@ -409,14 +403,14 @@ no interface and is documented directly.
 | ----------- | ---------------------------------------------------------------------------------- |
 | `write`     | Stage one text file.                                                               |
 | `copy`      | Stage one byte-for-byte copy in executable or non-executable destination mode.     |
-| `directory` | Establish one directory inside the target, one segment at a time.                  |
+| `establish` | Establish one directory inside the target, one segment at a time.                  |
 | `remove`    | Mark one file for deletion at commit.                                              |
 | `commit`    | Promote every staged file and take every marked file, or roll the whole call back. |
 | `discard`   | Abandon the transaction and remove everything it created.                          |
 
 ## Command line
 
-Five verbs. Authority is the verb's: every verb except `audit` writes when it is typed, and no
+Authority is the verb's: every verb except `audit` writes when it is typed, and no
 option grants a write.
 
 | Verb        | Writes                                                                            |
@@ -449,7 +443,7 @@ options
   --bin            scaffold a command-line executable at src/bin/main.ts
   --deps <list>    the @orkestrel/* packages the workspace depends on
   --groups <list>  the artifact groups to cover; every group when absent
-  --all            fetch a guide for every package the organization publishes, not just the declared ones
+  --all            fetch a guide for every package the organization publishes, not the declared ones alone
   --dirty          delete from a tree carrying uncommitted changes
   --from <path>    read the data root from a local path instead of the bundled one; catalog alone accepts it more than once
   --target <path>  the directory the verb operates on; the working directory when absent
@@ -461,9 +455,12 @@ exit codes
   2  usage error
 ```
 
-An option a verb does not list is refused by name rather than parsed and ignored. `--deps` reaches
-the registry, so `new` fails when the registry names no release for a package it was given: the
-workspace would otherwise declare a dependency that does not resolve.
+An option a verb does not list is refused by name rather than parsed and ignored. `--help` is the
+one exception, because it replaces the run rather than modifying it: a command line carrying
+`--help` anywhere prints the whole reference and exits `0` before the line is read as a command, so
+no verb has to list it. `--deps` reaches the registry, so `new` fails when the registry names no
+release for a package it was given: the workspace would otherwise declare a dependency that does not
+resolve.
 
 `new --bin` creates the executable entry, its test, and its scoped Vite and TypeScript wrappers. The
 other structural facts do not need creation flags. Add a root `tests/setup*.test.ts` proof for
@@ -478,9 +475,9 @@ vendor list from edited text.
 ### Reading a target
 
 `audit`, `repair`, `catalog`, and `overwrite` derive the blueprint from the target itself. The name
-and the declared `@orkestrel/*` packages come from `package.json`. The two environment axes come
+and the declared `@orkestrel/*` packages come from `package.json`. The environment axes come
 from the directories the target actually ships, because a directory is the fact and a declaration
-beside it could disagree. Nine more facts come from exact-case files: `src/bin/main.ts` selects
+beside it could disagree. The remaining facts come from exact-case files: `src/bin/main.ts` selects
 `bin`, each root `tests/setup*.test.ts` match selects `setup`, `tests/guides.test.ts` selects
 `guides`, `tests/distribution.test.ts` selects `distribution`,
 `tests/integration.test.ts` selects `integration`, `tests/conformance.test.ts` selects
@@ -506,7 +503,7 @@ fresh workspace therefore carries no guides project or script. A developer who a
 also add the exact `test:guides` script line that the plan reports; the manifest remains
 birth-owned.
 
-The three plan-reading verbs compare the Vitest project set named by the target manifest with the
+The plan-reading verbs compare the Vitest project set named by the target manifest with the
 project set the planned root configuration registers. Every planned proof project must also be
 reachable from the manifest's `test` chain. A target whose manifest does not set `private: true` may
 also reach it from `prepublishOnly`. A private target cannot use that chain, because npm refuses the
@@ -520,14 +517,16 @@ static Vitest fact to infer.
 
 `audit` still completes the comparison and reports one non-blocking `projects` question. For a
 literal absent project, its advisory tells the developer to register the project or remove the
-script. For a planned project absent from both gate chains, the advisory gives the exact direct
-script line to add to `package.json`. `repair` and `overwrite` refuse either mismatch and do not
-write the manifest or configuration. Their absent-project refusal tells the developer to remove the
-script or not use scaffold writing verbs for a workspace that needs custom Vitest projects. It does
-not recommend editing the content-owned configuration that the refusing verb would restore. An
-advisory alone does not make an aligned target drift.
+script. For a planned project absent from the gate chains, the advisory checks the direct
+`test:<project>` script. When the script is absent, the advisory gives the exact line to add to
+`package.json`. When the script is declared but ungated, the advisory names the script and the gate
+chain that must invoke it, without repeating a script line. `repair` and `overwrite` refuse either
+mismatch and do not write the manifest or configuration. Their absent-project refusal tells the
+developer to remove the script or not use scaffold writing verbs for a workspace that needs custom
+Vitest projects. It does not recommend editing the content-owned configuration that the refusing
+verb would restore. An advisory alone does not make an aligned target drift.
 
-The same three plan-reading verbs compare the tooling set the derived blueprint plans against
+The same plan-reading verbs compare the tooling set the derived blueprint plans against
 `dependencies` and `devDependencies` together. A missing planned package produces one non-blocking
 `dependencies` question naming every missing package and the exact manifest lines to add, in stable
 order. The comparison measures membership only: range differences and workspace-owned extras are
@@ -548,7 +547,7 @@ remove it.
 `overwrite` is the only verb that reads git, and it needs a repository. It asks git for the tracked
 set and the dirty set, deletes only tracked paths, and refuses a tree carrying uncommitted changes
 unless `--dirty` waives that refusal. A target that is not a git repository is refused under
-`TARGET`, because deletion there would have no recovery mechanism. The other four verbs never ask.
+`TARGET`, because deletion there would have no recovery mechanism. The other verbs never ask.
 
 ### Machine-readable output
 
@@ -566,7 +565,8 @@ standard error, so a piped value is never polluted.
 Every failure reports the same envelope instead: `{ "error": { "code": …, "message": … } }`. The
 code is a `ScaffoldErrorCode`, or `USAGE` for a command line that never became a command, or
 `FAILED` for a raised value that published no code of its own. A command line that never became a
-command carries no `--json`, so its refusal is always prose.
+command is refused in prose even when the line carries `--json`, because the flag is read from the
+command and no command was read.
 
 ## Blueprint
 
@@ -587,10 +587,10 @@ blueprint.engines // '>=22.12.0'
 ```
 
 `src` selects published library environments and `app` selects private application environments.
-The two axes are independent, so a library-only, an application-only, and a mixed workspace are all
+The axes are independent, so a library-only, an application-only, and a mixed workspace are all
 first class. `dependencies` are runtime `@orkestrel/*` packages. A peer in the `@orkestrel` scope is
 a fleet pin; every other peer is a floor. `extras` are development dependencies and may carry any
-valid npm name. A peer reaches the generated workspace through two representations:
+valid npm name. A peer reaches the generated workspace through separate representations:
 `Blueprint.peers` validates the scope rule and compiles the manifest declarations, while the
 `peers` binding in the generated `vite.config.ts` derives from the target's live
 `peerDependencies`. Each published build face — core, browser, server, and `bin` — externalizes
@@ -624,7 +624,7 @@ regenerates it.
 birth-owned, so the verb cannot add the project's script, and it will not register a project the
 manifest reaches from no gate. It exits 1 naming the target and writes nothing.
 
-Adding a structural proof is therefore three steps, in order: write the file; declare its
+Adding a structural proof is therefore these steps, in order: write the file; declare its
 `test:<project>` script and invoke that script from a gate chain; then run `repair`, which
 regenerates the root configuration and registers the project. `audit` reports whichever piece is
 still outstanding at each step.
@@ -660,7 +660,7 @@ questions. A blueprint the gate will refuse is still constructible, so one law l
 
 ## Compile
 
-The compiler is pure, synchronous, and host-independent. It runs three stages in order.
+The compiler is pure, synchronous, and host-independent. It runs its stages in order.
 
 | Stage   | Does                                                                     |
 | ------- | ------------------------------------------------------------------------ |
@@ -669,9 +669,9 @@ The compiler is pure, synchronous, and host-independent. It runs three stages in
 | `pin`   | Gives the plan its content identity                                      |
 
 ```ts
-import { createBlueprint, createCompiler } from '@orkestrel/scaffold'
+import { Compiler, createBlueprint } from '@orkestrel/scaffold'
 
-const compiler = createCompiler()
+const compiler = new Compiler()
 const scaffolding = compiler.compile(createBlueprint('router', { src: ['core'] }))
 
 scaffolding.plan?.artifacts // every planned file, in group order
@@ -684,18 +684,18 @@ refused blueprint is answered rather than raised, so a caller reads the refusal 
 asked for. Each stage records its input and its output, a failed stage records the coded reason
 beside them, and the stages after a failed one never run.
 
-A plan says the blueprint can be built. It does not say the blueprint should be created. Every
-question beside the plan is advice the compile could not settle, and the caller that chose the shape
-is the one that answers it. So `new` refuses on any question, blocking or not, before it writes,
-while `audit` and `repair` carry the same questions through, because a target that already has that
-shape still has to be described and restored.
+A plan says the blueprint can be built. It does not decide whether to create it. Every question
+beside the plan is advice the compile could not settle, and the caller that chose the shape is the
+one that answers it. So `new` refuses on any question, blocking or not, before it writes, while
+`audit` and `repair` carry the same questions through, because a target that already has that shape
+still has to be described and restored.
 
 A library caller creating a fresh workspace applies `new`'s rule itself:
 
 ```ts
-import { createBlueprint, createCompiler } from '@orkestrel/scaffold'
+import { Compiler, createBlueprint } from '@orkestrel/scaffold'
 
-const compiler = createCompiler()
+const compiler = new Compiler()
 const scaffolding = compiler.compile(createBlueprint('router', { src: ['browser', 'server'] }))
 
 scaffolding.plan === undefined || scaffolding.questions.length > 0 // true — do not write this shape
@@ -711,8 +711,8 @@ and the questions are where the package says what it thinks of the choice. That 
 place, and the caller that picked the shape is the one holding it.
 
 Off-contract input is different. A value that is not the exact shape raises `ScaffoldError` coded
-`INVALID`, because it is not a question anyone can answer. Both entry points snapshot the caller's
-value first and then guard the snapshot, so a property backed by an accessor is refused rather than
+`INVALID`, because it is not a question anyone can answer. Each entry point snapshots the caller's
+value first and then guards the snapshot, so a property backed by an accessor is refused rather than
 read.
 
 Overrides replace a drafted artifact's content whole. The gate checks each override against the
@@ -723,8 +723,8 @@ than a silent no-op.
 
 ### Groups
 
-A plan selects over seven groups, and a compile that names none covers all of them. The order below
-is the order a plan lists its artifacts in.
+A plan selects over the following groups, and a compile that names none covers all of them. Their
+order is the order a plan lists its artifacts in.
 
 | Group           | Holds                                                              |
 | --------------- | ------------------------------------------------------------------ |
@@ -738,7 +738,7 @@ is the order a plan lists its artifacts in.
 
 ## Ownership and drift
 
-Two axes describe every planned file, and they answer different questions. `Origin` says how the
+`Origin` and `Ownership` describe every planned file, and they answer different questions. `Origin` says how the
 content is produced. `Ownership` says what scaffold claims at the path.
 
 | `Origin`   | Content comes from                          |
@@ -751,18 +751,29 @@ content is produced. `Ownership` says what scaffold claims at the path.
 | ----------- | -------------- | ------------------------------------------------- |
 | `content`   | The bytes      | Restore a missing file, replace a stale one       |
 | `presence`  | Existence only | Restore an absent file, never touch present bytes |
-| `birth`     | Nothing        | Create the file only while it is absent           |
+| `birth`     | Nothing        | Create the file only during initial materialize   |
 
-Presence ownership has two separate mechanisms, and a reader needs to know which applies:
+Presence ownership has separate mechanisms, and a reader needs to know which applies:
 
 | Mechanism       | Paths                                             | Bytes belong to       | Cost                                                    |
 | --------------- | ------------------------------------------------- | --------------------- | ------------------------------------------------------- |
 | Verb-owned      | `CATALOG_AGENT_PATH` and dependency guide mirrors | `catalog` or `mirror` | The owning verb is the only route for a later update.   |
-| Workspace-owned | `WORKSPACE_OWNED_PATHS`, currently `.gitignore`   | The target workspace  | Present bytes receive no later canonical ignore update. |
+| Workspace-owned | `WORKSPACE_OWNED_PATHS`, which holds `.gitignore` | The target workspace  | Present bytes receive no later canonical ignore update. |
 
-Birth ownership is what makes a generated workspace the consumer's. `package.json`, the source
-barrels, the tests, `README.md`, and `guides/README.md` are written once and are never rewritten by
-a later verb.
+Birth ownership is what makes a generated workspace the consumer's. `materialize` writes a
+birth-owned path into a vacant target. A later `repair` or `overwrite` call treats that path as
+aligned whether it is present or absent, so it neither restores missing bytes nor replaces present
+bytes.
+
+You own `tests/setup.ts`, the selected `tests/setupBrowser.ts`, `tests/setupServer.ts`,
+`tests/setupService.ts`, and `tests/setupGlobal.ts` modules, each root `tests/setup*.test.ts` proof,
+the selected environment entry tests under `tests/src` and `tests/app`, the
+`tests/src/bin/main.test.ts` file, and the `tests/integration.test.ts` seed. Scaffold writes those
+planned files only during materialize and leaves later edits or deletions alone. You also own the `tests/guides.test.ts`,
+`tests/distribution.test.ts`, `tests/conformance.test.ts`, and `tests/service/**/*.test.ts` proof
+files that you add to select their projects. Scaffold content-owns `tests/setupPolicy.ts`,
+`tests/policy.test.ts`, and `tests/config.test.ts`; `repair` and `overwrite` restore those files when
+their bytes drift or the files are missing.
 
 Content ownership does not preserve an arbitrary custom Vitest project. Fixed optional proofs are
 selected by their defining paths, as `guides`, `distribution`, `integration`, `conformance`, and
@@ -812,13 +823,13 @@ is refused with a coded `INVALID` failure rather than accepted and partly unders
 finding carries `ownership`, which findings made before that field existed do not. `remove` acts
 only on foreign findings, which never carried ownership, but the guard reads every finding, so one
 older planned finding refuses that call too. Take a fresh audit rather than replaying a stored one:
-a stored audit records what a target looked like then, and both verbs bind their writes to what a
-target holds now. The refusal is deliberate at `0.0.x` and there is no migration path.
+a stored audit records what a target looked like then, and each verb binds its writes to what a
+target holds. The refusal is deliberate at `0.0.x` and there is no migration path.
 
 ## Fleet catalog
 
 `catalog` rewrites one marker-bounded region in `CATALOG_AGENT_PATH` and nothing else in that file.
-The region holds a table with four columns:
+The region holds a table with these columns:
 
 | Column                 | Content                                                                    |
 | ---------------------- | -------------------------------------------------------------------------- |
@@ -827,13 +838,13 @@ The region holds a table with four columns:
 | `Layer`                | The publish round the edges place the package in, as `L0`, `L1`, …         |
 | `Runtime dependencies` | Each declared runtime edge, as name and range                              |
 
-Both edge-bearing columns come from the same abbreviated packument the version came from, so a
+The edge-bearing columns come from the same abbreviated packument the version came from, so a
 catalog costs one request per package and no more. Only `dependencies` is read. `devDependencies`
 reaches no consumer of the published package, so it constrains nothing about publish order, and
 reading it would place packages in rounds that do not exist.
 
 The layer is not stored on a row. `catalogToLayers` derives it from the rows' own edges, in the same
-call that writes them, so the two cannot disagree:
+call that writes them, so the layer and the rows cannot disagree:
 
 ```ts
 import { catalogToLayers } from '@orkestrel/scaffold'
@@ -847,20 +858,22 @@ edge to a row that found no version each constrain nothing, so neither holds its
 
 The order is load-bearing because these packages are `0.0.x`, where a caret pins one exact release.
 A dependent sees a new dependency version only after the dependent re-pins and republishes, so
-publishing a dependent before its dependency leaves the dependent pinned to the older release. Two
-ranges that disagree install two copies of one package, and the compiler reads those copies as two
+publishing a dependent before its dependency leaves the dependent pinned to the older release.
+Ranges that disagree install duplicate copies of one package, and the compiler reads those copies as
 distinct types.
 
 A cycle cannot be published in rounds. `catalogToLayers` omits its members rather than placing them
-in an order that would be wrong, and their rows carry no layer cell. An absent name is the report:
-compare the returned names against the catalog to find one.
+in an order that would be wrong. It also omits each row whose `lookup` field is `missing` or
+`failed`, because no published version supplied dependencies to place. To distinguish the causes,
+inspect an omitted row's `lookup` field: an omitted `found` row belongs to a cycle, while another
+lookup verdict records why the registry row could not enter a layer.
 
 ## Vendored data root
 
 The vendored data root is the shared file set, staged into the published package as plain data. It
-holds the root instruction documents, the licence, the orchestration contract, the four harness
+holds the root instruction documents, the licence, the orchestration contract, the harness
 directories, the bench scripts, the shared policy register, the byte-identical root dotfiles, and
-the two guide mirrors a generated workspace starts from. `HOST_PATHS` is the candidate list; a plan
+the guide mirrors a generated workspace starts from. `HOST_PATHS` is the candidate list; a plan
 carries the subset its target selects, because a workspace never mirrors its own guide.
 
 `stageHost` fills the root from a real checkout at build time:
@@ -890,14 +903,14 @@ one to one.
 
 ## Generated workspace
 
-A workspace's file set is a function of its two axes plus its structural facts. Nothing is fixed
+A workspace's file set is a function of its axes plus its structural facts. Nothing is fixed
 except the manifest.
 
 - One computed artifact: `package.json`, with the entry points, `exports` map, scripts, and
   development dependencies its selection implies.
 - One template artifact per configuration file the selection needs: the root `tsconfig.json` and
-  `vite.config.ts`, plus a Vite config and a scoped TypeScript config per selected environment, and
-  two more when `bin` is set.
+  `vite.config.ts`, plus a Vite config and a scoped TypeScript config per selected environment and
+  for `bin` when it is set.
 - One template artifact, `configs/browsers.ts`, for a workspace selecting `browser` on either axis.
   It resolves the Chromium the Playwright provider launches, and the root `vite.config.ts` calls it
   once into `browserOptions` and passes that to every `playwright()` provider it configures. The
@@ -922,9 +935,9 @@ except the manifest.
 `planToSummary` reports the tally rather than a number written down here:
 
 ```ts
-import { createBlueprint, createCompiler, planToSummary } from '@orkestrel/scaffold'
+import { Compiler, createBlueprint, planToSummary } from '@orkestrel/scaffold'
 
-const compiler = createCompiler()
+const compiler = new Compiler()
 const scaffolding = compiler.compile(createBlueprint('router', { src: ['core', 'server'] }))
 const summary = scaffolding.plan === undefined ? undefined : planToSummary(scaffolding.plan)
 
@@ -936,7 +949,7 @@ compiler.destroy()
 
 ## Library
 
-The two entry points split by host. `@orkestrel/scaffold` is host-independent: it compiles, gates,
+The entry points split by host. `@orkestrel/scaffold` is host-independent: it compiles, gates,
 and compares, and it touches neither the filesystem nor the network.
 `@orkestrel/scaffold/server` is Node-only and holds everything that does.
 
@@ -944,12 +957,12 @@ Compare a plan against bytes a caller already read:
 
 ```ts
 import type { Blueprint, Snapshot } from '@orkestrel/scaffold'
-import { createCompiler } from '@orkestrel/scaffold'
+import { Compiler } from '@orkestrel/scaffold'
 
 declare const blueprint: Blueprint
 declare const current: Snapshot
 
-const compiler = createCompiler()
+const compiler = new Compiler()
 const audit = compiler.audit(blueprint, current)
 
 audit.findings.filter(({ drift }) => drift !== 'aligned')
@@ -960,11 +973,11 @@ Write a compiled plan into a real directory:
 
 ```ts
 import type { Plan } from '@orkestrel/scaffold'
-import { createMaterializer } from '@orkestrel/scaffold/server'
+import { Materializer } from '@orkestrel/scaffold/server'
 
 declare const plan: Plan
 
-const materializer = createMaterializer({ host: './dist/host' })
+const materializer = new Materializer({ host: './dist/host' })
 const result = materializer.materialize(plan, './packages/router')
 
 result.written // every path created
@@ -973,10 +986,11 @@ materializer.destroy()
 
 `resolveContainedPath` refuses a lexical escape, a physical link out of the root, and a dangling
 link whose raw target contains a `..` segment. It returns the lexical join of `root` and `path` — an
-absolute path under `root`, which is what its shipped example prints — after checking the namespace,
-not an open filesystem handle. Its contract therefore excludes a concurrent rename or link swap
-during the check or before the caller finishes using that path. A caller that admits hostile
-concurrent namespace mutation needs a handle-bound operation instead.
+absolute path under `root` — after checking the namespace, not an open filesystem handle. Its
+shipped example tests that answer's suffix rather than printing the whole path. Its contract
+therefore excludes a concurrent rename or link swap during the check or before the caller finishes
+using that path. A caller that admits hostile concurrent namespace mutation needs a handle-bound
+operation instead.
 
 `resolveRealPath` answers the caller's own text collapsed lexically, then resolved through every link
 in what survives that collapse. A `..` the caller wrote cancels the segment before it as text, so
@@ -987,9 +1001,9 @@ way; the answer is a lexical location resolved through links, not a physical one
 Read the registry and the guide host:
 
 ```ts
-import { createUpstream } from '@orkestrel/scaffold/server'
+import { Upstream } from '@orkestrel/scaffold/server'
 
-const upstream = createUpstream({ registry: { timeout: 5_000 } })
+const upstream = new Upstream({ registry: { timeout: 5_000 } })
 const releases = await upstream.lookup([{ name: '@orkestrel/emitter', range: '^0.0.5' }])
 
 releases.filter((release) => release.lookup === 'found')
@@ -1002,7 +1016,7 @@ verdict carrying its cause rather than thrown, so one unreachable package never 
 rest of the answer. The organization package list is the exception, because without it there is no
 fleet to report.
 
-Both bounds count decoded bytes, and a version lookup asks the registry for the abbreviated
+Each bound counts decoded bytes, and a version lookup asks the registry for the abbreviated
 packument — `dist-tags` and a trimmed version map, rather than the full per-version metadata no
 verdict reads. That is the smallest form the registry publishes, and `limit` is capped at
 `MAX_ARTIFACT_BYTES`, so a package with enough published releases to pass it cannot be looked up at
@@ -1030,7 +1044,7 @@ try {
 A transaction owns a private root beside the target on the same volume, so every promotion is a
 rename rather than a copy. A failure part way through commit restores every destination it already
 promoted and removes every directory it created. No destination ever receives half-written bytes.
-It is not a journal: a process killed between two promotions leaves a mixed target.
+It is not a journal: a process killed between promotions leaves a mixed target.
 The transaction binds each directory's location rather than its lifetime, so an ancestor swapped
 for another path, a file, a symlink, or nothing is refused, and one deleted and recreated in place
 may not be.
@@ -1047,11 +1061,12 @@ try {
 }
 ```
 
-`INVALID` is off-contract input, `BLOCKED` is a refused blueprint, `TARGET` is a destination that is
-not what the caller's observation said it was, `WRITE` is a mutation that could not be completed, and
-`FETCH` is an upstream read that produced no answer.
+`INVALID` is off-contract input, `BLOCKED` is a refused blueprint, `DESTROYED` is a call after an
+entity's teardown, `TARGET` is a destination that is not what the caller's observation said it was,
+`WRITE` is a mutation that could not be completed, and `FETCH` is an upstream read that produced no
+answer.
 
-`BLOCKED` covers both refusals a blueprint can meet, because they are one fact — this blueprint will
+`BLOCKED` covers every refusal a blueprint can meet, because they are one fact — this blueprint will
 not be built — and the questions say which. The compiler answers its refusal rather than throwing it:
 the gate fails closed and records `BLOCKED` on its stage, so a caller reads that refusal from the
 value it asked for. A verb that creates a workspace throws it, because it chose the shape and has
@@ -1065,18 +1080,20 @@ are thrown, so an observer sees a refusal even where the caller catches it.
 
 ## Limits
 
-Seven things a reader will look for and not find.
+What a reader will look for and not find.
 
-**A code fence in this guide is unverified.** [`tests/guides.test.ts`](../tests/guides.test.ts)
-proves that every fence imports only real exports of the two barrels, and that every backticked name
-in this file resolves to one. It neither runs a fence nor typechecks one, so a trailing `// value`
-comment inside a fence states what this guide claims rather than what the build answered. The
-verdicts that are measured are the ones a consumer hovers:
+**Guide parity has a bounded reach.** [`tests/guides.test.ts`](../tests/guides.test.ts) proves that
+the Surface tables match the core and server barrels in each direction, the method tables match the
+behavioral declarations, relative links resolve, and named imports in TypeScript fences resolve. It
+does not resolve arbitrary backticked prose spans or typecheck a whole fence. The same suite
+executes the transcribed pure examples for blueprint defaults, compile refusal, and error-code
+narrowing. Other trailing comments remain guide claims rather than build answers. The verdicts that
+are measured are the ones a consumer hovers:
 [`tests/distribution.test.ts`](../tests/distribution.test.ts) drives every `@example` the built
 declarations print against the installed package, scores each verdict it can read as a value, and
-names exactly the ones it cannot. Fences are not added to that instrument, because most of them
-cannot be run: several declare an ambient value that has no runtime, and several write to a
-directory or read the network, so executing them would be a mutation rather than a check.
+names exactly the ones it cannot. Executing the remaining fences would require fixtures for each
+ambient value plus isolated filesystem and network drivers for the mutating examples; adding those
+drivers is separate test capability rather than name-resolution parity.
 
 **The library does not enforce the creating verb's policy.** `new` refuses a blueprint carrying any
 question, and `materialize` writes any plan into any vacant target. A workspace of several published
@@ -1102,7 +1119,7 @@ host-dependent second one.
 **Scaffold emits no styles axis.** `SRC_MATRIX` is exactly `core`, `browser`, and `server`, and
 `Blueprint` carries no styles field. A workspace that needs `src/styles/` adds the directory, its
 configuration, and its Vitest project by hand. `.claude/rules/workspace.md` describes styles as an
-environment because the fleet has one; scaffold simply does not generate it.
+environment because the fleet has one; scaffold does not generate it.
 
 **No host path is normalized before it is guarded.** `isFilesystemPath` refuses an empty segment, so
 `packages//router` is off contract. A trailing separator does not produce one: it terminates a
@@ -1123,10 +1140,10 @@ registers `distribution` only when the workspace also publishes `src`. In a publ
 `distribution` and `service` run from `prepublishOnly` and `conformance` stays in `test`. In a
 `private: true` workspace, `distribution` is absent, `service` runs from `test`, and there is no
 `prepublishOnly` at all. Scaffold emits no proof into any registered project, because each names
-something only the package knows: the behavior its own packed artifact must hold once installed, the
-official artifact a conformance check measures against, and the service a live proof drives. A
-generated placeholder would read as a proof while measuring nothing, so the file a consumer writes
-is the file that selects the project.
+something only the package knows: the behavior its own packed artifact must hold after it is
+installed, the official artifact a conformance check measures against, and the service a live proof
+drives. A generated placeholder would read as a proof while measuring nothing, so the file a
+consumer writes is the file that selects the project.
 
 A distribution proof carries one contract scaffold does enforce from the outside. The generated
 `prepublishOnly` invokes it as `npm run test:distribution -- --mode release`, and a proof that reads
@@ -1144,11 +1161,11 @@ names that module by path, so an absent one fails the project's load rather than
 no suite beneath `tests/service`, so `test:service` reports no test files until the consumer writes
 the first one. Every case is visible the first time the script runs, which is why none is silent.
 
-None of the three folds into `integration`, which measures a different axis rather than a smaller
+None of those folds into `integration`, which measures a different axis rather than a smaller
 one: the workspace's selected environments compose through their public barrels. The generated seed
 proves only that those barrels load together and expose the initial empty surfaces; the consumer
 replaces it with an observable cross-environment flow. The seed starts no process and does not pack
-or install the workspace, so the project stays in `test`. Two fleet packages hold the distinction.
+or install the workspace, so the project stays in `test`. These fleet packages hold the distinction.
 `@orkestrel/ollama` drives a real Ollama daemon through a `service` project, so a real service
 answers it and it runs from `prepublishOnly`. `@orkestrel/mcp` measures its server against the
 specification's own runner, `@modelcontextprotocol/conformance`, through a `conformance` project. It pins that runner as a development dependency and resolves it out
@@ -1157,7 +1174,7 @@ port, so the run drives nothing external and stays in `test`.
 
 ## Tests
 
-- [`tests/src/core/Compiler.test.ts`](../tests/src/core/Compiler.test.ts) — the three stages, the
+- [`tests/src/core/Compiler.test.ts`](../tests/src/core/Compiler.test.ts) — the compile stages, the
   fail-closed rule, off-contract input, and teardown.
 - [`tests/src/core/compilers.test.ts`](../tests/src/core/compilers.test.ts) — every projection from
   a blueprint to an artifact, and every gate law.
@@ -1183,8 +1200,6 @@ port, so the run drives nothing external and stays in `test`.
   digests, inventories, and the staging producer.
 - [`tests/src/server/validators.test.ts`](../tests/src/server/validators.test.ts) — the host-path
   law and every server guard's boundary values.
-- [`tests/src/server/factories.test.ts`](../tests/src/server/factories.test.ts) — the two server
-  factories.
 - [`tests/src/bin/CLI.test.ts`](../tests/src/bin/CLI.test.ts) — every verb driven in process
   through recording output handlers.
 - [`tests/src/bin/helpers.test.ts`](../tests/src/bin/helpers.test.ts) — command-line reading, usage
@@ -1192,7 +1207,7 @@ port, so the run drives nothing external and stays in `test`.
 - [`tests/src/bin/main.test.ts`](../tests/src/bin/main.test.ts) — the process entry point.
 - [`tests/policy.test.ts`](../tests/policy.test.ts) — the syntactic coding and placement law over
   every source file.
-- [`tests/guides.test.ts`](../tests/guides.test.ts) — this guide's bijection with the two barrels.
+- [`tests/guides.test.ts`](../tests/guides.test.ts) — this guide's bijection with the barrels.
 
 ## See also
 
