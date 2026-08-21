@@ -4364,8 +4364,14 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     unlisted key is still inherited, so `env: { TOKEN: 'x' }` hands the child
     the parent's whole environment plus `TOKEN`. This transport exposes no way
     to withhold `process.env` from the child — spawn only a child you trust
-    with everything this process holds, or scrub the parent environment before
-    spawning. `send` writes `JSON.stringify(message) + '\n'` per message to the
+    with everything this process holds. Scrubbing the parent's own
+    environment first is not a substitute on Windows: the host injects its own
+    baseline keys into every child regardless of the supplied `env`, and
+    deleting `SystemRoot` from `process.env` aborts the next spawned Node
+    child at startup with exit 134. The bounded tail is the supervisor's
+    `evidence`; this transport holds its `Process` privately and exposes no
+    reader for it.
+    `send` writes `JSON.stringify(message) + '\n'` per message to the
     child's `stdin` and awaits the supervisor's answer, REJECTING when the
     channel is gone; the child's `stdout` is drained through the supervisor's
     `readline`-framed `lines` iterable and every complete line is decoded onto
