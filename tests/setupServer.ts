@@ -10,7 +10,6 @@ import type { ManualClockInterface } from './setup.js'
 import { createServer as createHTTPServer, request as httpRequest } from 'node:http'
 import { connect } from 'node:net'
 import { Duplex, PassThrough } from 'node:stream'
-import { afterEach } from 'vitest'
 import { isRecord } from '@orkestrel/contract'
 import { extractSourceLines, fenceImports, findMissing } from '@orkestrel/guide'
 import { waitForDelay } from '@orkestrel/test'
@@ -417,59 +416,6 @@ export async function openClientSocket(base: string, path: string): Promise<Clie
 	}
 }
 
-// ── Teardown registrar (tracked-resource cleanup) ────────────────────────────
-//
-// the duplicated `const tracked = []` + `afterEach(dispose-all)` +
-// `track(item)` trio every node-resource suite hand-rolls — folded into one registrar.
-// The caller supplies the disposer (`h => h.stop()`); the registrar holds the tracked
-// list AND wires its OWN `afterEach` to dispose every tracked item (awaiting async
-// disposers), so no socket leaks across a suite. A real cleanup wiring, not a mock.
-
-/** A tracked-resource teardown registrar — see {@link createTeardown}. */
-export interface TeardownInterface<T> {
-	/** Register `item` for disposal at `afterEach`, returning it for inline use. */
-	track<U extends T>(item: U): U
-}
-
-/**
- * Create a {@link TeardownInterface} that disposes every tracked item after each test —
- * the one general form of the `tracked[]` + `afterEach` + `track` pattern the server
- * suites repeat. Call it at a suite's top level: it registers its OWN
- * `afterEach` immediately, draining the tracked list and running `dispose` on each item
- * (awaiting a returned promise), so a started server is `stop()`ed even when an
- * assertion throws mid-test. The disposer is the caller's (`(handle) => handle.stop()`),
- * so the registrar stays agnostic to what it tears down.
- *
- * @remarks
- * Disposal runs in REVERSE registration order, because a resource is built on the ones
- * registered before it: a client is opened against a server that is already listening, so
- * the client is closed first and the server stops with nothing still attached. The order
- * matters rather than merely reading well — an UPGRADED WebSocket is detached from the
- * connection set both `closeIdleConnections()` and `closeAllConnections()` walk, so neither
- * `stop()` nor `destroy()` can reach it: a socket nothing on this side closes parks teardown
- * on `stop()` until Vitest's hook timeout fires (10s), and `destroy()` would have hung in
- * exactly the same place. What frees it is the owner closing it — which is what the WebSocket
- * ingress now does on the spine's `stop` event.
- *
- * @typeParam T - The kind of item tracked (the disposer's parameter type)
- * @param dispose - How to dispose one tracked item (may be async)
- * @returns A registrar whose `track` enrolls an item and returns it
- */
-export function createTeardown<T>(
-	dispose: (item: T) => void | Promise<void>,
-): TeardownInterface<T> {
-	const tracked: T[] = []
-	afterEach(async () => {
-		for (const item of tracked.splice(0).reverse()) await dispose(item)
-	})
-	return {
-		track(item) {
-			tracked.push(item)
-			return item
-		},
-	}
-}
-
 // ── HTTP spine test harness (node-only, real `@orkestrel/server`) ────────────
 //
 // the started-server fixture the MCP HTTP tests share lives here, not
@@ -514,14 +460,13 @@ export async function startServer<TState>(
 }
 
 /**
- * Everything a server suite hands to {@link createTeardown} — a started server, an MCP
- * client, or a bare client transport driven without one.
+ * A test resource released through {@link closeResource}: a started server, an MCP client, or a
+ * bare client transport driven without one.
  */
 export type TestResource = StartedServerInterface | MCPClientInterface | MCPClientTransportInterface
 
 /**
- * Release one tracked {@link TestResource} — the disposer a suite that opens CLIENTS as
- * well as servers passes to {@link createTeardown}.
+ * Release one {@link TestResource} from a suite that opens clients as well as servers.
  *
  * @remarks
  * Each member is identified by the one release method it declares (`stop` / `disconnect` /
@@ -535,8 +480,9 @@ export type TestResource = StartedServerInterface | MCPClientInterface | MCPClie
  *
  * @example
  * ```ts
- * const { track } = createTeardown(closeResource)
- * const client = track(createMCPClient({ transport: track(createWebSocketClientTransport(options)) }))
+ * const transport = createWebSocketClientTransport(options)
+ * const client = createMCPClient({ transport })
+ * await closeResource(client)
  * ```
  */
 export function closeResource(resource: TestResource): Promise<void> {

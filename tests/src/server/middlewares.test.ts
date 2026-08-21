@@ -5,7 +5,7 @@ import type { MCPOriginOptions, MCPSessionState } from '@src/server'
 import type { ManualClockInterface } from '../../setup.js'
 import type { StartedServerInterface } from '../../setupServer.js'
 import { request } from 'node:http'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
 	MCP_LEGACY_VERSION,
 	MCP_META_CAPABILITIES,
@@ -25,7 +25,7 @@ import {
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
 } from '@src/server'
-import { waitForDelay } from '@orkestrel/test'
+import { createTeardown, waitForDelay } from '@orkestrel/test'
 import {
 	createCalculatorServer,
 	createJSONRPCRequest,
@@ -33,12 +33,7 @@ import {
 	postJSON,
 	readSSEStream,
 } from '../../setup.js'
-import {
-	createClockMiddleware,
-	createDelayMiddleware,
-	createTeardown,
-	startServer,
-} from '../../setupServer.js'
+import { createClockMiddleware, createDelayMiddleware, startServer } from '../../setupServer.js'
 
 // ── createMCPSession — the plug-and-play stateful session middleware ─────────
 //
@@ -65,7 +60,8 @@ interface AppState extends MCPSessionState {
 	readonly caller?: unknown
 }
 
-const { track } = createTeardown<StartedServerInterface<AppState>>((handle) => handle.stop())
+const teardown = createTeardown()
+afterEach(() => teardown.destroy())
 
 // The in-request PUSH pattern as a tiny app middleware: on a POST carrying `x-push-now`, read the
 // session off `context.state` (set by `createMCPSession` for a validated request) and push the
@@ -128,7 +124,9 @@ async function startSession(options?: {
 	if (elapse !== undefined) server.use(createClockMiddleware<AppState>(elapse.clock, elapse.ms))
 	if (options?.hold !== undefined) server.use(createDelayMiddleware<AppState>(options.hold))
 	if (options?.push !== undefined) server.use(pushTrigger(options.push))
-	return track(await startServer(server))
+	const handle = await startServer(server)
+	teardown.add(() => handle.stop())
+	return handle
 }
 
 // POST a non-initialize request carrying a session id header — the stateful validation path.
@@ -329,7 +327,8 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		const server = createServer<AppState>({ dispatcher, state: () => ({}) })
 		server.use(authenticateCaller(caller))
 		server.use(createMCPSession<AppState>())
-		const handle = track(await startServer(server))
+		const handle = await startServer(server)
+		teardown.add(() => handle.stop())
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCRequest({

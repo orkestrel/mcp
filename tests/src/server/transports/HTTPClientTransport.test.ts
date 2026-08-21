@@ -1,7 +1,7 @@
 import type { JSONRPCMessage, MCPClientInterface, MCPServerInterface } from '@src/core'
 import type { MiddlewareHandler } from '@orkestrel/server'
 import type { StartedServerInterface } from '../../../setupServer.js'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
 	buildJSONRPCResult,
 	inferRequestVersion,
@@ -27,10 +27,10 @@ import {
 	MCP_PROTOCOL_VERSION_HEADER,
 } from '@src/server'
 import { createServer as createHTTPServer } from 'node:http'
-import { waitForDelay } from '@orkestrel/test'
+import { createTeardown, waitForDelay } from '@orkestrel/test'
 import { HTTPClientTransport } from '@src/server'
 import { createHeaderProjectionRequest, HEADER_PROJECTION_CONTEXTS } from '../../../setup.js'
-import { createTeardown, startServer } from '../../../setupServer.js'
+import { startServer } from '../../../setupServer.js'
 
 // src/server/mcp/HTTPClientTransport.ts — the HTTP CLIENT transport, proven END-TO-END
 // against the SHIPPED server transport (`createMCPRoutes`) over a REAL `node:http` server
@@ -44,7 +44,8 @@ import { createTeardown, startServer } from '../../../setupServer.js'
 // is pinned in tests/src/core/mcp/MCPClient.test.ts; the LIVE model round-trip in
 // tests/src/ollama/mcp.test.ts.
 
-const { track } = createTeardown((handle: StartedServerInterface) => handle.stop())
+const teardown = createTeardown()
+afterEach(() => teardown.destroy())
 
 // A real MCPServer over a real ToolManager: an `add` tool (a fixed structured value),
 // a `greet` tool (a plain string), and a `boom` tool that throws (→ an `isError` result).
@@ -101,7 +102,8 @@ async function connectClient(options?: {
 	)
 	const server = createServer<unknown>({ dispatcher, state: () => undefined })
 	if (options?.guardSecret !== undefined) server.use(createBearerGuard(options.guardSecret))
-	const handle = track(await startServer(server))
+	const handle = await startServer(server)
+	teardown.add(() => handle.stop())
 	const headers =
 		options?.guardSecret !== undefined
 			? { authorization: `Bearer ${options.guardSecret}` }
@@ -175,7 +177,8 @@ describe('HTTPClientTransport — policy composes in front', () => {
 		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer())))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
 		server.use(createBearerGuard('topsecret'))
-		const handle = track(await startServer(server))
+		const handle = await startServer(server)
+		teardown.add(() => handle.stop())
 		// No `headers` → the guard 401s the POST; the transport surfaces no `message`, so the
 		// client's `initialize` never resolves and `connect` rejects on its deadline.
 		const client = createMCPClient({
@@ -294,7 +297,8 @@ describe('HTTPClientTransport — lifecycle', () => {
 		const dispatcher = createDispatcher<unknown>()
 		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer()), { streaming: false }))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
-		const handle = track(await startServer(server))
+		const handle = await startServer(server)
+		teardown.add(() => handle.stop())
 		const protocols: Array<string | null> = []
 		const methods: Array<string | null> = []
 		const names: Array<string | null> = []
@@ -342,7 +346,8 @@ describe('HTTPClientTransport — lifecycle', () => {
 			},
 		})
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
-		const handle = track(await startServer(server))
+		const handle = await startServer(server)
+		teardown.add(() => handle.stop())
 		const protocols: Array<string | null> = []
 		const transport = createHTTPClientTransport({
 			url: `${handle.base}/mcp`,
@@ -362,7 +367,8 @@ describe('HTTPClientTransport — lifecycle', () => {
 		const dispatcher = createDispatcher<unknown>()
 		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer()), { streaming: false }))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
-		const handle = track(await startServer(server))
+		const handle = await startServer(server)
+		teardown.add(() => handle.stop())
 		const protocols: Array<string | null> = []
 		const transport = createHTTPClientTransport({
 			url: `${handle.base}/mcp`,
@@ -424,11 +430,10 @@ async function startEndlessStream(): Promise<EndlessStreamInterface> {
 	}
 }
 
-const endlessTeardown = createTeardown<EndlessStreamInterface>((peer) => peer.stop())
-
 describe('HTTPClientTransport — close releases the request it has in flight', () => {
 	it('close() aborts a pending send and the server sees the request abandoned', async () => {
-		const peer = endlessTeardown.track(await startEndlessStream())
+		const peer = await startEndlessStream()
+		teardown.add(() => peer.stop())
 		const transport = new HTTPClientTransport({ url: `${peer.base}/mcp` })
 		const sending = transport.send({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
 		// Let the request reach the server and its unending SSE body start arriving.
@@ -449,9 +454,8 @@ describe('HTTPClientTransport — close releases the request it has in flight', 
 	it('a send issued after a start following close still reaches the server', async () => {
 		const dispatcher = createDispatcher<unknown>()
 		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer()), { streaming: false }))
-		const handle = track(
-			await startServer(createServer<unknown>({ dispatcher, state: () => undefined })),
-		)
+		const handle = await startServer(createServer<unknown>({ dispatcher, state: () => undefined }))
+		teardown.add(() => handle.stop())
 		const transport = new HTTPClientTransport({ url: `${handle.base}/mcp` })
 		const messages: JSONRPCMessage[] = []
 		transport.emitter.on('message', (message) => messages.push(message))

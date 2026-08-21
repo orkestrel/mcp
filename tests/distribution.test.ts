@@ -335,10 +335,14 @@ function findUnexpectedPackedPaths(
  * to keep honest.
  */
 function buildPackedConsumer(root: string, scratch: string, consumer: string): readonly string[] {
-	const pack = spawnSync('npm', ['pack', '--json', '--pack-destination', scratch], {
-		cwd: root,
-		encoding: 'utf8',
-	})
+	const pack = spawnSync(
+		'npm',
+		['pack', '--json', '--ignore-scripts', '--pack-destination', scratch],
+		{
+			cwd: root,
+			encoding: 'utf8',
+		},
+	)
 	if (pack.error !== undefined || pack.status !== 0) {
 		throw new Error(`npm pack failed: ${pack.error?.message ?? pack.stderr}`)
 	}

@@ -17,7 +17,7 @@ import type { MCPClientInterface, MCPVersion } from '@src/core'
 import type { MCPSessionState } from '@src/server'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 import type { StartedServerInterface } from './setupServer.js'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
 	bindClient,
 	bindServer,
@@ -38,9 +38,10 @@ import {
 } from '@src/server'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
+import { createTeardown } from '@orkestrel/test'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createJSONRPCRequest, postJSON } from './setup.js'
-import { createTeardown, startServer } from './setupServer.js'
+import { startServer } from './setupServer.js'
 
 /** The JSON Schema `sum` advertises, renamed to `inputSchema` on the wire and back again. */
 const SUM_SCHEMA: Readonly<Record<string, unknown>> = Object.freeze({
@@ -222,11 +223,13 @@ async function startStack(options?: TestStackOptions): Promise<TestStackInterfac
 	}
 }
 
-const { track } = createTeardown((stack: TestStackInterface) => stack.stop())
+const teardown = createTeardown()
+afterEach(() => teardown.destroy())
 
 describe('a core server mounted on the server face and driven by a core client', () => {
 	it('carries a list, a computed call, and a tool failure over a real HTTP socket', async () => {
-		const stack = track(await startStack())
+		const stack = await startStack()
+		teardown.add(() => stack.stop())
 		const client = stack.http()
 
 		await client.connect()
@@ -256,7 +259,8 @@ describe('a core server mounted on the server face and driven by a core client',
 
 describe('one core server, one live registry, every carrier', () => {
 	it('serves a tool registered after every client connected, over HTTP, WebSocket, and a MessagePort', async () => {
-		const stack = track(await startStack())
+		const stack = await startStack()
+		teardown.add(() => stack.stop())
 		const http = stack.http()
 		const socket = stack.socket()
 		// The browser face inside a Node project: a real `MessageChannel`, the same transport
@@ -296,7 +300,8 @@ describe('one core server, one live registry, every carrier', () => {
 
 describe('the remote tools of a composed server, run by a local tool manager', () => {
 	it('executes a remote tool through a local ToolManager and isolates its failure', async () => {
-		const stack = track(await startStack())
+		const stack = await startStack()
+		teardown.add(() => stack.stop())
 		const client = stack.http()
 		await client.connect()
 
@@ -325,7 +330,8 @@ describe('the remote tools of a composed server, run by a local tool manager', (
 
 describe('one deployment, one registry, both wire eras', () => {
 	it('answers a dated handshake statefully and a modern client on the same endpoint', async () => {
-		const stack = track(await startStack({ legacy: true }))
+		const stack = await startStack({ legacy: true })
+		teardown.add(() => stack.stop())
 		const legacy = stack.http(MCP_LEGACY_VERSION)
 		const modern = stack.http()
 

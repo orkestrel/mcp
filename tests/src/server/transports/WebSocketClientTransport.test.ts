@@ -1,9 +1,8 @@
 import type { JSONRPCMessage } from '@src/core'
-import type { StartedServerInterface, TestUpgradeInterface } from '../../../setupServer.js'
-import type { Server } from 'node:http'
+import type { StartedServerInterface } from '../../../setupServer.js'
 import type { Duplex } from 'node:stream'
 import { createServer as createHTTPServer } from 'node:http'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { createMCPClient, MCP_META_SERVER } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { createDispatcher } from '@orkestrel/router'
@@ -14,9 +13,9 @@ import {
 	encodeWebSocketFrame,
 	WEBSOCKET_OPCODE_TEXT,
 } from '@orkestrel/websocket'
-import { waitForDelay } from '@orkestrel/test'
+import { createTeardown, waitForDelay } from '@orkestrel/test'
 import { createCalculatorServer, MODERN_METADATA } from '../../../setup.js'
-import { createTeardown, startServer, startUpgradeServer } from '../../../setupServer.js'
+import { startServer, startUpgradeServer } from '../../../setupServer.js'
 
 // src/server/mcp/WebSocketClientTransport.ts — the WebSocket CLIENT transport (the egress
 // mirror of createWebSocketServer), proven END TO END against the shipped createWebSocketServer
@@ -29,31 +28,13 @@ import { createTeardown, startServer, startUpgradeServer } from '../../../setupS
 // v1; and `disconnect()` closes cleanly. The per-connection bridge + frame decode/drop are pinned
 // at the unit level in WebSocketServerTransport.test.ts (the same MCPClientTransportInterface).
 
-const teardown = createTeardown<StartedServerInterface>((handle) => handle.stop())
+const teardown = createTeardown()
+afterEach(() => teardown.destroy())
 
-// A raw `node:http` server plus the upgraded sockets it claimed — tracked together so teardown
-// can DESTROY each lingering upgrade socket before closing the server.
-interface RawServerHandle {
-	readonly server: Server
-	readonly sockets: Duplex[]
-}
-
-// A second registrar for the RAW `node:http` server the bogus-handshake test stands up (it
-// writes a malformed 101 by hand, so it cannot be a spine `Server`). Closed in `afterEach` —
-// an UPGRADED socket is detached from the server's tracked-connection set, so neither `close`'s
-// drain nor `closeAllConnections()` reaches it; destroy each captured socket FIRST, then `close`
-// (whose callback now fires promptly, since no connection remains).
-// Another registrar for the raw upgrade RECORDER the D2 controls drive: it completes
-// real handshakes and tallies the sockets it upgraded, so it owns its own `stop`.
-const upgradeTeardown = createTeardown<TestUpgradeInterface>((peer) => peer.stop())
-
-const rawTeardown = createTeardown<RawServerHandle>(
-	({ server, sockets }) =>
-		new Promise<void>((resolve) => {
-			for (const socket of sockets) socket.destroy()
-			server.close(() => resolve())
-		}),
-)
+// Teardown runs newest-first because a client is acquired after the server it connects to and must
+// close before that server stops. An upgraded WebSocket is detached from the connection set that
+// `closeIdleConnections()` and `closeAllConnections()` walk, so neither call reaches it. The owner
+// must close the socket before the raw server can finish closing.
 
 // Stand up a server exposing the stub-tool MCPServer over WebSocket (the spine upgrade seam) on
 // an ephemeral port. `path` defaults to /mcp; pass a custom one to exercise the path option.
@@ -66,7 +47,9 @@ async function startWs(path?: string): Promise<StartedServerInterface> {
 			...(path === undefined ? {} : { path }),
 		}),
 	)
-	return teardown.track(await startServer(server))
+	const handle = await startServer(server)
+	teardown.add(() => handle.stop())
+	return handle
 }
 
 // Stand up a RAW `node:http` server that ANSWERS the upgrade with a structurally-valid 101
@@ -75,8 +58,16 @@ async function startWs(path?: string): Promise<StartedServerInterface> {
 // check is otherwise vacuously covered: the happy path never feeds a wrong accept). Returns the
 // bound `http://…` base; tracked for `afterEach` close.
 async function startBogusAcceptServer(): Promise<string> {
-	const server = createHTTPServer()
 	const sockets: Duplex[] = []
+	const server = createHTTPServer()
+	teardown.add(
+		() =>
+			new Promise<void>((resolve) => {
+				for (const socket of sockets) socket.destroy()
+				if (!server.listening) resolve()
+				else server.close(() => resolve())
+			}),
+	)
 	server.on('upgrade', (_request, socket) => {
 		sockets.push(socket) // captured so teardown can destroy this detached upgrade socket
 		// The client `socket.destroy()`s its end on the accept mismatch, so this server end sees an
@@ -92,7 +83,6 @@ async function startBogusAcceptServer(): Promise<string> {
 				'\r\n',
 		)
 	})
-	rawTeardown.track({ server, sockets })
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
 	const address: unknown = server.address()
 	const port = isRecord(address) && typeof address.port === 'number' ? address.port : 0
@@ -182,7 +172,8 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 	it('two concurrent start()s bind one socket and orphan none', async () => {
 		// The handshake is held open, so both upgrades are genuinely in flight at the same time
 		// and both `start()` calls have already passed the `#socket === undefined` guard.
-		const peer = upgradeTeardown.track(await startUpgradeServer({ delay: 25 }))
+		const peer = await startUpgradeServer({ delay: 25 })
+		teardown.add(() => peer.stop())
 		const transport = createWebSocketClientTransport({ url: `${peer.base}/mcp` })
 
 		await Promise.all([transport.start(), transport.start()])
@@ -199,7 +190,8 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 	// must still install exactly one live socket. An instrument that only ever races two starts
 	// cannot tell "re-asked correctly" from "never installs anything".
 	it('a single start() still installs one live socket', async () => {
-		const peer = upgradeTeardown.track(await startUpgradeServer())
+		const peer = await startUpgradeServer()
+		teardown.add(() => peer.stop())
 		const transport = createWebSocketClientTransport({ url: `${peer.base}/mcp` })
 
 		await transport.start()
@@ -264,12 +256,11 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 	it('close() during a suspended start() leaves no bound socket and re-emits nothing', async () => {
 		// The peer appends one well-formed JSON-RPC text frame to the handshake, so a socket the
 		// transport BOUND re-emits it on `message`; one it never bound cannot.
-		const peer = upgradeTeardown.track(
-			await startUpgradeServer({
-				delay: 60,
-				frame: JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }),
-			}),
-		)
+		const peer = await startUpgradeServer({
+			delay: 60,
+			frame: JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }),
+		})
+		teardown.add(() => peer.stop())
 		const transport = createWebSocketClientTransport({ url: `${peer.base}/mcp` })
 		const received: JSONRPCMessage[] = []
 		transport.emitter.on('message', (message) => received.push(message))
@@ -293,7 +284,8 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 	it('binds exactly one socket when two start() calls race, destroying the loser', async () => {
 		// Both handshakes complete; the second socket to arrive finds one already installed and
 		// is destroyed rather than bound, so no orphan is left re-emitting frames at nobody.
-		const peer = upgradeTeardown.track(await startUpgradeServer())
+		const peer = await startUpgradeServer()
+		teardown.add(() => peer.stop())
 		const transport = createWebSocketClientTransport({ url: `${peer.base}/mcp` })
 
 		await Promise.all([transport.start(), transport.start()])
@@ -330,8 +322,16 @@ interface HoldingPeerInterface {
 }
 
 async function startHoldingPeer(): Promise<HoldingPeerInterface> {
-	const server = createHTTPServer()
 	const sockets: Duplex[] = []
+	const server = createHTTPServer()
+	teardown.add(
+		() =>
+			new Promise<void>((resolve) => {
+				for (const socket of sockets) socket.destroy()
+				if (!server.listening) resolve()
+				else server.close(() => resolve())
+			}),
+	)
 	server.on('upgrade', (request, socket) => {
 		const key = request.headers['sec-websocket-key']
 		if (typeof key !== 'string') {
@@ -353,7 +353,6 @@ async function startHoldingPeer(): Promise<HoldingPeerInterface> {
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
 	const address: unknown = server.address()
 	const port = isRecord(address) && typeof address.port === 'number' ? address.port : 0
-	rawTeardown.track({ server, sockets })
 	return {
 		base: `http://127.0.0.1:${port}`,
 		send(text: string): void {
@@ -374,7 +373,8 @@ describe('WebSocketClientTransport — close releases what the connect acquired'
 	it('close() during a pending upgrade cancels the request instead of waiting for the peer', async () => {
 		// The peer holds the handshake for 400ms, so an upgrade this transport cannot cancel
 		// leaves `start()` suspended for the peer's whole delay.
-		const peer = upgradeTeardown.track(await startUpgradeServer({ delay: 400 }))
+		const peer = await startUpgradeServer({ delay: 400 })
+		teardown.add(() => peer.stop())
 		const transport = createWebSocketClientTransport({ url: `${peer.base}/mcp` })
 		const starting = transport.start()
 		await waitForDelay(30)

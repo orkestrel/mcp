@@ -1,9 +1,10 @@
 import type { JSONRPCMessage, MCPDispatcherInterface } from '@src/core'
 import type { MiddlewareHandler } from '@orkestrel/server'
-import type { ClientSocketInterface, StartedServerInterface } from '../../setupServer.js'
+import type { StartedServerInterface } from '../../setupServer.js'
 import { spawn } from 'node:child_process'
+import { createServer as createHTTPServer } from 'node:http'
 import { PassThrough } from 'node:stream'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
 	buildCancelledNotification,
 	createMCPClient,
@@ -27,7 +28,7 @@ import {
 	MCP_SESSION_HEADER,
 } from '@src/server'
 import { WEBSOCKET_CLOSE_NORMAL, WEBSOCKET_OPCODE_CLOSE } from '@orkestrel/websocket'
-import { waitForDelay } from '@orkestrel/test'
+import { createTeardown, waitForDelay } from '@orkestrel/test'
 import {
 	collectSSE,
 	createCalculatorServer,
@@ -37,13 +38,7 @@ import {
 	postJSON,
 	waitForAbort,
 } from '../../setup.js'
-import {
-	closeResource,
-	createTeardown,
-	openClientSocket,
-	startServer,
-	upgradeRequest,
-} from '../../setupServer.js'
+import { closeResource, openClientSocket, startServer, upgradeRequest } from '../../setupServer.js'
 
 // src/server/factories.ts — createMCPRoutes, the stateless Streamable-HTTP MCP
 // transport, proven over a REAL @orkestrel/server + a REAL MCPServer over a REAL
@@ -62,7 +57,64 @@ import {
 
 // Servers AND the clients driven against them, released newest first: a client the teardown
 // closes is one a FAILING assertion cannot leave attached to the server it then has to stop.
-const { track } = createTeardown(closeResource)
+const teardown = createTeardown()
+afterEach(() => teardown.destroy())
+
+describe('teardown failure handling', () => {
+	it('runs every real server disposer after one fails', async () => {
+		const failureTeardown = createTeardown()
+		let failure: Error | undefined
+		const released = createHTTPServer()
+		failureTeardown.add(
+			() =>
+				new Promise<void>((resolve, reject) => {
+					released.close((error) => {
+						if (error === undefined) resolve()
+						else reject(error)
+					})
+				}),
+		)
+		await new Promise<void>((resolve, reject) => {
+			released.once('error', reject)
+			released.listen(0, '127.0.0.1', resolve)
+		})
+		const stopped = createHTTPServer()
+		// The failing disposer must register LAST: release runs newest-first, so this is
+		// the discriminant that lets the aggregation proof tell the two disposers apart.
+		failureTeardown.add(
+			() =>
+				new Promise<void>((resolve, reject) => {
+					stopped.close((error) => {
+						if (error === undefined) resolve()
+						else {
+							failure = error
+							reject(error)
+						}
+					})
+				}),
+		)
+		await new Promise<void>((resolve, reject) => {
+			stopped.once('error', reject)
+			stopped.listen(0, '127.0.0.1', resolve)
+		})
+		await new Promise<void>((resolve, reject) => {
+			stopped.close((error) => {
+				if (error === undefined) resolve()
+				else reject(error)
+			})
+		})
+
+		let thrown: unknown
+		try {
+			await failureTeardown.destroy()
+		} catch (error) {
+			thrown = error
+		}
+		expect(thrown).toBe(failure)
+		expect(thrown).toMatchObject({ code: 'ERR_SERVER_NOT_RUNNING' })
+		expect(released.listening).toBe(false)
+	})
+})
 
 describe('createMCPContinuation', () => {
 	it('adapts the installed token primitives into the host-neutral seal/open port', async () => {
@@ -105,7 +157,9 @@ async function startMCP(options?: {
 	)
 	const server = createServer<unknown>({ dispatcher, state: () => undefined })
 	if (options?.guardSecret !== undefined) server.use(createBearerGuard(options.guardSecret))
-	return track(await startServer(server))
+	const handle = await startServer(server)
+	teardown.add(() => closeResource(handle))
+	return handle
 }
 
 describe('createMCPRoutes — dispatch the MCP methods', () => {
@@ -113,7 +167,8 @@ describe('createMCPRoutes — dispatch the MCP methods', () => {
 		const dispatcher = createDispatcher<unknown>()
 		dispatcher.add(createMCPRoutes(createCalculatorServer(), { streaming: false }))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
-		const handle = track(await startServer(server))
+		const handle = await startServer(server)
+		teardown.add(() => closeResource(handle))
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ method: 'ping', params: { _meta: MODERN_METADATA } }),
@@ -431,18 +486,19 @@ async function startWsMCP(
 	// Ingress over the spine upgrade seam, following the spine's own lifecycle: `emitter` is
 	// what lets `stop()` end the sockets this handler claimed.
 	server.upgrade(createWebSocketServer(mcp, { emitter: server.emitter }))
-	return track(await startServer(server))
+	const handle = await startServer(server)
+	teardown.add(() => closeResource(handle))
+	return handle
 }
 
 describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-transports WS e2e', () => {
 	it('serves a legacy initialize and tools/call through the decorator over a real socket', async () => {
 		const handle = await startWsMCP(createMCPLegacy(createCalculatorServer()))
-		const client = track(
-			createMCPClient({
-				transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
-				version: '2025-06-18',
-			}),
-		)
+		const client = createMCPClient({
+			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
+			version: '2025-06-18',
+		})
+		teardown.add(() => closeResource(client))
 
 		await client.connect()
 		expect(client.version).toBe('2025-06-18')
@@ -451,7 +507,8 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 
 	it('CONTROL — a bare server refuses initialize at either shape, naming the method, over a real socket', async () => {
 		const handle = await startWsMCP()
-		const transport = track(createWebSocketClientTransport({ url: `${handle.base}/mcp` }))
+		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
+		teardown.add(() => closeResource(transport))
 
 		await transport.start()
 		// A raw legacy line declares no protocol version, and the modern seam registers no
@@ -484,11 +541,10 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 
 	it('connect → tools/list → tools/call(add): a value round-trips over real WebSocket frames', async () => {
 		const handle = await startWsMCP()
-		const client = track(
-			createMCPClient({
-				transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
-			}),
-		)
+		const client = createMCPClient({
+			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
+		})
+		teardown.add(() => closeResource(client))
 
 		// connect() handshakes over WS (the 101 upgrade + the MCP initialize over frames).
 		await client.connect()
@@ -508,11 +564,10 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 
 	it('a remote erroring tool throws locally (isError → throw)', async () => {
 		const handle = await startWsMCP()
-		const client = track(
-			createMCPClient({
-				transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
-			}),
-		)
+		const client = createMCPClient({
+			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
+		})
+		teardown.add(() => closeResource(client))
 		await client.connect()
 
 		// `boom` throws server-side → an in-band `isError` tool result → the client throws.
@@ -598,12 +653,11 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 // "the drain settles on the close" versus "the drain runs out", and those are three orders of
 // magnitude apart. A tight bound would measure the runner's load instead.
 
-const socketTeardown = createTeardown<ClientSocketInterface>((socket) => socket.close())
-
 describe('createWebSocketServer — the spine stop closes every socket it claimed', () => {
 	it('closes a live socket with an RFC 6455 close frame, so stop settles in milliseconds', async () => {
 		const handle = await startWsMCP()
-		const socket = socketTeardown.track(await openClientSocket(handle.base, DEFAULT_MCP_PATH))
+		const socket = await openClientSocket(handle.base, DEFAULT_MCP_PATH)
+		teardown.add(() => socket.close())
 
 		const started = performance.now()
 		await handle.server.stop()
@@ -628,7 +682,8 @@ describe('createWebSocketServer — the spine stop closes every socket it claime
 
 	it('a client that already went away neither throws nor holds the stop path', async () => {
 		const handle = await startWsMCP()
-		const socket = socketTeardown.track(await openClientSocket(handle.base, DEFAULT_MCP_PATH))
+		const socket = await openClientSocket(handle.base, DEFAULT_MCP_PATH)
+		teardown.add(() => socket.close())
 		// The peer vanishes without a close frame — the socket the handler owns is already dead
 		// when `stop()` reaches it, so closing it must be a silent no-op.
 		socket.close()

@@ -8,7 +8,7 @@ import type {
 import type { HTTPTransportOptions } from '@src/server'
 import type { StartedServerInterface } from '../../setupServer.js'
 import { request as httpRequest } from 'node:http'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
 	createMCPServer,
 	createMCPLegacy,
@@ -23,6 +23,7 @@ import {
 import { createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
+import { createTeardown } from '@orkestrel/test'
 import {
 	createMCPPostHandler as createPostHandler,
 	createMCPRoutes,
@@ -37,7 +38,7 @@ import {
 	createJSONRPCRequest,
 	readSSEStream,
 } from '../../setup.js'
-import { createTeardown, startServer } from '../../setupServer.js'
+import { startServer } from '../../setupServer.js'
 
 async function* subscriptionEvents(): AsyncGenerator<JSONRPCNotification> {
 	yield { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }
@@ -79,7 +80,8 @@ async function* callerEvents(
 	return buildJSONRPCResult(id, { caller: options.caller })
 }
 
-const { track } = createTeardown<StartedServerInterface<undefined>>((handle) => handle.stop())
+const teardown = createTeardown()
+afterEach(() => teardown.destroy())
 
 function createMCPPostHandler<TState = unknown>(
 	mcp: MCPServerInterface,
@@ -94,7 +96,9 @@ async function startHTTP(
 ): Promise<StartedServerInterface<undefined>> {
 	const dispatcher = createDispatcher<undefined>()
 	dispatcher.add(createMCPRoutes<undefined>(createMCPLegacy(mcp), options))
-	return track(await startServer(createServer({ dispatcher, state: () => undefined })))
+	const handle = await startServer(createServer({ dispatcher, state: () => undefined }))
+	teardown.add(() => handle.stop())
+	return handle
 }
 
 function disconnectHTTP(
