@@ -52,7 +52,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `Mirror`            | type | One dependency guide fetched from upstream, beside the local mirror it answers for.              |
 | `Origin`            | type | How an artifact's content is produced.                                                           |
 | `Ownership`         | type | What scaffold claims at an artifact's path.                                                      |
-| `Release`           | type | One declared dependency range measured against the registry's latest release.                    |
+| `Release`           | type | One declared dependency range measured against a registry release.                               |
 | `ScaffoldErrorCode` | type | The coded reasons a scaffold error is raised.                                                    |
 | `Snapshot`          | type | Exact lowercase hexadecimal target bytes keyed by artifact-relative path.                        |
 
@@ -123,7 +123,9 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `MAX_NAME_LENGTH`                 | const | Maximum bare workspace name length.                                                              |
 | `MAX_PATH_LENGTH`                 | const | Maximum length of one path, matching the longest a supported filesystem accepts.                 |
 | `MAX_RANGE_LENGTH`                | const | Maximum length of one declared package range.                                                    |
+| `MAX_REGISTRY_BYTES`              | const | Maximum decoded bytes accepted from one registry response.                                       |
 | `MAX_TOTAL_ARTIFACT_BYTES`        | const | Maximum bytes retained across one whole plan or audit.                                           |
+| `MAX_TOTAL_REGISTRY_BYTES`        | const | Maximum decoded bytes accepted across one registry-reading call.                                 |
 | `MINIMUM_NODE_VERSION`            | const | The oldest Node version the generated toolchain supports.                                        |
 | `NAME_PATTERN`                    | const | The bare workspace name syntax: lowercase alphanumeric with hyphens, letter first.               |
 | `ORCHESTRATION_PATH_NAMES`        | const | The exact root filenames that wire an agent bench rather than the toolchain, frozen.             |
@@ -189,6 +191,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `computeBytes`              | function | Count the UTF-8 bytes text encodes to.                                        |
 | `computeHash`               | function | Compute the deterministic content identity of text.                           |
 | `contentToHex`              | function | Encode text as the exact lowercase hexadecimal form of its UTF-8 bytes.       |
+| `extractRangeMajor`         | function | Extract the major component of an admitted dependency range.                  |
 | `extractVersion`            | function | Extract the major, minor, and patch components of an exact version.           |
 | `inferDrift`                | function | Infer how one target path compares to the artifact planned for it.            |
 | `inferGroup`                | function | Infer the `Group` a path belongs to.                                          |
@@ -232,6 +235,8 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `pathToCondition`                   | function | Build one `exports` condition block for a built environment.                    |
 | `planToFindings`                    | function | Compare a plan against a target's current content.                              |
 | `planToHash`                        | function | Compute a plan's content identity.                                              |
+| `replaceManifestRanges`             | function | Replace declared dependency ranges in package manifest text.                    |
+| `replacePlanRanges`                 | function | Replace dependency ranges in a plan's manifest and recompute its identity.      |
 | `srcToEntry`                        | function | Project a published selection into the manifest's entry fields.                 |
 | `srcToExports`                      | function | Project a published selection into the manifest's `exports` map.                |
 | `srcToRoot`                         | function | Select the single published environment a package root points at.               |
@@ -392,7 +397,7 @@ no interface and is documented directly.
 
 | Method    | Summary                                                                    |
 | --------- | -------------------------------------------------------------------------- |
-| `lookup`  | Look up the registry's latest release for each declared dependency.        |
+| `lookup`  | Look up the newest release each declared range admits.                     |
 | `fetch`   | Fetch each named package's guide, beside the local mirror it answers for.  |
 | `catalog` | Catalog the published fleet from the registry's organization package list. |
 | `destroy` | Tear the reader down, aborting every request in flight.                    |
@@ -413,13 +418,13 @@ no interface and is documented directly.
 Authority is the verb's: every verb except `audit` writes when it is typed, and no
 option grants a write.
 
-| Verb        | Writes                                                                            |
-| ----------- | --------------------------------------------------------------------------------- |
-| `new`       | A whole workspace, into a target that holds nothing the plan would collide with   |
-| `audit`     | Nothing                                                                           |
-| `repair`    | Each planned path the target is missing or has let drift                          |
-| `catalog`   | The package table and the guide mirrors                                           |
-| `overwrite` | Everything `repair` and `catalog` write, plus deletions and the dependency ranges |
+| Verb        | Writes                                                                          |
+| ----------- | ------------------------------------------------------------------------------- |
+| `new`       | A whole workspace, into a target that holds nothing the plan would collide with |
+| `audit`     | Nothing                                                                         |
+| `repair`    | Each planned path the target is missing or has let drift, and the ranges        |
+| `catalog`   | The package table, the guide mirrors, and the ranges                            |
+| `overwrite` | Everything `repair` and `catalog` write, plus deletions                         |
 
 `scaffold --help` prints the whole reference:
 
@@ -448,6 +453,7 @@ options
   --from <path>    read the data root from a local path instead of the bundled one; catalog alone accepts it more than once
   --target <path>  the directory the verb operates on; the working directory when absent
   --json           emit one machine-readable value instead of a report
+  ORKESTREL_SCAFFOLD_REGISTRY  the registry base mapped to upstream.registry.base
 
 exit codes
   0  clean
@@ -458,9 +464,13 @@ exit codes
 An option a verb does not list is refused by name rather than parsed and ignored. `--help` is the
 one exception, because it replaces the run rather than modifying it: a command line carrying
 `--help` anywhere prints the whole reference and exits `0` before the line is read as a command, so
-no verb has to list it. `--deps` reaches the registry, so `new` fails when the registry names no
-release for a package it was given: the workspace would otherwise declare a dependency that does not
-resolve.
+no verb has to list it. Every verb reaches the registry, and none of them invents a range when the
+read produces no answer. Dependency floors states what each verb reads and what it does then.
+
+Every read addresses the published registry. Set `ORKESTREL_SCAFFOLD_REGISTRY` to address a loopback
+or private one instead. The process entry maps it to `upstream.registry.base` and nothing else, so
+the seam changes which host answers a read and grants no verb any write authority it did not already
+have.
 
 `new --bin` creates the executable entry, its test, and its scoped Vite and TypeScript wrappers. The
 other structural facts do not need creation flags. Add a root `tests/setup*.test.ts` proof for
@@ -529,8 +539,9 @@ verb would restore. An advisory alone does not make an aligned target drift.
 The same plan-reading verbs compare the tooling set the derived blueprint plans against
 `dependencies` and `devDependencies` together. A missing planned package produces one non-blocking
 `dependencies` question naming every missing package and the exact manifest lines to add, in stable
-order. The comparison measures membership only: range differences and workspace-owned extras are
-outside it, and a planned tool may live in either section. A present section that is not an object
+order. The comparison measures membership: a workspace-owned extra is outside it, a planned tool may
+live in either section, and how current a declared range is belongs to the registry evidence
+Dependency floors describes rather than to this question. A present section that is not an object
 produces a question instead of a crash. `audit` reports the question without changing its exit
 semantics. `repair` and `overwrite` refuse before writing configuration, and no verb edits the
 birth-owned `package.json`.
@@ -554,13 +565,13 @@ unless `--dirty` waives that refusal. A target that is not a git repository is r
 `--json` replaces the report with one JSON value on standard output. Warnings and refusals go to
 standard error, so a piped value is never polluted.
 
-| Verb        | Value                                                                      |
-| ----------- | -------------------------------------------------------------------------- |
-| `new`       | `MaterializeResult` — `target`, `written`, `skipped`, `removed`            |
-| `audit`     | `Audit` — `findings` and `questions`; planned findings carry `ownership`   |
-| `repair`    | `MaterializeResult` plus `audit`, the terminal audit taken after the write |
-| `catalog`   | `MaterializeResult` plus `entries`, `mirrors`, and `dropped`               |
-| `overwrite` | The `catalog` value plus `audit`, `releases`, and `note` on a partial run  |
+| Verb        | Value                                                                                      |
+| ----------- | ------------------------------------------------------------------------------------------ |
+| `new`       | `MaterializeResult` — `target`, `written`, `skipped`, `removed`                            |
+| `audit`     | `Audit` — `findings` and `questions` — plus `releases`; findings carry `ownership`         |
+| `repair`    | `MaterializeResult` plus `audit`, the terminal audit taken after the write, and `releases` |
+| `catalog`   | `MaterializeResult` plus `entries`, `mirrors`, `dropped`, and `releases`                   |
+| `overwrite` | The `catalog` value plus `audit` and `note` on a partial run                               |
 
 Every failure reports the same envelope instead: `{ "error": { "code": …, "message": … } }`. The
 code is a `ScaffoldErrorCode`, or `USAGE` for a command line that never became a command, or
@@ -596,6 +607,25 @@ valid npm name. A peer reaches the generated workspace through separate represen
 `peerDependencies`. Each published build face — core, browser, server, and `bin` — externalizes
 every name in that binding, so a peer the workspace declares by hand, such as `vitest`, is left as
 an import in the emitted bundle rather than inlined into it.
+
+A range is admitted by the shape and refused by the gate, and a `file:` specifier is where a
+consumer meets that split. `isDependency` reads `range` as a non-empty string bounded at
+`MAX_RANGE_LENGTH` and nothing more, because which ranges a blueprint may declare is a gate law
+that reports its accepted candidates rather than a bare `false`. So a blueprint naming
+`file:vendor/orkestrel-form-0.0.1.tgz` is a valid `Dependency` and reaches the gate.
+`dependenciesToQuestions` then tests every declared range against the pattern its own field
+accepts — `ORKESTREL_RANGE_PATTERN` for a runtime dependency and a fleet peer,
+`FLOOR_RANGE_PATTERN` for a foreign peer, `EXTRA_RANGE_PATTERN` for a development extra — and none
+of them admits a `file:` specifier. The question is blocking, so `audit` reports it and compares no
+path:
+
+```text
+dependencies: @orkestrel/form declares the range file:vendor/orkestrel-form-0.0.1.tgz, which dependencies does not accept.
+Audit did not compare the target because the blueprint was refused.
+```
+
+A workspace pinned to a committed tarball therefore has no drift detection until it re-pins to a
+registry range. Read that audit as unavailable, not as clean.
 
 One published environment owns the package root directly. Several published environments require
 `core`, which owns that root while each other environment keeps its subpath. A multi-environment
@@ -807,15 +837,10 @@ removes a foreign file each fail when the destination no longer matches what the
 The requirement sits in the type rather than in prose, because a deletion that cannot bind to what
 the audit showed is the one thing the destructive verb must never do.
 
-The shape a `Finding` admits is wider than the set an audit produces. Which combinations of
-`ownership`, `drift`, and `observed` a real comparison reaches is `inferDrift`'s law — birth is
-always aligned, presence compares existence only, and bytes are recorded only where they were
-read — so the shape admits a birth-owned path reported stale, which no audit produces. That is
-deliberate: restating the comparison's case analysis in the type would be a second copy of it, able
-to disagree with the one that decides. `isFinding` proves the shape a reader may destructure and
-nothing about whether the verdict is one an audit could have reached. `repair` and `remove`
-re-derive every verdict themselves and act only on what they derived, so a verdict the comparison
-could not have produced is refused by name rather than acted on.
+`isFinding` proves the shape a reader may destructure and nothing about whether the verdict is one
+an audit could have reached. `repair` and `remove` re-derive every verdict themselves and act only
+on what they derived, so a verdict the comparison could not have produced is refused by name rather
+than acted on.
 
 That shape is versioned, and the guard runs at runtime. `repair` and `remove` guard the whole audit
 before reading any of it, so an audit persisted or built against an earlier version of this package
@@ -868,6 +893,69 @@ in an order that would be wrong. It also omits each row whose `lookup` field is 
 inspect an omitted row's `lookup` field: an omitted `found` row belongs to a cycle, while another
 lookup verdict records why the registry row could not enter a layer.
 
+## Dependency floors
+
+Every scaffold-owned range from its dependency tables is a floor: a caret over a whole
+`major.minor.patch` version. The triple is the newest release the registry served when that floor
+was last raised, so a workspace generated with no network still receives the latest floor scaffold
+knew rather than a bare `major.0.0`. Caller extras and peers pass through unchanged. Extras follow
+`EXTRA_RANGE_PATTERN`; fleet peers follow `ORKESTREL_RANGE_PATTERN`; foreign peers follow
+`FLOOR_RANGE_PATTERN`.
+
+The floors live in scaffold's own `package.json`. `BASE_DEV_DEPENDENCIES` and the tables beside it
+derive each row scaffold installs from that manifest, and the self-pin from its `version` field, so
+the toolchain a generated workspace receives is the toolchain scaffold runs. The rows scaffold does
+not install are seeds — `@vitejs/plugin-vue`, `vue`, `vue-tsc`, `vite-plugin-singlefile`, and the
+application-server fleet packages — and each carries the newest triple its supported major served
+when it was written.
+[`tests/src/core/constants.test.ts`](../tests/src/core/constants.test.ts) names that seeded set, so a
+row entering or leaving the manifest moves a test rather than passing unnoticed.
+
+A newer major is never crossed for you. `audit` reports one as a non-blocking `dependencies`
+question, and a person decides whether the generated toolchain supports it. Inside the declared
+major the verbs raise the floor themselves, which is what makes the caret's own width beside the
+point: `^0.64.0` admits no `0.65.0`, and `repair` rewrites the range to `^0.65.0` rather than
+widening it.
+
+Compatibility and staleness are separate questions, so they are read by separate helpers.
+`extractRangeMajor` answers which major a range names, which is what a compatibility bound is
+measured against. `matchesRange` answers whether a published version satisfies a range, which is
+admission rather than currency: a drift check that asked it would read a raised floor and a stale one
+alike.
+
+### What each verb reads
+
+| Verb        | Reads                                                       | Writes on a complete answer                     | With no answer                                           |
+| ----------- | ----------------------------------------------------------- | ----------------------------------------------- | -------------------------------------------------------- |
+| `new`       | Every `@orkestrel/*` row the compiled manifest declares     | The plan's ranges, before the target is opened  | `FETCH`, exit `1`, nothing written                       |
+| `audit`     | Every declared fleet row and planned foreign row            | Nothing                                         | Failed verdicts reported, exit `1`, nothing written      |
+| `repair`    | Every declared fleet row and planned foreign row            | The manifest's ranges, beside the repair        | `FETCH`, exit `1`, nothing written                       |
+| `catalog`   | The organization package list and every packument behind it | The manifest's ranges, beside the package table | `FETCH`, exit `1`, nothing written                       |
+| `overwrite` | Everything `repair` and `catalog` read                      | Everything `repair` and `catalog` write         | The offline half stands, `note` names the step, exit `1` |
+
+Each verb resolves the whole set before it opens a write transaction, so a partial answer never
+becomes a partial pin set. `overwrite` is the exception, and deliberately: its offline repair and
+deletion have already landed by the time the network half runs, so a step that produces no answer is
+collected into `note` and reported rather than discarding work that succeeded.
+
+A fleet row is compared exactly — `^0.1.0` is stale the moment the registry serves `0.1.2` — and
+that inequality alone raises `audit` to exit `1`. A foreign row is compared inside its declared
+major, and each verdict is a non-blocking question: one for a floor below the newest release that
+major serves, and one for a newer major the registry publishes.
+
+### Raising the floor before a release
+
+The floors ship inside the package, so a release carrying stale ones propagates them to every
+workspace generated from it until the next release. Raise them as the opening step of a release,
+while the registry is reachable:
+
+1. Run `scaffold audit` against this repository and read its `dependencies` questions.
+2. Run `scaffold repair`, or `npm update` followed by the same audit, until no question remains.
+3. Run the gate chain, then bump the version and publish.
+
+That cycle is what keeps every release shipping the then-latest floor, and it is what a consumer
+generating a workspace with no network receives.
+
 ## Vendored data root
 
 The vendored data root is the shared file set, staged into the published package as plain data. It
@@ -875,6 +963,13 @@ holds the root instruction documents, the licence, the orchestration contract, t
 directories, the bench scripts, the shared policy register, the byte-identical root dotfiles, and
 the guide mirrors a generated workspace starts from. `HOST_PATHS` is the candidate list; a plan
 carries the subset its target selects, because a workspace never mirrors its own guide.
+
+`.claude/settings.json` is in that set, and the artifact planned for it is content-owned. `repair`
+and `overwrite` restore its bytes, so an edit made to it inside a target is reverted at the next
+visit and reported as drift until then. Put an operator grant in `.claude/settings.local.json`
+instead. That path is outside `HOST_PATHS` and matches the vendoring deny-list
+`matchesSensitivePath` reads, so `stageHost` never copies it into a host root and no plan carries
+it.
 
 `stageHost` fills the root from a real checkout at build time:
 
@@ -907,7 +1002,10 @@ A workspace's file set is a function of its axes plus its structural facts. Noth
 except the manifest.
 
 - One computed artifact: `package.json`, with the entry points, `exports` map, scripts, and
-  development dependencies its selection implies.
+  development dependencies its selection implies. A publishing manifest carries
+  `"prepack": "npm run build"` so a publish rebuilds `dist/` and cannot ship a stale artifact;
+  the hook is publish-time only, and every generated distribution proof passes
+  `--ignore-scripts` to `npm pack` so a suite never re-runs the build it already gates.
 - One template artifact per configuration file the selection needs: the root `tsconfig.json` and
   `vite.config.ts`, plus a Vite config and a scoped TypeScript config per selected environment and
   for `bin` when it is set.
@@ -1016,12 +1114,17 @@ verdict carrying its cause rather than thrown, so one unreachable package never 
 rest of the answer. The organization package list is the exception, because without it there is no
 fleet to report.
 
+A found verdict carries the newest version the declared range admits, not whatever `dist-tags.latest`
+names. `lookup` reads the packument's version map, selects across it before any collection bound can
+truncate the map, and falls back to the latest tag only when that tag is itself admitted. A range of
+`*` admits every version, which is how a caller asks for the newest release outright.
+
 Each bound counts decoded bytes, and a version lookup asks the registry for the abbreviated
 packument — `dist-tags` and a trimmed version map, rather than the full per-version metadata no
-verdict reads. That is the smallest form the registry publishes, and `limit` is capped at
-`MAX_ARTIFACT_BYTES`, so a package with enough published releases to pass it cannot be looked up at
-all. It comes back as a `failed` verdict naming the limit, which is this reader's bound and not a
-statement about the package.
+verdict reads. That is the smallest form the registry publishes. The default response limit is
+`MAX_REGISTRY_BYTES`, and the default call budget is `MAX_TOTAL_REGISTRY_BYTES`. A package that
+passes the response limit comes back as a `failed` verdict naming the limit, which is this reader's
+bound and not a statement about the package.
 
 A status that carries no representation — a `204` or a `205` — is a `failed` verdict naming the
 status, never a `found` answer holding no bytes. A genuinely empty file arrives as a `200` and does
@@ -1096,13 +1199,8 @@ ambient value plus isolated filesystem and network drivers for the mutating exam
 drivers is separate test capability rather than name-resolution parity.
 
 **The library does not enforce the creating verb's policy.** `new` refuses a blueprint carrying any
-question, and `materialize` writes any plan into any vacant target. A workspace of several published
-`src` environments without `core` is therefore constructible, compilable, and writable through the
-library, and its manifest names a `core` build the workspace never runs — which is exactly what the
-advisory said. The refusal lives in the verb that chose the shape because that verb is the only one
-holding the advice: `compile` returns `questions` beside `plan`, and `materialize` receives the plan
-alone, so it has nothing to refuse on. The Compile section states the rule a library caller applies
-in its place.
+question, and `materialize` writes any plan into any vacant target. The Compile section states the
+rule a library caller applies in its place.
 
 **`isPath` does not prove host portability.** It proves bounded target-relative syntax and rejects
 traversal, separators, controls, and reserved syntax characters. It deliberately admits host-specific
@@ -1188,8 +1286,9 @@ port, so the run drives nothing external and stays in `test`.
   taken from a hostile value.
 - [`tests/src/core/templates.test.ts`](../tests/src/core/templates.test.ts) — the frozen template
   definitions.
-- [`tests/src/core/constants.test.ts`](../tests/src/core/constants.test.ts) — the scaffold pin every
-  generated workspace inherits, held to the version this manifest declares.
+- [`tests/src/core/constants.test.ts`](../tests/src/core/constants.test.ts) — the seeded rows named
+  as a set, the floor form every shared table and this manifest carry, and the emitted TypeScript
+  bound.
 - [`tests/src/server/Materializer.test.ts`](../tests/src/server/Materializer.test.ts) — every
   mutation verb against a real temporary target and a real vendored root.
 - [`tests/src/server/WriteTransaction.test.ts`](../tests/src/server/WriteTransaction.test.ts) —

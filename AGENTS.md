@@ -84,6 +84,7 @@ configs/  thin target wrappers around root Vite/TypeScript configuration
 - Treat a mid-task type change from the user as immediately authoritative. Type failures identify implementation that has not caught up.
 - Insert a failing proof before fixing a defect: record the exact command and its failing count, implement, then record the same command green. A test that never ran red does not bind to the defect it claims.
 - Run the question rather than reasoning about it. Get the smallest real input through the real code and read the real output, as early as the question can be put under a test. Reasoning chooses what to run and interprets what comes back; it never replaces the run.
+- When a claim about a TypeScript edit can name its project, its case, and the edit that must break with the stage it breaks at, call the `prove` tool the `probe` MCP server registers before relying on the claim. `.claude/rules/quality.md` § Instruments owns that rule and the receipt it requires.
 - Test your own assumptions before relying on them, and before stating them. A probe needs no dispute to justify it, and an unverified belief you put into context becomes a fact for everything downstream.
 - Follow the applicable repository skill for comprehensive hardening, research, centralization, contract adoption, real-service integration, or cross-package alignment.
 - Leave no current-scope requirement as a TODO, skipped test, deferred row, or hidden follow-up.

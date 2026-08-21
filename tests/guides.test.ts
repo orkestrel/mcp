@@ -3,12 +3,15 @@
 // own, and are what a sibling package changes.
 
 import type { JSONRPCMessage, MCPDispatcherInterface } from '@src/core'
+import type { ChildProcess } from 'node:child_process'
+import type { ScratchInterface } from '@orkestrel/test/server'
 import { createMCPLegacy, createMCPServer } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
-import { fstatSync, readFileSync } from 'node:fs'
+import { closeSync, fstatSync, openSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { createStdioClientTransport, createStdioServer } from '@src/server'
 import {
@@ -26,7 +29,7 @@ import {
 	symbolKey,
 } from '@orkestrel/guide'
 import { requireValue } from '@orkestrel/test'
-import { readInventory } from '@orkestrel/test/server'
+import { createScratch, readInventory } from '@orkestrel/test/server'
 import { waitForSettlement } from './setup.js'
 import { findMissingNamedImports } from './setupServer.js'
 
@@ -676,20 +679,46 @@ for (const entry of manifest) {
 // a provided `env` REPLACING `process.env`, and that the child's `stderr` INHERITS the parent's.
 // Both are now stated the other way round in the guide, so both are executed here.
 //
-// One child reports what it actually received. Every reading is compared against the same
+// One child reports what it actually received. Each transport reading is contrasted with the same
 // reading taken from a raw `node:child_process.spawn` configured the way the old sentences
-// described this transport — `env` replacing and `stderr` inheriting. That control sits outside
-// this package entirely and reports the opposite of every assertion below, which is what makes
-// these assertions evidence rather than a restatement of the source.
+// described this transport — `env` replacing and `stderr` inheriting. Those controls sit outside
+// this package entirely, which is what makes these assertions evidence rather than a restatement
+// of the source.
+//
+// Two host facts decide what each control can compare:
+//
+// - Windows injects a host set — `PATH`, `SYSTEMROOT`, `TEMP`, `USERPROFILE`, and more — into any
+//   explicit environment, so a child of a REPLACING spawn there reads its parent's own `PATH`
+//   unchanged. `PATH` separates a merge from a replacement on a POSIX host alone.
+//   `guides/process.md` § The child environment owns that law. What separates them on every host
+//   is a key this test names itself, outside the injected set.
+// - `fstat` gives a Windows anonymous pipe no file id and reports a per-process handle value as
+//   `ino` instead, so two processes holding the SAME pipe read different identities and one
+//   process reads a different identity for every child it hands that pipe down to. A `dev:ino`
+//   comparison across a process boundary carries meaning only for a descriptor that has a file
+//   id. The inherit control therefore hands its child a scratch FILE, not this process's own
+//   `stderr`, which under this runner is exactly such a pipe.
 
-/** One request, one JSON-RPC reply carrying what the spawned child's environment and `stderr` are. */
+/** The bytes the reporting child writes to its own `stderr` before it answers. */
+const STDERR_SENTINEL = 'stderr-sentinel'
+
+/** The scratch file the inherit control hands down as its relay's `stderr`. */
+const STDERR_FILE = 'stderr.log'
+
+/**
+ * One request, one JSON-RPC reply carrying what the spawned child's environment and `stderr` are.
+ *
+ * The kind reading masks the mode bits itself: `Stats.isFIFO()` answers `false` for a Windows
+ * anonymous pipe whose mode carries `S_IFIFO`, so the derived answer is the one that travels.
+ */
 const REPORT_SCRIPT = `
 const readline = require('node:readline')
-const { fstatSync } = require('node:fs')
+const { constants, fstatSync } = require('node:fs')
 const rl = readline.createInterface({ input: process.stdin })
 rl.on('line', (line) => {
 	const message = JSON.parse(line)
 	if (message.method !== 'report') return
+	process.stderr.write(${JSON.stringify(STDERR_SENTINEL)})
 	const stderr = fstatSync(2)
 	process.stdout.write(JSON.stringify({
 		jsonrpc: '2.0',
@@ -697,15 +726,36 @@ rl.on('line', (line) => {
 		result: {
 			path: process.env.PATH,
 			supplied: process.env.MCP_GUIDE_SUPPLIED,
+			inherited: process.env.MCP_GUIDE_INHERITED,
 			absent: process.env.MCP_GUIDE_ABSENT,
 			stderr: String(stderr.dev) + ':' + String(stderr.ino),
+			pipe: (stderr.mode & constants.S_IFMT) === constants.S_IFIFO,
 		},
 	}) + '\\n')
 })
 `
 
+/**
+ * A raw spawn whose `stdio` slot 2 is `'inherit'`, run one level down from this test.
+ *
+ * The relay is what makes `'inherit'` measurable. This process cannot name its own `stderr` across
+ * a process boundary on every host, so it hands the relay a scratch file instead and reads that
+ * file's identity back out of the grandchild `'inherit'` passes it down to.
+ */
+const RELAY_SCRIPT = `
+const { spawn } = require('node:child_process')
+const child = spawn(process.execPath, ['-e', ${JSON.stringify(REPORT_SCRIPT)}], {
+	stdio: ['pipe', 'pipe', 'inherit'],
+})
+process.stdin.pipe(child.stdin)
+child.stdout.pipe(process.stdout)
+`
+
 /** The `env` this guide's claim is about: one key the parent does not carry. */
 const SUPPLIED_ENVIRONMENT = Object.freeze({ MCP_GUIDE_SUPPLIED: 'supplied' })
+
+/** The key this process carries and never supplies, so only a merge can put it in a child. */
+const INHERITED = Object.freeze({ key: 'MCP_GUIDE_INHERITED', value: 'inherited' })
 
 function readReport(value: unknown): Readonly<Record<string, unknown>> {
 	if (!isRecord(value)) throw new Error('The child returned no JSON-RPC envelope')
@@ -714,10 +764,10 @@ function readReport(value: unknown): Readonly<Record<string, unknown>> {
 	return result
 }
 
-/** The identity of this process's own `stderr`, the thing an inherited descriptor would equal. */
-function readOwnStderr(): string {
-	const own = fstatSync(2)
-	return `${String(own.dev)}:${String(own.ino)}`
+/** The identity `fstat` reports for one descriptor, in the shape the reporting child reports it. */
+function readIdentity(descriptor: number): string {
+	const stat = fstatSync(descriptor)
+	return `${String(stat.dev)}:${String(stat.ino)}`
 }
 
 async function reportThroughTransport(): Promise<Readonly<Record<string, unknown>>> {
@@ -743,11 +793,8 @@ async function reportThroughTransport(): Promise<Readonly<Record<string, unknown
 	}
 }
 
-async function reportThroughReplacingSpawn(): Promise<Readonly<Record<string, unknown>>> {
-	const child = spawn(process.execPath, ['-e', REPORT_SCRIPT], {
-		env: { ...SUPPLIED_ENVIRONMENT },
-		stdio: ['pipe', 'pipe', 'inherit'],
-	})
+/** Drive one raw-spawn control through its stdout pipe and read back the one report line. */
+async function readSpawnReport(child: ChildProcess): Promise<Readonly<Record<string, unknown>>> {
 	const stdout = child.stdout
 	const stdin = child.stdin
 	if (stdout === null || stdin === null) throw new Error('The control child has no stdio pipes')
@@ -773,7 +820,49 @@ async function reportThroughReplacingSpawn(): Promise<Readonly<Record<string, un
 	}
 }
 
+/**
+ * The environment control: a raw spawn whose `env` REPLACES `process.env`.
+ *
+ * Its `stderr` is dropped because the reporting child writes a sentinel there and this control
+ * makes no claim about that descriptor. The inherit control owns that claim.
+ */
+async function reportThroughReplacingSpawn(): Promise<Readonly<Record<string, unknown>>> {
+	return await readSpawnReport(
+		spawn(process.execPath, ['-e', REPORT_SCRIPT], {
+			env: { ...SUPPLIED_ENVIRONMENT },
+			stdio: ['pipe', 'pipe', 'ignore'],
+		}),
+	)
+}
+
+/** The `stderr` control: a raw spawn that INHERITS the descriptor this test handed its relay. */
+async function reportThroughInheritingSpawn(
+	descriptor: number,
+): Promise<Readonly<Record<string, unknown>>> {
+	return await readSpawnReport(
+		spawn(process.execPath, ['-e', RELAY_SCRIPT], { stdio: ['pipe', 'pipe', descriptor] }),
+	)
+}
+
 describe('guides/mcp.md § stdio transport — what the spawned child actually receives', () => {
+	let owned: { readonly scratch: ScratchInterface; readonly descriptor: number } | undefined
+
+	beforeAll(() => {
+		process.env[INHERITED.key] = INHERITED.value
+		const scratch = createScratch()
+		scratch.write(STDERR_FILE, '')
+		owned = { scratch, descriptor: openSync(join(scratch.path, STDERR_FILE), 'a') }
+	})
+
+	afterAll(() => {
+		if (owned !== undefined) {
+			closeSync(owned.descriptor)
+			owned.scratch.destroy()
+		}
+		owned = undefined
+		delete process.env[INHERITED.key]
+	})
+
 	it('MERGES a provided env over process.env, so the child inherits every key the guide says it does', async () => {
 		const inherited = process.env['PATH']
 		expect(typeof inherited).toBe('string')
@@ -781,8 +870,11 @@ describe('guides/mcp.md § stdio transport — what the spawned child actually r
 
 		const report = await reportThroughTransport()
 
-		// The sentence the guide now carries: an unlisted parent key still reaches the child.
+		// The sentence the guide now carries: an unlisted parent key still reaches the child. A
+		// Windows child reads `PATH` under a replacing spawn too, so the key below is what
+		// separates a merge from a replacement on every host.
 		expect(report['path']).toBe(inherited)
+		expect(report['inherited']).toBe(INHERITED.value)
 		// The override layer works, so the merge is a merge and not a plain inherit.
 		expect(report['supplied']).toBe('supplied')
 		// The readout can report absence, so the assertions above are not an artifact of it
@@ -790,25 +882,38 @@ describe('guides/mcp.md § stdio transport — what the spawned child actually r
 		expect(report['absent']).toBeUndefined()
 	})
 
-	it('CONTROL — a raw spawn whose env REPLACES the parent hands the child no PATH at all', async () => {
+	it('CONTROL — a raw spawn whose env REPLACES the parent withholds every key only the parent carries', async () => {
 		const report = await reportThroughReplacingSpawn()
 
-		expect(report['path']).toBeUndefined()
+		expect(report['inherited']).toBeUndefined()
+		expect(report['absent']).toBeUndefined()
 		expect(report['supplied']).toBe('supplied')
 	})
 
 	it('PIPES the child stderr, so the parent stderr never receives a byte of it', async () => {
 		const report = await reportThroughTransport()
 
-		// A piped descriptor is a fresh pipe: it cannot be the one this process writes to.
-		expect(typeof report['stderr']).toBe('string')
-		expect(report['stderr']).not.toBe(readOwnStderr())
+		// A fresh pipe the supervisor made, rather than a descriptor this process handed down.
+		// The inherit control proves this reading can report the other answer: a handed-down
+		// descriptor carrying a file id reads `false` there.
+		//
+		// The reading separates the two only on a host whose own `stderr` carries a file id.
+		// Under a runner that hands its worker an anonymous pipe — this one — an inherited
+		// descriptor reads as a pipe too, and no descriptor this process can name tells them
+		// apart. A console or file `stderr` closes that gap without touching this assertion.
+		expect(report['pipe']).toBe(true)
 	})
 
-	it("CONTROL — a raw spawn with stdio 'inherit' hands the child this process's own stderr", async () => {
-		const report = await reportThroughReplacingSpawn()
+	it("CONTROL — a raw spawn with stdio 'inherit' hands the child the exact descriptor its parent holds", async () => {
+		const held = requireValue(owned)
 
-		expect(report['stderr']).toBe(readOwnStderr())
+		const report = await reportThroughInheritingSpawn(held.descriptor)
+
+		// The grandchild reports the scratch file this test handed the relay, identity and kind.
+		expect(report['stderr']).toBe(readIdentity(held.descriptor))
+		expect(report['pipe']).toBe(false)
+		// And the bytes it wrote to that descriptor landed in the file this process owns.
+		expect(held.scratch.read(STDERR_FILE)).toBe(STDERR_SENTINEL)
 	})
 })
 

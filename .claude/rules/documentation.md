@@ -69,8 +69,9 @@ Never use in-repository `@src/*` aliases in public guide examples; reserve them 
 - Set `name` to the skill's own directory name.
 - Write `description` as a single-line scalar or a folded `>-` block, and no other shape. Include in it a sentence beginning `Use ` that names when to invoke the skill.
 - Do not put model routing or package version catalogs in a skill.
-- Validate every referenced resource; do not leave template TODOs or auxiliary README/changelog files.
+- Validate every referenced resource, leave no template TODOs, and limit each skill directory to `SKILL.md`, `agents/openai.yaml`, and the `references/*.md` files its `SKILL.md` names; add no other file or directory.
 - Write `agents/openai.yaml` as one root `interface:` mapping over exactly `display_name`, `short_description`, and `default_prompt`, in that order, each on its own two-space-indented line.
+- Research the external schema only when a consumer needs a key outside `display_name`, `short_description`, and `default_prompt`, and add no key before then.
 - Give every one of those keys a non-empty single-quoted scalar, and write an apostrophe inside it as `''`.
 - Name the skill's own `$<directory>` token in `default_prompt`.
 - Keep provider bridges minimal: they load one canonical workflow and add no competing instructions.

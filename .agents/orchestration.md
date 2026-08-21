@@ -566,7 +566,9 @@ right to stop.
   allowlist. A read-only role cannot write a report file, cannot write a probe, and cannot run a
   sandbox that writes, so naming any of those stops the unit on arrival over a detail the allowlist
   already settled. Where a read-only lane needs executed evidence, produce it separately and hand it
-  over: the Orchestrator supplies the evidence and the lane rules on it.
+  over: the Orchestrator supplies the evidence and the lane rules on it. When the evidence a lane
+  needs is a `prove` verdict and the lane's allowlist omits that tool, the Orchestrator takes the
+  call outside the lane's live interval and hands over the complete rendered verdict.
 - Scope a change by the files its result makes **false**, not by the files that declare the thing
   changing. Counting importers finds only part of that set. A test asserting the behaviour being
   reversed, a fixture carrying a value being raised, a golden digest over generated output, and a

@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import {
 	cpSync,
 	existsSync,
+	globSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -14,6 +15,16 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
 import * as ts from 'typescript'
+
+// Windows resolves the launcher only as `npm.cmd`, and `spawnSync` applies no PATHEXT
+// resolution, so naming `npm` fails ENOENT there.
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+// Windows needs a shell to launch a `.cmd`: Node refuses one directly since the
+// batch-argument hardening, and `spawnSync` returns EINVAL with a null status
+// rather than an exit code the caller can read. Every argument passed to npm in
+// this file is a literal or a path this file built, so the shell has nothing to
+// escape.
+const shell = process.platform === 'win32'
 
 // The consumer this proof builds is the only subject that answers for the published artifact. A
 // specifier resolved from this repository reaches the repository's own manifest, or the copy of an
@@ -336,21 +347,29 @@ function findUnexpectedPackedPaths(
  */
 function buildPackedConsumer(root: string, scratch: string, consumer: string): readonly string[] {
 	const pack = spawnSync(
-		'npm',
+		npm,
 		['pack', '--json', '--ignore-scripts', '--pack-destination', scratch],
 		{
 			cwd: root,
 			encoding: 'utf8',
+			windowsHide: true,
+			shell,
 		},
 	)
 	if (pack.error !== undefined || pack.status !== 0) {
 		throw new Error(`npm pack failed: ${pack.error?.message ?? pack.stderr}`)
 	}
-	const packed: unknown = JSON.parse(pack.stdout)
-	if (!Array.isArray(packed)) throw new Error('npm pack returned no artifact list')
-	const [packedArtifact] = packed
-	const filename = readField(packedArtifact, 'filename')
+	// The installed npm reports `--json` as a record keyed by package name rather than an
+	// array, and that shape is undocumented and has moved before, so the artifact's filename
+	// is read from the destination directory instead of trusted out of the parsed record.
+	const archives = globSync('*.tgz', { cwd: scratch })
+	if (archives.length !== 1) throw new Error('npm pack did not write exactly one archive')
+	const [filename] = archives
 	if (typeof filename !== 'string') throw new Error('npm pack returned no artifact filename')
+	const packed: unknown = JSON.parse(pack.stdout)
+	const [packedArtifact] = Object.values(
+		typeof packed === 'object' && packed !== null ? packed : {},
+	)
 	const packedPaths = readPackedPaths(packedArtifact)
 	const tarball = join(scratch, filename)
 
@@ -360,9 +379,9 @@ function buildPackedConsumer(root: string, scratch: string, consumer: string): r
 		JSON.stringify({ name: 'mcp-distribution-consumer', private: true, type: 'module' }),
 	)
 	const install = spawnSync(
-		'npm',
+		npm,
 		['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball],
-		{ cwd: consumer, encoding: 'utf8' },
+		{ cwd: consumer, encoding: 'utf8', windowsHide: true, shell },
 	)
 	const packageRoot = join(consumer, 'node_modules', '@orkestrel', 'mcp')
 	if (install.status !== 0 || install.error !== undefined) {

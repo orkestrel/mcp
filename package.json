@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/mcp",
-	"version": "0.0.20",
+	"version": "0.0.21",
 	"description": "A typed Model Context Protocol client/server with pluggable HTTP, WebSocket, and stdio transports. Part of the @orkestrel line.",
 	"keywords": [
 		"json-rpc",
@@ -93,34 +93,34 @@
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:distribution -- --mode release"
 	},
 	"dependencies": {
-		"@orkestrel/contract": "^0.0.12",
+		"@orkestrel/contract": "^0.0.13",
 		"@orkestrel/emitter": "^0.0.7",
-		"@orkestrel/process": "^0.0.4",
+		"@orkestrel/process": "^0.0.5",
 		"@orkestrel/sse": "^0.0.5",
 		"@orkestrel/tool": "^0.0.11",
 		"@orkestrel/websocket": "^0.0.9"
 	},
 	"devDependencies": {
-		"@microsoft/api-extractor": "^7.58.12",
+		"@microsoft/api-extractor": "^7.59.0",
 		"@modelcontextprotocol/conformance": "0.2.0-alpha.10",
 		"@orkestrel/guide": "^0.0.12",
-		"@orkestrel/probe": "^0.0.1",
-		"@orkestrel/router": "^0.0.10",
+		"@orkestrel/probe": "^0.0.2",
+		"@orkestrel/router": "^0.0.11",
 		"@orkestrel/scaffold": "^0.0.47",
 		"@orkestrel/server": "^0.0.14",
-		"@orkestrel/test": "^0.0.7",
+		"@orkestrel/test": "^0.0.8",
 		"@types/node": "^26.2.0",
 		"@vitest/browser-playwright": "^4.1.11",
 		"oxfmt": "^0.64.0",
 		"oxlint": "^1.79.0",
 		"playwright": "^1.62.1",
 		"typescript": "^6.0.3",
-		"vite": "~8.2.1",
+		"vite": "^8.2.2",
 		"vite-plugin-dts": "^5.0.3",
 		"vitest": "^4.1.11"
 	},
 	"peerDependencies": {
-		"@orkestrel/router": "^0.0.10",
+		"@orkestrel/router": "^0.0.11",
 		"@orkestrel/server": "^0.0.14"
 	},
 	"engines": {

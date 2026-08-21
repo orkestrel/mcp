@@ -93,6 +93,14 @@ its own:
 
 A probe is a throwaway instrument that settles one question. It is not a test and never ships.
 
+Route the question before writing a probe. When you can state the edit you believe is correct and the
+edit that must break with the stage it breaks at, the question is a claim for the `prove` tool the
+`probe` MCP server registers, and `.claude/rules/quality.md` § Instruments owns that rule. When the
+question carries no stated belief to falsify yet, when the subject lies outside the TypeScript a
+workspace project judges, or when the proof needs what that tool's stages do not model — a process
+tree, a listening socket, an installed package, a built entry driven as a child, or a live external
+service — write a probe.
+
 The kinds split by which tool has to see the probe:
 
 - A **type probe** is read by `tsc`, whose scoped project includes only its own environment, so it
@@ -101,10 +109,21 @@ The kinds split by which tool has to see the probe:
 - A **runtime probe** is collected by a Vitest project, so it lives in `tmp/probe/` and runs through
   the `probe` project. `tmp/` is ignored by git, so no probe enters a commit by accident, and every
   test script names its project, so no gate runs the `probe` project.
+- A **bench** is read by Vitest's benchmark mode, so it lives inside a test file as a block behind
+  the `if (import.meta.env.MODE === 'benchmark')` guard. Only the `test:bench` script collects the
+  block, test mode fails an unguarded `bench()` call loudly, and no gate runs a bench.
 
 Run a probe before relying on an unverified belief about behaviour: what a function returns, what a
 configuration resolves to, whether a path is reached at all. Prefer a probe to an argument whenever
 the probe is cheap.
+
+When the question is whether the difference between methods is a magnitude or negligible, write a
+guarded bench block beside the probe test and run the `test:bench` script. Declare the threshold
+before the run, read the ratio between the methods against each side's reported uncertainty, and
+record nothing below a magnitude. A settled magnitude that underwrites an implementation choice
+promotes with its test into the mirrored suite and keeps its guarded block there while that choice
+stands. A deterministic relationship promotes as an ordinary assertion, so delete the block. Never
+commit baseline output.
 
 These rules bind every probe:
 

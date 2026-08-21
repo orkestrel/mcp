@@ -183,7 +183,7 @@ The contracts and options, all from `@orkestrel/process`.
 | `ProcessManagerEventMap`  | type      | A manager's events — `launch(id)` and `exit(id, exit)`.                                                                          |
 | `ProcessManagerOptions`   | interface | `ProcessManager` construction — initial `on` listeners and an `error` handler.                                                   |
 | `ProcessManagerInterface` | interface | The registry surface — `emitter` / `count` plus the query, launch, stop, and destroy methods.                                    |
-| `ProcessErrorCode`        | type      | The failure categories — `spawn`, `timeout`, `duplicate`, `protocol`, or `invalid`.                                              |
+| `ProcessErrorCode`        | type      | The failure categories — `spawn`, `timeout`, `input`, `duplicate`, `protocol`, or `invalid`.                                     |
 | `ProcessErrorContext`     | interface | Structured failure detail — `id`, `command`, `code`, `signal`, or `value`.                                                       |
 | `ProcessErrorOptions`     | interface | `ProcessError` construction — `code` plus optional `context`, `cause`, `result`.                                                 |
 
@@ -237,7 +237,7 @@ barrier shared by every call.
 
 | Method    | Returns            | Behavior                                                                                     |
 | --------- | ------------------ | -------------------------------------------------------------------------------------------- |
-| `send`    | `Promise<boolean>` | Write one line to the open stdin channel; true when the line reached the host without error. |
+| `send`    | `Promise<boolean>` | Write one line to the open stdin channel; true when the host accepted the bytes.             |
 | `stop`    | `Promise<boolean>` | Terminate the child tree and await its exit; true when the native exit was observed.         |
 | `destroy` | `Promise<void>`    | Stop the child, destroy stdin, then destroy the emitter last; the barrier every call shares. |
 
@@ -259,10 +259,14 @@ name ids and `void` when you stop every child.
 ## Supervised children
 
 `Process` spawns one child and captures both its streams. Standard output is framed through
-`readline`, including a final line written without a trailing newline. Standard error is decoded and
-forwarded live as the `stderr` event, while a byte-bounded raw tail is retained as `evidence` — the
-diagnostic to attach to a failed exit. The typed `emitter` also carries the child `error` cause on a
-spawn fault and the terminal `exit`, alongside the `exit` promise.
+`readline`, including a final line written without a trailing newline. A line feed, a CRLF pair, and
+a bare carriage return each terminate a line, and a CRLF split across delivered chunks joins as one
+break. A child that redraws a progress bar with a carriage return therefore yields one line per
+redraw, and consecutive carriage returns yield an empty line between them. Standard error is decoded
+and forwarded live as the `stderr` event, while a byte-bounded raw tail is retained as `evidence` —
+the diagnostic to attach to a failed exit. The typed `emitter` also carries the child `error` cause
+on a spawn fault, a `ProcessError` coded `protocol` whose cause is a host-reported standard-input
+fault, and the terminal `exit`, alongside the `exit` promise.
 
 `ProcessOptions` requires `command` and `workspace`; the rest are optional:
 
@@ -273,6 +277,7 @@ spawn fault and the terminal `exit`, alongside the `exit` promise.
 | `grace`     | `number`                        | no       | POSIX milliseconds between `SIGTERM` and `SIGKILL`. Default: `PROCESS_GRACE` (`5_000`).                    |
 | `evidence`  | `number`                        | no       | Maximum retained stderr tail in bytes. Default: `PROCESS_EVIDENCE` (`2_048`).                              |
 | `backlog`   | `number`                        | no       | Soft high-water mark in bytes; termination retains at most twice `backlog`. Default: `PROCESS_BACKLOG`.    |
+| `delivery`  | `number`                        | no       | Milliseconds an unconfirmed `send` waits before resolving `false`; `0` or omitted disables the bound.      |
 | `writable`  | `boolean`                       | no       | When `true`, stdin stays open for `send`; when `false` or omitted, stdin closes after any initial `input`. |
 | `signal`    | `AbortSignal`                   | no       | Aborting this signal terminates the child through the same bounded `stop`.                                 |
 | `on`        | `EmitterHooks<ProcessEventMap>` | no       | Initial `stderr`, `error`, and `exit` listeners installed at construction.                                 |
@@ -311,23 +316,46 @@ stdout holds the child's own write and therefore its exit. The teardown drain re
 `backlog`; it drops later lines without pausing stdout. The `truncated` property becomes `true` when
 either the no-consumer mark or the termination cap omits a line, so a consumer can detect the gap.
 
-A retained line costs its payload bytes plus the newline that framed it, so a line carrying no
-payload still costs one byte. That is what bounds a flood of empty lines, which would otherwise be
-free and defeat the mark entirely.
+A retained line costs its payload bytes plus one byte for the break that framed it, whichever
+terminator the child wrote, so a line carrying no payload still costs a byte. That is what bounds a
+flood of empty lines, which would otherwise be free and defeat the mark entirely.
 
 ### Standard input
 
 `writable: true` keeps stdin open for `send`. `send` never rejects and never throws: it resolves
-`true` when the host reported the line handled, and `false` when the channel was closed, destroyed,
-or ended, or when the write failed.
+`true` when the host accepted the bytes without reporting a fault, and `false` when the channel was
+closed, destroyed, ended, failed, or left the write unconfirmed through `delivery`. Acceptance is a
+fact about the host's pipe rather than about the child: it does not prove that the child read the
+bytes, and it does not prove that the child ever will.
 
-A stdin delivery failure is swallowed on purpose. The engine attaches a stdin `error` listener that
-ignores the fault, so a child that closed its end of the pipe never crashes the caller with an
-unhandled stream error. The failure still reaches you: `send` resolves `false`, the child's outcome
-arrives through `exit`, and a caller that wants a deadline arms its own timer and calls `stop`. A
-line written to a child that is not reading stays pending until the child drains it or the channel
-closes, and every terminal teardown path destroys stdin, so a pending `send` always settles by
-teardown.
+After `stop` or `destroy` begins, a later `send` call resolves `false`. Version 0.0.4 could resolve
+that call `true` before teardown destroyed the pipe. The narrower answer avoids claiming delivery
+for bytes the package is about to discard.
+
+A host-reported fault on the channel surfaces rather than being swallowed. The affected `send`
+resolves `false`, and the `error` event carries a `ProcessError` coded `protocol` whose `cause` is
+the host fault, so a message lost to a dying child is an event you can act on. The channel holds one
+failure state: the write callback and the stream error report the same fault once, and every later
+`send` resolves `false` with no further event.
+
+A channel the package or consumer has ended stays quiet for its remaining life. A `stop`, a
+`destroy`, or a channel that was never writable settles every pending write `false` and emits
+nothing. The constructor-supplied `input` write and its closing `end` form the initial input phase;
+a fault arising from that sequence also emits nothing and creates no channel-failure state. Only a
+`writable: true` channel that has not yet ended surfaces a later host fault as `protocol`.
+
+An ordinary write settles as soon as the kernel accepts it. A write larger than the host's pipe
+buffer to a child that never reads it can fill the pipe and remain unconfirmed. `delivery` bounds
+that wait: an unconfirmed write resolves `false` after the given milliseconds, and no event fires,
+because the bound expiring is not a fault the host reported. Omit `delivery`, or pass `0`, and the
+write stays pending until the channel faults or teardown settles it.
+
+Neither mechanism proves delivery, so a consumer that needs a deadline still arms its own timer and
+calls `stop`. On Windows 11 with Node v24.18.1, measured on 2026-08-21, a child that closes its own
+file descriptor 0 can leave the parent's pipe writable: `send` resolves `true` and no fault is ever
+reported while that child stays alive, so `true` there records bytes taken into a pipe nobody will
+read. After that child exits, `send` resolves `false` because the channel is closed, and a write
+still pending when it exits fails with the host's `EOF` and arrives as the `protocol` error.
 
 ```ts
 import { createProcess } from '@orkestrel/process/server'
@@ -341,7 +369,7 @@ const echo = createProcess({
 	writable: true,
 })
 
-await echo.send('ping') // true — the line reached the host
+await echo.send('ping') // true — the host accepted the bytes
 await echo.stop() // true — the native exit was observed
 await echo.destroy()
 ```
@@ -585,6 +613,12 @@ const echoed = executeSync(
 echoed.stdout === input // true
 ```
 
+The `execute` function writes `input` with a host callback. A fault while that write is pending ends
+the run by design and makes `failed` true. With `strict: true`, the rejection is coded `input`, its
+message states that standard-input writing failed, and it carries the host fault as its `cause`;
+with `strict: false`, the result carries no cause member. This behavior is distinct from the quiet
+constructor input phase of `Process`.
+
 A run with no `timeout` and no `signal` is unbounded, and what it waits for is stdio completion
 rather than process exit. A descendant that inherits the child's stdio holds those pipes open after
 the child itself has exited, and the run stays pending for as long as the descendant lives. Give
@@ -604,18 +638,21 @@ result, and `expired`, `aborted`, and `truncated` each report one specific thing
 | `aborted`   | The caller's `signal` aborted the run before completion.                   |
 | `truncated` | Either stream exceeded `limit`, so the captured text is the retained head. |
 
-`failed` is derived: a run failed when it expired, was aborted, ended on a host fault, was ended by a
-signal, or exited with a code other than `0`. A `null` code from a spawn fault is therefore a
+`failed` is derived: a run failed when it timed out, was aborted, ended on a host fault, was ended by
+a signal, or exited with a code other than `0`. A `null` code from a spawn fault is therefore a
 failure, an abort is a failure, and a synchronous overflow is a failure. `expired` and `aborted` are
 the ways the run ended the child rather than the child ending itself, and only the earliest observed
-is recorded, so they are never both `true`.
+is recorded, so they are mutually exclusive. For a `strict: false` caller, `failed: true` with
+`expired`, `aborted`, and `truncated` false, `code: 0`, and `signal: null` is the residual signature
+that a host fault ended the run.
 
 A spawn fault reports the host's negative errno in `ProcessExit.code` and an asynchronous
 `ExecuteResult.code`. The synchronous `executeSync` result reports `null` instead.
 
 By default a failed run rejects with a `ProcessError` carrying the `ExecuteResult` on its `result`
-property. An expired run carries code `timeout`; every other failure carries code `spawn`. Passing
-`strict: false` settles with the result even on failure, so you inspect `failed` yourself.
+property. An expired run carries code `timeout`, and a host fault while writing standard input
+carries code `input`; every other failure carries code `spawn`. Passing `strict: false` settles with
+the result even on failure, so you inspect `failed` yourself.
 
 ```ts
 import { execute } from '@orkestrel/process/server'
@@ -783,13 +820,14 @@ every live child and resolves `void`.
 `ProcessError` is the one failure type, carrying a stable machine-readable `code`. Narrow a caught
 value with `isProcessError`, then branch on `code`.
 
-| Code        | Raised when                                                     |
-| ----------- | --------------------------------------------------------------- |
-| `spawn`     | A rejecting run failed for a reason other than its own timeout. |
-| `timeout`   | A rejecting run's own `timeout` elapsed before completion.      |
-| `duplicate` | `ProcessManager.launch` reused an id that is already live.      |
-| `protocol`  | `ProcessManager.launch` ran after `destroy` had begun.          |
-| `invalid`   | A public input was refused before anything was spawned.         |
+| Code        | Raised when                                                                                               |
+| ----------- | --------------------------------------------------------------------------------------------------------- |
+| `spawn`     | A rejecting run failed outside its own timeout or input write.                                            |
+| `timeout`   | A rejecting run's own `timeout` elapsed before completion.                                                |
+| `input`     | `execute` alone: a rejecting run's standard-input write reported a host fault.                            |
+| `duplicate` | `ProcessManager.launch` reused an id that is already live.                                                |
+| `protocol`  | `ProcessManager.launch` ran after `destroy` began, or a supervised channel's open stdin reported a fault. |
+| `invalid`   | A public input was refused before anything was spawned.                                                   |
 
 `isProcessError` recognizes an error thrown by another installed copy of the package. It reads a
 global own-property brand rather than `instanceof`, so a duplicate installation and an ESM/CommonJS
@@ -830,8 +868,8 @@ try {
 }
 ```
 
-`createExecuteError` is the factory behind a rejecting run, and `buildExecuteResult` assembles the
-result it carries.
+`createExecuteError` constructs rejecting run failures other than standard-input write faults, and
+`buildExecuteResult` assembles the result each error carries.
 
 ```ts
 import { buildExecuteResult } from '@orkestrel/process/server'
@@ -860,20 +898,24 @@ Both `Process` and `ProcessManager` expose a typed `emitter` for fire-and-forget
 logging, metrics, tracing. Subscribe through `child.emitter.on(...)` or `manager.emitter.on(...)`, or
 wire initial listeners through the `on` option; supply an `error` handler to receive a listener's
 throw. The `error` handler and the `Process` `error` event are distinct: the handler receives a
-listener's own throw, while the `error` event carries a child fault. Emitting is observation-only:
-every event fires after the transition it reports, and a throwing listener is isolated and routed to
-the `error` handler, never onto a domain event, so a faulty observer cannot corrupt the engine.
+listener's own throw, while the `error` event carries a child or channel fault. Emitting is
+observation-only: every event fires after the transition it reports, and a throwing listener is
+isolated and routed to the `error` handler, never onto a domain event, so a faulty observer cannot
+corrupt the engine.
 
 | Event map                | Events                                          |
 | ------------------------ | ----------------------------------------------- |
 | `ProcessEventMap`        | `stderr(chunk)` · `error(cause)` · `exit(exit)` |
 | `ProcessManagerEventMap` | `launch(id)` · `exit(id, exit)`                 |
 
-A `Process` emits `stderr` for each decoded standard-error chunk, `error` with its cause when the
-child fails to spawn or errors, and `exit` once, with the terminal `ProcessExit`, when the child
-settles. A spawn fault emits `error` and then still resolves `exit`. A `ProcessManager` emits
-`launch` when a child joins the registry and `exit`, with the child's id and terminal state, when it
-settles and leaves.
+A `Process` emits `stderr` for each decoded standard-error chunk, `error` when the child fails to
+spawn, when the child itself errors, and when the host reports a fault on the standard-input
+channel after the constructor input phase, and `exit` once, with the terminal `ProcessExit`, when
+the child settles. A spawn or child fault carries its cause directly; a standard-input fault carries
+a `ProcessError` coded `protocol` whose `cause` is the host fault. A fault arising from constructor
+`input` or its closing `end` stays quiet. A spawn fault emits `error` and then still resolves `exit`. A
+`ProcessManager` emits `launch` when a child joins the registry and `exit`, with the child's id and
+terminal state, when it settles and leaves.
 
 ```ts
 import { createProcess } from '@orkestrel/process/server'
@@ -1036,6 +1078,14 @@ root. On a Windows host, settle it and re-run every server row with this command
 npx vitest run --config vite.config.ts --no-cache --project src:server
 ```
 
+The standard-input fault rows execute on every host, and only their Windows reading has been taken,
+on 2026-08-21. A write still pending when the child exits reports the host's `EOF` there and `EPIPE`
+on POSIX, and both arrive through the same `protocol` error, so the rows assert that shape rather
+than the errno. The POSIX `EPIPE` fast path is therefore the unproven residue, alongside the delivery
+matrix and the line framing across the supported Node lines. A POSIX child that closes its own file
+descriptor 0 is also expected to fault where the measured Windows child does not. On a POSIX host,
+settle each with the same command.
+
 The pure decision rows do not prove Windows end to end. They prove the decisions.
 
 - [`tests/src/core/errors.test.ts`](../tests/src/core/errors.test.ts) — the error surface:
@@ -1043,11 +1093,13 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   compared against the declared `PROCESS_ERROR_CODES` tuple with a refusal control drawn from
   outside it, and recognition of an error constructed by another source copy of the module.
 - [`tests/src/server/Process.test.ts`](../tests/src/server/Process.test.ts) — the supervised child:
-  line framing including a trailing partial line, the bounded backlog under each consumer policy
-  and under a flood of empty lines, the byte-bounded `evidence` tail and live `stderr` event, `send`
-  over an open and a closed channel, bounded termination and its confirmation, the POSIX escalation
-  from a trapped `SIGTERM` to `SIGKILL`, abort-signal termination, the isolated environment, the
-  `invalid` refusals, and `destroy`.
+  line framing across every terminator, a split CRLF pair, a carriage-return redraw, and a trailing
+  partial line, the bounded backlog under each consumer policy and under a flood of empty lines, the
+  byte-bounded `evidence` tail and live `stderr` event, `send` over an open and a closed channel, the
+  `delivery` bound against its unbounded control, the `protocol` fault a host-reported channel
+  failure raises beside the silence a package-initiated teardown keeps, bounded termination and its
+  confirmation, the POSIX escalation from a trapped `SIGTERM` to `SIGKILL`, abort-signal termination,
+  the isolated environment, the `invalid` refusals, and `destroy`.
 - [`tests/src/server/Retention.test.ts`](../tests/src/server/Retention.test.ts) — the stream-head
   accumulator: delivered and retained totals across a truncating stream.
 - [`tests/src/server/ProcessManager.test.ts`](../tests/src/server/ProcessManager.test.ts) — the

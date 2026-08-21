@@ -150,9 +150,15 @@ parallelism in `service`. In a `private: true` workspace, never declare `prepubl
 configuration.
 
 One project sits on neither axis. `probe` includes `tmp/probe/**/*.test.ts` so an agent can run a
-throwaway instrument against real sources, aliases and setup. Declare no proof there. Every test
-script names its project, so no gate runs it; its directory is ignored by git; and
-`.claude/rules/tests.md` governs what may live there.
+throwaway instrument against real sources, aliases and setup. Declare no proof there. Keep the
+project composed in the root configuration rather than declared as a path string. The `probe` MCP
+server arms through it — its arming specifications live under the `tmp/probe/` directory and infer
+this project — so a workspace that removes the project, or declares it as a path string, fails the
+server's arming, and an unarmed server refuses every `prove` call. The `test:bench` script runs the
+same project in benchmark mode, which collects every test file under the `tmp/probe/` directory and
+the `tests/` tree while refusing every ordinary test case. Every test script names its project and
+the `test:bench` script joins no chain, so no gate runs either mode; the project's directory is
+ignored by git; and `.claude/rules/tests.md` governs what may live there.
 
 - Define a cross-cutting project only for a proof the package actually has.
 - A live-service project is the `service` project in the preceding table, `scripts/service.sh`
@@ -208,24 +214,25 @@ Build/check config alignment:
 
 ## Script intent
 
-| Script                  | Contract                                                          |
-| ----------------------- | ----------------------------------------------------------------- |
-| `dev`                   | Browser development entry                                         |
-| `build`                 | Build configured library/application targets                      |
-| `serve` / `serve:build` | Run built server / build then run                                 |
-| `showcase`              | Showcase dev server                                               |
-| `build:showcase`        | Build `dist/showcase`                                             |
-| `show`                  | Build and copy showcase to `demo/showcase.html`                   |
-| `lint`                  | `oxlint --config .oxlintrc.json --fix .`; separate from typecheck |
-| `lint:check`            | Non-mutating whole-tree lint gate                                 |
-| `check`                 | Comprehensive root typecheck plus configured isolation scopes     |
-| `check:<scope>`         | On-demand environment-isolation pass                              |
-| `format`                | Format all files                                                  |
-| `format:check`          | Non-mutating whole-tree format gate                               |
-| `test`                  | Environment projects plus non-isolated cross-cutting proofs       |
-| `clean`                 | Remove `dist/`                                                    |
-| `copy <from> <to>`      | Copy while creating parent directories                            |
-| `prepublishOnly`        | Publishing workspaces only: the gate chain, then isolated proofs  |
+| Script                  | Contract                                                                   |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `dev`                   | Browser development entry                                                  |
+| `build`                 | Build configured library/application targets                               |
+| `serve` / `serve:build` | Run built server / build then run                                          |
+| `showcase`              | Showcase dev server                                                        |
+| `build:showcase`        | Build `dist/showcase`                                                      |
+| `show`                  | Build and copy showcase to `demo/showcase.html`                            |
+| `lint`                  | `oxlint --config .oxlintrc.json --fix .`; separate from typecheck          |
+| `lint:check`            | Non-mutating whole-tree lint gate                                          |
+| `check`                 | Comprehensive root typecheck plus configured isolation scopes              |
+| `check:<scope>`         | On-demand environment-isolation pass                                       |
+| `format`                | Format all files                                                           |
+| `format:check`          | Non-mutating whole-tree format gate                                        |
+| `test`                  | Environment projects plus non-isolated cross-cutting proofs                |
+| `clean`                 | Remove `dist/`                                                             |
+| `copy <from> <to>`      | Copy while creating parent directories                                     |
+| `prepublishOnly`        | Publishing workspaces only: the gate chain, then isolated proofs           |
+| `prepack`               | Publishing workspaces only: rebuild `dist/` so a pack ships current output |
 
 Run `show` only **after** formatting. The committed `demo/showcase.html` is generated/minified; formatting after generation would expand its inlined bundle.
 

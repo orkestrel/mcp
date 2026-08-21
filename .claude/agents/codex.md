@@ -98,10 +98,10 @@ On any interruption or missing result, in order:
 3. Interrupted CLI exec → the journal survives. Report the thread id and the last journal
    events as a deviation, and let the Orchestrator choose resume or fresh.
 
-`codex exec resume <session-id>` inherits the session's sandbox, model, and effort, and
-rejects `--sandbox`, `--model`, and `-c`. Only output flags and the prompt are valid on a
-resume. A read-only session can therefore never be resumed into a writer, so
-implementation always gets a fresh `workspace-write` session.
+`codex exec resume <session-id>` inherits the session's sandbox, model, effort, and
+working directory, and rejects `--sandbox`, `--model`, `-c`, and `-C`. Only output flags
+and the prompt are valid on a resume. A read-only session can therefore never be resumed
+into a writer, so implementation always gets a fresh `workspace-write` session.
 
 ## Analyst route
 

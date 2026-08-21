@@ -19,6 +19,7 @@ import {
 	SKILL_POLICY_BACKTICKED,
 	SKILL_POLICY_CONTROLS,
 	SKILL_POLICY_EXCLUSION,
+	SKILL_POLICY_FENCED,
 	SKILL_POLICY_FOLDED,
 	SKILL_POLICY_PARAGRAPHS,
 	stemToPolicyCandidates,
@@ -359,6 +360,7 @@ describe('skill family policy', () => {
 			const violations = inspectPolicyControl(control)
 			expect(violations).toHaveLength(1)
 			expect(violations[0]?.rule).toBe(control.rule)
+			expect(control.line === undefined || violations[0]?.line === control.line).toBe(true)
 			expect(control.message === undefined || violations[0]?.message === control.message).toBe(true)
 		})
 	}
@@ -373,6 +375,10 @@ describe('skill family policy', () => {
 
 	it(`${SKILL_POLICY_BACKTICKED.label} [membership: ${SKILL_POLICY_BACKTICKED.membership}]`, () => {
 		expect(inspectPolicyControl(SKILL_POLICY_BACKTICKED)).toEqual([])
+	})
+
+	it(`${SKILL_POLICY_FENCED.label} [membership: ${SKILL_POLICY_FENCED.membership}]`, () => {
+		expect(inspectPolicyControl(SKILL_POLICY_FENCED)).toEqual([])
 	})
 
 	it('parses a folded description containing more than one paragraph', () => {
@@ -401,6 +407,7 @@ describe('skill bridge policy', () => {
 			const violations = inspectPolicyControl(control)
 			expect(violations).toHaveLength(1)
 			expect(violations[0]?.rule).toBe(control.rule)
+			expect(control.line === undefined || violations[0]?.line === control.line).toBe(true)
 			expect(control.message === undefined || violations[0]?.message === control.message).toBe(true)
 		})
 	}
