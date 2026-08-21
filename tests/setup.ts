@@ -2,9 +2,7 @@
 // every test project (core, server, guides). Environment-specific harnesses live in
 // `tests/setupServer.ts`.
 
-import type { EmitterInterface, EventMap } from '@orkestrel/emitter'
 import type { SSEEvent } from '@orkestrel/sse'
-import type { RecorderInterface } from '@orkestrel/test'
 import type {
 	MCPClientTransportEventMap,
 	MCPClientTransportInterface,
@@ -44,143 +42,7 @@ import {
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
 import { createSSEParser } from '@orkestrel/sse'
-import { createRecorder, waitForDelay } from '@orkestrel/test'
-
-// ── Abort-listener recorder (a real AbortSignal, counted) ────────────────────
-//
-// A caller's `AbortSignal` OUTLIVES the request it was passed to, and one controller may drive
-// several calls — so whether a listener was released is a real, load-bearing fact and not an
-// implementation detail. It is also invisible to every other instrument here: a client that
-// never releases and one that always does answer identically to "did aborting after the exit
-// write a cancellation frame", because the client's own `#pending` lookup already refuses that
-// write either way. What separates them is the listener count on the caller's own signal, and
-// the platform publishes no way to read it — so the signal's own registration methods are
-// wrapped on the INSTANCE.
-//
-// This is a recorder over a platform primitive, not a fake of anything this package owns: the
-// signal is a real `AbortSignal` from a real `AbortController`, every registration reaches the
-// real event target, and `abort()` drives the real abort. Only the tally is added.
-
-/** A real `AbortController` whose signal counts the `'abort'` listeners registered on it. */
-export interface TestSignalRecorderInterface {
-	/** The real controller — `abort()` drives the real signal exactly as an unwrapped one does. */
-	readonly controller: AbortController
-	/** The real `AbortSignal` to pass as `options.signal`, with its registration methods counted. */
-	readonly signal: AbortSignal
-	/** How many `'abort'` listeners are registered on the signal right now. */
-	readonly live: number
-}
-
-/**
- * Create a {@link TestSignalRecorderInterface} — a real `AbortSignal` that reports how many
- * `'abort'` listeners are registered on it at this moment.
- *
- * @remarks
- * `live` rises on each `addEventListener('abort', …)` and falls on each matching
- * `removeEventListener`, so it reads the balance a caller-owned signal accumulates across
- * several requests. Listeners of other types are passed through untouched and uncounted.
- *
- * A `{ once: true }` registration that FIRES is removed by the platform without any
- * `removeEventListener` call, so `live` is read at a moment the signal has NOT aborted —
- * which is exactly the moment the question is asked: a request that has exited must leave the
- * caller's signal as clean as it found it, before anybody aborts anything.
- *
- * @returns A recorder over one real controller/signal pair
- *
- * @example
- * ```ts
- * const caller = createSignalRecorder()
- * const pending = client.call('slow', {}, { signal: caller.signal })
- * caller.live // 1 while the request is in flight
- * ```
- */
-export function createSignalRecorder(): TestSignalRecorderInterface {
-	const controller = new AbortController()
-	const signal = controller.signal
-	const add = signal.addEventListener.bind(signal)
-	const remove = signal.removeEventListener.bind(signal)
-	let live = 0
-	signal.addEventListener = (
-		type: string,
-		listener: EventListenerOrEventListenerObject,
-		options?: boolean | AddEventListenerOptions,
-	) => {
-		if (type === 'abort') live += 1
-		add(type, listener, options)
-	}
-	signal.removeEventListener = (
-		type: string,
-		listener: EventListenerOrEventListenerObject,
-		options?: boolean | EventListenerOptions,
-	) => {
-		if (type === 'abort') live -= 1
-		remove(type, listener, options)
-	}
-	return {
-		controller,
-		signal,
-		get live() {
-			return live
-		},
-	}
-}
-
-/** A {@link createRecorder} per listed event of an `EmitterInterface`, keyed by event name. */
-export type EmitterRecorders<TMap extends EventMap, TName extends keyof TMap> = {
-	readonly [K in TName]: RecorderInterface<TMap[K]>
-}
-
-/**
- * Narrow an accumulated `Partial<EmitterRecorders>` to its total mapped form once every
- * listed event has a recorder present — the total guard standing in for an assertion in
- * {@link recordEmitterEvents} (whose loop assigns one recorder per name, so this holds; the
- * explicit per-name presence check keeps the narrowing a sound guard, not a cast).
- *
- * @typeParam TMap - The emitter's {@link EventMap}
- * @typeParam TName - The subset of event names that must each have a recorder
- * @param recorders - The partially-accumulated recorder map to narrow
- * @param events - The event names that must all be present for the map to be total
- * @returns Whether every listed event has a recorder (narrowing `recorders` to total)
- */
-export function isTotal<TMap extends EventMap, TName extends keyof TMap>(
-	recorders: Partial<EmitterRecorders<TMap, TName>>,
-	events: readonly TName[],
-): recorders is EmitterRecorders<TMap, TName> {
-	return events.every((name) => recorders[name] !== undefined)
-}
-
-/**
- * Wire one {@link createRecorder} onto `emitter` for each of the named events — the one
- * generic form of a per-entity `recordXEvents` bundle. Each recorder
- * subscribes via `emitter.on(name, recorder.handler)` and is returned keyed by its event
- * name, typed with that event's argument tuple — so a test asserts what fired
- * (`events.request.calls`) and with which payload.
- *
- * @typeParam TMap - The emitter's {@link EventMap}
- * @typeParam TName - The subset of event names to record (inferred from `events`)
- * @param emitter - The emitter to subscribe the recorders to
- * @param events - The event names to record (each becomes a key of the result)
- * @returns A recorder per name, each subscribed and keyed by event name
- */
-export function recordEmitterEvents<TMap extends EventMap, TName extends keyof TMap>(
-	emitter: EmitterInterface<TMap>,
-	events: readonly TName[],
-): EmitterRecorders<TMap, TName> {
-	// Accumulate into a `Partial` of the exact mapped shape — every value keeps its precise
-	// per-event tuple type, all keys optional until assigned. The dynamic key list is the
-	// untyped edge: once every listed name is present we narrow `Partial` → total through a
-	// guard, never an assertion.
-	const recorders: Partial<EmitterRecorders<TMap, TName>> = {}
-	for (const name of events) {
-		const recorder = createRecorder<TMap[typeof name]>()
-		emitter.on(name, recorder.handler)
-		recorders[name] = recorder
-	}
-	if (!isTotal(recorders, events)) {
-		throw new Error('recordEmitterEvents: a recorder was not wired for every event')
-	}
-	return recorders
-}
+import { waitForDelay } from '@orkestrel/test'
 
 /**
  * Narrow an untyped value to an {@link MCPMethodHandler} the way a DYNAMIC registration must.
@@ -204,25 +66,6 @@ export function isMCPMethodHandler(value: unknown): value is MCPMethodHandler {
 }
 
 // ── Async wait ───────────────────────────────────────────────────────────────
-
-/**
- * Resolve when a signal aborts — the wakeup a cooperating producer parks on, so a fixture
- * can be genuinely suspended on an event that only cancellation will ever deliver.
- *
- * @param signal - The signal whose abort resolves the wait
- * @returns A promise that resolves on abort, and immediately for an already-aborted signal
- *
- * @example
- * ```ts
- * await waitForAbort(options.signal) // parked until somebody ends the request
- * ```
- */
-export function waitForAbort(signal: AbortSignal): Promise<void> {
-	if (signal.aborted) return Promise.resolve()
-	return new Promise((resolve) => {
-		signal.addEventListener('abort', () => resolve(), { once: true })
-	})
-}
 
 /**
  * Await one promise within a bounded interval and clear the watchdog on every settlement path.

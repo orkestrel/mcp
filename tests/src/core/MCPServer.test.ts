@@ -23,6 +23,7 @@ import type {
 	MCPPromptPage,
 	MCPProgress,
 	MCPProgressInterface,
+	MCPServerEventMap,
 	MCPServerInterface,
 	MCPServerOptions,
 	MCPStream,
@@ -68,7 +69,7 @@ import {
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { createRecorder, waitForDelay } from '@orkestrel/test'
+import { createRecorder, createRecorders, waitForDelay } from '@orkestrel/test'
 import {
 	buildNestedRecord,
 	createJSONRPCNotification,
@@ -78,7 +79,6 @@ import {
 	MODERN_METADATA,
 	MemoryResourceManager,
 	modernRequest,
-	recordEmitterEvents,
 	TestTaskManager,
 } from '../../setup.js'
 
@@ -788,7 +788,10 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 
 	it('treats a present non-string version as modern and rejects it with -32602', async () => {
 		const mcp = server()
-		const events = recordEmitterEvents(mcp.emitter, MCP_EVENTS)
+		const events = createRecorders<MCPServerEventMap, (typeof MCP_EVENTS)[number]>(
+			mcp.emitter,
+			MCP_EVENTS,
+		)
 		const response = responseOf(
 			await mcp.dispatch(
 				createJSONRPCRequest({
@@ -950,7 +953,10 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 
 	it('returns no response for a modern notification after emitting its era', async () => {
 		const mcp = server()
-		const events = recordEmitterEvents(mcp.emitter, MCP_EVENTS)
+		const events = createRecorders<MCPServerEventMap, (typeof MCP_EVENTS)[number]>(
+			mcp.emitter,
+			MCP_EVENTS,
+		)
 		const response = responseOf(
 			await mcp.dispatch({
 				jsonrpc: '2.0',
@@ -2493,7 +2499,7 @@ describe('MCPServer — the modern method seam', () => {
 	// consumer's does: through the ONE fact a runtime registration can check.
 	it('contains a registered handler that answers nothing for a request', async () => {
 		const mcp = server()
-		const events = recordEmitterEvents(mcp.emitter, ['error'] as const)
+		const events = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
 		const untyped: unknown = async () => undefined
 		if (!isMCPMethodHandler(untyped)) throw new Error('expected a callable handler')
 		mcp.methods.add('demo/silent', untyped)
@@ -2515,7 +2521,7 @@ describe('MCPServer — the modern method seam', () => {
 
 	it('contains the same handler through the string boundary', async () => {
 		const mcp = server()
-		const events = recordEmitterEvents(mcp.emitter, ['error'] as const)
+		const events = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
 		const untyped: unknown = async () => undefined
 		if (!isMCPMethodHandler(untyped)) throw new Error('expected a callable handler')
 		mcp.methods.add('demo/silent', untyped)
@@ -3006,7 +3012,10 @@ describe('MCPServer — handle (string boundary)', () => {
 describe('MCPServer — request event', () => {
 	it('fires request with the method and id at the top of dispatch', async () => {
 		const mcp = server()
-		const events = recordEmitterEvents(mcp.emitter, MCP_EVENTS)
+		const events = createRecorders<MCPServerEventMap, (typeof MCP_EVENTS)[number]>(
+			mcp.emitter,
+			MCP_EVENTS,
+		)
 		await mcp.dispatch(createJSONRPCRequest({ method: 'ping' }))
 		await mcp.dispatch(createJSONRPCRequest({ method: 'tools/list', id: 2 }))
 
@@ -3018,7 +3027,10 @@ describe('MCPServer — request event', () => {
 
 	it('fires request with no id for a notification, which has none to report', async () => {
 		const mcp = server()
-		const events = recordEmitterEvents(mcp.emitter, MCP_EVENTS)
+		const events = createRecorders<MCPServerEventMap, (typeof MCP_EVENTS)[number]>(
+			mcp.emitter,
+			MCP_EVENTS,
+		)
 		await mcp.dispatch(createJSONRPCNotification('notifications/initialized'))
 
 		expect(events.request.calls).toEqual([])
@@ -3026,7 +3038,10 @@ describe('MCPServer — request event', () => {
 
 	it('fires request through handle as well (parse → dispatch path)', async () => {
 		const mcp = server()
-		const events = recordEmitterEvents(mcp.emitter, MCP_EVENTS)
+		const events = createRecorders<MCPServerEventMap, (typeof MCP_EVENTS)[number]>(
+			mcp.emitter,
+			MCP_EVENTS,
+		)
 		await mcp.handle('{"jsonrpc":"2.0","method":"ping","id":3}')
 
 		expect(events.request.calls).toEqual([['ping', 3, 'modern']])
@@ -3478,7 +3493,7 @@ describe('MCPServer — W02-A: the modern internal-error code', () => {
 describe('MCPServer — W02-A: the broadened error event', () => {
 	it('reports a contained registered-handler throw exactly once and answers detail-free', async () => {
 		const mcp = throwingHandlerServer()
-		const faults = recordEmitterEvents(mcp.emitter, ['error'])
+		const faults = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
 
 		const response = responseOf(await mcp.dispatch(modernRequest('demo/boom')))
 
@@ -3497,7 +3512,7 @@ describe('MCPServer — W02-A: the broadened error event', () => {
 		const mcp = faultingServer(() => {
 			throw thrown
 		})
-		const faults = recordEmitterEvents(mcp.emitter, ['error'])
+		const faults = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
 
 		const serialized = await mcp.handle(JSON.stringify(modernCall({ name: 'echo' })))
 
@@ -3509,7 +3524,7 @@ describe('MCPServer — W02-A: the broadened error event', () => {
 
 	it('reports a contained subscription-source throw once, as one detail-free terminal', async () => {
 		const mcp = throwingSourceServer()
-		const faults = recordEmitterEvents(mcp.emitter, ['error'])
+		const faults = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
 		const stream = streamOf(
 			await mcp.dispatch(
 				createJSONRPCRequest({
@@ -3530,7 +3545,7 @@ describe('MCPServer — W02-A: the broadened error event', () => {
 
 	it('reports nothing for a request that simply completes', async () => {
 		const mcp = server()
-		const faults = recordEmitterEvents(mcp.emitter, ['error'])
+		const faults = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
 
 		await mcp.dispatch(modernRequest('tools/list'))
 
@@ -4114,7 +4129,10 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 			tools: tools(),
 			limit: { metadata: 256 },
 		})
-		const events = recordEmitterEvents(mcp.emitter, MCP_EVENTS)
+		const events = createRecorders<MCPServerEventMap, (typeof MCP_EVENTS)[number]>(
+			mcp.emitter,
+			MCP_EVENTS,
+		)
 
 		const refused = responseOf(
 			await mcp.dispatch(
@@ -4347,7 +4365,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// failure (`-32603`, detail-free, reported once on `error`).
 	it('separates an unrecoverable carrier from a malformed opened payload', async () => {
 		const probe = inputProbe()
-		const faults = recordEmitterEvents(probe.server.emitter, ['error'] as const)
+		const faults = createRecorders<MCPServerEventMap, 'error'>(probe.server.emitter, ['error'])
 		const first = responseOf(await probe.server.dispatch(formCall('taxonomy-1')))
 		const round = roundOf(first)
 
@@ -4626,7 +4644,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 					},
 				},
 			})
-			const faults = recordEmitterEvents(mcp.emitter, ['error'] as const)
+			const faults = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
 
 			const answer = responseOf(await mcp.dispatch(formCall(`contained-${failing}`)))
 
