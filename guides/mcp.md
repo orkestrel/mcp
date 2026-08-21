@@ -2260,7 +2260,22 @@ resume that stream; the caller must call `resume()` before the listener receives
 `options.env`, and that supervisor spawns the child with
 `stdio: ['pipe', 'pipe', 'pipe']`: `stdin`/`stdout` carry the JSON-RPC channel
 and `stderr` is piped and retained as a bounded tail on the supervisor, not
-inherited by the parent. `options.env` merges over `process.env` rather than
+inherited by the parent. The returned `StdioClientTransportInterface` reports
+that tail as `evidence`, so a child that dies before it answers anything still
+leaves the reason it died. Read `evidence` off the
+`createStdioClientTransport` result rather than off `client.transport`, which
+is typed as the wide `MCPClientTransportInterface` and carries no such member.
+The tail follows the child that wrote it, so read it before you open a
+replacement: the next `start()` clears it. How far that reaches inside one
+`close` emit depends on how the lifetime ended. An explicit `close()` still
+holds its teardown barrier while the `close` listeners run, so a listener that
+calls `start()` parks behind that barrier and every later listener still reads
+the captured tail. A natural exit holds no barrier, so a listener's `start()`
+opens the next lifetime inside the emit and clears the value every listener
+after it would have read. Lifetimes never overlap — a `start()` issued while
+a `close()` is still tearing down waits for that teardown to capture its tail
+first — so an older child's tail cannot arrive over a replacement's however the
+calls interleave. `options.env` merges over `process.env` rather than
 replacing it: each named key overrides the inherited value, every unlisted key
 is still inherited, and the child therefore receives every secret this process
 holds. The server side frames its own input with `extractLines` (fold a
@@ -2273,7 +2288,17 @@ lives in the shared `helpers.ts`.
 Closing the client releases the transport's own line pump before the transport awaits the
 supervisor's bounded process teardown. A descendant that inherited the child's stdout pipe
 therefore cannot keep the transport's `close` call pending after the supervisor's teardown has
-resolved.
+resolved. Releasing the pump also ends inbound delivery at the call: a line the supervisor had
+already framed behind the one being delivered is dropped rather than emitted onto a transport whose
+teardown has begun. A `close()` issued while that teardown is running joins it rather than opening
+a second one, so it resolves only after this lifetime's tail is captured and the `close` event has
+fired.
+
+The tail `close()` captures is what the supervisor had received when that bounded termination
+resolved, not the child's complete output. On Windows the supervisor ends the tree with
+`taskkill /F /T`, which nothing in the child can intercept: a `SIGTERM` handler never runs there,
+so the bytes it would have written never exist. A child that ends on its own closes its `stderr`
+first, and that tail is complete.
 
 ```ts
 import { createMCPClient, createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
@@ -2300,15 +2325,15 @@ const tools = await client.tools()
 
 | API                          | Kind     | Summary                                                                                                                                                                                                                                                                                 |
 | ---------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createStdioClientTransport` | function | Create a `MCPClientTransportInterface` that spawns a CHILD PROCESS MCP server and drives it over its piped stdio.                                                                                                                                                                       |
+| `createStdioClientTransport` | function | Create a `StdioClientTransportInterface` that spawns a CHILD PROCESS MCP server, drives it over its piped stdio, and reports that child's bounded stderr tail as `evidence`.                                                                                                            |
 | `createStdioServer`          | function | Pipes an `MCPDispatcherInterface` (through `bindServer`) over newline-delimited JSON-RPC on `stdin`/`stdout` (or injected streams) — `{ start(); stop() }`; `stop()` unbinds the pump, drops every listener the transport put on `input`, and releases `input` so the process can exit. |
 
 #### Entities
 
-| API                    | Kind  | Summary                                                                                                                   |
-| ---------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------- |
-| `StdioClientTransport` | class | The `MCPClientTransportInterface` that spawns and drives a child process's stdio as a newline-delimited JSON-RPC channel. |
-| `StdioServerTransport` | class | The `MCPClientTransportInterface` wrapping a readable/writable stream pair (default `process.stdin` / `process.stdout`).  |
+| API                    | Kind  | Summary                                                                                                                     |
+| ---------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------- |
+| `StdioClientTransport` | class | The `StdioClientTransportInterface` that spawns and drives a child process's stdio as a newline-delimited JSON-RPC channel. |
+| `StdioServerTransport` | class | The `MCPClientTransportInterface` wrapping a readable/writable stream pair (default `process.stdin` / `process.stdout`).    |
 
 #### Constants
 
@@ -2320,11 +2345,12 @@ _See `extractLines` / `dispatchLines` under [HTTP transport § Helpers](#helpers
 
 #### Types
 
-| Type                          | Kind      | Shape                                                                                                                                                                                                        |
-| ----------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `StdioClientTransportOptions` | interface | `{ command: string; args?: readonly string[]; env?: Record<string, string> }` — the child process to spawn. `env` MERGES over `process.env`; it never replaces it, so the child inherits every unlisted key. |
-| `StdioServerOptions`          | interface | `{ input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream }` — the injectable stream pair (default `process.stdin`/`stdout`).                                                                         |
-| `LineExtraction`              | interface | `{ lines: readonly string[]; remainder: string }` — the result of folding one more chunk into the newline-framed buffer (`extractLines`).                                                                    |
+| Type                            | Kind      | Shape                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `StdioClientTransportInterface` | interface | `MCPClientTransportInterface & { readonly evidence: string \| undefined }` — what `createStdioClientTransport` returns. The `evidence` member reads the supervised child's bounded stderr tail: `undefined` before the first `start()`, that child's live tail while it is held, and the tail captured at its end afterwards. It declares no method of its own; the methods it inherits from `MCPClientTransportInterface` are under [Methods](#methods). |
+| `StdioClientTransportOptions`   | interface | `{ command: string; args?: readonly string[]; env?: Record<string, string> }` — the child process to spawn. `env` MERGES over `process.env`; it never replaces it, so the child inherits every unlisted key.                                                                                                                                                                                                                                              |
+| `StdioServerOptions`            | interface | `{ input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream }` — the injectable stream pair (default `process.stdin`/`stdout`).                                                                                                                                                                                                                                                                                                                      |
+| `LineExtraction`                | interface | `{ lines: readonly string[]; remainder: string }` — the result of folding one more chunk into the newline-framed buffer (`extractLines`).                                                                                                                                                                                                                                                                                                                 |
 
 ### Browser transport
 
@@ -4023,15 +4049,19 @@ event)`, NOT a domain event) — so a buggy observer can never corrupt a
     `WebSocketServerTransport` / `WebSocketClientTransport` /
     `StdioClientTransport` / `StdioServerTransport` (`src/server`) plus the
     browser face's own `HTTPClientTransport` / `WebSocketClientTransport`
-    (`src/browser`), each implementing the one `MCPClientTransportInterface`;
-    and `MCPSession`) exposes the same public methods, no more. The
+    (`src/browser`), each implementing the one `MCPClientTransportInterface` —
+    `StdioClientTransport` through the narrower `StdioClientTransportInterface`
+    that extends it; and `MCPSession`) exposes the same public methods, no more. The
     `HTTPDisconnect` entity exposes only `bridge` (its `signal` is data). The remaining
     exports add no behavioral interface with methods (the factories,
     `acceptsEventStream` / `readSessionHeader` /
     `readLastEventId` / `rejectUnknownSession` / `readEventStream` /
     `decodeEvent` / `upgradeRequestPath` / `extractLines` / `dispatchLines` /
     `createScopeMessageListener` are functions; the options interfaces / event
-    maps / `EventStoreEntry` / `LineExtraction` are bags), so they contribute
+    maps / `EventStoreEntry` / `LineExtraction` are bags;
+    `StdioClientTransportInterface` extends `MCPClientTransportInterface` with
+    the readonly `evidence` data member and declares no call signature of its
+    own, so that member is a `## Surface` Types row), so they contribute
     no `## Methods` row. `MessagePortTransport` (`src/browser`) is likewise
     excluded: it implements `MCPTransportInterface`, not
     `MCPClientTransportInterface`, and `MCPTransportInterface` itself is
@@ -4368,18 +4398,60 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     environment first is not a substitute on Windows: the host injects its own
     baseline keys into every child regardless of the supplied `env`, and
     deleting `SystemRoot` from `process.env` aborts the next spawned Node
-    child at startup with exit 134. The bounded tail is the supervisor's
-    `evidence`; this transport holds its `Process` privately and exposes no
-    reader for it.
+    child at startup with exit 134. `createStdioClientTransport` returns a
+    `StdioClientTransportInterface`, whose `evidence` member is the reader for
+    that bounded tail. It answers `undefined` before the first `start()` has
+    spawned anything; the held child's LIVE tail while that child runs, which
+    reads `''` from the spawn until the child writes; and the tail CAPTURED at
+    that child's end afterwards, whether the child exited on its own or
+    `close()` ended it. A child that ran and wrote nothing answers `''`, which
+    says a child ran and reported nothing — a different fact from the
+    `undefined` that says none ran. Past that capture the supervisor is NEVER
+    re-read, because a detached descendant holding the inherited `stderr` can
+    still write after `close()` resolves and those bytes belong to no lifetime
+    this transport reports. What the `close()` capture holds is what the
+    supervisor had received when its bounded termination resolved, rather than
+    the child's complete output: Windows ends the tree with `taskkill /F /T`,
+    which nothing in the child can intercept, so a `SIGTERM` handler never runs
+    there and the bytes it would have written never exist. A child that exits on
+    its own closes its `stderr` first, so THAT tail is complete. The next
+    `start()` opens a lifetime and CLEARS the retained tail, so a respawning
+    transport never reports the previous child's stderr as the current child's —
+    immediately after that second `start()` the reading is `''`, the replacement
+    child's empty live tail. Read a tail you want across a respawn before you
+    open the replacement: after a NATURAL exit a `close` listener that calls
+    `start()` opens that next lifetime inside the emit and clears the value every
+    listener after it would have read, while after an explicit `close()` that
+    listener's `start()` parks behind the teardown barrier and the later
+    listeners still read the captured tail.
+    Lifetimes never overlap — a `start()` issued while a `close()` is still
+    tearing down waits for that teardown to capture its tail — so an older
+    child's tail cannot arrive over a replacement's however the calls interleave.
+    The bound is the supervisor's `PROCESS_EVIDENCE` — at most 2048 RAW BYTES
+    under `@orkestrel/process` 0.0.5 — and it keeps the END of the stream, so a
+    long-running child's early output is dropped and its last error survives.
+    It counts encoded bytes rather than decoded characters: a run of two-byte
+    characters fills those 2048 bytes with 1024 characters. The kept bytes never
+    begin inside a multibyte sequence, so a run of three-byte characters keeps
+    2046 bytes and 682 characters rather than cutting one in half. A spawn the
+    host refuses reads `''`, and its cause arrives on the `error` event this
+    transport already forwards.
     `send` writes `JSON.stringify(message) + '\n'` per message to the
     child's `stdin` and awaits the supervisor's answer, REJECTING when the
     channel is gone; the child's `stdout` is drained through the supervisor's
     `readline`-framed `lines` iterable and every complete line is decoded onto
     `message` through the shared `dispatchLines` helper (a malformed line emits
     `error`); the child's exit bridges to the transport's `close`. `close()`
-    releases the transport's own line pump, then runs the supervisor's bounded
-    `SIGTERM` → grace → `SIGKILL` group kill and teardown without waiting for a
-    descendant-held stdout pipe, and fires `close` once. The stdio transports'
+    releases the transport's own line pump — dropping a line already framed
+    behind the one being delivered rather than emitting it after the teardown
+    began — then runs the supervisor's bounded termination and teardown without
+    waiting for a descendant-held stdout pipe, captures this lifetime's tail, and
+    fires `close` once; a `close()` issued while that teardown runs joins it and
+    resolves only after the tail is captured and `close` has fired. The
+    termination is the host's — a POSIX host signals the child's own process
+    group `SIGTERM`, waits the grace window, then `SIGKILL`s through the same
+    route, while Windows ends the tree with `taskkill /F /T`.
+    The stdio transports'
     `session` is always
     `undefined` (the process pipe carries no session concept).
 21. **The browser transport carries the SAME `MCPClientTransportInterface`
