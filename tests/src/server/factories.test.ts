@@ -28,7 +28,7 @@ import {
 	MCP_SESSION_HEADER,
 } from '@src/server'
 import { WEBSOCKET_CLOSE_NORMAL, WEBSOCKET_OPCODE_CLOSE } from '@orkestrel/websocket'
-import { createTeardown, waitForDelay } from '@orkestrel/test'
+import { createTeardown, waitForAbort, waitForDelay } from '@orkestrel/test'
 import {
 	collectSSE,
 	createCalculatorServer,
@@ -36,7 +36,6 @@ import {
 	createJSONRPCRequest,
 	MODERN_METADATA,
 	postJSON,
-	waitForAbort,
 } from '../../setup.js'
 import { closeResource, openClientSocket, startServer, upgradeRequest } from '../../setupServer.js'
 

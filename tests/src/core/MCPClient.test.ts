@@ -30,8 +30,7 @@ import { createHTTPClientTransport } from '@src/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
 import { createServer } from 'node:http'
-import { waitForDelay } from '@orkestrel/test'
-import { createSignalRecorder } from '../../setup.js'
+import { createSignal, waitForDelay } from '@orkestrel/test'
 
 const NATIVE_ABORT_TIMEOUT = AbortSignal.timeout
 const RECORDED_ABORT_DEADLINES: number[] = []
@@ -3342,7 +3341,7 @@ describe('MCPClient — request-scoped progress', () => {
 // produce the same silence, and deleting the release from `#settle` left this whole suite
 // green. What the release actually buys is on the CALLER's signal, which outlives the request
 // and may be driving several calls: without it a long-lived `AbortController` accumulates one
-// bound listener per `call` for the client's life. `createSignalRecorder` counts them.
+// bound listener per `call` for the client's life. `createSignal` counts them.
 describe('MCPClient — every registration is released on every exit', () => {
 	it('releases both on the exit nobody enumerates: a rejecting transport.send', async () => {
 		const peer = createFixturePeer({
@@ -3359,7 +3358,7 @@ describe('MCPClient — every registration is released on every exit', () => {
 		const client = createMCPClient({ transport: peer, timeout: 5_000 })
 		await client.connect()
 		const seen: unknown[] = []
-		const subject = createSignalRecorder()
+		const subject = createSignal()
 		const sibling = new AbortController()
 
 		const pending = client.call(
@@ -3373,7 +3372,7 @@ describe('MCPClient — every registration is released on every exit', () => {
 		peer.emitter.emit('message', progressNotification(id, 1))
 		await waitForDelay()
 		expect(seen).toEqual([{ progressToken: id, progress: 1 }])
-		expect(subject.live).toBe(1)
+		expect(subject.count).toBe(1)
 
 		peer.release()
 		await expect(pending).rejects.toThrow('write failed')
@@ -3381,7 +3380,7 @@ describe('MCPClient — every registration is released on every exit', () => {
 		// RELEASED: the entry is gone, so neither registration answers any more — and the
 		// caller's own signal is as clean as the client found it. Read BEFORE anything aborts,
 		// because a `once` listener that fires removes itself and would hide the difference.
-		expect(subject.live).toBe(0)
+		expect(subject.count).toBe(0)
 		peer.emitter.emit('message', progressNotification(id, 2))
 		await waitForDelay()
 		subject.controller.abort()
@@ -3402,7 +3401,7 @@ describe('MCPClient — every registration is released on every exit', () => {
 		const client = createMCPClient({ transport: peer, timeout: 5_000 })
 		await client.connect()
 		const seen: unknown[] = []
-		const subject = createSignalRecorder()
+		const subject = createSignal()
 		const probe = new AbortController()
 
 		const pending = client.call(
@@ -3419,13 +3418,13 @@ describe('MCPClient — every registration is released on every exit', () => {
 		probe.abort()
 		await expect(probed).rejects.toThrow(/was aborted/)
 		expect(seen).toEqual([{ progressToken: id, progress: 1 }])
-		expect(subject.live).toBe(1)
+		expect(subject.count).toBe(1)
 
 		await client.disconnect()
 		await expect(pending).rejects.toThrow(/disconnected/)
 
 		// RELEASED by the drain, which knows nothing about any of the registrations.
-		expect(subject.live).toBe(0)
+		expect(subject.count).toBe(0)
 		peer.emitter.emit('message', progressNotification(id, 2))
 		await waitForDelay()
 		subject.controller.abort()
@@ -3443,7 +3442,7 @@ describe('MCPClient — every registration is released on every exit', () => {
 		const client = createMCPClient({ transport: peer, timeout: 5_000 })
 		await client.connect()
 		const seen: unknown[] = []
-		const subject = createSignalRecorder()
+		const subject = createSignal()
 		const sibling = new AbortController()
 
 		const pending = client.call(
@@ -3456,7 +3455,7 @@ describe('MCPClient — every registration is released on every exit', () => {
 		peer.emitter.emit('message', progressNotification(id, 1))
 		await waitForDelay()
 		expect(seen).toEqual([{ progressToken: id, progress: 1 }])
-		expect(subject.live).toBe(1)
+		expect(subject.count).toBe(1)
 
 		peer.emitter.emit(
 			'message',
@@ -3464,7 +3463,7 @@ describe('MCPClient — every registration is released on every exit', () => {
 		)
 		await expect(pending).resolves.toEqual({ resultType: 'complete', value: 'done' })
 
-		expect(subject.live).toBe(0)
+		expect(subject.count).toBe(0)
 		peer.emitter.emit('message', progressNotification(id, 2))
 		await waitForDelay()
 		subject.controller.abort()
@@ -3484,7 +3483,7 @@ describe('MCPClient — every registration is released on every exit', () => {
 		const client = createMCPClient({ transport: peer, timeout: 50 })
 		await client.connect()
 		const seen: unknown[] = []
-		const subject = createSignalRecorder()
+		const subject = createSignal()
 		const probe = new AbortController()
 
 		const pending = client.call(
@@ -3499,11 +3498,11 @@ describe('MCPClient — every registration is released on every exit', () => {
 		probe.abort()
 		await expect(probed).rejects.toThrow(/was aborted/)
 		expect(seen).toEqual([{ progressToken: id, progress: 1 }])
-		expect(subject.live).toBe(1)
+		expect(subject.count).toBe(1)
 
 		await expect(pending).rejects.toThrow(/timed out/)
 
-		expect(subject.live).toBe(0)
+		expect(subject.count).toBe(0)
 		peer.emitter.emit('message', progressNotification(id, 2))
 		await waitForDelay()
 		subject.controller.abort()

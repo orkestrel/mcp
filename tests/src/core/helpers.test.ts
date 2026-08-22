@@ -52,7 +52,7 @@ import {
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import * as MCP from '@src/core'
-import { waitForDelay } from '@orkestrel/test'
+import { waitForAbort, waitForDelay } from '@orkestrel/test'
 import {
 	createJSONRPCNotification,
 	createJSONRPCRequest,
@@ -60,7 +60,6 @@ import {
 	modernRequest,
 	probeOwnership,
 	TestTaskManager,
-	waitForAbort,
 } from '../../setup.js'
 
 // An in-memory MCPTransportInterface double (a real duplex channel, no
