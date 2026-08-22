@@ -2266,16 +2266,20 @@ leaves the reason it died. Read `evidence` off the
 `createStdioClientTransport` result rather than off `client.transport`, which
 is typed as the wide `MCPClientTransportInterface` and carries no such member.
 The tail follows the child that wrote it, so read it before you open a
-replacement: the next `start()` clears it. How far that reaches inside one
-`close` emit depends on how the lifetime ended. An explicit `close()` still
-holds its teardown barrier while the `close` listeners run, so a listener that
-calls `start()` parks behind that barrier and every later listener still reads
-the captured tail. A natural exit holds no barrier, so a listener's `start()`
-opens the next lifetime inside the emit and clears the value every listener
-after it would have read. Lifetimes never overlap — a `start()` issued while
-a `close()` is still tearing down waits for that teardown to capture its tail
-first — so an older child's tail cannot arrive over a replacement's however the
-calls interleave. `options.env` merges over `process.env` rather than
+replacement: the next `start()` installs a replacement child, and the reading
+becomes that child's. How far the ended child's tail reaches inside one `close`
+emit depends on how the lifetime ended. An explicit `close()` still holds its
+teardown barrier while the `close` listeners run, so a listener that calls
+`start()` parks behind that barrier and every later listener still reads the
+ended child's frozen tail. A natural exit holds its barrier only across the
+`error` it reports at that end, and releases it before the emit: a restart
+begun from that fault channel parks until the `close` has been delivered,
+while a `close` listener's `start()` opens the next lifetime inside the emit
+and replaces the value every listener after it would have read. Lifetimes
+never overlap — a `start()` issued while a `close()` is still tearing down
+waits for that teardown to report `close` first — so an older child's tail
+cannot arrive over a replacement's however the calls interleave.
+`options.env` merges over `process.env` rather than
 replacing it: each named key overrides the inherited value, every unlisted key
 is still inherited, and the child therefore receives every secret this process
 holds. The server side frames its own input with `extractLines` (fold a
@@ -2285,20 +2289,24 @@ decode through `dispatchLines` (decode + emit each complete line as `message` or
 `error`) — documented under [HTTP transport § Helpers](#helpers-1) because it
 lives in the shared `helpers.ts`.
 
-Closing the client releases the transport's own line pump before the transport awaits the
-supervisor's bounded process teardown. A descendant that inherited the child's stdout pipe
-therefore cannot keep the transport's `close` call pending after the supervisor's teardown has
-resolved. Releasing the pump also ends inbound delivery at the call: a line the supervisor had
-already framed behind the one being delivered is dropped rather than emitted onto a transport whose
-teardown has begun. A `close()` issued while that teardown is running joins it rather than opening
-a second one, so it resolves only after this lifetime's tail is captured and the `close` event has
-fired.
+Closing the client runs the supervisor's bounded process teardown, which reaches the child's
+terminal moment: the supervisor freezes `evidence`, ends `lines`, and settles the child's exit
+together there. The transport's line pump therefore needs no release of its own — the stream ends
+under it. The wait for the child's streams is bounded by the supervisor's `drain` window, so a
+descendant that inherited the child's stdout pipe cannot keep the transport's `close` call pending
+past it. Inbound delivery ends at the call rather than at the stream's end: a line the supervisor
+had already framed behind the one being delivered is dropped rather than emitted onto a transport
+whose teardown has begun. A `close()` issued while that teardown is running joins it rather than
+opening a second one, so it resolves only after the `close` event has fired.
 
-The tail `close()` captures is what the supervisor had received when that bounded termination
-resolved, not the child's complete output. On Windows the supervisor ends the tree with
-`taskkill /F /T`, which nothing in the child can intercept: a `SIGTERM` handler never runs there,
-so the bytes it would have written never exist. A child that ends on its own closes its `stderr`
-first, and that tail is complete.
+The tail frozen at that moment is what the supervisor had received by then, not the child's
+complete output. On Windows the supervisor ends the tree with `taskkill /F /T`, which nothing in
+the child can intercept: a `SIGTERM` handler never runs there, so the bytes it would have written
+never exist. A child that ends on its own closes its `stderr` first, and that tail is complete.
+When the terminal moment arrived at the `drain` bound instead — a detached descendant holding the
+inherited `stderr` open is what does that — the tail stops at the cutoff and later diagnostics may
+have existed. The transport reports that lifetime on its `error` event, so a partial tail is
+readable as partial rather than as the child's whole output.
 
 ```ts
 import { createMCPClient, createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
@@ -2345,12 +2353,12 @@ _See `extractLines` / `dispatchLines` under [HTTP transport § Helpers](#helpers
 
 #### Types
 
-| Type                            | Kind      | Shape                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `StdioClientTransportInterface` | interface | `MCPClientTransportInterface & { readonly evidence: string \| undefined }` — what `createStdioClientTransport` returns. The `evidence` member reads the supervised child's bounded stderr tail: `undefined` before the first `start()`, that child's live tail while it is held, and the tail captured at its end afterwards. It declares no method of its own; the methods it inherits from `MCPClientTransportInterface` are under [Methods](#methods). |
-| `StdioClientTransportOptions`   | interface | `{ command: string; args?: readonly string[]; env?: Record<string, string> }` — the child process to spawn. `env` MERGES over `process.env`; it never replaces it, so the child inherits every unlisted key.                                                                                                                                                                                                                                              |
-| `StdioServerOptions`            | interface | `{ input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream }` — the injectable stream pair (default `process.stdin`/`stdout`).                                                                                                                                                                                                                                                                                                                      |
-| `LineExtraction`                | interface | `{ lines: readonly string[]; remainder: string }` — the result of folding one more chunk into the newline-framed buffer (`extractLines`).                                                                                                                                                                                                                                                                                                                 |
+| Type                            | Kind      | Shape                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `StdioClientTransportInterface` | interface | `MCPClientTransportInterface & { readonly evidence: string \| undefined }` — what `createStdioClientTransport` returns. The `evidence` member reads the supervised child's bounded stderr tail: `undefined` before the first `start()`, that child's live tail while it runs, and the tail frozen at its end afterwards. It declares no method of its own; the methods it inherits from `MCPClientTransportInterface` are under [Methods](#methods). |
+| `StdioClientTransportOptions`   | interface | `{ command: string; args?: readonly string[]; env?: Record<string, string> }` — the child process to spawn. `env` MERGES over `process.env`; it never replaces it, so the child inherits every unlisted key.                                                                                                                                                                                                                                         |
+| `StdioServerOptions`            | interface | `{ input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream }` — the injectable stream pair (default `process.stdin`/`stdout`).                                                                                                                                                                                                                                                                                                                 |
+| `LineExtraction`                | interface | `{ lines: readonly string[]; remainder: string }` — the result of folding one more chunk into the newline-framed buffer (`extractLines`).                                                                                                                                                                                                                                                                                                            |
 
 ### Browser transport
 
@@ -2911,9 +2919,10 @@ the negotiated protocol version. The `WebSocketClientTransport`s unsubscribe
 from the socket before closing it, and the Node one also destroys an upgrade
 request still on the wire. `WebSocketServerTransport` unsubscribes before it
 runs the close handshake, so a frame already in flight cannot re-emit on a
-transport that has closed. `StdioClientTransport` releases its own line pump,
-terminates its child through the supervisor's bounded group kill, and tears the
-supervisor down without waiting for a descendant-held stdout pipe.
+transport that has closed. `StdioClientTransport` stops its own line
+dispatch at the call, terminates its child through the supervisor's bounded group
+kill, and tears the supervisor down within the `drain` bound that caps a
+descendant-held stdout pipe.
 `StdioServerTransport` removes the listeners it put on `input`, preserves the
 caller's flowing or non-flowing state and listeners, and does NOT destroy or end
 the injected streams. An initially unread stream settles at non-flowing because
@@ -4402,33 +4411,37 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     `StdioClientTransportInterface`, whose `evidence` member is the reader for
     that bounded tail. It answers `undefined` before the first `start()` has
     spawned anything; the held child's LIVE tail while that child runs, which
-    reads `''` from the spawn until the child writes; and the tail CAPTURED at
-    that child's end afterwards, whether the child exited on its own or
-    `close()` ended it. A child that ran and wrote nothing answers `''`, which
-    says a child ran and reported nothing — a different fact from the
-    `undefined` that says none ran. Past that capture the supervisor is NEVER
-    re-read, because a detached descendant holding the inherited `stderr` can
-    still write after `close()` resolves and those bytes belong to no lifetime
-    this transport reports. What the `close()` capture holds is what the
-    supervisor had received when its bounded termination resolved, rather than
-    the child's complete output: Windows ends the tree with `taskkill /F /T`,
-    which nothing in the child can intercept, so a `SIGTERM` handler never runs
-    there and the bytes it would have written never exist. A child that exits on
-    its own closes its `stderr` first, so THAT tail is complete. The next
-    `start()` opens a lifetime and CLEARS the retained tail, so a respawning
+    reads `''` from the spawn until the child writes; and the tail the
+    supervisor FROZE at that child's terminal moment afterwards, whether the
+    child exited on its own or `close()` ended it. A child that ran and wrote
+    nothing answers `''`, which says a child ran and reported nothing — a
+    different fact from the `undefined` that says none ran. The transport keeps
+    reading that same child past its end, and the frozen value never moves
+    again, so a detached descendant holding the inherited `stderr` can write
+    after `close()` resolves and those bytes reach no reading this transport
+    reports. What the frozen tail holds is what the supervisor had received by
+    that moment, rather than the child's complete output: Windows ends the tree
+    with `taskkill /F /T`, which nothing in the child can intercept, so a
+    `SIGTERM` handler never runs there and the bytes it would have written never
+    exist. A child that exits on its own closes its `stderr` first, so THAT tail
+    is complete. Where the terminal moment arrived at the supervisor's `drain`
+    bound rather than at the child's own stream close, the tail stops at that
+    cutoff and later diagnostics may have existed; the transport emits an
+    `error` naming that lifetime, so a partial tail reads as partial. The next
+    `start()` opens a lifetime and REPLACES the held child, so a respawning
     transport never reports the previous child's stderr as the current child's —
     immediately after that second `start()` the reading is `''`, the replacement
     child's empty live tail. Read a tail you want across a respawn before you
     open the replacement: after a NATURAL exit a `close` listener that calls
-    `start()` opens that next lifetime inside the emit and clears the value every
-    listener after it would have read, while after an explicit `close()` that
-    listener's `start()` parks behind the teardown barrier and the later
-    listeners still read the captured tail.
+    `start()` opens that next lifetime inside the emit and replaces the value
+    every listener after it would have read, while after an explicit `close()`
+    that listener's `start()` parks behind the teardown barrier and the later
+    listeners still read the ended child's frozen tail.
     Lifetimes never overlap — a `start()` issued while a `close()` is still
-    tearing down waits for that teardown to capture its tail — so an older
+    tearing down waits for that teardown to report `close` — so an older
     child's tail cannot arrive over a replacement's however the calls interleave.
     The bound is the supervisor's `PROCESS_EVIDENCE` — at most 2048 RAW BYTES
-    under `@orkestrel/process` 0.0.5 — and it keeps the END of the stream, so a
+    under `@orkestrel/process` 0.0.6 — and it keeps the END of the stream, so a
     long-running child's early output is dropped and its last error survives.
     It counts encoded bytes rather than decoded characters: a run of two-byte
     characters fills those 2048 bytes with 1024 characters. The kept bytes never
@@ -4442,12 +4455,13 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     `readline`-framed `lines` iterable and every complete line is decoded onto
     `message` through the shared `dispatchLines` helper (a malformed line emits
     `error`); the child's exit bridges to the transport's `close`. `close()`
-    releases the transport's own line pump — dropping a line already framed
-    behind the one being delivered rather than emitting it after the teardown
-    began — then runs the supervisor's bounded termination and teardown without
-    waiting for a descendant-held stdout pipe, captures this lifetime's tail, and
-    fires `close` once; a `close()` issued while that teardown runs joins it and
-    resolves only after the tail is captured and `close` has fired. The
+    runs the supervisor's bounded termination and teardown, which ends that
+    `lines` stream at the child's terminal moment rather than throwing at the
+    pump, and fires `close` once. A line already framed behind the one being
+    delivered is dropped rather than emitted after the teardown began, and the
+    wait for a descendant-held stdout pipe is capped by the supervisor's `drain`
+    bound; a `close()` issued while that teardown runs joins it and resolves only
+    after `close` has fired. The
     termination is the host's — a POSIX host signals the child's own process
     group `SIGTERM`, waits the grace window, then `SIGKILL`s through the same
     route, while Windows ends the tree with `taskkill /F /T`.

@@ -400,26 +400,35 @@ export interface StdioClientTransportInterface extends MCPClientTransportInterfa
 	 *   it exited on its own or `close()` terminated it, and `''` there for a child that ran and
 	 *   wrote nothing — an empty tail is a real reading of a silent child, distinct from the
 	 *   absent one.
-	 * - **Lifetime.** The tail follows the child that produced it. It is captured at that
-	 *   child's end — inside the exit that fires this transport's `close`, and inside `close()`
-	 *   after the supervisor's teardown resolves — and every later read answers the captured
-	 *   value rather than the supervisor. That capture is what makes the value stable: a
-	 *   detached descendant holding the child's inherited stderr can still write bytes after
-	 *   `close()` resolves, and those bytes never reach it. The next `start()` clears the
-	 *   capture, so a replacement child never reports its predecessor's stderr as current.
-	 *   Lifetimes never overlap: a `start()` issued while a `close()` is still tearing down
-	 *   waits for that teardown's capture before it opens the next one, so an older tail cannot
-	 *   arrive over a newer one however the calls interleave. Read the tail before you open a
-	 *   replacement — a `close` listener that calls `start()` opens the next lifetime itself and
-	 *   clears the value every listener after it would have read.
-	 * - **What the close path carries.** The value captured in `close()` is what the supervisor
-	 *   had received when its bounded termination resolved, not the child's complete output.
+	 * - **Lifetime.** The tail follows the child that produced it. The supervisor FREEZES it at
+	 *   that child's terminal moment — the moment `close()`'s teardown resolves past, and the
+	 *   moment the exit that fires this transport's `close` settles at — and this transport keeps
+	 *   reading that same child afterwards. The frozen value never moves again, which is what
+	 *   makes a late read stable: a detached descendant holding the child's inherited stderr can
+	 *   still write bytes after `close()` resolves, and those bytes reach no reading this
+	 *   transport reports. The next `start()` replaces the held child, so a replacement never
+	 *   reports its predecessor's stderr as current. Lifetimes never overlap: a `start()` issued
+	 *   while a `close()` is still tearing down waits for that teardown to report `close` before
+	 *   it opens the next one, so an older tail cannot arrive over a newer one however the calls
+	 *   interleave. Read the tail before you open a replacement, and read how far it reaches
+	 *   inside one `close` emit off the way the lifetime ended. An explicit `close()` still holds
+	 *   its teardown barrier while those listeners run, so a `start()` one of them calls parks
+	 *   behind it and every later listener reads the ended child's frozen tail. A natural exit
+	 *   holds that barrier only across the `error` it reports at that end, so a restart begun
+	 *   THERE parks until `close` has been delivered, while a `close` listener that calls
+	 *   `start()` opens the next lifetime itself and replaces the value every listener after it
+	 *   would have read.
+	 * - **What the close path carries.** The frozen value is what the supervisor had received by
+	 *   that terminal moment, not the child's complete output.
 	 *   Windows ends the tree with `taskkill /F /T`, which nothing in the child can intercept: a
 	 *   `SIGTERM` handler never runs there, so the bytes it would have written never exist. A
 	 *   child that ends on its own closes its stderr first, and THAT tail is complete.
+	 *   Where that moment arrived at the supervisor's `drain` bound rather than at the child's
+	 *   own stream close, the tail stops at the cutoff and later diagnostics may have existed;
+	 *   the transport emits an `error` naming that lifetime, so a partial tail reads as partial.
 	 * - **Bound.** The supervisor keeps the END of the child's raw stderr bytes, at most
 	 *   `@orkestrel/process`'s {@link import('@orkestrel/process').PROCESS_EVIDENCE} (2048
-	 *   bytes under 0.0.5). A child that writes more than the bound loses its earliest output
+	 *   bytes under 0.0.6). A child that writes more than the bound loses its earliest output
 	 *   and keeps its last, which is the half that names why it died. The bound counts raw
 	 *   bytes before decoding rather than characters, so multibyte output yields fewer
 	 *   characters than an ASCII run over the same byte window. The kept bytes never begin

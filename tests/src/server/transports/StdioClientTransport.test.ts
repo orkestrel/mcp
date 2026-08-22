@@ -3,7 +3,7 @@ import type { ScratchInterface } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
 import { basename, delimiter, dirname, join } from 'node:path'
 import { isRecord } from '@orkestrel/contract'
-import { PROCESS_EVIDENCE } from '@orkestrel/process'
+import { PROCESS_DRAIN, PROCESS_EVIDENCE } from '@orkestrel/process'
 import { createJSONRPCRequest, waitForSettlement } from '../../../setup.js'
 import { requireValue, waitForCondition, waitForDelay, waitForEvent } from '@orkestrel/test'
 import { createScratch, destroyScratch, isRunning } from '@orkestrel/test/server'
@@ -79,26 +79,12 @@ rl.on('line', () => {
 })
 `
 
-/** The scratch file the first child under the barrier command writes, so only a later one lives. */
-const BARRIER_CLAIM_FILE = 'barrier-claim.txt'
-
-// The FIRST child under this command ends the moment it has written its claim, so its lifetime ends
-// through the transport's own exit bridge rather than through a `close()`. Every later child finds
-// that claim and stays alive instead, so the replacement lifetime holds a LIVE child whose bounded
-// termination takes real time to resolve.
-const BARRIER_SCRIPT = `
-const { existsSync, writeFileSync } = require('node:fs')
-const claim = process.env.MCP_BARRIER_CLAIM
-if (existsSync(claim)) {
-	setInterval(() => {}, 1000)
-} else {
-	writeFileSync(claim, 'claimed')
-}
-`
-
 // Comfortably above both a Windows stdio pipe buffer and a 64 KiB POSIX one, so the write below
 // cannot be swallowed whole by the host and answered before the child has read anything.
 const UNREAD_PAYLOAD = 'x'.repeat(256 * 1024)
+
+/** How long past the supervisor's `drain` bound a bounded `close()` is waited for, in milliseconds. */
+const CLOSE_SLACK = 2_000
 
 function spawnClient(): StdioClientTransport {
 	return new StdioClientTransport({ command: process.execPath, args: ['-e', CHILD_SCRIPT] })
@@ -117,14 +103,6 @@ function spawnDescendantClient(): StdioClientTransport {
 
 function spawnBurstClient(): StdioClientTransport {
 	return new StdioClientTransport({ command: process.execPath, args: ['-e', BURST_SCRIPT] })
-}
-
-function spawnBarrierClient(scratch: ScratchInterface): StdioClientTransport {
-	return new StdioClientTransport({
-		command: process.execPath,
-		args: ['-e', BARRIER_SCRIPT],
-		env: { MCP_BARRIER_CLAIM: join(scratch.path, BARRIER_CLAIM_FILE) },
-	})
 }
 
 describe('StdioClientTransport — drives a real child process over stdio', () => {
@@ -220,7 +198,7 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		expect(closed).toBe(1)
 	})
 
-	it('close() settles while a descendant retains the child stdout pipe', async () => {
+	it('close() settles inside the supervisor drain bound while a descendant retains the child stdout pipe', async () => {
 		const transport = spawnDescendantClient()
 		const arrived = new Promise<JSONRPCMessage>((resolve) => {
 			transport.emitter.on('message', resolve)
@@ -228,22 +206,18 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		let pid: number | undefined
 		try {
 			await transport.start()
-			const message = await waitForSettlement(
-				arrived,
-				5_000,
-				'Timed out waiting for the descendant report',
+			pid = readDescendantPid(
+				await waitForSettlement(arrived, 5_000, 'Timed out waiting for the descendant report'),
 			)
-			if (!('result' in message) || !isRecord(message.result)) {
-				throw new Error('The descendant report carries no result')
-			}
-			const value = message.result['pid']
-			if (typeof value !== 'number') throw new Error('The descendant report carries no pid')
-			pid = value
 
+			// The child has exited and the detached descendant holds its inherited stdout open, so
+			// those read ends never close on their own and the descendant outlives this whole test.
+			// What ends the observation is the supervisor's own `drain` bound, and this `close()`
+			// settles inside it rather than on the descendant.
 			await expect(
 				waitForSettlement(
 					transport.close(),
-					1_000,
+					PROCESS_DRAIN + CLOSE_SLACK,
 					'Timed out closing while the descendant retained stdout',
 				),
 			).resolves.toBeUndefined()
@@ -293,8 +267,9 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		)
 
 		// The teardown began INSIDE the first line's delivery, and the second line was already sitting
-		// in the supervisor's queue by then. The supervisor answers that queued read at once, so the
-		// pump's release barrier does not win the race and only the closed state stops the pump.
+		// in the supervisor's queue by then. The supervisor delivers a queued line before it ends the
+		// stream, so the stream's own end does not stop that second delivery — the transport's closed
+		// state is what drops it.
 		await requireValue(closing)
 		await waitForDelay(300)
 
@@ -320,24 +295,23 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		await transport.close()
 	})
 
-	it('gives a close() issued behind a stale start() the running teardown, not a no-op', async () => {
-		const scratch = createScratch()
-		const transport = spawnBarrierClient(scratch)
+	it('holds a stale start() behind the newer teardown a close() opened while it was parked', async () => {
+		const transport = spawnDeafClient()
 		let closes = 0
 		transport.emitter.on('close', () => (closes += 1))
 		try {
-			// The first lifetime ends on its own, so the `close()` after it finds that lifetime already
-			// ended: its teardown is a no-op and leaves a RESOLVED barrier assigned behind it.
+			// An explicit `close()` over a LIVE child runs a REAL teardown, and the barrier that
+			// teardown ran under stays assigned once it settles: `close()` clears no barrier, and the
+			// exit bridge clears only the one it installed itself. That settled barrier is what both
+			// `start()` calls below capture, so each parks on it rather than opening a child here.
 			await transport.start()
-			await waitForCondition('the first child ends on its own', () => closes === 1, {
-				budget: 10_000,
-			})
 			await transport.close()
+			expect(closes).toBe(1)
 
-			// The interleaving. Both `start()` calls capture that stale barrier in this one turn, and
-			// each queued microtask lands between their two resumptions: the first opens the
-			// replacement's teardown after the earlier `start()` installed it, and the second asks for
-			// a teardown after the LATER `start()` has resumed and could have discarded it.
+			// The interleaving. Both `start()` calls capture that barrier in this one turn, and each
+			// queued microtask lands between their two resumptions: the first closes the replacement
+			// the earlier `start()` installed, which opens a real teardown over a LIVE child, and the
+			// second asks for a teardown while the later `start()` is parked on that newer barrier.
 			const opening = transport.start()
 			let tearing: Promise<void> | undefined
 			queueMicrotask(() => {
@@ -350,19 +324,27 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 			})
 			await Promise.all([opening, stale])
 
-			// The stale continuation must not discard a teardown that started after it. The joining
-			// `close()` reports THAT teardown's completion, so this lifetime's `close` has already
-			// fired when it resolves rather than firing after it.
-			await requireValue(joining)
+			// The stale continuation resumed against a NEWER barrier than the one it awaited, and it
+			// waited that one out before installing its own child, so that teardown had reported its
+			// `close` by the time this resolved. A `start()` that waited once and cleared whatever it
+			// found would have discarded the newer barrier and spawned over a teardown still running.
 			expect(closes).toBe(2)
 
-			// The teardown itself ends the replacement either way, so the reading above is about WHEN
-			// the joining call resolved rather than about whether the replacement was ended at all.
+			// The joining `close()` reports THAT teardown's completion rather than resolving through a
+			// no-op, so this lifetime's `close` has already fired when it resolves rather than firing
+			// after it. The teardown call itself reads the same, and neither adds a second report.
+			await requireValue(joining)
+			expect(closes).toBe(2)
 			await requireValue(tearing)
 			expect(closes).toBe(2)
+
+			// The child the stale `start()` installed is live and untorn, so closing it runs a real
+			// teardown and reports it: the barrier walk left the replacement closable rather than
+			// stranding it behind a barrier a later `close()` resolves through.
+			await transport.close()
+			expect(closes).toBe(3)
 		} finally {
 			await transport.close()
-			await destroyScratch(scratch)
 		}
 	}, 30_000)
 
@@ -401,12 +383,15 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 //
 // The host facts below decide how these tests wait and what they can assert:
 //
-// - `Process.exit` resolves on the child's `close` event, which fires only after every stdio
-//   stream is closed. Node delivers each `data` event before that, so a tail read after this
-//   transport's `close` event is complete rather than raced.
-// - `Process.destroy()` resolves on the child's `exit` event instead, which a descendant holding
-//   the inherited `stderr` does not delay. That gap is why a `close()` capture is a snapshot: the
-//   supervisor's own tail can still grow afterwards.
+// - `Process` reaches ONE terminal moment, where `evidence` freezes, `lines` ends, and `exit`
+//   settles together. It arrives when the child's stdio streams close, or when the `drain` bound
+//   armed by the native exit or by an initiated termination elapses first; `ProcessExit.drained`
+//   reports which. Node delivers each `data` event before a stream closes, so a tail read after
+//   this transport's `close` event is complete rather than raced.
+// - `Process.destroy()` resolves past that moment, so the tail this transport reports off the held
+//   child is already frozen when `close()` returns. A descendant holding the inherited `stderr`
+//   cannot hold that barrier open beyond `drain`, and a tail cut off there is the reading
+//   `drained: false` names.
 // - Windows ends a child tree with `taskkill /F /T`, which no `SIGTERM` handler can intercept, so
 //   the close path there carries only what the child had already written. A POSIX host signals
 //   `SIGTERM` and waits out the grace window instead, and that window is unmeasured here.
@@ -452,10 +437,10 @@ const ABSENT_COMMAND = 'orkestrel-mcp-absent-command'
 /** The exit code the failing children report, so their end is a fault rather than a success. */
 const EVIDENCE_CODE = 3
 
-/** The bytes the detached descendant writes before the transport's teardown barrier. */
+/** The bytes the detached descendant writes before the child's terminal moment. */
 const DESCENDANT_EARLY = 'descendant-early'
 
-/** The bytes the detached descendant writes after that barrier. */
+/** The bytes the detached descendant writes after that moment, once the tail is frozen. */
 const DESCENDANT_LATE = 'descendant-late'
 
 /** The scratch file whose appearance releases the descendant's late write. */
@@ -708,7 +693,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		await waitForEvidence(transport, EVIDENCE_SENTINEL)
 
 		// The child is alive and the tail is live here. `close()` terminates it, and the reading
-		// afterwards is the value captured at the teardown barrier rather than a released supervisor.
+		// afterwards is the value the supervisor froze at that child's terminal moment.
 		await transport.close()
 
 		expect(transport.evidence).toBe(EVIDENCE_SENTINEL)
@@ -722,7 +707,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			await waitForEvidence(transport, EVIDENCE_SENTINEL)
 
 			// The child holds a `SIGTERM` handler that would write more, so this reading is what the
-			// supervisor had received at the teardown barrier rather than everything the child could
+			// supervisor had received at the terminal moment rather than everything the child could
 			// still have produced. That much holds on every host.
 			await transport.close()
 
@@ -900,6 +885,188 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		}
 	}, 30_000)
 
+	it('delivers an ended lifetime close before a restart its own error listener began', async () => {
+		const scratch = createScratch()
+		const transport = spawnDescendantStderrClient(scratch)
+		const arrived = new Promise<JSONRPCMessage>((resolve) => {
+			transport.emitter.on('message', resolve)
+		})
+		let restarting: Promise<void> | undefined
+		let captured: string | undefined
+		let ended = false
+		transport.emitter.on('error', () => {
+			// The drain-bound notice is emitted from INSIDE the natural exit's own report, BEFORE
+			// that exit has fired `close`. A restart begun here must not open the next lifetime over
+			// the tail the `close` listeners are about to read.
+			restarting ??= transport.start()
+		})
+		transport.emitter.on('close', () => {
+			captured ??= transport.evidence
+			ended = true
+		})
+		let pid: number | undefined
+		try {
+			await transport.start()
+			pid = readDescendantPid(
+				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
+			)
+			// CONTROL — the ended child's own tail is present before its exit reports, so the reading
+			// below excludes a replacement rather than a value this lifetime never carried.
+			await waitForEvidence(transport, DESCENDANT_EARLY)
+
+			await waitForCondition('the ended child fires its close', () => ended, { budget: 10_000 })
+
+			// The `close` for the ended lifetime reached its listener while that lifetime's child was
+			// still the held one. A replacement installed inside the report would have read its own
+			// empty live tail here instead.
+			expect(captured).toContain(DESCENDANT_EARLY)
+		} finally {
+			if (restarting !== undefined) await restarting
+			await transport.close()
+			if (pid !== undefined && isRunning(pid)) process.kill(pid)
+			await destroyScratch(scratch)
+		}
+	}, 30_000)
+
+	it('CONTROL — a restart the same exit close listener began still opens inside that emit', async () => {
+		const scratch = createScratch()
+		const transport = spawnDescendantStderrClient(scratch)
+		const arrived = new Promise<JSONRPCMessage>((resolve) => {
+			transport.emitter.on('message', resolve)
+		})
+		let early: string | undefined
+		let late: string | undefined
+		let read = false
+		let restarting: Promise<void> | undefined
+		transport.emitter.on('close', () => {
+			if (!read) early = transport.evidence
+		})
+		transport.emitter.on('close', () => {
+			// The barrier the report held is released before this emit, so this `start()` runs to its
+			// spawn INSIDE the emit rather than parking behind the ended lifetime.
+			restarting ??= transport.start()
+		})
+		transport.emitter.on('close', () => {
+			if (read) return
+			late = transport.evidence
+			read = true
+		})
+		let pid: number | undefined
+		try {
+			await transport.start()
+			pid = readDescendantPid(
+				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
+			)
+			await waitForEvidence(transport, DESCENDANT_EARLY)
+
+			await waitForCondition('the ended child fires its close', () => read, { budget: 10_000 })
+
+			// The same exit that defers an error listener's restart still lets a `close` listener's
+			// restart replace the tail every listener after it reads.
+			expect(early).toContain(DESCENDANT_EARLY)
+			expect(late).toBe('')
+		} finally {
+			if (restarting !== undefined) await restarting
+			await transport.close()
+			if (pid !== undefined && isRunning(pid)) process.kill(pid)
+			await destroyScratch(scratch)
+		}
+	}, 30_000)
+
+	it('opens that restart inside the emit though an earlier close listener called close()', async () => {
+		const scratch = createScratch()
+		const transport = spawnDescendantStderrClient(scratch)
+		const arrived = new Promise<JSONRPCMessage>((resolve) => {
+			transport.emitter.on('message', resolve)
+		})
+		let joining: Promise<void> | undefined
+		let restarting: Promise<void> | undefined
+		let late: string | undefined
+		let read = false
+		transport.emitter.on('close', () => {
+			// The ended lifetime reached its terminal moment before this emit, so this `close()` has
+			// nothing to tear down and must leave NO barrier behind. A resolved no-op barrier parks
+			// the `start()` below on the microtask queue, and the replacement then opens after this
+			// emit rather than inside it.
+			joining ??= transport.close()
+		})
+		transport.emitter.on('close', () => {
+			restarting ??= transport.start()
+		})
+		transport.emitter.on('close', () => {
+			if (read) return
+			late = transport.evidence
+			read = true
+		})
+		let pid: number | undefined
+		try {
+			await transport.start()
+			pid = readDescendantPid(
+				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
+			)
+			// CONTROL — the ended child's own tail is present before its exit reports, so the reading
+			// below excludes a replacement rather than a value this lifetime never carried.
+			await waitForEvidence(transport, DESCENDANT_EARLY)
+
+			await waitForCondition('the ended child fires its close', () => read, { budget: 10_000 })
+
+			// The replacement opened INSIDE the emit despite the earlier `close()`, so the listener
+			// after it reads the replacement's own empty live tail rather than the ended child's.
+			expect(late).toBe('')
+		} finally {
+			await requireValue(joining)
+			await requireValue(restarting)
+			await transport.close()
+			if (pid !== undefined && isRunning(pid)) process.kill(pid)
+			await destroyScratch(scratch)
+		}
+	}, 30_000)
+
+	it('leaves the replacement an error listener began closable behind a close listener close()', async () => {
+		const scratch = createScratch()
+		const transport = spawnDescendantStderrClient(scratch)
+		const arrived = new Promise<JSONRPCMessage>((resolve) => {
+			transport.emitter.on('message', resolve)
+		})
+		let restarting: Promise<void> | undefined
+		let joining: Promise<void> | undefined
+		let ends = 0
+		transport.emitter.on('error', () => {
+			restarting ??= transport.start()
+		})
+		transport.emitter.on('close', () => {
+			ends += 1
+			// This `close()` lands in the gap between the report's barrier and the replacement the
+			// parked `start()` above has not installed yet. The lifetime is closed and no barrier is
+			// assigned, so it returns directly and leaves nothing behind — a barrier left here would
+			// become the answer a LATER `close()` resolves through, over a live replacement it then
+			// never tears down.
+			joining ??= transport.close()
+		})
+		let pid: number | undefined
+		try {
+			await transport.start()
+			pid = readDescendantPid(
+				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
+			)
+			await waitForEvidence(transport, DESCENDANT_EARLY)
+
+			await waitForCondition('the ended child fires its close', () => ends >= 1, {
+				budget: 10_000,
+			})
+			await requireValue(restarting)
+			await requireValue(joining)
+
+			// The replacement is a live child, so this close runs a real teardown and reports it.
+			await transport.close()
+			expect(ends).toBe(2)
+		} finally {
+			await transport.close()
+			if (pid !== undefined && isRunning(pid)) process.kill(pid)
+			await destroyScratch(scratch)
+		}
+	}, 30_000)
+
 	it("never reports a closing lifetime's tail after the replacement lifetime ended", async () => {
 		const scratch = createScratch()
 		const inherited = requireValue(process.env['PATH'])
@@ -918,8 +1085,8 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			// running, and `PATH` no longer resolves the command, so the replacement is a spawn the
 			// host refuses: it ends in about 17ms, well inside the roughly 102ms a Windows teardown
 			// spends ending the tree through `taskkill` (both measured on this host, 2026-08-21).
-			// The replacement therefore captures its own tail BEFORE the ended lifetime's teardown
-			// resumes, which is the order that lets a stale capture arrive last.
+			// The replacement is therefore installed and already ended BEFORE the ended lifetime's
+			// teardown resumes, which is the order that lets a stale tail arrive last.
 			process.env['PATH'] = scratch.path
 			const closing = transport.close()
 			const restarting = transport.start()
@@ -1074,8 +1241,8 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			)
 			await waitForEvidence(transport, DESCENDANT_EARLY)
 
-			// The child has ended and its tail is captured, but the descendant still holds that
-			// child's `stderr`, so the supervisor's own exit has not landed yet.
+			// The child has ended and its tail is frozen, because the descendant holding that child's
+			// `stderr` kept the streams open until the supervisor's `drain` bound cut them off.
 			await transport.close()
 			expect(transport.evidence).toContain(DESCENDANT_EARLY)
 
@@ -1157,7 +1324,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			pid = readDescendantPid(
 				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
 			)
-			// CONTROL — the descendant's write BEFORE the teardown barrier reaches the tail, so the
+			// CONTROL — the descendant's write BEFORE the terminal moment reaches the tail, so the
 			// exclusion asserted below excludes a channel this reading proves is live.
 			await waitForEvidence(transport, DESCENDANT_EARLY)
 
@@ -1185,4 +1352,59 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			await destroyScratch(scratch)
 		}
 	}, 30_000)
+
+	it('reports on error that a tail the drain bound cut off may be incomplete', async () => {
+		const scratch = createScratch()
+		const transport = spawnDescendantStderrClient(scratch)
+		const errors: unknown[] = []
+		transport.emitter.on('error', (error) => errors.push(error))
+		const arrived = new Promise<JSONRPCMessage>((resolve) => {
+			transport.emitter.on('message', resolve)
+		})
+		let pid: number | undefined
+		try {
+			await transport.start()
+			pid = readDescendantPid(
+				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
+			)
+			await waitForEvidence(transport, DESCENDANT_EARLY)
+
+			// The child has ended and the descendant holds its inherited `stderr`, so the terminal
+			// moment arrives at the `drain` bound rather than at the child's own stream close. The
+			// tail frozen there is the tail as of that cutoff, and a consumer given no notice reads
+			// it as the child's whole output.
+			await transport.close()
+
+			const [reported] = errors
+			expect(errors).toHaveLength(1)
+			expect(reported).toBeInstanceOf(Error)
+			expect(String(reported)).toContain('evidence may be incomplete')
+			expect(transport.evidence).toContain(DESCENDANT_EARLY)
+		} finally {
+			await transport.close()
+			if (pid !== undefined && isRunning(pid)) process.kill(pid)
+			await destroyScratch(scratch)
+		}
+	}, 30_000)
+
+	it('CONTROL — a child whose own streams close reports no such notice', async () => {
+		const transport = spawnEvidenceClient({ payload: EVIDENCE_SENTINEL, wait: true })
+		const errors: unknown[] = []
+		transport.emitter.on('error', (error) => errors.push(error))
+		try {
+			await transport.start()
+			await transport.send(createJSONRPCRequest({ method: 'write', id: 1 }))
+			await waitForEvidence(transport, EVIDENCE_SENTINEL)
+
+			// The same `close()` over a child that holds no descendant: its streams close under the
+			// termination, the terminal moment arrives drained, and the tail is complete. So the
+			// notice above reports the cutoff rather than every close this transport runs.
+			await transport.close()
+
+			expect(errors).toEqual([])
+			expect(transport.evidence).toBe(EVIDENCE_SENTINEL)
+		} finally {
+			await transport.close()
+		}
+	})
 })
