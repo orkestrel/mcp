@@ -2,7 +2,8 @@
 
 > A typed child-process toolkit in tiers. `Process` supervises one child with framed stdout
 > lines under a bounded backlog, a byte-bounded stderr tail, a live `stderr` event, a writable stdin
-> channel, a typed lifecycle emitter, and bounded termination. `execute` and `executeSync` buffer a
+> channel, a typed lifecycle emitter, and a bounded termination that ends every observation channel
+> at one terminal moment. `execute` and `executeSync` buffer a
 > child to completion and settle with an `ExecuteResult`; `detach` is the fire-and-forget spawn that
 > returns without waiting. `ProcessManager` is a keyed registry of live children, launched and
 > stopped by id and observed through its own emitter. No spawn in this package uses an implicit
@@ -125,13 +126,14 @@ The byte-bounding and result-assembly building blocks, from `@orkestrel/process/
 The signalling and confirmation building blocks a bounded stop composes, from
 `@orkestrel/process/server`.
 
-| API           | Kind     | Summary                                                                   |
-| ------------- | -------- | ------------------------------------------------------------------------- |
-| `isExited`    | function | Report whether a child has reached its native exit.                       |
-| `killProcess` | function | Signal one child, or its detached process group on a POSIX host.          |
-| `killTree`    | function | End one Windows process tree through `taskkill`, bounded by a deadline.   |
-| `waitForExit` | function | Await one child's native exit, bounded by a deadline.                     |
-| `stopChild`   | function | Terminate one child tree and report whether its native exit was observed. |
+| API            | Kind     | Summary                                                                   |
+| -------------- | -------- | ------------------------------------------------------------------------- |
+| `isExited`     | function | Report whether a child has reached its native exit.                       |
+| `killProcess`  | function | Signal one child, or its detached process group on a POSIX host.          |
+| `killTree`     | function | End one Windows process tree through `taskkill`, bounded by a deadline.   |
+| `waitForExit`  | function | Await one child's native exit, bounded by a deadline.                     |
+| `waitForClose` | function | Await one child's stream close, bounded by a deadline.                    |
+| `stopChild`    | function | Terminate one child tree and report whether its native exit was observed. |
 
 ### Validators
 
@@ -155,6 +157,7 @@ The defaults and host bounds, from `@orkestrel/process`.
 | ---------------------- | ----- | ----------------------- | ------------------------------------------------------------------- |
 | `PROCESS_GRACE`        | const | `5_000`                 | Default POSIX milliseconds between `SIGTERM` and `SIGKILL`.         |
 | `PROCESS_CONFIRMATION` | const | `5_000`                 | Milliseconds a termination waits for the native exit after a kill.  |
+| `PROCESS_DRAIN`        | const | `1_000`                 | Default milliseconds a termination waits for the streams to close.  |
 | `PROCESS_EVIDENCE`     | const | `2_048`                 | Default maximum retained stderr tail, in bytes, for a `Process`.    |
 | `PROCESS_BACKLOG`      | const | `10_485_760`            | Default soft high-water mark, in bytes, for the unconsumed backlog. |
 | `PROCESS_OUTPUT`       | const | `10_485_760`            | Default maximum captured bytes for a run's stdout and stderr, each. |
@@ -166,26 +169,26 @@ The defaults and host bounds, from `@orkestrel/process`.
 
 The contracts and options, all from `@orkestrel/process`.
 
-| API                       | Kind      | Summary                                                                                                                          |
-| ------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `ProcessCommand`          | interface | One spawnable command — `file`, `arguments`, and optional `environment`, `input`, `isolated`.                                    |
-| `ProcessExit`             | interface | The terminal state — an exit `code`, or the `signal` that ended the child.                                                       |
-| `SpawnInput`              | interface | The resolved spawn form — the `file`, the `arguments`, and the `verbatim` flag.                                                  |
-| `ExecutableOptions`       | interface | Lookup inputs for resolving a command file — `workspace` and `environment`.                                                      |
-| `ProcessEventMap`         | type      | A `Process`'s events — `stderr(chunk)`, `error(cause)`, and `exit(exit)`.                                                        |
-| `ProcessOptions`          | interface | `Process` construction — `command`, `workspace`, and the optional settings.                                                      |
-| `ProcessInterface`        | interface | The supervised-child surface — `pid` / `code` / `signal` / `emitter` / `lines` / `evidence` / `truncated` / `exit` plus methods. |
-| `ExecuteResult`           | interface | A one-shot outcome — the captured output, the exit, and the state flags.                                                         |
-| `ExecuteInput`            | interface | The captured bytes and terminal facts one settled `ExecuteResult` is built from.                                                 |
-| `ExecuteOptions`          | interface | `execute` options — workspace, environment, input, timeout, grace, signal, strict, limit.                                        |
-| `ExecuteSyncOptions`      | interface | `executeSync` options — the same set without `grace` and without `signal`.                                                       |
-| `DetachOptions`           | interface | `detach` options — the working directory the detached child starts in.                                                           |
-| `ProcessManagerEventMap`  | type      | A manager's events — `launch(id)` and `exit(id, exit)`.                                                                          |
-| `ProcessManagerOptions`   | interface | `ProcessManager` construction — initial `on` listeners and an `error` handler.                                                   |
-| `ProcessManagerInterface` | interface | The registry surface — `emitter` / `count` plus the query, launch, stop, and destroy methods.                                    |
-| `ProcessErrorCode`        | type      | The failure categories — `spawn`, `timeout`, `input`, `duplicate`, `protocol`, or `invalid`.                                     |
-| `ProcessErrorContext`     | interface | Structured failure detail — `id`, `command`, `code`, `signal`, or `value`.                                                       |
-| `ProcessErrorOptions`     | interface | `ProcessError` construction — `code` plus optional `context`, `cause`, `result`.                                                 |
+| API                       | Kind      | Summary                                                                                                                                                   |
+| ------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ProcessCommand`          | interface | One spawnable command — `file`, `arguments`, and optional `environment`, `input`, `isolated`.                                                             |
+| `ProcessExit`             | interface | The terminal state — an exit `code` or the `signal` that ended the child, plus the `drained` discriminant.                                                |
+| `SpawnInput`              | interface | The resolved spawn form — the `file`, the `arguments`, and the `verbatim` flag.                                                                           |
+| `ExecutableOptions`       | interface | Lookup inputs for resolving a command file — `workspace` and `environment`.                                                                               |
+| `ProcessEventMap`         | type      | A `Process`'s events — `stderr(chunk)`, `error(cause)`, and `exit(exit)`.                                                                                 |
+| `ProcessOptions`          | interface | `Process` construction — `command`, `workspace`, and the optional settings.                                                                               |
+| `ProcessInterface`        | interface | The supervised-child surface — `pid` / `code` / `signal` / `emitter` / `lines` / `evidence` / `truncated` / `settled` / `stopping` / `exit` plus methods. |
+| `ExecuteResult`           | interface | A one-shot outcome — the captured output, the exit, and the state flags.                                                                                  |
+| `ExecuteInput`            | interface | The captured bytes and terminal facts one settled `ExecuteResult` is built from.                                                                          |
+| `ExecuteOptions`          | interface | `execute` options — workspace, environment, input, timeout, grace, signal, strict, limit.                                                                 |
+| `ExecuteSyncOptions`      | interface | `executeSync` options — the same set without `grace` and without `signal`.                                                                                |
+| `DetachOptions`           | interface | `detach` options — the working directory the detached child starts in.                                                                                    |
+| `ProcessManagerEventMap`  | type      | A manager's events — `launch(id)` and `exit(id, exit)`.                                                                                                   |
+| `ProcessManagerOptions`   | interface | `ProcessManager` construction — initial `on` listeners and an `error` handler.                                                                            |
+| `ProcessManagerInterface` | interface | The registry surface — `emitter` / `count` plus the query, launch, stop, and destroy methods.                                                             |
+| `ProcessErrorCode`        | type      | The failure categories — `spawn`, `timeout`, `input`, `duplicate`, `protocol`, or `invalid`.                                                              |
+| `ProcessErrorContext`     | interface | Structured failure detail — `id`, `command`, `code`, `signal`, or `value`.                                                                                |
+| `ProcessErrorOptions`     | interface | `ProcessError` construction — `code` plus optional `context`, `cause`, `result`.                                                                          |
 
 ### Server contracts
 
@@ -199,10 +202,10 @@ capture helper, so they stay out of the host-independent face.
 
 ### Surface notes
 
-The `pid`, `code`, `signal`, `emitter`, `lines`, `evidence`, `truncated`, and `exit` members of
-`ProcessInterface`, and the `emitter` and `count` members of `ProcessManagerInterface`, are readonly
-data properties, so they stay Surface rows. Their call-signature methods are documented under
-[Methods](#methods).
+The `pid`, `code`, `signal`, `emitter`, `lines`, `evidence`, `truncated`, `settled`, `stopping`, and
+`exit` members of `ProcessInterface`, and the `emitter` and `count` members of
+`ProcessManagerInterface`, are readonly data properties, so they stay Surface rows. Their
+call-signature methods are documented under [Methods](#methods).
 
 ## Methods
 
@@ -233,13 +236,15 @@ retention.retained // 3
 
 `send` writes one line to the child's stdin; `stop` and `destroy` are the lifecycle verbs. None of
 them rejects. `stop` shares one termination across every call, and `destroy` returns one stable
-barrier shared by every call.
+barrier shared by every call. Each verb reaches
+[the terminal moment](#the-terminal-moment) before it settles, so a caller that resumes from either
+one holds a frozen `evidence`, an ended `lines`, and a settled `exit`.
 
-| Method    | Returns            | Behavior                                                                                     |
-| --------- | ------------------ | -------------------------------------------------------------------------------------------- |
-| `send`    | `Promise<boolean>` | Write one line to the open stdin channel; true when the host accepted the bytes.             |
-| `stop`    | `Promise<boolean>` | Terminate the child tree and await its exit; true when the native exit was observed.         |
-| `destroy` | `Promise<void>`    | Stop the child, destroy stdin, then destroy the emitter last; the barrier every call shares. |
+| Method    | Returns            | Behavior                                                                                        |
+| --------- | ------------------ | ----------------------------------------------------------------------------------------------- |
+| `send`    | `Promise<boolean>` | Write one line to the open stdin channel; true when the host accepted the bytes.                |
+| `stop`    | `Promise<boolean>` | Terminate the child tree and reach the terminal moment; true when the native exit was observed. |
+| `destroy` | `Promise<void>`    | Stop the child, destroy stdin, then destroy the emitter last; the barrier every call shares.    |
 
 #### `ProcessManagerInterface`
 
@@ -270,20 +275,26 @@ fault, and the terminal `exit`, alongside the `exit` promise.
 
 `ProcessOptions` requires `command` and `workspace`; the rest are optional:
 
-| Option      | Type                            | Required | Meaning                                                                                                    |
-| ----------- | ------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------- |
-| `command`   | `ProcessCommand`                | yes      | The executable, its argument vector, and optional environment overrides and stdin `input`.                 |
-| `workspace` | `string`                        | yes      | The working directory the child runs in.                                                                   |
-| `grace`     | `number`                        | no       | POSIX milliseconds between `SIGTERM` and `SIGKILL`. Default: `PROCESS_GRACE` (`5_000`).                    |
-| `evidence`  | `number`                        | no       | Maximum retained stderr tail in bytes. Default: `PROCESS_EVIDENCE` (`2_048`).                              |
-| `backlog`   | `number`                        | no       | Soft high-water mark in bytes; termination retains at most twice `backlog`. Default: `PROCESS_BACKLOG`.    |
-| `delivery`  | `number`                        | no       | Milliseconds an unconfirmed `send` waits before resolving `false`; `0` or omitted disables the bound.      |
-| `writable`  | `boolean`                       | no       | When `true`, stdin stays open for `send`; when `false` or omitted, stdin closes after any initial `input`. |
-| `signal`    | `AbortSignal`                   | no       | Aborting this signal terminates the child through the same bounded `stop`.                                 |
-| `on`        | `EmitterHooks<ProcessEventMap>` | no       | Initial `stderr`, `error`, and `exit` listeners installed at construction.                                 |
-| `error`     | `EmitterErrorHandler`           | no       | Receives a listener's throw, isolated from the engine.                                                     |
+| Option      | Type                            | Required | Meaning                                                                                                                                                                         |
+| ----------- | ------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`   | `ProcessCommand`                | yes      | The executable, its argument vector, and optional environment overrides and stdin `input`.                                                                                      |
+| `workspace` | `string`                        | yes      | The working directory the child runs in.                                                                                                                                        |
+| `grace`     | `number`                        | no       | POSIX milliseconds between `SIGTERM` and `SIGKILL`. Default: `PROCESS_GRACE` (`5_000`).                                                                                         |
+| `drain`     | `number`                        | no       | Milliseconds the package waits for the child's read ends to close after its ending, before cutting them off; `0` cuts them off immediately. Default: `PROCESS_DRAIN` (`1_000`). |
+| `evidence`  | `number`                        | no       | Maximum retained stderr tail in bytes. Default: `PROCESS_EVIDENCE` (`2_048`).                                                                                                   |
+| `backlog`   | `number`                        | no       | Soft high-water mark in bytes; termination retains at most twice `backlog`. Default: `PROCESS_BACKLOG`.                                                                         |
+| `delivery`  | `number`                        | no       | Milliseconds an unconfirmed `send` waits before resolving `false`; `0` or omitted disables the bound.                                                                           |
+| `writable`  | `boolean`                       | no       | When `true`, stdin stays open for `send`; when `false` or omitted, stdin closes after any initial `input`.                                                                      |
+| `signal`    | `AbortSignal`                   | no       | Aborting this signal terminates the child through the same bounded `stop`.                                                                                                      |
+| `on`        | `EmitterHooks<ProcessEventMap>` | no       | Initial `stderr`, `error`, and `exit` listeners installed at construction.                                                                                                      |
+| `error`     | `EmitterErrorHandler`           | no       | Receives a listener's throw, isolated from the engine.                                                                                                                          |
 
-There is no completion deadline. A caller that wants one arms its own timer and calls `stop`.
+There is no completion deadline for a running child. Nothing here ends a child that is still
+working, the `exit` promise carries no deadline of its own, and a caller that wants one arms its own
+timer and calls `stop`. `drain` does not weaken that: it bounds the window between the child's
+ending and the release of its read ends. The child's native exit arms that window, and a termination
+this package initiated arms it too, so every ending reaches the bound. The cutoff ends
+observation; it does not terminate the child.
 
 Every numeric option is validated at construction. A timer value outside `[0, PROCESS_TIMER]`, a
 negative or fractional byte value, and a `backlog` below `1` each throw a `ProcessError` coded
@@ -294,6 +305,102 @@ restriction.
 Every option and command property is read once, before the child is spawned. Reading a property runs
 whatever getter you put behind it, so hoisting those reads is what keeps a construction failure from
 leaving a live child nobody holds: a getter that throws does so while nothing has started.
+
+### The terminal moment
+
+The child's ending and the supervision's ending are distinct, and telling them apart is what this
+surface is shaped around.
+
+- **The child's ending** is the host's own record of the process: `pid`, `code`, and `signal`. They
+  carry the native exit as soon as the host records it.
+- **The supervision's ending** is the terminal moment: `settled`, `exit`, `evidence`, and `lines`.
+  They reach it together.
+
+The terminal moment arrives when the child's streams close, or when the `drain` bound elapses first.
+The child's native exit arms that bound, and so does a termination this package initiated, so a
+natural exit, a spawn fault, `stop`, `destroy`, and an abort of the `signal` option each reach the
+moment. `ProcessExit.drained` reports which way it arrived: `true` for the close, `false` for the
+cutoff.
+
+The endings separate whenever a descendant inherited the child's stdio, because that descendant
+holds the pipe open after the child itself is gone. Inside that window `code` and `signal` carry the
+terminal pair while `exit` is still pending, so read the child's ending from those fields and the
+supervision's ending from `settled`.
+
+At the terminal moment every observation surface stops moving, together:
+
+- `evidence` freezes and never moves again. Every later read returns the same string, so a consumer
+  needs no private copy of the tail and cannot watch it move under them.
+- `lines` ends rather than throwing, so teardown is not an error path: a pending `next` call resolves
+  `done: true` and a `for await` loop exits normally. Every line already framed and queued is
+  delivered before that end, so a consumer that stops a chatty child still reads what the child had
+  framed. A cutoff loses more than the bytes that arrive after it: only a stream's own end flushes a
+  trailing partial, so a final line the child wrote without a newline is dropped however early it
+  was written.
+- `exit` settles with its `ProcessExit` value, and `settled` turns `true`.
+- The abort listener registered on the caller's `signal` option is released here, rather than at the
+  `destroy` call that preceded it.
+
+`stop` reaches the terminal moment as well as `destroy` does. A caller that terminates a child and
+keeps reading it therefore reaches the end of the stream instead of waiting on a child it already
+ended, and needs no second call to release it. `stopping` reports the initiation rather than the
+arrival: it turns `true` when `stop`, `destroy`, or an abort of `signal` begins a termination, and it stays
+`true` from then on, including after `settled` turns `true`. A child that exited on its own reports
+`stopping` as `false` with `settled` as `true`.
+
+A consumer handed the terminal value never reads a child that still reports itself unfinished. The
+latch runs before the `exit` event and before the read ends are released, so a listener on that
+event reads `settled` as `true` from inside the delivery that handed it the value.
+
+`drained` lives on `ProcessExit` rather than on the child, because that value exists only at the
+terminal moment. A getter would admit a read before the moment arrives, which is the defect this
+contract removes.
+
+```ts
+import { createProcess } from '@orkestrel/process/server'
+
+const child = createProcess({
+	command: { file: 'node', arguments: ['-e', 'console.error("done")'] },
+	workspace: process.cwd(),
+	drain: 1_000, // the bound on the wait for the child's read ends to close
+})
+
+const exit = await child.exit
+exit.drained // true — the child's own streams closed
+child.settled // true — evidence is frozen and lines has ended
+child.stopping // false — this child ended on its own
+child.evidence // 'done\n' — the frozen tail every later read returns
+await child.destroy()
+```
+
+#### The drain bound
+
+`drain` bounds how long the package waits for the child's read ends to close, and defaults to
+`PROCESS_DRAIN`. The TSDoc on that constant carries the measurement behind the value and the date it
+was taken.
+
+Two moments arm the bound. The child's native exit arms it, which is what carries a natural exit to
+the terminal moment when a descendant holds the read ends open. The return of a termination this
+package initiated arms it too, confirmed or not, so a `stop` whose confirmation window elapsed while
+the child was still running reaches the cutoff with `code` and `signal` still `null`.
+
+The close latency is bimodal rather than long-tailed, so `drain` is a bound on the unbounded case
+and not a percentile of a distribution. Measured on Windows 11 with Node v24.18.1 on 2026-08-21,
+every ordinary close landed within 0.02ms of the native exit, and a `taskkill /F /T` that reaped a
+descendant while the root was still alive closed within 0.01ms. Every late close in that fixture set
+came from a descendant holding the inherited pipe: one that ends on its own closes late by its own
+remaining life, and one that never ends never closes at all. There is no finite tail for a
+percentile to cover.
+
+Pass `drain: 0` for an immediate cutoff. That reads against the sibling `delivery`, whose `0`
+disables its bound, and the difference is deliberate: an unbounded drain is the defect `drain`
+exists to prevent, so no value requests one.
+
+Read `drained` when the diagnostics matter. `drained: true` reports that the child's streams closed,
+so `evidence` holds everything the child wrote. `drained: false` reports that the bound elapsed
+first, so `evidence` is the tail as of the cutoff and later diagnostics may have existed. `drained`
+and `truncated` are independent facts about different streams, and one child reports both when a
+retention bound dropped stdout lines and the drain bound cut stderr off.
 
 ### The line backlog
 
@@ -384,18 +491,20 @@ signal and the host delivering it belongs to the operating system, which is the 
 caller can hold. `destroy` runs `stop`, destroys stdin so every pending `send` settles, then destroys
 the emitter last; it always resolves, including when termination was never confirmed.
 
-`destroy` resolving does not mean the child's streams have closed. A descendant that inherited the
-child's stdio holds the pipe open after the child itself is gone, so the close event never arrives
-and the `exit` promise and the `lines` stream can both stay outstanding past the barrier. A caller
-that must not wait on either arms its own timer around them.
+`stop` and `destroy` each settle after [the terminal moment](#the-terminal-moment), bounded by
+`drain`, so a descendant holding an inherited pipe cannot hold either one open. `destroy` destroys the emitter
+after the frozen state exists, so a consumer watching the `stderr` event and a consumer reading
+`evidence` end on the same bytes.
 
 POSIX detachment creates the process group that tree termination signals. The child therefore
 survives the supervisor's `SIGKILL` and does not receive the terminal's `SIGINT`. Call `stop` or
 `destroy` during an orderly shutdown.
 
-Neither bounded wait leaks a listener. `destroy` removes the abort listener it registered on the
-caller's `signal`, so a long-lived controller does not accumulate one per child. `waitForExit`
-releases its own `exit` listener when its deadline elapses before the exit, so a child driven through
+No bounded wait leaks a listener. `destroy` removes the abort listener it registered on the caller's
+`signal`, so a long-lived controller does not accumulate one per child; the release happens at the
+terminal moment, which is where every other observation surface is released, rather than at the
+`destroy` call. `waitForExit` releases its own `exit` listener when its deadline elapses before the
+exit, and `waitForClose` releases its own `close` listener the same way, so a child driven through
 several bounded waits accumulates none either. `ProcessChild` declares the `off` that release needs,
 so a caller composing a stop of its own from the published contract releases it too.
 
@@ -422,6 +531,22 @@ when the window elapses. A tree is discoverable only while its root lives, so a 
 outlives the root is beyond this mechanism; Windows job objects, which would close that gap, are not
 part of this package.
 
+`stopChild` therefore returns for an already-exited child before any route to its pid runs, on every
+host. The host has reaped that number and can have handed it to another process, so signalling it or
+naming it to `taskkill` reaches a process this package never spawned. Nothing recoverable is given
+up by returning: measured on Windows 11 with Node v24.18.1 on 2026-08-21, `taskkill /F /T` against a
+live root reaped every descendant in the fixture set, and against an exited root it reported the
+process as not found while the descendant kept the pipe open and delivered for a further 2.28s. A
+descendant whose root has exited is beyond every mechanism here, and the `drain` bound is what ends
+the wait for it.
+
+After an undrained cutoff, no mechanism here can report whether further diagnostics existed, and that
+is a limit rather than an omission. Node exposes no count of the writers still holding a pipe, and a
+descendant that outlives its root is beyond `taskkill /F /T`, so nothing observable settles the
+question. `drained: true` carries no such limit: the read ends closed, so `evidence` holds everything
+the child wrote. Start a teardown while the root is still alive to keep the ordinary case on that
+branch.
+
 `killProcess` is the direct signalling helper underneath. On a POSIX host it signals the negated pid,
 which reaches the detached child's whole process group. When the host reports that no group owns the
 pid, it falls back to signalling the child directly, so `killProcess` and `stopChild` also support a
@@ -433,9 +558,9 @@ check and the call, and the child's native exit stays the authoritative terminal
 recorded for it. The spawn is eager, so `pid` carries a number by the time `createProcess` returns,
 and a spawn that produced no child reports `undefined` for that child's whole lifetime. `code` and
 `signal` are `null` while the child runs; the host records them at the native exit, which arrives
-before the `exit` promise whenever a descendant holds the child's stdio open, so a supervisor inside
-that window reads the terminal state from them. A spawn fault records the host's negative errno as
-the `code`, the same value the `exit` promise carries.
+before the terminal moment whenever a descendant holds the child's stdio open, so a supervisor
+inside that window reads the child's own ending from them. A spawn fault records the host's negative
+errno as the `code`, the same value the `exit` promise carries.
 
 An assigned id survives the exit, so `pid` reports no liveness on its own. Derive liveness as
 `pid !== undefined && code === null && signal === null`, and derive it again before each use of the
@@ -460,8 +585,9 @@ const child = createProcess({
 })
 
 controller.abort()
-await child.exit
-console.log(child.evidence) // the retained stderr tail, at most PROCESS_EVIDENCE bytes
+const { drained } = await child.exit // false when the drain bound cut the streams off
+console.log(child.evidence) // the frozen stderr tail, at most PROCESS_EVIDENCE bytes
+console.log(drained)
 await child.destroy()
 ```
 
@@ -804,8 +930,9 @@ returned, and its fault surfaces through its own `exit` and `error` event rather
 - A `protocol`-coded `ProcessError` after `destroy` has begun. The check runs again after the child
   exists, because reading an option runs your own code and that code can start the teardown; a
   registry being destroyed adopts nothing, so the child it has already spawned is destroyed and the
-  launch is still refused. The `protocol` refusal throws synchronously before the `destroy` barrier
-  settles. The barrier does not cover the child's asynchronous teardown.
+  launch is still refused. The `protocol` refusal throws synchronously, and the `destroy` barrier
+  covers that child's teardown, so the refused child reaches its terminal moment before the barrier
+  resolves.
 - An `invalid`-coded `ProcessError` when an option or command string is malformed. The id is
   reserved before the child is constructed and released when construction throws, so a refused launch
   strands no key.
@@ -954,10 +1081,13 @@ const child = createProcess({
 })
 
 setTimeout(() => controller.abort(), 10_000) // stop after ten seconds
-for await (const line of child.lines) console.log(line)
+for await (const line of child.lines) console.log(line) // ends at the terminal moment
 await child.exit
 await child.destroy()
 ```
+
+The abort reaches the terminal moment through the same bounded `stop`, so the loop exits on its own
+and the `exit` promise is already settled when the loop returns.
 
 ### Supervise a fleet by id
 
@@ -979,7 +1109,10 @@ await manager.destroy()
 
 The termination helpers are the pieces `stop` composes, and they are exported so a caller supervising
 a child it spawned itself gets the same bounded sequence. Reach for `stopChild` first: it is the
-whole sequence, host-aware, and it never signals a process it has already seen exit.
+whole sequence, and it is host-aware. It returns for a child that has already exited before any
+route to its pid runs, because the host has reaped that number and can have handed it to another
+process. A descendant whose root exited between your decision and that liveness read is therefore
+unreachable, on either host; `drain` is what bounds the wait for it.
 
 ```ts
 import { spawn } from 'node:child_process'
@@ -992,6 +1125,24 @@ const worker = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 50)'
 
 const confirmed = await stopChild(worker, 5_000, 5_000)
 confirmed // true when the native exit arrived
+```
+
+`stopChild` reports the child's own ending. Pair it with `waitForClose` to reach the supervision's
+ending over a child you spawned yourself, and register that wait before the termination so a close
+landing between them is still observed.
+
+```ts
+import { spawn } from 'node:child_process'
+import { stopChild, waitForClose } from '@orkestrel/process/server'
+
+const collector = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 50)'], {
+	detached: process.platform !== 'win32',
+})
+
+const closing = waitForClose(collector, 1_000) // registered before the termination
+await stopChild(collector, 5_000, 5_000)
+const closed = await closing
+closed // true when the streams closed inside the bound
 ```
 
 Drive the pieces yourself only when you want a different sequence — a shorter cooperative window, an
@@ -1045,7 +1196,15 @@ isExited(reporter) // whether the native exit arrived
   `pid !== undefined && code === null && signal === null`, and the host reuses a dead child's id, so
   a signal sent without that check reaches whatever process holds the id.
 - **Read `evidence` on a failed exit** — the byte-bounded stderr tail is the diagnostic to attach,
-  bounded by `evidence` (default `PROCESS_EVIDENCE`).
+  bounded by `evidence` (default `PROCESS_EVIDENCE`). It freezes at the terminal moment, so read it
+  after `exit` settles and keep no copy of your own.
+- **Read `drained` before you treat the diagnostics as complete** — `true` reports that the child's
+  streams closed, so the diagnostics are everything the child wrote. `false` reports that the `drain`
+  bound cut them off, and nothing can report whether more existed, because a descendant holding an
+  inherited pipe is beyond the tree kill and the host counts no remaining writers.
+- **Lower `drain` for a shutdown with a deadline of its own** — the default `PROCESS_DRAIN` bounds
+  the wait for a descendant that never releases the pipe. Pass `drain: 0` to cut the streams off as
+  soon as the bound is armed.
 - **Observe, do not drive** — subscribe to `emitter` for lifecycle moments; emitting is a pure
   side-channel, so a listener never changes what the engine does.
 
@@ -1053,26 +1212,31 @@ isExited(reporter) // whether the native exit arrived
 
 Each name on this surface that reads against a house rule is settled here rather than rediscovered.
 
-| Name                     | Ruling                                                                                                                                                                                                                           |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `execute`, `executeSync` | Use the fixed lifecycle verb for primary work to completion. `executeSync` keeps the ecosystem `Sync` suffix.                                                                                                                    |
-| `process`, `processes`   | Retained. A registry exposes its contents as accessors named for what they hold, so the manager reads `manager.process(id)` and `manager.processes()`.                                                                           |
-| `strict`                 | Replaces `reject`. A boolean reads as an adjective asserting a state, and `reject` named the reaction rather than the mode. `strict: false` resolves with the failed result.                                                     |
-| `evidence`, `backlog`    | Byte bounds are named for their subject where an entity has several, so a `Process` carries `evidence` and `backlog` rather than flavours of `limit`. A run has one bound, so it is named for the bound: `limit`.                |
-| `truncated`              | One name on both surfaces, because it reports one fact: the surface omitted output. Each entity names its own bound — a `Process` omits `lines` past a retention bound, and an `ExecuteResult` omits captured text past `limit`. |
-| `run`                    | Kept as the English noun for one invocation — a terminated run, a run that stays pending. It never names a function; `execute` and `executeSync` are named by their identifiers, so the concept carries one term.                |
+| Name                     | Ruling                                                                                                                                                                                                                                                                              |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `execute`, `executeSync` | Use the fixed lifecycle verb for primary work to completion. `executeSync` keeps the ecosystem `Sync` suffix.                                                                                                                                                                       |
+| `process`, `processes`   | Retained. A registry exposes its contents as accessors named for what they hold, so the manager reads `manager.process(id)` and `manager.processes()`.                                                                                                                              |
+| `strict`                 | Replaces `reject`. A boolean reads as an adjective asserting a state, and `reject` named the reaction rather than the mode. `strict: false` resolves with the failed result.                                                                                                        |
+| `evidence`, `backlog`    | Byte bounds are named for their subject where an entity has several, so a `Process` carries `evidence` and `backlog` rather than flavours of `limit`. A run has one bound, so it is named for the bound: `limit`.                                                                   |
+| `truncated`              | One name on both surfaces, because it reports one fact: the surface omitted output. Each entity names its own bound — a `Process` omits `lines` past a retention bound, and an `ExecuteResult` omits captured text past `limit`.                                                    |
+| `run`                    | Kept as the English noun for one invocation — a terminated run, a run that stays pending. It never names a function; `execute` and `executeSync` are named by their identifiers, so the concept carries one term.                                                                   |
+| `settled`                | Derives literally: it is `true` exactly when `exit` has settled. `closed` was refused because it borrows a Node event name into `ProcessInterface`, which is host-independent enough to type `signal` as a `string`.                                                                |
+| `stopping`               | A present participle for a latched fact, documented as monotonic rather than renamed. It reports that a termination was initiated, not that one is in flight, because the initiation is what a consumer acts on: a child that was asked to end is not a child to send new work to.  |
+| `drain`, `drained`       | The option names the window and the result names its outcome, so one concept carries one term across the two surfaces. `drain: 0` is an immediate cutoff rather than a disabled bound, unlike the sibling `delivery`, because an unbounded drain is the defect the option prevents. |
 
 ## Tests
 
 The pure platform-decision rows execute both `win32` and POSIX inputs on every host. They cover
 environment-key folding and merging, `PATHEXT` candidate order, batch routing, argument quoting, and
 the percent-sign refusal. Those rows were last proven on Linux on 2026-08-20. The live POSIX rows
-were also last proven on Linux on 2026-08-20.
+were also last proven on Linux on 2026-08-20, before the terminal-moment fixtures landed.
 
-The live Windows filesystem, `cmd.exe`, and `taskkill.exe` rows execute on Windows only. Their
-pre-`b392629` form was last proven on Windows; the current fixtures have not run there. The exact
-unproven residue is `killTree` through `taskkill.exe` and grandchild tree termination through a live
-root. On a Windows host, settle it and re-run every server row with this command:
+The live Windows filesystem, `cmd.exe`, and `taskkill.exe` rows execute on Windows only, and the
+current fixtures were last proven on Windows on 2026-08-21. That run settles `killTree` through
+`taskkill.exe` and grandchild tree termination through a live root. The unproven residue is the live
+POSIX rows against those same fixtures, which cover the terminal moment, the drain cutoff, and the
+descendant that outlives its root. On a POSIX host, settle them and re-run every server row with
+this command:
 
 ```text
 npx vitest run --config vite.config.ts --no-cache --project src:server
@@ -1099,17 +1263,26 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   `delivery` bound against its unbounded control, the `protocol` fault a host-reported channel
   failure raises beside the silence a package-initiated teardown keeps, bounded termination and its
   confirmation, the POSIX escalation from a trapped `SIGTERM` to `SIGKILL`, abort-signal termination,
-  the isolated environment, the `invalid` refusals, and `destroy`.
+  the isolated environment, the `invalid` refusals, and `destroy`. The terminal moment carries its
+  own rows: the frozen `evidence` tail read against a descendant that keeps writing, the `stderr`
+  event and the tail stopping together, `lines` ending an in-flight read after its queued lines, the
+  `exit` promise settling at the cutoff when the streams never close, the `drain` bound driven below
+  and above a descendant release, `stop` alone reaching the moment with no `destroy` call, the
+  latched `stopping` refusing a `send`, the released abort listener, the spawn-fault path, and the
+  `drain` refusals at each end of its range.
 - [`tests/src/server/Retention.test.ts`](../tests/src/server/Retention.test.ts) — the stream-head
   accumulator: delivered and retained totals across a truncating stream.
 - [`tests/src/server/ProcessManager.test.ts`](../tests/src/server/ProcessManager.test.ts) — the
   registry: `launch` registration and its `duplicate`, `protocol`, and `invalid` refusals, including
-  a teardown started from inside the caller's own option getter, the unforgeable eviction and its
-  ordering, the query surface, the `stop` overloads, and emitter-last `destroy`.
+  a teardown started from inside the caller's own option getter, the terminal moment of the child
+  that refusal spawned arriving before the barrier resolves, the eviction of a child whose
+  descendant holds the pipe at the drain cutoff, the unforgeable eviction and its ordering, the
+  query surface, the `stop` overloads, and emitter-last `destroy`.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the building blocks:
   the resolver under `PATHEXT` and an extension-bearing name, each platform input to the quoted
   batch builder and its percent-sign refusal, the environment merge under each platform input, the
-  UTF-8-safe byte bounds, the validators, and the termination helpers.
+  UTF-8-safe byte bounds, the validators, the termination helpers, and `waitForClose` across a close
+  inside its deadline, a deadline that elapsed first, and the listeners it leaves behind.
 - [`tests/src/server/execution/execute.test.ts`](../tests/src/server/execution/execute.test.ts) —
   the asynchronous one-shot run: owned inputs, buffered outcomes, failure delivery, cancellation,
   timeout, capture bounds, spawn faults, and pre-spawn refusal.
@@ -1125,8 +1298,9 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   it packs the package, installs the tarball into a directory outside this repository, and compares
   the runtime exports of each built format against the declarations the compiler parses, under each
   supported `moduleResolution` mode.
-- [`tests/setup.test.ts`](../tests/setup.test.ts) — `waitForCondition`, the polled wait this suite
-  uses in place of a fixed delay: when it returns, when it rejects, and the budget it names.
+- [`tests/setup.test.ts`](../tests/setup.test.ts) — `resolveChildFixture` and `childCommand`, the
+  fixture command builders this suite spawns through: where the fixture resolves, and the argument
+  vector each mode produces.
 
 ## See also
 

@@ -729,7 +729,14 @@ rl.on('line', (line) => {
 			inherited: process.env.MCP_GUIDE_INHERITED,
 			absent: process.env.MCP_GUIDE_ABSENT,
 			stderr: String(stderr.dev) + ':' + String(stderr.ino),
-			pipe: (stderr.mode & constants.S_IFMT) === constants.S_IFIFO,
+			// A stdio pipe is a FIFO on some hosts and a socketpair on others: this host reports
+			// S_IFSOCK for the very descriptor Node created as 'pipe'. Read the property the
+			// assertion needs — a channel the supervisor made — rather than one host's spelling of
+			// it. The inherit control hands down a regular file, which is neither, so the reading
+			// still separates the two.
+			pipe:
+				(stderr.mode & constants.S_IFMT) === constants.S_IFIFO
+				|| (stderr.mode & constants.S_IFMT) === constants.S_IFSOCK,
 		},
 	}) + '\\n')
 })
