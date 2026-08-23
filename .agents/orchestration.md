@@ -530,7 +530,8 @@ right to stop.
   is a guess. A claim about a search names the scope the search covered: a search bounded to one
   directory proves something about that directory and nothing about the rest of the tree, and a
   filtered set proves something about the filter's membership rule and nothing about the population
-  it was drawn from.
+  it was drawn from. Where several artifacts state the fact, check it against the code rather than
+  against the other copies: agreement proves one copy was taken from another.
 - Take every measurement under the conditions the unit will run in, or have the unit take it. A
   number measured in your environment and asserted as a criterion is unreachable when the
   executor's sandbox denies what yours permitted, and no edit to the owned files can close it.
@@ -595,6 +596,10 @@ right to stop.
   grep. Where the change is already written somewhere — a scratch copy, an earlier unit, a probe —
   run the suite against it and read the failures. Where it is not, name the search's bound in the
   brief so the unit re-derives the set instead of trusting it.
+- Scope a unit that changes a mechanism to own the prose describing that mechanism: the comment
+  beside the code it edits, and the guide passage stating the behaviour it moves. Where a brief
+  scopes that prose out so writers do not share a file, name the carrier that takes it and dispatch
+  that carrier before the change ships.
 
 ### Carry every finding
 
@@ -626,6 +631,11 @@ command that outlives the turn that started it. Every law here binds all of them
 - Write a multi-step chain to a script file and run the file. A chain composed inside one shell
   argument cannot be read back, corrected, or re-run, and the record of what actually ran is the
   argument text in a transcript rather than a file on disk.
+- Never edit a script file while a shell is executing it. `bash` reads a script incrementally from a
+  byte offset rather than loading it, so an edit that shifts line numbers moves the text under that
+  offset and the shell resumes mid-construct. The run dies on a syntax error in a line the script
+  does not contain, which reads as a defect in the work rather than as the edit that caused it. Copy
+  the file, edit the copy, and launch the copy for the next run.
 - On a Windows host this binds every program-carrying command, not only long ones. Heredocs,
   `node -e`, `node -p`, `&&` chaining, and any argument carrying `${...}` trip the Git Bash
   approval classifier and turn an unattended run into a manual approval prompt. Write the program
