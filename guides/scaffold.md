@@ -59,27 +59,29 @@ Exported from `@orkestrel/scaffold`, and reachable from
 
 #### Interfaces
 
-| Name                | Kind      | Summary                                                                                 |
-| ------------------- | --------- | --------------------------------------------------------------------------------------- |
-| `AppDefinition`     | interface | The configuration and runtime-entry settings one private `app` environment contributes. |
-| `ArtifactBase`      | interface | The fields every planned file carries.                                                  |
-| `Audit`             | interface | The whole comparison of a plan against a target's current content.                      |
-| `Blueprint`         | interface | The closed, JSON-serializable workspace specification.                                  |
-| `CompileFailure`    | interface | The coded reason one compile stage failed.                                              |
-| `CompileRecord`     | interface | The input and output snapshot of one compile stage.                                     |
-| `CompilerInterface` | interface | The compilation contract: pure, synchronous, and host-independent.                      |
-| `CompilerOptions`   | interface | Options for the compiler.                                                               |
-| `ContentArtifact`   | interface | A text file produced by the template or computed compilation path.                      |
-| `Dependency`        | interface | One runtime `@orkestrel/*` dependency of a generated workspace.                         |
-| `HostArtifact`      | interface | A file byte-copied from the vendored data root, planned before its bytes are read.      |
-| `HydratedArtifact`  | interface | A vendored file whose exact bytes have been read, so its content can be compared.       |
-| `Override`          | interface | One artifact override.                                                                  |
-| `Plan`              | interface | The compiled, ordered artifact list and the selection it covers.                        |
-| `PlanSummary`       | interface | The tally of one plan by artifact origin.                                               |
-| `Question`          | interface | One validation issue raised against a blueprint or a plan.                              |
-| `Scaffolding`       | interface | The replayable outcome of one compile.                                                  |
-| `SrcDefinition`     | interface | The build and export settings one published `src` environment contributes.              |
-| `ViteMachinery`     | interface | Which host-specific pipelines a generated root Vite configuration carries.              |
+| Name                    | Kind      | Summary                                                                                 |
+| ----------------------- | --------- | --------------------------------------------------------------------------------------- |
+| `AppDefinition`         | interface | The configuration and runtime-entry settings one private `app` environment contributes. |
+| `ArtifactBase`          | interface | The fields every planned file carries.                                                  |
+| `Audit`                 | interface | The whole comparison of a plan against a target's current content.                      |
+| `Blueprint`             | interface | The closed, JSON-serializable workspace specification.                                  |
+| `CompileFailure`        | interface | The coded reason one compile stage failed.                                              |
+| `CompileRecord`         | interface | The input and output snapshot of one compile stage.                                     |
+| `CompilerInterface`     | interface | The compilation contract: pure, synchronous, and host-independent.                      |
+| `CompilerOptions`       | interface | Options for the compiler.                                                               |
+| `ContentArtifact`       | interface | A text file produced by the template or computed compilation path.                      |
+| `Dependency`            | interface | One runtime `@orkestrel/*` dependency of a generated workspace.                         |
+| `DependencyPinSet`      | interface | The runtime and development dependency sections a range writer may change.              |
+| `HostArtifact`          | interface | A file byte-copied from the vendored data root, planned before its bytes are read.      |
+| `HydratedArtifact`      | interface | A vendored file whose exact bytes have been read, so its content can be compared.       |
+| `ManifestDependencySet` | interface | The runtime, development, and peer declarations read from an existing manifest.         |
+| `Override`              | interface | One artifact override.                                                                  |
+| `Plan`                  | interface | The compiled, ordered artifact list and the selection it covers.                        |
+| `PlanSummary`           | interface | The tally of one plan by artifact origin.                                               |
+| `Question`              | interface | One validation issue raised against a blueprint or a plan.                              |
+| `Scaffolding`           | interface | The replayable outcome of one compile.                                                  |
+| `SrcDefinition`         | interface | The build and export settings one published `src` environment contributes.              |
+| `ViteMachinery`         | interface | Which host-specific pipelines a generated root Vite configuration carries.              |
 
 #### Constants
 
@@ -116,6 +118,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `HOST_INVENTORY_PATH`             | const | The repository-relative path where the committed vendored-file inventory is served.              |
 | `INTEGRATION_TEST_PATH`           | const | The cross-environment composition proof whose presence makes a workspace `integration`.          |
 | `INVALID_PATH_CHARACTER_PATTERN`  | const | Visible characters a target-relative path and a Markdown path cell both forbid.                  |
+| `MANIFEST_PATH`                   | const | The manifest path every compiler plan emits with birth ownership.                                |
 | `MAX_ARTIFACT_BYTES`              | const | Maximum bytes accepted for one artifact.                                                         |
 | `MAX_ARTIFACT_HEX_LENGTH`         | const | Maximum length of the hexadecimal string carrying one artifact's bytes.                          |
 | `MAX_AUDIT_FINDINGS`              | const | Maximum findings one audit can produce from a bounded plan and snapshot.                         |
@@ -198,7 +201,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `inferDrift`                | function | Infer how one target path compares to the artifact planned for it.            |
 | `inferGroup`                | function | Infer the `Group` a path belongs to.                                          |
 | `isDeferredPath`            | function | Test whether another surface owns the vendored bytes at a path.               |
-| `manifestToDependencies`    | function | Project a package manifest's text to the `@orkestrel/*` packages it declares. |
+| `manifestToDependencies`    | function | Project a manifest's `@orkestrel/*` declarations into separate section lists. |
 | `manifestToName`            | function | Project a package manifest's text to its own name.                            |
 | `matchesDriftReachability`  | function | Test whether `inferDrift` could have produced a finding for an ownership.     |
 | `matchesEngines`            | function | Test whether a declared engines floor is at or above the supported minimum.   |
@@ -238,8 +241,8 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `pathToCondition`                   | function | Build one `exports` condition block for a built environment.                    |
 | `planToFindings`                    | function | Compare a plan against a target's current content.                              |
 | `planToHash`                        | function | Compute a plan's content identity.                                              |
-| `replaceManifestRanges`             | function | Replace declared dependency ranges in package manifest text.                    |
-| `replacePlanRanges`                 | function | Replace dependency ranges in a plan's manifest and recompute its identity.      |
+| `replaceManifestRanges`             | function | Replace runtime and development ranges without reading or writing peer fields.  |
+| `replacePlanRanges`                 | function | Replace writable ranges in a plan's manifest and recompute its identity.        |
 | `srcToEntry`                        | function | Project a published selection into the manifest's entry fields.                 |
 | `srcToExports`                      | function | Project a published selection into the manifest's `exports` map.                |
 | `srcToRoot`                         | function | Select the single published environment a package root points at.               |
@@ -400,7 +403,7 @@ no interface and is documented directly.
 | `repair`      | Write a plan into an existing target, guided by an audit of it.                  |
 | `mirror`      | Write fetched dependency guides to their local mirrors.                          |
 | `catalog`     | Rewrite the marker-bounded package table in the target's catalog agent file.     |
-| `declare`     | Rewrite the `@orkestrel/*` range set in the target's manifest.                   |
+| `declare`     | Rewrite named runtime and development ranges without reading or writing peers.   |
 | `remove`      | Re-derive and delete the tracked files the plan does not own.                    |
 | `destroy`     | Tear the materializer down. Every later call throws, and teardown is idempotent. |
 
@@ -568,16 +571,17 @@ question instead of licensing a write. The classifier is deliberately bounded to
 text that names `vitest`; an external wrapper whose name does not identify its runner supplies no
 static Vitest fact to infer.
 
-`audit` still completes the comparison and reports one non-blocking `projects` question. For a
+`audit` still completes the comparison and reports one non-blocking `projects` question when its
+selection includes `configs`. A scoped audit that excludes `configs` omits that question. For a
 literal absent project, its advisory tells the developer to register the project or remove the
 script. For a planned project absent from the gate chains, the advisory checks the direct
 `test:<project>` script. When the script is absent, the advisory gives the exact line to add to
 `package.json`. When the script is declared but ungated, the advisory names the script and the gate
-chain that must invoke it, without repeating a script line. `repair` and `overwrite` refuse either
-mismatch and do not write the manifest or configuration. Their absent-project refusal tells the
-developer to remove the script or not use scaffold writing verbs for a workspace that needs custom
-Vitest projects. It does not recommend editing the content-owned configuration that the refusing
-verb would restore. An advisory alone does not make an aligned target drift.
+chain that must invoke it, without repeating a script line. When `configs` is selected, `repair` and
+`overwrite` refuse either mismatch before writing. Their refusal names the `configs` group, the
+manifest and planned `vite.config.ts` conflict, and the option to exclude `configs` from
+`--groups`. A selection that excludes `configs` proceeds. An advisory alone does not make an aligned
+target drift.
 
 The same plan-reading verbs compare the tooling set the derived blueprint plans against
 `dependencies` and `devDependencies` together. A missing planned package produces one non-blocking
@@ -585,9 +589,10 @@ The same plan-reading verbs compare the tooling set the derived blueprint plans 
 order. The comparison measures membership: a workspace-owned extra is outside it, a planned tool may
 live in either section, and how current a declared range is belongs to the registry evidence
 Dependency floors describes rather than to this question. A present section that is not an object
-produces a question instead of a crash. `audit` reports the question without changing its exit
-semantics. `repair` and `overwrite` refuse before writing configuration, and no verb edits the
-birth-owned `package.json`.
+produces a question instead of a crash. This question belongs to `configs` and `tests`. `audit`
+reports it only when its selection includes either group, without changing its exit semantics.
+`repair` and `overwrite` refuse before writing a selected `configs` or `tests` group. A selection
+that excludes those groups proceeds, and no verb edits the birth-owned `package.json`.
 
 ### Exit codes
 
@@ -786,7 +791,8 @@ place, and the caller that picked the shape is the one holding it.
 Off-contract input is different. A value that is not the exact shape raises `ScaffoldError` coded
 `INVALID`, because it is not a question anyone can answer. Each entry point snapshots the caller's
 value first and then guards the snapshot, so a property backed by an accessor is refused rather than
-read.
+read. `isPlan` refuses an artifact at `package.json` unless it carries `birth` ownership, because a
+plan claiming `content` or `presence` there contradicts the compiler-produced plan.
 
 Overrides replace a drafted artifact's content whole. The gate checks each override against the
 blueprint's full draft before a group selection narrows the returned plan, so an override outside a
@@ -938,12 +944,18 @@ lookup verdict records why the registry row could not enter a layer.
 
 ## Dependency floors
 
-Every scaffold-owned range from its dependency tables is a floor: a caret over a whole
+Every scaffold-owned runtime or development range is a floor: a caret over a whole
 `major.minor.patch` version. The triple is the newest release the registry served when that floor
 was last raised, so a workspace generated with no network still receives the latest floor scaffold
-knew rather than a bare `major.0.0`. Caller extras and peers pass through unchanged. Extras follow
-`EXTRA_RANGE_PATTERN`; fleet peers follow `ORKESTREL_RANGE_PATTERN`; foreign peers follow
-`FLOOR_RANGE_PATTERN`.
+knew rather than a bare `major.0.0`. A `Blueprint.peers` row is written during creation into a
+vacant target. After creation, peer declarations and `peerDependenciesMeta` are caller-owned:
+`audit`, `repair`, `catalog`, and `overwrite` do not invent, rewrite, insert, or remove them. Caller
+extras also pass through unchanged. Extras follow `EXTRA_RANGE_PATTERN`; fleet peers follow
+`ORKESTREL_RANGE_PATTERN`; foreign peers follow `FLOOR_RANGE_PATTERN`.
+
+The distribution project packs a caller-owned peer beside a co-peer witness that requires an exact
+version. The real npm resolver accepts the preserved range. Its narrowed-range control reports
+`ERESOLVE`.
 
 The floors live in scaffold's own `package.json`. `BASE_DEV_DEPENDENCIES` and the tables beside it
 derive each row scaffold installs from that manifest, and the self-pin from its `version` field, so
