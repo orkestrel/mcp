@@ -2289,6 +2289,34 @@ decode through `dispatchLines` (decode + emit each complete line as `message` or
 `error`) — documented under [HTTP transport § Helpers](#helpers-1) because it
 lives in the shared `helpers.ts`.
 
+`send` writes one newline-terminated line per message and settles on the
+supervisor's answer, so a write that failed reaches the caller instead of reading
+as a delivered message. The failures are told apart by voice. A call made with no
+live child rejects `stdio transport is not connected` — a `send` before the first
+`start()` is that case. `send` rejects
+`stdio transport could not deliver the message` when a live child's write
+settles unconfirmed. The supervisor reports that it refused the line and not why,
+so neither message names a cause it cannot read. Separately, an `MCPClient`
+request settles when its transport's `send` rejects.
+
+`options.delivery` bounds one unconfirmed write to the child's `stdin`, in
+milliseconds. A live child that never reads its `stdin` fills the pipe, the
+kernel confirms nothing further, and the write waits — that wait is what this
+bound ends. The rejection arrives no earlier than the bound, the child is still
+running when it arrives, and the transport fires neither `error` nor `close` for
+it: an undeliverable message is that write's own outcome rather than the end of
+the lifetime. An omitted `delivery` selects `DEFAULT_MCP_DELIVERY`. An explicit
+`0` removes the bound, and the write then stays pending on the channel: `close()`
+tears that channel down and settles it as the same undeliverable rejection.
+
+`delivery` and the client's request `timeout` answer different questions, and
+neither covers the other. `delivery` answers "the child is not reading my
+bytes" — a write the kernel cannot confirm. `timeout` answers "the child never
+replied" — a request that was written and drew no response. A message that never
+landed draws no reply either. `DEFAULT_MCP_DELIVERY` sits below
+`DEFAULT_MCP_REQUEST_TIMEOUT`; that ordering distinguishes a default-bound
+undeliverable write from the later deadline for a peer that did not answer.
+
 Closing the client runs the supervisor's bounded process teardown, which reaches the child's
 terminal moment: the supervisor freezes `evidence`, ends `lines`, and settles the child's exit
 together there. The transport's line pump therefore needs no release of its own — the stream ends
@@ -2345,7 +2373,9 @@ const tools = await client.tools()
 
 #### Constants
 
-_None specific to this section._
+| Constant               | Kind  | Value                                                                                                                                                                   |
+| ---------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEFAULT_MCP_DELIVERY` | const | `10000` — the default bound (ms) on one unconfirmed `send` write to the client transport child's `stdin`; an omitted `delivery` selects it, an explicit `0` removes it. |
 
 #### Helpers
 
@@ -2356,7 +2386,7 @@ _See `extractLines` / `dispatchLines` under [HTTP transport § Helpers](#helpers
 | Type                            | Kind      | Shape                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `StdioClientTransportInterface` | interface | `MCPClientTransportInterface & { readonly evidence: string \| undefined }` — what `createStdioClientTransport` returns. The `evidence` member reads the supervised child's bounded stderr tail: `undefined` before the first `start()`, that child's live tail while it runs, and the tail frozen at its end afterwards. It declares no method of its own; the methods it inherits from `MCPClientTransportInterface` are under [Methods](#methods). |
-| `StdioClientTransportOptions`   | interface | `{ command: string; args?: readonly string[]; env?: Record<string, string> }` — the child process to spawn. `env` MERGES over `process.env`; it never replaces it, so the child inherits every unlisted key.                                                                                                                                                                                                                                         |
+| `StdioClientTransportOptions`   | interface | `{ command: string; args?: readonly string[]; env?: Record<string, string>; delivery?: number }` — the child process to spawn. `env` MERGES over `process.env`; it never replaces it, so the child inherits every unlisted key. `delivery` bounds one unconfirmed write to the child's `stdin`, in milliseconds: an omitted value selects `DEFAULT_MCP_DELIVERY`, and an explicit `0` removes the bound.                                             |
 | `StdioServerOptions`            | interface | `{ input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream }` — the injectable stream pair (default `process.stdin`/`stdout`).                                                                                                                                                                                                                                                                                                                 |
 | `LineExtraction`                | interface | `{ lines: readonly string[]; remainder: string }` — the result of folding one more chunk into the newline-framed buffer (`extractLines`).                                                                                                                                                                                                                                                                                                            |
 
@@ -4450,8 +4480,22 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     host refuses reads `''`, and its cause arrives on the `error` event this
     transport already forwards.
     `send` writes `JSON.stringify(message) + '\n'` per message to the
-    child's `stdin` and awaits the supervisor's answer, REJECTING when the
-    channel is gone; the child's `stdout` is drained through the supervisor's
+    child's `stdin` and awaits the supervisor's answer, REJECTING when that
+    answer refuses the line. The refusals carry different messages: a call made
+    with NO live child rejects `stdio transport is not connected`, while a live
+    child's write that settles unconfirmed rejects
+    `stdio transport could not deliver the message`. The supervisor discloses no
+    cause behind that answer, so neither message claims one. `options.delivery`
+    is the bound in milliseconds on ONE unconfirmed write: a live child that
+    never reads its `stdin` fills the pipe, and the write the kernel cannot
+    confirm rejects at that bound with the child still running and with neither
+    `error` nor `close` fired for it. An omitted `delivery` selects
+    `DEFAULT_MCP_DELIVERY`, which sits BELOW `DEFAULT_MCP_REQUEST_TIMEOUT` to
+    distinguish a default-bound undeliverable write from the later request
+    deadline for a peer that did not answer; an explicit `0` removes the bound
+    and leaves such a write pending on the channel until teardown settles it as
+    the same rejection.
+    The child's `stdout` is drained through the supervisor's
     `readline`-framed `lines` iterable and every complete line is decoded onto
     `message` through the shared `dispatchLines` helper (a malformed line emits
     `error`); the child's exit bridges to the transport's `close`. `close()`

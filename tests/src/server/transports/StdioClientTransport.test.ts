@@ -211,6 +211,36 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		}
 	}, 10_000)
 
+	it('uses the default delivery bound when delivery is omitted', async () => {
+		// This test spends the real 10 s bound; that duration is the price of pinning the default.
+		const transport = new StdioClientTransport({
+			command: process.execPath,
+			args: ['-e', DEAF_CHILD_SCRIPT],
+		})
+		const ready = new Promise<JSONRPCMessage>((resolve) => {
+			transport.emitter.on('message', resolve)
+		})
+		try {
+			await transport.start()
+			const pid = readDescendantPid(
+				await waitForSettlement(ready, 5_000, 'Timed out waiting for the deaf child readiness'),
+			)
+			const opened = performance.now()
+
+			await expect(
+				transport.send(
+					createJSONRPCRequest({ method: 'ping', id: 1, params: { payload: UNREAD_PAYLOAD } }),
+				),
+			).rejects.toThrow(/^stdio transport could not deliver the message$/)
+			const elapsed = performance.now() - opened
+
+			expect(isRunning(pid)).toBe(true)
+			expect(elapsed).toBeGreaterThanOrEqual(DEFAULT_MCP_DELIVERY)
+		} finally {
+			await transport.close()
+		}
+	}, 20_000)
+
 	it('send() stays pending until the line reaches the host, and rejects when it never does', async () => {
 		const transport = spawnDeafClient()
 		await transport.start()
