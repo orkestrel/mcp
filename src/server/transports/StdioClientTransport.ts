@@ -5,6 +5,7 @@ import type { StdioClientTransportInterface, StdioClientTransportOptions } from 
 import { Process } from '@orkestrel/process/server'
 import { PROCESS_GRACE } from '@orkestrel/process'
 import { Emitter } from '@orkestrel/emitter'
+import { DEFAULT_MCP_DELIVERY } from '../constants.js'
 import { dispatchLines } from '../helpers.js'
 
 /**
@@ -27,9 +28,10 @@ import { dispatchLines } from '../helpers.js'
  * - **Outbound (`send`).** `send(message)` writes one newline-terminated `JSON.stringify`d line
  *   through the supervisor's `send` and AWAITS its answer, so this promise settles only after the
  *   host reports the line handled rather than the moment the write is queued. The supervisor never
- *   rejects — it answers `false` for a channel that was closed, destroyed, or ended, and for a write
- *   that failed — so a `false` answer REJECTS here with the same not-connected error a transport
- *   that was never started raises. A dead peer surfaces at the caller instead of vanishing.
+ *   rejects — it answers `false` for a channel that was closed, destroyed, or ended, for a write
+ *   that failed, or for one that remained unconfirmed through `delivery`. A call made without a
+ *   live child rejects as not connected; a `false` answer from a live child rejects as unable to
+ *   deliver. The supervisor does not disclose which cause produced that answer.
  * - **`close()`** runs the supervisor's bounded termination and teardown, then fires `close` once
  *   (idempotent). That teardown reaches the child's TERMINAL MOMENT, where the supervisor freezes
  *   `evidence`, ends `lines`, and settles `exit` together, so this transport needs no release of
@@ -69,6 +71,7 @@ export class StdioClientTransport implements StdioClientTransportInterface {
 	readonly #command: string
 	readonly #args: readonly string[]
 	readonly #env: Readonly<Record<string, string>> | undefined
+	readonly #delivery: number
 	#process: Process | undefined = undefined
 	#closing: Promise<void> | undefined = undefined
 	#closed = false
@@ -78,6 +81,7 @@ export class StdioClientTransport implements StdioClientTransportInterface {
 		this.#command = options.command
 		this.#args = options.args ?? []
 		this.#env = options.env
+		this.#delivery = options.delivery ?? DEFAULT_MCP_DELIVERY
 	}
 
 	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
@@ -142,6 +146,7 @@ export class StdioClientTransport implements StdioClientTransportInterface {
 			},
 			workspace: process.cwd(),
 			grace: PROCESS_GRACE,
+			delivery: this.#delivery,
 			writable: true,
 		})
 		this.#process = child
@@ -150,17 +155,29 @@ export class StdioClientTransport implements StdioClientTransportInterface {
 		void this.#pump(child)
 	}
 
+	/**
+	 * Sends one newline-delimited JSON-RPC message to the live child.
+	 *
+	 * @param message - The message to write to the child's `stdin`
+	 * @returns Resolves when the supervisor confirms the write
+	 * @throws Thrown with `stdio transport is not connected` when no live child is available before
+	 *   the write
+	 * @throws Thrown with `stdio transport could not deliver the message` when a live child's write
+	 *   resolves `false`
+	 */
 	async send(message: JSONRPCMessage): Promise<void> {
 		// A closed lifetime's child is still HELD for its tail, and a tail is not a channel: this
 		// transport's own closed state is what says the channel is gone, so a write issued after a
 		// `close()` or after the child's own exit reports not-connected here rather than depending
 		// on the supervisor to answer for a channel it has already torn down.
 		const child = this.#closed ? undefined : this.#process
+		if (child === undefined) throw new Error('stdio transport is not connected')
 		// The supervisor's `send` never rejects: it ANSWERS `false` when the channel was closed,
-		// destroyed, ended, or the write failed. Awaiting that answer is what keeps a dead peer from
-		// vanishing — an unawaited call resolves this `send` before the line reaches the host.
-		const delivered = child === undefined ? false : await child.send(JSON.stringify(message))
-		if (!delivered) throw new Error('stdio transport is not connected')
+		// destroyed, ended, the write failed, or the delivery bound elapsed. Awaiting that answer is
+		// what keeps a dead peer from vanishing — an unawaited call resolves this `send` before the
+		// line reaches the host. The answer does not disclose which cause produced it.
+		const delivered = await child.send(JSON.stringify(message))
+		if (!delivered) throw new Error('stdio transport could not deliver the message')
 	}
 
 	async close(): Promise<void> {

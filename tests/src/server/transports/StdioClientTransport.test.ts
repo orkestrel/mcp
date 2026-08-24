@@ -7,7 +7,8 @@ import { PROCESS_DRAIN, PROCESS_EVIDENCE } from '@orkestrel/process'
 import { createJSONRPCRequest, waitForSettlement } from '../../../setup.js'
 import { requireValue, waitForCondition, waitForDelay, waitForEvent } from '@orkestrel/test'
 import { createScratch, destroyScratch, isRunning } from '@orkestrel/test/server'
-import { StdioClientTransport } from '@src/server'
+import { DEFAULT_MCP_REQUEST_TIMEOUT } from '@src/core'
+import { DEFAULT_MCP_DELIVERY, StdioClientTransport } from '@src/server'
 
 // src/server/transports/StdioClientTransport.ts — the stdio CLIENT transport, driven END TO
 // END against a REAL spawned child process (a tiny inline `node -e` script standing in for a
@@ -40,10 +41,11 @@ rl.on('line', (line) => {
 })
 `
 
-// A child that never reads its stdin and stays alive on a timer. A line larger than the host's
-// pipe buffer therefore sits undelivered in the channel for as long as the child lives, which is
-// what makes "did this write reach the host?" observable rather than a race.
+// A child that reports its pid, never reads its stdin, and stays alive on a timer. A line larger
+// than the host's pipe buffer therefore sits undelivered in the channel for as long as the child
+// lives, which makes the delivery bound and the child's liveness observable at the same rejection.
 const DEAF_CHILD_SCRIPT = `
+process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'ready', result: { pid: process.pid } }) + '\\n')
 setInterval(() => {}, 1000)
 `
 
@@ -91,7 +93,12 @@ function spawnClient(): StdioClientTransport {
 }
 
 function spawnDeafClient(): StdioClientTransport {
-	return new StdioClientTransport({ command: process.execPath, args: ['-e', DEAF_CHILD_SCRIPT] })
+	return new StdioClientTransport({
+		command: process.execPath,
+		args: ['-e', DEAF_CHILD_SCRIPT],
+		// This fixture is the unbounded control: teardown, not a delivery window, settles its write.
+		delivery: 0,
+	})
 }
 
 function spawnDescendantClient(): StdioClientTransport {
@@ -106,6 +113,10 @@ function spawnBurstClient(): StdioClientTransport {
 }
 
 describe('StdioClientTransport — drives a real child process over stdio', () => {
+	it('keeps the default delivery bound below the request deadline', () => {
+		expect(DEFAULT_MCP_DELIVERY).toBeLessThan(DEFAULT_MCP_REQUEST_TIMEOUT)
+	})
+
 	it('start() spawns the child; a reply line becomes the parsed message event', async () => {
 		const transport = spawnClient()
 		const messages: JSONRPCMessage[] = []
@@ -157,8 +168,48 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 
 	it('send() throws when the transport has not been started', async () => {
 		const transport = spawnClient()
-		await expect(transport.send(createJSONRPCRequest())).rejects.toThrow(/not connected/)
+		await expect(transport.send(createJSONRPCRequest())).rejects.toThrow(
+			/^stdio transport is not connected$/,
+		)
 	})
+
+	it('rejects an unconfirmed write at the delivery bound while the child stays alive', async () => {
+		// This is far above real pipe-accept latency while remaining short enough for the suite.
+		const delivery = 100
+		const transport = new StdioClientTransport({
+			command: process.execPath,
+			args: ['-e', DEAF_CHILD_SCRIPT],
+			delivery,
+		})
+		const ready = new Promise<JSONRPCMessage>((resolve) => {
+			transport.emitter.on('message', resolve)
+		})
+		const errors: unknown[] = []
+		let closes = 0
+		transport.emitter.on('error', (error) => errors.push(error))
+		transport.emitter.on('close', () => (closes += 1))
+		try {
+			await transport.start()
+			const pid = readDescendantPid(
+				await waitForSettlement(ready, 5_000, 'Timed out waiting for the deaf child readiness'),
+			)
+			const opened = performance.now()
+
+			await expect(
+				transport.send(
+					createJSONRPCRequest({ method: 'ping', id: 1, params: { payload: UNREAD_PAYLOAD } }),
+				),
+			).rejects.toThrow(/^stdio transport could not deliver the message$/)
+			const elapsed = performance.now() - opened
+
+			expect(isRunning(pid)).toBe(true)
+			expect(errors).toEqual([])
+			expect(closes).toBe(0)
+			expect(elapsed).toBeGreaterThanOrEqual(delivery)
+		} finally {
+			await transport.close()
+		}
+	}, 10_000)
 
 	it('send() stays pending until the line reaches the host, and rejects when it never does', async () => {
 		const transport = spawnDeafClient()
@@ -182,7 +233,7 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		// the caller instead of resolving as a delivered write.
 		await transport.close()
 		await outcome
-		await expect(write).rejects.toThrow(/not connected/)
+		await expect(write).rejects.toThrow(/^stdio transport could not deliver the message$/)
 	})
 
 	it('close() kills the child and fires the close event (idempotent)', async () => {
