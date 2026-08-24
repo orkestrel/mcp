@@ -323,10 +323,14 @@ export function createWebSocketClientTransport(
  * inherits it. Each JSON-RPC message the client `send`s is written as one
  * newline-terminated line to the child's `stdin`; each decoded reply line from the
  * child's `stdout` is surfaced on the transport's `message` event for the client's
- * id correlation.
+ * id correlation. That write is bounded: a child that stays alive without ever reading
+ * its `stdin` fills the pipe, and `options.delivery` is how long the unconfirmed write
+ * waits before the `send` rejects. An omitted `delivery` selects {@link
+ * import('./constants.js').DEFAULT_MCP_DELIVERY}; an explicit `0` removes the bound.
  *
  * @param options - `command` (the executable to spawn; REQUIRED), optional `args`,
- *   and optional `env`; see {@link StdioClientTransportOptions}
+ *   optional `env`, and an optional `delivery` bound in milliseconds on an unconfirmed
+ *   `stdin` write; see {@link StdioClientTransportOptions}
  * @returns A working {@link StdioClientTransportInterface} over a child process's stdio,
  *   whose `evidence` carries the supervised child's bounded stderr tail
  *

@@ -1,5 +1,6 @@
-// The MCP HTTP-transport constants — the wire-level header
-// names, the default mount path, and the folded event-log bounds. The HEADER names are
+// The MCP server-environment transport constants — the wire-level header
+// names, the default mount path, the folded event-log bounds, and the stdio client
+// transport's default write-delivery bound. The HEADER names are
 // the Streamable-HTTP transport's session /
 // protocol-version headers. `createMCPSession` owns the optional session id, while
 // `createMCPRoutes` validates a present protocol version on every POST. The
@@ -90,3 +91,16 @@ export const DEFAULT_MCP_SESSION_CAPACITY = 1024
  * this bounds the replay log paired with it.
  */
 export const DEFAULT_MCP_SESSION_TTL = 300_000
+
+/**
+ * The default bound in milliseconds on one unconfirmed write to a stdio client transport's
+ * child `stdin` — the `delivery` a `createStdioClientTransport` caller who supplies none gets.
+ *
+ * @remarks
+ * Ten seconds. The load-bearing property is the ordering, not the magnitude: this bound stays
+ * BELOW {@link import('@orkestrel/mcp').DEFAULT_MCP_REQUEST_TIMEOUT}, so a write the child never
+ * reads fails as an undeliverable message while the request that carried it is still open,
+ * rather than being masked by that request's own deadline expiring first. Override per
+ * transport with `delivery`; an explicit `0` there removes the bound.
+ */
+export const DEFAULT_MCP_DELIVERY = 10_000

@@ -367,11 +367,34 @@ export interface WebSocketClientTransportOptions {
  *   OMITTED the child inherits the full `process.env`, when PROVIDED each named key overrides
  *   the inherited value while every unlisted key is still inherited. This transport cannot
  *   REPLACE the inherited environment entirely — the supervisor always merges over the parent.
+ * - `delivery` — the bound in milliseconds on one unconfirmed write to the child's `stdin`;
+ *   an explicit `0` opts out. Defaults to {@link import('./constants.js').DEFAULT_MCP_DELIVERY}.
  */
 export interface StdioClientTransportOptions {
 	readonly command: string
 	readonly args?: readonly string[]
 	readonly env?: Readonly<Record<string, string>>
+	/**
+	 * Bounds the wait on one unconfirmed `send` write to the child's `stdin`, in milliseconds.
+	 *
+	 * @remarks
+	 * A full pipe is the case this bounds: a live child that never reads its `stdin` leaves the
+	 * kernel unable to confirm the write, and the supervisor holds that write open. When the
+	 * window elapses the supervisor answers that write `false`, which this transport surfaces as
+	 * a rejection, so the caller learns the message did not land instead of waiting on a peer
+	 * that will never read it. Default: {@link import('./constants.js').DEFAULT_MCP_DELIVERY}.
+	 *
+	 * An explicit `0` opts out: the bound is off, and an unconfirmed write stays pending until
+	 * the channel faults or teardown settles it. Omission does NOT opt out here, which is where
+	 * this option diverges from the supervisor's own `delivery` on {@link
+	 * import('@orkestrel/process').ProcessOptions} — omitted THERE disables the bound, omitted
+	 * HERE selects the default.
+	 *
+	 * An out-of-range value surfaces at `start()` rather than at construction. This transport
+	 * forwards the value verbatim and adds no validator of its own, so the supervisor's own timer
+	 * range is what rejects it, at the moment it spawns the child.
+	 */
+	readonly delivery?: number
 }
 
 /**
