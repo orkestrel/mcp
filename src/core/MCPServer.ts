@@ -77,7 +77,6 @@ import {
 	serializeJSON,
 	stampSubscriptionNotification,
 } from './helpers.js'
-import { inferEra } from './inferers.js'
 import { MCPMethodManager } from './MCPMethodManager.js'
 import { MCPProgressReporter } from './MCPProgressReporter.js'
 import { MCPStreamController } from './MCPStreamController.js'
@@ -95,6 +94,7 @@ import {
 	isMCPCompletion,
 	isMCPCompletionParams,
 	isMCPInputResult,
+	isMCPModernVersion,
 	isModernRequest,
 	isMCPPaginationParams,
 	isMCPPromptGetResult,
@@ -139,8 +139,8 @@ import {
  * const tools = createToolManager()
  * tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
  * const server = new MCPServer({ identity: { name: 'demo', version: '1.0.0' }, tools })
- * await server.handle('{"jsonrpc":"2.0","method":"ping","id":1,"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}')
- * // '{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"demo","version":"1.0.0"}}}}'
+ * await server.handle('{"jsonrpc":"2.0","method":"server/discover","id":1,"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}')
+ * // The result advertises only `2026-07-28`; wrap with `createMCPLegacy` to serve initialize or ping.
  * ```
  */
 export class MCPServer implements MCPServerInterface {
@@ -310,9 +310,6 @@ export class MCPServer implements MCPServerInterface {
 	// where conformance needs it, and is absent from the live registry reads below, where
 	// nothing does.
 	#register(): void {
-		this.#methods.add('ping', async (request, _options) =>
-			buildJSONRPCResult(request.id, buildModernResult({}, this.#options.identity)),
-		)
 		this.#methods.add('server/discover', async (request, _options) => this.#discover(request))
 		this.#methods.add('tools/list', async (request, _options) => this.#list(request))
 		this.#methods.add('tools/call', async (request, options) => this.#call(request, options))
@@ -395,7 +392,7 @@ export class MCPServer implements MCPServerInterface {
 				'Invalid params: malformed modern request metadata',
 			)
 		}
-		if (inferEra(context.version) === undefined) {
+		if (!isMCPModernVersion(context.version)) {
 			return buildJSONRPCError(
 				id,
 				MCP_UNSUPPORTED_VERSION,

@@ -563,7 +563,7 @@ describe('buildDiscoverResult', () => {
 		const identity = { name: 'server', version: '1.0.0' }
 
 		expect(buildDiscoverResult({ identity, tools: createToolManager() })).toEqual({
-			supportedVersions: ['2026-07-28', '2025-11-25', '2025-06-18'],
+			supportedVersions: ['2026-07-28'],
 			capabilities: { tools: {} },
 			resultType: 'complete',
 			ttlMs: DEFAULT_MCP_CACHE_TTL,
@@ -583,7 +583,7 @@ describe('buildDiscoverResult', () => {
 				cache: { ttl: 0, scope: 'public' },
 			}),
 		).toEqual({
-			supportedVersions: ['2026-07-28', '2025-11-25', '2025-06-18'],
+			supportedVersions: ['2026-07-28'],
 			capabilities: { tools: {} },
 			instructions: 'Use carefully',
 			resultType: 'complete',
@@ -710,7 +710,7 @@ describe('bindServer', () => {
 		const transport = createMemoryTransport()
 		bindServer(mcp, transport)
 
-		transport.deliver(JSON.stringify(modernRequest('ping')))
+		transport.deliver(JSON.stringify(modernRequest('server/discover')))
 		await waitForDelay()
 
 		expect(transport.sent).toEqual([
@@ -718,7 +718,11 @@ describe('bindServer', () => {
 				jsonrpc: '2.0',
 				id: 1,
 				result: {
+					supportedVersions: ['2026-07-28'],
+					capabilities: { tools: {} },
 					resultType: 'complete',
+					ttlMs: DEFAULT_MCP_CACHE_TTL,
+					cacheScope: 'private',
 					_meta: { [MCP_META_SERVER]: { name: 'demo', version: '1.0.0' } },
 				},
 			}),
@@ -800,7 +804,7 @@ describe('bindServer', () => {
 		unbind()
 		bindServer(mcp, transport)
 
-		transport.deliver(JSON.stringify(modernRequest('ping')))
+		transport.deliver(JSON.stringify(modernRequest('server/discover')))
 		await waitForDelay()
 
 		expect(transport.sent).toEqual([
@@ -808,7 +812,11 @@ describe('bindServer', () => {
 				jsonrpc: '2.0',
 				id: 1,
 				result: {
+					supportedVersions: ['2026-07-28'],
+					capabilities: { tools: {} },
 					resultType: 'complete',
+					ttlMs: DEFAULT_MCP_CACHE_TTL,
+					cacheScope: 'private',
 					_meta: { [MCP_META_SERVER]: { name: 'demo', version: '1.0.0' } },
 				},
 			}),

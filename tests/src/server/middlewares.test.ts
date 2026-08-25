@@ -10,7 +10,7 @@ import {
 	MCP_LEGACY_VERSION,
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
-	MCP_PROTOCOL_VERSION,
+	MCP_MODERN_VERSION,
 	buildJSONRPCResult,
 	createMCPClient,
 	createMCPLegacy,
@@ -294,20 +294,20 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 				method: 'server/discover',
 				params: {
 					_meta: {
-						[MCP_META_VERSION]: MCP_PROTOCOL_VERSION,
+						[MCP_META_VERSION]: MCP_MODERN_VERSION,
 						[MCP_META_CAPABILITIES]: {},
 					},
 				},
 			}),
 			{
-				[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
+				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
 				[MCP_METHOD_HEADER]: 'server/discover',
 			},
 		)
 
 		expect(response.status).toBe(200)
 		expect(response.headers.get(MCP_SESSION_HEADER)).toBeNull()
-		expect((await response.json()).result.supportedVersions).toContain(MCP_PROTOCOL_VERSION)
+		expect((await response.json()).result.supportedVersions).toContain(MCP_MODERN_VERSION)
 	})
 
 	it('preserves middleware-resolved caller context across its rebuilt POST request', async () => {

@@ -18,8 +18,9 @@ describe('inferEra', () => {
 })
 
 describe('inferVersion', () => {
-	it('selects the newest locally supported offered revision', () => {
-		expect(inferVersion(['2025-06-18', 'future', '2025-11-25'])).toBe('2025-11-25')
+	it('selects the supported modern revision without selecting a legacy offer', () => {
+		expect(inferVersion(['2025-06-18', 'future', '2026-07-28'])).toBe('2026-07-28')
+		expect(inferVersion(['2025-06-18', '2025-11-25'])).toBeUndefined()
 	})
 
 	it('returns undefined when no offered revision is supported', () => {

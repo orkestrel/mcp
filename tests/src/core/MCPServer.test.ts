@@ -390,7 +390,9 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 				limit: { metadata: 0 },
 			}),
 		)
-		const absent = responseOf(await absentServer.dispatch(createJSONRPCRequest({ method: 'ping' })))
+		const absent = responseOf(
+			await absentServer.dispatch(createJSONRPCRequest({ method: 'tools/list' })),
+		)
 		expect(absent?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
 
 		const sizeServer = createMCPServer({
@@ -942,13 +944,10 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 		},
 	)
 
-	it('answers modern ping through the one registered seam', async () => {
+	it('refuses modern ping because the modern revision removed it', async () => {
 		const response = responseOf(await server().dispatch(modernRequest('ping')))
 
-		expect(response?.result).toEqual({
-			resultType: 'complete',
-			_meta: { [MCP_META_SERVER]: { name: 'test-server', version: '1.2.3' } },
-		})
+		expect(response?.error?.code).toBe(JSONRPC_METHOD_NOT_FOUND)
 	})
 
 	it('returns no response for a modern notification after emitting its era', async () => {
@@ -2130,7 +2129,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 		expect(omittedAnswer?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
 		expect(changedArguments?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
 		expect(changedName?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
-		expect(changedVersion?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(changedVersion?.error?.code).toBe(MCP_UNSUPPORTED_VERSION)
 		// A carrier on another method is no longer refused by core for being on another
 		// method: continuation semantics belong to whoever registered that method, and this
 		// server has registered nothing under `resources/read`, so the answer is `-32601`.
@@ -2249,13 +2248,13 @@ describe('MCPServer — the modern method seam', () => {
 	it('owns a direct dispatch request before routing and handler observation', async () => {
 		const target: JSONRPCRequest = {
 			jsonrpc: '2.0',
-			method: 'ping',
+			method: 'tools/list',
 			id: 71,
 			params: { _meta: MODERN_METADATA },
 		}
 		const request = new Proxy(target, {
 			get(source, property) {
-				if (property === 'method') return 'tools/list'
+				if (property === 'method') return 'server/discover'
 				return Reflect.get(source, property)
 			},
 		})
@@ -2266,15 +2265,15 @@ describe('MCPServer — the modern method seam', () => {
 			}).dispatch(request),
 		)
 
-		expect(answer?.result).toEqual({
+		expect(answer?.result).toMatchObject({
 			resultType: 'complete',
-			_meta: { [MCP_META_SERVER]: { name: 'test-server', version: '1.2.3' } },
+			tools: expect.any(Array),
 		})
 	})
 	it('registers the built-in modern methods on the registry it dispatches from', () => {
 		const mcp = server()
 
-		expect(mcp.methods.method('ping')).toBeTypeOf('function')
+		expect(mcp.methods.method('ping')).toBeUndefined()
 		expect(mcp.methods.method('server/discover')).toBeTypeOf('function')
 		expect(mcp.methods.method('tools/list')).toBeTypeOf('function')
 		expect(mcp.methods.method('tools/call')).toBeTypeOf('function')
@@ -3016,11 +3015,11 @@ describe('MCPServer — request event', () => {
 			mcp.emitter,
 			MCP_EVENTS,
 		)
-		await mcp.dispatch(createJSONRPCRequest({ method: 'ping' }))
-		await mcp.dispatch(createJSONRPCRequest({ method: 'tools/list', id: 2 }))
+		await mcp.dispatch(modernRequest('server/discover', 1))
+		await mcp.dispatch(modernRequest('tools/list', 2))
 
 		expect(events.request.calls).toEqual([
-			['ping', 1, 'modern'],
+			['server/discover', 1, 'modern'],
 			['tools/list', 2, 'modern'],
 		])
 	})
@@ -3042,9 +3041,9 @@ describe('MCPServer — request event', () => {
 			mcp.emitter,
 			MCP_EVENTS,
 		)
-		await mcp.handle('{"jsonrpc":"2.0","method":"ping","id":3}')
+		await mcp.handle(JSON.stringify(modernRequest('tools/list', 3)))
 
-		expect(events.request.calls).toEqual([['ping', 3, 'modern']])
+		expect(events.request.calls).toEqual([['tools/list', 3, 'modern']])
 	})
 
 	it('EMIT SAFETY: a throwing request listener cannot corrupt the dispatch, and routes to the error handler', async () => {
@@ -3055,9 +3054,9 @@ describe('MCPServer — request event', () => {
 		})
 
 		// THE LOAD-BEARING ASSERTION: the dispatch still produces its response.
-		const response = responseOf(await mcp.dispatch(createJSONRPCRequest({ method: 'ping' })))
+		const response = responseOf(await mcp.dispatch(modernRequest('tools/list')))
 
-		expect(response?.result).toEqual({})
+		expect(response?.result).toMatchObject({ resultType: 'complete', tools: expect.any(Array) })
 		// The error handler received (error, event) — note the arg order.
 		expect(errors.calls).toEqual([[expect.any(Error), 'request']])
 	})
@@ -3073,9 +3072,9 @@ describe('MCPServer — request event', () => {
 		})
 
 		// The dispatch STILL produces a response — neither throw escaped.
-		const response = responseOf(await mcp.dispatch(createJSONRPCRequest({ method: 'ping' })))
+		const response = responseOf(await mcp.dispatch(modernRequest('tools/list')))
 
-		expect(response?.result).toEqual({})
+		expect(response?.result).toMatchObject({ resultType: 'complete', tools: expect.any(Array) })
 		// Fired exactly once (its own throw was swallowed, not re-entered — no recursion).
 		expect(errors.count).toBe(1)
 		expect(errors.calls[0]?.[1]).toBe('request')

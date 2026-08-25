@@ -40,22 +40,21 @@ import {
 	DEFAULT_MCP_CACHE_TTL,
 	JSONRPC_INVALID_PARAMS,
 	MCP_EXTENSION_TASKS,
-	MCP_LEGACY_VERSION,
 	MCP_META_SERVER,
 	MCP_META_SUBSCRIPTION,
+	MCP_PROTOCOL_VERSION,
 	SUPPORTED_PROTOCOL_VERSIONS,
 } from './constants.js'
 import { MCPError } from './errors.js'
-import { inferEra } from './inferers.js'
 import { parseJSONRPCMessage } from './parsers.js'
 import {
 	isBoundedString,
 	isJSONRPCId,
 	isJSONRPCNotification,
 	isMCPInputResult,
+	isMCPLegacyVersion,
 	isMCPMetaObject,
 	isMCPTaskResult,
-	isMCPVersion,
 } from './validators.js'
 
 /**
@@ -887,7 +886,7 @@ export function buildSubscriptionResult(
 export function buildDiscoverResult(options: MCPServerOptions): MCPDiscoverResult {
 	return buildModernResult(
 		{
-			supportedVersions: SUPPORTED_PROTOCOL_VERSIONS.filter(isMCPVersion),
+			supportedVersions: SUPPORTED_PROTOCOL_VERSIONS,
 			capabilities: {
 				tools: {},
 				...(options.resources === undefined
@@ -943,11 +942,7 @@ export function buildInitializeResult(
 	version: string,
 	requested?: string,
 ): MCPLegacyResult {
-	const newestLegacy =
-		SUPPORTED_PROTOCOL_VERSIONS.find((candidate) => inferEra(candidate) === 'legacy') ??
-		MCP_LEGACY_VERSION
-	const protocolVersion =
-		isMCPVersion(requested) && inferEra(requested) === 'legacy' ? requested : newestLegacy
+	const protocolVersion = isMCPLegacyVersion(requested) ? requested : MCP_PROTOCOL_VERSION
 	return {
 		protocolVersion,
 		capabilities: { tools: {} },

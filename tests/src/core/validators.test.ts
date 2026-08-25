@@ -62,10 +62,12 @@ import {
 	isMCPContent,
 	isMCPIcon,
 	isMCPIdentity,
+	isMCPLegacyVersion,
 	isMCPLegacyResult,
 	isMCPLoggingLevel,
 	isMCPMetaKey,
 	isMCPMetaObject,
+	isMCPModernVersion,
 	isMCPProgress,
 	isMCPPaginationParams,
 	isMCPPrompt,
@@ -102,6 +104,8 @@ import {
 	MCP_META_VERSION,
 	MCP_UNSUPPORTED_VERSION,
 	MCPError,
+	SUPPORTED_CLIENT_PROTOCOL_VERSIONS,
+	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
 	SUPPORTED_PROTOCOL_VERSIONS,
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
@@ -640,11 +644,22 @@ describe('isJSONRPCId', () => {
 
 describe('isMCPVersion', () => {
 	it('accepts every supported revision and rejects removed or unknown revisions', () => {
-		for (const version of SUPPORTED_PROTOCOL_VERSIONS) {
+		for (const version of SUPPORTED_CLIENT_PROTOCOL_VERSIONS) {
 			expect(isMCPVersion(version)).toBe(true)
 		}
 		expect(isMCPVersion('2025-03-26')).toBe(false)
 		expect(isMCPVersion('2024-11-05')).toBe(false)
+	})
+
+	it('keeps modern and legacy revision guards disjoint', () => {
+		for (const version of SUPPORTED_PROTOCOL_VERSIONS) {
+			expect(isMCPModernVersion(version)).toBe(true)
+			expect(isMCPLegacyVersion(version)).toBe(false)
+		}
+		for (const version of SUPPORTED_LEGACY_PROTOCOL_VERSIONS) {
+			expect(isMCPLegacyVersion(version)).toBe(true)
+			expect(isMCPModernVersion(version)).toBe(false)
+		}
 	})
 
 	it('is total over non-string values', () => {
@@ -1784,10 +1799,12 @@ const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = 
 	isMCPInputRequest,
 	isMCPInputRequestMap,
 	isMCPInputResult,
+	isMCPLegacyVersion,
 	isMCPLegacyResult,
 	isMCPLoggingLevel,
 	isMCPMetaKey,
 	isMCPMetaObject,
+	isMCPModernVersion,
 	isMCPProgress,
 	isMCPPaginationParams,
 	isMCPPrompt,

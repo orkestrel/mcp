@@ -15,6 +15,7 @@ import type {
 	MCPDiscoverResult,
 	MCPEra,
 	MCPIdentity,
+	MCPModernVersion,
 	MCPProgressHandler,
 	MCPTaskClientInterface,
 	MCPVersion,
@@ -43,15 +44,17 @@ import {
 	MCP_MODERN_VERSION,
 	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
-	SUPPORTED_PROTOCOL_VERSIONS,
+	SUPPORTED_CLIENT_PROTOCOL_VERSIONS,
 } from './constants.js'
 import { MCPError, isMCPError } from './errors.js'
 import { buildCallOutcome, buildCancelledNotification, matchesResultType } from './helpers.js'
-import { inferEra, inferVersion } from './inferers.js'
+import { inferVersion } from './inferers.js'
 import { parseJSONRPCMessage } from './parsers.js'
 import {
 	isJSONRPCId,
 	isJSONRPCResponse,
+	isMCPLegacyVersion,
+	isMCPModernVersion,
 	isMCPProgress,
 	isMCPResultMetaObject,
 	isMCPServerCapabilities,
@@ -199,13 +202,13 @@ export class MCPClient implements MCPClientInterface {
 	#supersession = Promise.withResolvers<void>()
 	#version: MCPVersion | undefined = undefined
 	#era: MCPEra | undefined = undefined
-	#offer: MCPVersion
+	#offer: MCPModernVersion
 
 	constructor(options: MCPClientOptions) {
 		const requested: unknown = options.version
 		if (requested !== undefined && !isMCPVersion(requested)) {
 			throw new MCPError('Unsupported protocol version', MCP_UNSUPPORTED_VERSION, {
-				supported: SUPPORTED_PROTOCOL_VERSIONS,
+				supported: SUPPORTED_CLIENT_PROTOCOL_VERSIONS,
 				requested,
 			})
 		}
@@ -220,7 +223,7 @@ export class MCPClient implements MCPClientInterface {
 		}
 		this.#capabilities = options.capabilities ?? {}
 		this.#pin = requested
-		this.#offer = requested ?? MCP_MODERN_VERSION
+		this.#offer = isMCPModernVersion(requested) ? requested : MCP_MODERN_VERSION
 		this.#timeout = options.timeout ?? DEFAULT_MCP_REQUEST_TIMEOUT
 		this.#tasks = new MCPTaskClient({
 			request: this.#request.bind(this),
@@ -306,12 +309,9 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	async discover(): Promise<MCPDiscoverResult> {
-		const received = await this.#request(
-			'server/discover',
-			undefined,
-			this.#timeout,
-			this.#version ?? this.#offer,
-		)
+		const negotiated = this.#version
+		const version = isMCPModernVersion(negotiated) ? negotiated : this.#offer
+		const received = await this.#request('server/discover', undefined, this.#timeout, version)
 		const owned = attempt(() => cloneJSONRecord(received))
 		if (!owned.success) {
 			throw new MCPError('MCP server returned a malformed discovery result', JSONRPC_INVALID_PARAMS)
@@ -348,9 +348,9 @@ export class MCPClient implements MCPClientInterface {
 				result,
 			)
 		}
-		const supportedVersions: MCPVersion[] = []
-		for (const version of advertised) {
-			if (isMCPVersion(version)) supportedVersions.push(version)
+		const supportedVersions: MCPModernVersion[] = []
+		for (const candidate of advertised) {
+			if (isMCPModernVersion(candidate)) supportedVersions.push(candidate)
 		}
 		const retained = Object.freeze(supportedVersions)
 		return Object.freeze({
@@ -419,7 +419,7 @@ export class MCPClient implements MCPClientInterface {
 		method: string,
 		params: Readonly<Record<string, unknown>> | undefined,
 		deadline: number | undefined,
-		version?: MCPVersion,
+		version?: MCPModernVersion,
 		options?: MCPCallOptions,
 	): Promise<unknown> {
 		this.#nextId += 1
@@ -427,7 +427,8 @@ export class MCPClient implements MCPClientInterface {
 		const timeout = deadline
 		const caller = options?.signal
 		const report = options?.progress
-		const modern = version ?? (this.#era === 'modern' ? this.#version : undefined)
+		const negotiated = this.#era === 'modern' ? this.#version : undefined
+		const modern = version ?? (isMCPModernVersion(negotiated) ? negotiated : undefined)
 		const metadata = {
 			...(modern === undefined
 				? {}
@@ -672,7 +673,7 @@ export class MCPClient implements MCPClientInterface {
 		this.#owner = generation
 		try {
 			if (generation !== this.#generation) throw new Error('MCP client disconnected')
-			if (this.#era === 'legacy' || (this.#pin !== undefined && inferEra(this.#pin) === 'legacy')) {
+			if (this.#era === 'legacy' || isMCPLegacyVersion(this.#pin)) {
 				await this.#initialize(generation, this.#pin ?? MCP_PROTOCOL_VERSION)
 				return
 			}
@@ -713,7 +714,7 @@ export class MCPClient implements MCPClientInterface {
 			let version: MCPVersion | undefined
 			if (this.#pin === undefined) {
 				version = inferVersion(discovery.supportedVersions)
-			} else if (discovery.supportedVersions.includes(this.#pin)) {
+			} else if (isMCPModernVersion(this.#pin) && discovery.supportedVersions.includes(this.#pin)) {
 				version = this.#pin
 			} else {
 				throw new MCPError(
@@ -886,7 +887,7 @@ export class MCPClient implements MCPClientInterface {
 		if (!isString(protocol)) {
 			throw new Error('MCP server returned a malformed protocol version')
 		}
-		if (!isMCPVersion(protocol) || inferEra(protocol) !== 'legacy') {
+		if (!isMCPLegacyVersion(protocol)) {
 			throw new Error(`MCP server negotiated unsupported protocol version '${protocol}'`)
 		}
 		if (this.#pin !== undefined && protocol !== this.#pin) {

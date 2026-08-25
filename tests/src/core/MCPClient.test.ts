@@ -24,7 +24,7 @@ import {
 	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
 	parseJSONRPCMessage,
-	SUPPORTED_PROTOCOL_VERSIONS,
+	SUPPORTED_CLIENT_PROTOCOL_VERSIONS,
 } from '@src/core'
 import { createHTTPClientTransport } from '@src/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -602,7 +602,7 @@ describe('MCPClient — connect (modern-and-legacy negotiation)', () => {
 		expect(isMCPError(failure)).toBe(true)
 		expect(failure).toMatchObject({
 			code: MCP_UNSUPPORTED_VERSION,
-			context: { supported: SUPPORTED_PROTOCOL_VERSIONS, requested: '2020-01-01' },
+			context: { supported: SUPPORTED_CLIENT_PROTOCOL_VERSIONS, requested: '2020-01-01' },
 		})
 		expect(peer.started).toBe(0)
 		expect(peer.sent).toEqual([])
@@ -741,7 +741,7 @@ describe('MCPClient — modern discovery and fallback', () => {
 
 		const result = await client.discover()
 
-		expect(result.supportedVersions).toEqual(['2026-07-28', '2025-11-25', '2025-06-18'])
+		expect(result.supportedVersions).toEqual(['2026-07-28'])
 		expect(result.resultType).toBe('complete')
 		const request = loopback.requests[0]
 		expect(request?.method).toBe('server/discover')
@@ -752,32 +752,22 @@ describe('MCPClient — modern discovery and fallback', () => {
 		})
 	})
 
-	it('retries -32022 exactly once with a new id and the newest mutually supported offer', async () => {
-		let discoveries = 0
+	it('does not retry a modern request with a legacy-only offer', async () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				discoveries += 1
-				if (discoveries === 1) {
-					return errorResponse(request.id, MCP_UNSUPPORTED_VERSION, {
-						supported: ['2025-11-25', '2025-06-18'],
-					})
-				}
-				return discoverResponse(request.id, ['2025-11-25'])
+				return errorResponse(request.id, MCP_UNSUPPORTED_VERSION, {
+					supported: ['2025-11-25', '2025-06-18'],
+				})
 			},
 		})
 		const client = createMCPClient({ transport: peer })
 
-		await client.connect()
+		await expect(client.connect()).rejects.toMatchObject({ code: MCP_UNSUPPORTED_VERSION })
 
-		expect(client.version).toBe('2025-11-25')
-		expect(peer.sent).toEqual(['server/discover', 'server/discover'])
-		expect(peer.requests.map((request) => request.id)).toEqual([1, 2])
-		expect(peer.requests[1]?.params?.['_meta']).toEqual({
-			[MCP_META_VERSION]: '2025-11-25',
-			[MCP_META_CAPABILITIES]: {},
-			[MCP_META_CLIENT]: { name: 'taverna', version: '1.0.0' },
-		})
+		expect(client.version).toBeUndefined()
+		expect(peer.sent).toEqual(['server/discover'])
+		expect(peer.requests.map((request) => request.id)).toEqual([1])
 	})
 
 	it('surfaces -32022 without changing a pinned modern revision', async () => {
@@ -809,7 +799,7 @@ describe('MCPClient — modern discovery and fallback', () => {
 
 		await expect(client.connect()).rejects.toMatchObject({
 			code: MCP_UNSUPPORTED_VERSION,
-			context: { supported: [MCP_PROTOCOL_VERSION], requested: '2026-07-28' },
+			context: { supported: [], requested: '2026-07-28' },
 		})
 
 		expect(client.connected).toBe(false)
@@ -831,8 +821,8 @@ describe('MCPClient — modern discovery and fallback', () => {
 
 		await expect(client.connect()).rejects.toMatchObject({ code: MCP_UNSUPPORTED_VERSION })
 
-		expect(peer.sent).toEqual(['server/discover', 'server/discover'])
-		expect(peer.requests.map((request) => request.id)).toEqual([1, 2])
+		expect(peer.sent).toEqual(['server/discover'])
+		expect(peer.requests.map((request) => request.id)).toEqual([1])
 	})
 
 	it.each([JSONRPC_METHOD_NOT_FOUND, JSONRPC_INVALID_REQUEST])(
@@ -949,7 +939,7 @@ describe('MCPClient — modern discovery and fallback', () => {
 		const client = createMCPClient({ transport })
 
 		await expect(client.discover()).resolves.toMatchObject({
-			supportedVersions: ['2026-07-28', '2025-11-25'],
+			supportedVersions: ['2026-07-28'],
 		})
 	})
 

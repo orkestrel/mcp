@@ -1,4 +1,4 @@
-import type { JSONRPCMessage, MCPEra, MCPVersion } from './types.js'
+import type { JSONRPCMessage, MCPEra, MCPModernVersion } from './types.js'
 import { isModernRequest } from './validators.js'
 import { isRecord, isString } from '@orkestrel/contract'
 import { MCP_META_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
@@ -23,12 +23,12 @@ export function inferEra(version: string): MCPEra | undefined {
 }
 
 /**
- * Infers the newest supported protocol revision present in a peer's offer.
+ * Infers the newest supported modern protocol revision present in a peer's offer.
  *
  * @param offered - The protocol revisions offered by the peer
- * @returns The newest locally supported offered revision, or `undefined`
+ * @returns The newest locally supported modern revision, or `undefined`
  */
-export function inferVersion(offered: readonly string[]): MCPVersion | undefined {
+export function inferVersion(offered: readonly string[]): MCPModernVersion | undefined {
 	for (const version of SUPPORTED_PROTOCOL_VERSIONS) {
 		if (offered.includes(version)) return version
 	}

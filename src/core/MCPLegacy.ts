@@ -116,6 +116,7 @@ export class MCPLegacy implements MCPDispatcherInterface {
 				)
 			}
 			case 'ping':
+				return buildJSONRPCResult(id, {})
 			case 'tools/list':
 				return this.#forward(invocation, options)
 			case 'tools/call':

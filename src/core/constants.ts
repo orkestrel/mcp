@@ -1,4 +1,4 @@
-import type { MCPVersion } from './types.js'
+import type { MCPLegacyVersion, MCPModernVersion, MCPVersion } from './types.js'
 
 // MCP protocol revisions, reserved modern `_meta` keys, and protocol error codes.
 // Transport-level header names (session / version headers) belong to the HTTP
@@ -12,27 +12,36 @@ import type { MCPVersion } from './types.js'
  * and defines no `initialize`, so it can never be the handshake's version — a client that offers
  * it is asking to negotiate a revision with no negotiation.
  */
-export const MCP_PROTOCOL_VERSION: MCPVersion = '2025-11-25'
+export const MCP_PROTOCOL_VERSION: MCPLegacyVersion = '2025-11-25'
 
 /** The legacy fallback anchor used when an initialize request cannot be accepted as modern. */
-export const MCP_LEGACY_VERSION: MCPVersion = '2025-06-18'
+export const MCP_LEGACY_VERSION: MCPLegacyVersion = '2025-06-18'
 
 /** The modern revision offered by an unpinned client during discovery. */
-export const MCP_MODERN_VERSION: MCPVersion = '2026-07-28'
+export const MCP_MODERN_VERSION: MCPModernVersion = '2026-07-28'
 
 /**
- * The MCP protocol revisions this server can negotiate.
+ * The MCP protocol revisions a bare server accepts and advertises.
  *
  * @remarks
- * `initialize` echoes the client's requested `protocolVersion` when it appears in
- * this list. Frozen in client-preference and discovery-advertisement order. The
- * package does not advertise `2025-03-26` because that revision mandates JSON-RPC
- * batching, while this package accepts only individual JSON-RPC messages.
+ * Frozen in discovery-advertisement order. Legacy revisions are absent because
+ * only {@link SUPPORTED_LEGACY_PROTOCOL_VERSIONS} and the optional legacy
+ * decorator own them.
  */
-export const SUPPORTED_PROTOCOL_VERSIONS: readonly MCPVersion[] = Object.freeze([
-	'2026-07-28',
-	'2025-11-25',
-	'2025-06-18',
+export const SUPPORTED_PROTOCOL_VERSIONS: readonly MCPModernVersion[] = Object.freeze([
+	MCP_MODERN_VERSION,
+])
+
+/** The protocol revisions accepted by the optional legacy decorator. */
+export const SUPPORTED_LEGACY_PROTOCOL_VERSIONS: readonly MCPLegacyVersion[] = Object.freeze([
+	MCP_PROTOCOL_VERSION,
+	MCP_LEGACY_VERSION,
+])
+
+/** The protocol revisions the client can use across modern and legacy peers. */
+export const SUPPORTED_CLIENT_PROTOCOL_VERSIONS: readonly MCPVersion[] = Object.freeze([
+	...SUPPORTED_PROTOCOL_VERSIONS,
+	...SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
 ])
 
 /** Reserved modern `_meta` key carrying the request's protocol revision. */

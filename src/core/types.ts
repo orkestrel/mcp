@@ -178,8 +178,7 @@ export interface MCPResult {
  * `result.resultType === undefined` narrows a {@link JSONRPCResultResponse}'s
  * `result` to the legacy arm.
  *
- * This arm exists only while `MCPServer` still carries the legacy branch, and is
- * removed with it.
+ * This arm exists only for the optional legacy decorator and client.
  */
 export interface MCPLegacyResult {
 	/** Forbidden — the legacy revision has no result discriminator. */
@@ -187,8 +186,14 @@ export interface MCPLegacyResult {
 	readonly [key: string]: unknown
 }
 
-/** A protocol revision supported by this MCP package. */
-export type MCPVersion = '2026-07-28' | '2025-11-25' | '2025-06-18'
+/** A modern protocol revision supported by the bare MCP server. */
+export type MCPModernVersion = '2026-07-28'
+
+/** A legacy protocol revision supported by the optional legacy decorator and client. */
+export type MCPLegacyVersion = '2025-11-25' | '2025-06-18'
+
+/** A protocol revision supported by an MCP package surface. */
+export type MCPVersion = MCPModernVersion | MCPLegacyVersion
 
 /**
  * Exact finite JSON metadata carried by MCP `_meta` envelopes.
@@ -414,8 +419,8 @@ export type MCPContent =
  * `resultType`, which is the only shape the legacy revision has for one.
  * {@link MCPCallResult} is this payload plus the modern `'complete'` stamp, so
  * stamping is the one difference between the modern and legacy answers to `tools/call`.
- * Its sole producer is `MCPServer`'s legacy branch, and it is removed with that
- * branch.
+ * `MCPServer` produces it before modern stamping, and `MCPLegacy` projects the
+ * stamped answer back to this shape.
  *
  * A success carries the tool's value unchanged as `structuredContent` alongside
  * its serialized form in one `text` content block. A value-less success omits
@@ -1297,7 +1302,7 @@ export interface MCPRequestContext {
 
 /** The mandatory modern `server/discover` result. */
 export type MCPDiscoverResult = {
-	readonly supportedVersions: readonly MCPVersion[]
+	readonly supportedVersions: readonly MCPModernVersion[]
 	readonly capabilities: MCPServerCapabilities
 	readonly resultType: 'complete'
 	readonly ttlMs: number
@@ -1342,8 +1347,8 @@ export type MCPSubscriptionResult = {
 
 // THE MODERN METHOD SEAM — the per-request execution options a handler receives,
 // the held-open result arms, and the registrable method contract the modern
-// dispatch branch runs every method through. The legacy branch keeps its own
-// fixed switch: its method set is frozen by a shipped revision and never grows.
+// dispatch branch runs every method through. `MCPLegacy` keeps the legacy
+// revision's fixed method switch outside this server.
 
 /**
  * Per-request execution options every dispatched handler receives.
@@ -1888,7 +1893,7 @@ export interface MCPDispatcherInterface {
 
 /**
  * A transport-agnostic Model Context Protocol server — dispatches JSON-RPC 2.0
- * requests (the fixed legacy methods plus the modern subscription method) over a live
+ * modern requests over a live
  * {@link ToolManagerInterface}, with NO transport coupling (a transport layer
  * pumps strings through `handle`).
  *

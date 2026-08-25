@@ -54,6 +54,8 @@ import type {
 	MCPTaskResult,
 	MCPTaskStatus,
 	MCPTextResource,
+	MCPLegacyVersion,
+	MCPModernVersion,
 	MCPVersion,
 } from './types.js'
 import {
@@ -67,7 +69,13 @@ import {
 	isString,
 	isUndefined,
 } from '@orkestrel/contract'
-import { MCP_META_SERVER, MCP_META_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
+import {
+	MCP_META_SERVER,
+	MCP_META_VERSION,
+	SUPPORTED_CLIENT_PROTOCOL_VERSIONS,
+	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
+	SUPPORTED_PROTOCOL_VERSIONS,
+} from './constants.js'
 import { serializeJSON } from './helpers.js'
 
 /** Determines whether a value is an exact finite JSON object. */
@@ -1213,10 +1221,30 @@ export function isJSONRPCId(value: unknown): value is JSONRPCId {
  * Determines whether a value is a supported {@link MCPVersion}.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when the value is one of {@link SUPPORTED_PROTOCOL_VERSIONS}
+ * @returns `true` when the value is one of {@link SUPPORTED_CLIENT_PROTOCOL_VERSIONS}
  */
 export function isMCPVersion(value: unknown): value is MCPVersion {
+	return isString(value) && SUPPORTED_CLIENT_PROTOCOL_VERSIONS.some((version) => version === value)
+}
+
+/**
+ * Determines whether a value is a modern protocol revision accepted by a bare server.
+ *
+ * @param value - The unknown value to inspect
+ * @returns `true` when the value is one of {@link SUPPORTED_PROTOCOL_VERSIONS}
+ */
+export function isMCPModernVersion(value: unknown): value is MCPModernVersion {
 	return isString(value) && SUPPORTED_PROTOCOL_VERSIONS.some((version) => version === value)
+}
+
+/**
+ * Determines whether a value is a revision accepted by the optional legacy decorator.
+ *
+ * @param value - The unknown value to inspect
+ * @returns `true` when the value is one of {@link SUPPORTED_LEGACY_PROTOCOL_VERSIONS}
+ */
+export function isMCPLegacyVersion(value: unknown): value is MCPLegacyVersion {
+	return isString(value) && SUPPORTED_LEGACY_PROTOCOL_VERSIONS.some((version) => version === value)
 }
 
 /**
