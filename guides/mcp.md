@@ -3225,6 +3225,8 @@ import {
 	buildModernResult,
 	inferEra,
 	inferVersion,
+	isMCPLegacyVersion,
+	isMCPModernVersion,
 	isMCPVersion,
 	isModernRequest,
 	parseRequestContext,
@@ -3251,6 +3253,14 @@ isMCPVersion('2026-07-28') // true
 isMCPVersion('2024-11-05') // false — not a supported revision
 inferEra('2026-07-28') // 'modern'
 inferEra('2025-11-25') // 'legacy'
+
+// The two guards behind that split are disjoint: the modern one covers what a bare server
+// accepts and advertises, the legacy one covers what the optional decorator accepts during
+// `initialize`, and no revision satisfies both.
+isMCPModernVersion('2026-07-28') // true
+isMCPModernVersion('2025-11-25') // false — a bare server never accepts a legacy revision
+isMCPLegacyVersion('2025-06-18') // true
+isMCPLegacyVersion('2026-07-28') // false — the modern revision defines no initialize
 
 // Selection walks the supported revisions newest-first, so the peer's own ordering
 // never decides the outcome — this is how `connect` picks a revision from a discovery.

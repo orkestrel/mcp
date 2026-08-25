@@ -1,7 +1,12 @@
 import type { ServeMCPScopeInterface } from '@src/browser'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 import { describe, expect, it, vi } from 'vitest'
-import { createMCPServer, MCP_META_SERVER } from '@src/core'
+import {
+	createMCPServer,
+	DEFAULT_MCP_CACHE_TTL,
+	MCP_META_SERVER,
+	MCP_MODERN_VERSION,
+} from '@src/core'
 import {
 	createScopeMessageListener,
 	createScopeTransport,
@@ -66,13 +71,19 @@ function createCalculatorTools(): ToolManagerInterface {
 }
 
 // The scope double hosts a bare modern server. Use `modernRequest` because a version-less
-// `createJSONRPCRequest` is correctly rejected by that server with JSON-RPC -32602.
+// `createJSONRPCRequest` is correctly rejected by that server with JSON-RPC -32602, and drive
+// `server/discover` because it is the modern era's own required RPC — 2026-07-28 removes
+// `ping`, so a bare server answers that one -32601 and it cannot carry a transport canary.
 function expectModernReply(message: unknown, id: number): void {
 	expect(JSON.parse(String(message))).toEqual({
 		jsonrpc: '2.0',
 		id,
 		result: {
 			resultType: 'complete',
+			supportedVersions: [MCP_MODERN_VERSION],
+			capabilities: { tools: {} },
+			ttlMs: DEFAULT_MCP_CACHE_TTL,
+			cacheScope: 'private',
 			_meta: {
 				[MCP_META_SERVER]: {
 					name: DEFAULT_MCP_SERVER_NAME,
@@ -108,7 +119,7 @@ describe('serveMCPScope — dedicated-worker-shaped scope (implicit, portless ch
 		port2.start()
 
 		double.dispatch({ ports: [port1] })
-		port2.postMessage(JSON.stringify(modernRequest('ping')))
+		port2.postMessage(JSON.stringify(modernRequest('server/discover')))
 
 		await vi.waitFor(() => expect(replies).toHaveLength(1))
 		expectModernReply(replies[0], 1)
@@ -159,7 +170,7 @@ describe('serveMCPScope — Service-Worker-shaped scope (per-client MessagePort,
 
 		double.dispatch({ ports: [channelA.port1] })
 		double.dispatch({ ports: [channelB.port1] })
-		channelA.port2.postMessage(JSON.stringify(modernRequest('ping')))
+		channelA.port2.postMessage(JSON.stringify(modernRequest('server/discover')))
 
 		await vi.waitFor(() => expect(repliesA).toHaveLength(1))
 		await waitForDelay(30)
@@ -179,11 +190,11 @@ describe('serveMCPScope — dispose', () => {
 		port2.start()
 
 		double.dispatch({ ports: [port1] })
-		port2.postMessage(JSON.stringify(modernRequest('ping')))
+		port2.postMessage(JSON.stringify(modernRequest('server/discover')))
 		await vi.waitFor(() => expect(replies).toHaveLength(1))
 
 		dispose()
-		port2.postMessage(JSON.stringify(modernRequest('ping', 2)))
+		port2.postMessage(JSON.stringify(modernRequest('server/discover', 2)))
 		await waitForDelay(30)
 
 		expect(replies).toHaveLength(1)
@@ -203,7 +214,7 @@ describe('serveMCPScope — dispose', () => {
 		port2.start()
 
 		double.dispatch({ ports: [port1] })
-		port2.postMessage(JSON.stringify(modernRequest('ping')))
+		port2.postMessage(JSON.stringify(modernRequest('server/discover')))
 		await waitForDelay(30)
 
 		expect(replies).toEqual([])
@@ -232,7 +243,7 @@ describe('serveMCPScope — accept option (A2)', () => {
 		port2.start()
 
 		double.dispatch({ ports: [port1] })
-		port2.postMessage(JSON.stringify(modernRequest('ping')))
+		port2.postMessage(JSON.stringify(modernRequest('server/discover')))
 		await waitForDelay(30)
 
 		expect(replies).toEqual([])
@@ -260,11 +271,11 @@ describe('serveMCPScope — accept option (A2)', () => {
 
 		double.dispatch({ data: 'deny', ports: [denied.port1] })
 		double.dispatch({ data: 'allow', ports: [allowed.port1] })
-		allowed.port2.postMessage(JSON.stringify(modernRequest('ping')))
+		allowed.port2.postMessage(JSON.stringify(modernRequest('server/discover')))
 		await vi.waitFor(() => expect(allowedReplies).toHaveLength(1))
 
 		expectModernReply(allowedReplies[0], 1)
-		denied.port2.postMessage(JSON.stringify(modernRequest('ping', 2)))
+		denied.port2.postMessage(JSON.stringify(modernRequest('server/discover', 2)))
 		await waitForDelay(30)
 		expect(deniedReplies).toEqual([])
 
@@ -287,7 +298,7 @@ describe('serveMCPScope — dispose mid-flight (A5.2)', () => {
 		await waitForDelay(50)
 
 		const replyCount = replies.length
-		port2.postMessage(JSON.stringify(modernRequest('ping', 2)))
+		port2.postMessage(JSON.stringify(modernRequest('server/discover', 2)))
 		await waitForDelay(30)
 
 		expect(replies.length).toBe(replyCount)
@@ -305,7 +316,7 @@ describe('serveMCPScope — double-port-delivery dedup (A5.3)', () => {
 
 		double.dispatch({ ports: [port1] })
 		double.dispatch({ ports: [port1] })
-		port2.postMessage(JSON.stringify(modernRequest('ping')))
+		port2.postMessage(JSON.stringify(modernRequest('server/discover')))
 		await vi.waitFor(() => expect(replies).toHaveLength(1))
 
 		expect(replies).toHaveLength(1)
@@ -365,7 +376,7 @@ describe('serveMCPScope — hostile inbound', () => {
 		const dispose = serveMCPScope(double.scope, { tools: createCalculatorTools() })
 
 		double.dispatch({ data: { not: 'a string' } })
-		double.dispatch({ data: JSON.stringify(modernRequest('ping')) })
+		double.dispatch({ data: JSON.stringify(modernRequest('server/discover')) })
 
 		await vi.waitFor(() => expect(double.sent).toHaveLength(1))
 		expectModernReply(double.sent[0], 1)

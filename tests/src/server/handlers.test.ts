@@ -18,7 +18,6 @@ import {
 	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
 	MCP_MODERN_VERSION,
-	MCP_PROTOCOL_VERSION,
 } from '@src/core'
 import { createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
@@ -313,7 +312,7 @@ describe('createMCPPostHandler', () => {
 				code: -32022,
 				message: "Unsupported MCP protocol version '2099-01-01'",
 				data: {
-					supported: ['2026-07-28', '2025-11-25', '2025-06-18'],
+					supported: [MCP_MODERN_VERSION],
 					requested: '2099-01-01',
 				},
 			},
@@ -630,7 +629,7 @@ describe('createMCPPostHandler', () => {
 			new Request('http://localhost/mcp', {
 				method: 'POST',
 				headers: {
-					[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
+					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
 					[MCP_METHOD_HEADER]: 'server/discover',
 				},
 				body: JSON.stringify(
@@ -638,7 +637,7 @@ describe('createMCPPostHandler', () => {
 						method: 'server/discover',
 						params: {
 							_meta: {
-								[MCP_META_VERSION]: MCP_PROTOCOL_VERSION,
+								[MCP_META_VERSION]: MCP_MODERN_VERSION,
 								[MCP_META_CAPABILITIES]: {},
 							},
 						},
@@ -646,8 +645,11 @@ describe('createMCPPostHandler', () => {
 				),
 			}),
 		)
+		const body = await response.json()
 
 		expect(response.status).toBe(200)
+		expect(body.result.supportedVersions).toEqual([MCP_MODERN_VERSION])
+		expect(body.result['_meta'][MCP_META_SERVER]).toEqual({ name: 'calculator', version: '1.0.0' })
 	})
 
 	it('requires Mcp-Name only on tools/call and matches it to params.name', async () => {
@@ -656,7 +658,7 @@ describe('createMCPPostHandler', () => {
 			new Request('http://localhost/mcp', {
 				method: 'POST',
 				headers: {
-					[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
+					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
 					[MCP_METHOD_HEADER]: 'tools/call',
 					[MCP_NAME_HEADER]: 'add',
 				},
@@ -667,7 +669,7 @@ describe('createMCPPostHandler', () => {
 							name: 'add',
 							arguments: {},
 							_meta: {
-								[MCP_META_VERSION]: MCP_PROTOCOL_VERSION,
+								[MCP_META_VERSION]: MCP_MODERN_VERSION,
 								[MCP_META_CAPABILITIES]: {},
 							},
 						},
@@ -675,8 +677,11 @@ describe('createMCPPostHandler', () => {
 				),
 			}),
 		)
+		const body = await response.json()
 
 		expect(response.status).toBe(200)
+		expect(body.result.resultType).toBe('complete')
+		expect(body.result.content).toEqual([{ type: 'text', text: '5' }])
 	})
 
 	it.each([
@@ -801,7 +806,7 @@ describe('createMCPPostHandler', () => {
 		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
 		const params = {
 			_meta: {
-				[MCP_META_VERSION]: MCP_PROTOCOL_VERSION,
+				[MCP_META_VERSION]: MCP_MODERN_VERSION,
 				[MCP_META_CAPABILITIES]: {},
 			},
 		}
@@ -809,7 +814,7 @@ describe('createMCPPostHandler', () => {
 			new Request('http://localhost/mcp', {
 				method: 'POST',
 				headers: {
-					[MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION,
+					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
 					[MCP_METHOD_HEADER]: 'unknown',
 				},
 				body: JSON.stringify(createJSONRPCRequest({ method: 'unknown', params })),

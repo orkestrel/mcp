@@ -163,6 +163,9 @@ async function startMCP(options?: {
 
 describe('createMCPRoutes — dispatch the MCP methods', () => {
 	it('exposes a raw server as modern-only and a decorated server as both eras', async () => {
+		// `server/discover` is the modern era's own required RPC and the canary here. The
+		// removed `ping` cannot be one: 2026-07-28 deletes it, so a bare server answers it
+		// -32601 and the request would measure the removal rather than the transport.
 		const dispatcher = createDispatcher<unknown>()
 		dispatcher.add(createMCPRoutes(createCalculatorServer(), { streaming: false }))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
@@ -170,11 +173,11 @@ describe('createMCPRoutes — dispatch the MCP methods', () => {
 		teardown.add(() => closeResource(handle))
 		const response = await postJSON(
 			handle.base,
-			createJSONRPCRequest({ method: 'ping', params: { _meta: MODERN_METADATA } }),
+			createJSONRPCRequest({ method: 'server/discover', params: { _meta: MODERN_METADATA } }),
 			{
 				headers: {
 					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
-					[MCP_METHOD_HEADER]: 'ping',
+					[MCP_METHOD_HEADER]: 'server/discover',
 				},
 			},
 		)
@@ -182,10 +185,27 @@ describe('createMCPRoutes — dispatch the MCP methods', () => {
 
 		expect(response.status).toBe(200)
 		expect(body.result.resultType).toBe('complete')
+		expect(body.result.supportedVersions).toEqual([MCP_MODERN_VERSION])
 		expect(body.result['_meta'][MCP_META_SERVER]).toEqual({
 			name: 'calculator',
 			version: '1.0.0',
 		})
+
+		// The other half of the name: the bare server owns no legacy handshake, and the
+		// decorated server the `startMCP` helper mounts answers the same `initialize`.
+		const bare = await postJSON(
+			handle.base,
+			createJSONRPCRequest({ params: { protocolVersion: '2025-06-18' } }),
+			{ headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' } },
+		)
+		expect((await bare.json()).error.code).toBe(-32601)
+
+		const decorated = await startMCP()
+		const handshake = await postJSON(
+			decorated.base,
+			createJSONRPCRequest({ params: { protocolVersion: '2025-06-18' } }),
+		)
+		expect((await handshake.json()).result.protocolVersion).toBe('2025-06-18')
 	})
 
 	it('POST initialize → 200 + the negotiated handshake result', async () => {
@@ -282,7 +302,7 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 				code: -32022,
 				message: "Unsupported MCP protocol version '2099-01-01'",
 				data: {
-					supported: ['2026-07-28', '2025-11-25', '2025-06-18'],
+					supported: [MCP_MODERN_VERSION],
 					requested: '2099-01-01',
 				},
 			},
@@ -903,13 +923,18 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 		const reply = readLine(output)
 		input.write(
 			`${JSON.stringify(
-				createJSONRPCRequest({ method: 'ping', id: 1, params: { _meta: MODERN_METADATA } }),
+				createJSONRPCRequest({
+					method: 'server/discover',
+					id: 1,
+					params: { _meta: MODERN_METADATA },
+				}),
 			)}\n`,
 		)
 		const response = JSON.parse(await reply)
 
 		expect(response.id).toBe(1)
 		expect(response.result.resultType).toBe('complete')
+		expect(response.result.supportedVersions).toEqual([MCP_MODERN_VERSION])
 		expect(response.result['_meta'][MCP_META_SERVER]).toEqual({
 			name: 'calculator',
 			version: '1.0.0',

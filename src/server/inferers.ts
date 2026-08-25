@@ -1,4 +1,10 @@
-import type { JSONRPCInvocation, JSONRPCResponse, MCPEra, MCPVersion } from '@src/core'
+import type {
+	JSONRPCInvocation,
+	JSONRPCResponse,
+	MCPEra,
+	MCPLegacyVersion,
+	MCPVersion,
+} from '@src/core'
 import type { MCPHeaderIssue } from './types.js'
 import {
 	JSONRPC_INVALID_PARAMS,
@@ -8,9 +14,8 @@ import {
 	MCP_MISSING_CAPABILITY,
 	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
-	inferEra,
-	inferVersion,
 	isInitializeRequest,
+	isMCPLegacyVersion,
 	isModernRequest,
 } from '@src/core'
 import { isRecord, isString } from '@orkestrel/contract'
@@ -124,16 +129,20 @@ export function inferHeaderIssue(
  *
  * @remarks
  * A supported legacy request is pinned exactly. A modern, malformed, absent, or unsupported
- * request selects the newest supported legacy revision, matching the core initialize result.
+ * request selects the newest supported legacy revision. The read is deliberately the SAME one
+ * {@link import('@orkestrel/mcp').buildInitializeResult} performs — `isMCPLegacyVersion` over
+ * the requested revision — because the session version this pins and the version that result
+ * echoes must be the one value. Routing through `inferVersion` cannot do it: that inferer is
+ * modern-only, so it answers `undefined` for every legacy offer and the session would pin
+ * `2025-11-25` while the handshake echoed `2025-06-18`, which the client's own protocol
+ * header then contradicts.
  *
  * @param request - The legacy initialize invocation
  * @returns The negotiated legacy protocol revision
  */
-export function inferLegacyVersion(request: JSONRPCInvocation): MCPVersion {
+export function inferLegacyVersion(request: JSONRPCInvocation): MCPLegacyVersion {
 	const requested = request.params?.['protocolVersion']
-	const version = inferVersion(isString(requested) ? [requested] : [])
-	if (version !== undefined && inferEra(version) === 'legacy') return version
-	return MCP_PROTOCOL_VERSION
+	return isMCPLegacyVersion(requested) ? requested : MCP_PROTOCOL_VERSION
 }
 
 /**

@@ -397,15 +397,21 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 		transport.emitter.on('message', (message) => messages.push(message))
 
 		await transport.send(createJSONRPCRequest({ params: { _meta: MODERN_METADATA } }))
+		// `server/discover` carries the second leg because 2026-07-28 removes `ping`: a modern
+		// request for it comes back -32601 and would frame an error rather than a result.
 		await transport.send(
-			createJSONRPCRequest({ method: 'ping', id: 2, params: { _meta: MODERN_METADATA } }),
+			createJSONRPCRequest({
+				method: 'server/discover',
+				id: 2,
+				params: { _meta: MODERN_METADATA },
+			}),
 		)
 
 		expect(messages).toHaveLength(2)
 		expect(messages[1]).toMatchObject({
 			jsonrpc: '2.0',
 			id: 2,
-			result: { resultType: 'complete' },
+			result: { resultType: 'complete', supportedVersions: [MCP_MODERN_VERSION] },
 		})
 	})
 

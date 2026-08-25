@@ -3,7 +3,12 @@ import type { StartedServerInterface } from '../../../setupServer.js'
 import type { Duplex } from 'node:stream'
 import { createServer as createHTTPServer } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createMCPClient, MCP_META_SERVER } from '@src/core'
+import {
+	createMCPClient,
+	DEFAULT_MCP_CACHE_TTL,
+	MCP_META_SERVER,
+	MCP_MODERN_VERSION,
+} from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
@@ -218,9 +223,12 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 		await waitForDelay(60)
 
 		expect(closed).toBe(1)
+		// `server/discover` is the canary because it is the modern era's own required RPC.
+		// 2026-07-28 removes `ping`, so the reply that proves the replacement socket carries
+		// traffic has to be one the bare server still answers.
 		await transport.send({
 			jsonrpc: '2.0',
-			method: 'ping',
+			method: 'server/discover',
 			id: 2,
 			params: { _meta: MODERN_METADATA },
 		})
@@ -231,6 +239,10 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 				id: 2,
 				result: {
 					resultType: 'complete',
+					supportedVersions: [MCP_MODERN_VERSION],
+					capabilities: { tools: {} },
+					ttlMs: DEFAULT_MCP_CACHE_TTL,
+					cacheScope: 'private',
 					_meta: {
 						[MCP_META_SERVER]: { name: 'calculator', version: '1.0.0' },
 					},
