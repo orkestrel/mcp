@@ -28,6 +28,7 @@ import {
 	upgradeRequestPath,
 	writeLine,
 } from '@src/server'
+import { waitForDelay } from '@orkestrel/test'
 import { createJSONRPCRequest, probeOwnership } from '../../setup.js'
 import { createRequestStub, createStreamStub } from '../../setupServer.js'
 
@@ -113,6 +114,34 @@ describe('writeLine — one callback-confirmed writable write', () => {
 		})
 
 		await expect(writeLine(output, 'line\n')).rejects.toBe(failure)
+	})
+
+	it('parks while the stream withholds its completion callback and settles when it fires', async () => {
+		const releases: Array<() => void> = []
+		const output = new Writable({
+			highWaterMark: 1,
+			write(_chunk, _encoding, callback) {
+				releases.push(() => callback())
+			},
+		})
+
+		const writing = writeLine(output, 'line\n')
+
+		// The callback is the only settlement this helper has — it holds no timer and no abort —
+		// so a stream that neither confirms nor fails the write keeps the promise pending. The
+		// transport that races this one bounds it for its caller: `StdioServerTransport` rejects
+		// its own per-send entry on `close()`, proven in its suite.
+		await expect(
+			Promise.race([writing.then(() => 'settled'), waitForDelay(20).then(() => 'parked')]),
+		).resolves.toBe('parked')
+
+		const release = releases.shift()
+		if (release === undefined) throw new Error('the write never reached the stream')
+		release()
+
+		// And the same promise settles the moment the stream answers, so the park is the stream's
+		// silence rather than a helper that dropped the write.
+		await expect(writing).resolves.toBeUndefined()
 	})
 })
 

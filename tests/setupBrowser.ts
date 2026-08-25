@@ -1,17 +1,10 @@
-// Browser-only test infrastructure — DOM, real page globals, and the in-page carrier
-// peers the duplex proof observes. Loaded by the `src:browser` project only.
+// Browser-only test infrastructure — real page globals and the in-page carrier peers the
+// duplex proof observes. Loaded by the `src:browser` project only.
 
 import type { JSONRPCMessage } from '@src/core'
 import type { ScopeTransportInterface, ServeMCPScopeInterface } from '@src/browser'
 import { createScopeTransport, decodeEvent } from '@src/browser'
 import { isArray, isString } from '@orkestrel/contract'
-
-/** Append a real element to the browser document for one test. */
-export function buildElement(tag = 'div'): HTMLElement {
-	const element = document.createElement(tag)
-	document.body.append(element)
-	return element
-}
 
 // ── Peer observation ─────────────────────────────────────────────────────────
 //

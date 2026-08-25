@@ -2245,7 +2245,10 @@ JSON-RPC request runs through `mcp.dispatch`, writing a defined response back
 as one newline-terminated line (a notification writes nothing). The server transport awaits
 the output stream's completion callback as its backpressure boundary. A callback error or
 synchronous write throw rejects `send`, and an out-of-band output `error` reaches the transport's
-domain `error` event.
+domain `error` event. That callback is the only confirmation a write has, so an output that
+neither confirms nor fails parks it. The transport bounds that for its caller: each `send` races
+the write against a per-send entry the transport rejects on close, so closing settles the caller
+while the abandoned write stays with the caller-owned stream that still holds its callback.
 The handle's `stop()` unbinds that pump and closes the transport: the
 listeners `start()` put on `input` and `output` are removed, every pending `send` rejects, and
 `input` is paused only when
@@ -4348,7 +4351,11 @@ socket, key, head, protocol })` (SERVER mode → writes the `101` handshake,
     `createNodeWebSocket({ socket, head })` (CLIENT mode — no key → frames
     MASKED) and bridges its frames as the client's `message` channel (decoded +
     narrowed with `parseJSONRPCMessage`). `send` writes ONE masked text frame
-    per message; `close()` destroys an upgrade request still on the wire,
+    per message, and a socket write is unconfirmed, so a closed channel is
+    answered from the transport's own state: a `send` with no bound socket —
+    before `start()`, after `close()`, or after the peer ended the socket —
+    REJECTS with `WebSocket transport is not connected`, dropping nothing and
+    queueing nothing. `close()` destroys an upgrade request still on the wire,
     unsubscribes from the socket, closes it, and fires `close` (idempotent —
     a second call on the same closed lifetime releases nothing and emits
     nothing). `url` accepts `ws://` / `wss://` OR `http://` / `https://` (a

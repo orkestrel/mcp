@@ -393,6 +393,27 @@ describe('WebSocketClientTransport — close releases what the connect acquired'
 		expect(peer.open).toBe(0) // and the socket carrying it is gone
 	})
 
+	it('rejects a send issued after close() as not connected', async () => {
+		const handle = await startWs()
+		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
+		await transport.start()
+
+		// The control, from the state this assertion is NOT about: while the socket is bound the
+		// same call resolves against the real shipped server, so the rejection below reports the
+		// closed state rather than a `send` that never worked.
+		await expect(transport.send({ jsonrpc: '2.0', id: 1, method: 'ping' })).resolves.toBeUndefined()
+
+		await transport.close()
+
+		// `MCPClientTransportInterface.send` has a channel that cannot confirm a write answer a
+		// closed channel from its own state. This transport's state is the released socket and its
+		// answer is a REJECTION — not the browser face's silent drop, and not a queue that would
+		// hold the message for a connection this transport can no longer open.
+		await expect(transport.send({ jsonrpc: '2.0', id: 2, method: 'ping' })).rejects.toThrow(
+			'WebSocket transport is not connected',
+		)
+	})
+
 	it('close() releases the socket subscriptions — a later frame emits nothing', async () => {
 		const peer = await startHoldingPeer()
 		const transport = createWebSocketClientTransport({ url: `${peer.base}/mcp` })

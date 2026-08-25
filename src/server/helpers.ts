@@ -333,6 +333,14 @@ export function extractLines(buffer: string, chunk: string): LineExtraction {
  * The completion callback is the writable channel's backpressure boundary. A callback error and
  * a synchronous `write` throw reject the returned promise with the original value.
  *
+ * That callback is the ONLY thing that settles the promise: this helper holds no timer and no
+ * abort, so an output that neither confirms nor fails the write parks the promise for as long as
+ * the caller-owned stream holds the callback. A caller wanting a bound races this promise against
+ * one it owns — {@link import('./transports/StdioServerTransport.js').StdioServerTransport}
+ * registers such a bound per send and rejects it on `close()`, so closing the transport settles
+ * the CALLER's `send` while the abandoned write stays with the stream that still holds its
+ * callback, reachable from nothing the transport retains.
+ *
  * @param output - The writable stream that receives the line
  * @param line - The complete line to write
  * @returns Resolves when the stream confirms the write; rejects when the write fails

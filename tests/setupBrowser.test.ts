@@ -1,14 +1,13 @@
 // Proof of `tests/setupBrowser.ts` — the peer-observation helpers the duplex claims are read
 // through.
 //
-// The `setup` project runs in Node with the browser disabled, and the module divides cleanly
-// along that line. Everything asserted here is host-independent: `createScopeCarrier` wires two
-// real `createScopeTransport` halves and never touches a document, `recordPort` taps a real
+// The `setup` project runs in Node with the browser disabled, and every export of the module
+// is host-independent, so this proof reaches all of them: `createScopeCarrier` wires two real
+// `createScopeTransport` halves and never touches a document, `recordPort` taps a real
 // `MessagePort` (Node's is the same `EventTarget` contract the page's is), and `drainRecorded`
-// reads frames back over a real socket from the real Node fixture. The DOM-driving side is
-// `buildElement`, which appends to a live `document` that no Node project has; it is proven by
-// no suite at all, because nothing imports it — a proof of it belongs in the `src:browser`
-// project, where a document exists.
+// reads frames back over a real socket from the real Node fixture. The module holds no
+// DOM-driving helper, because the browser face this workspace ships carries no element surface
+// for one to drive.
 //
 // The carrier and the tap are also driven end to end by `tests/src/browser/factories.test.ts`
 // inside Chromium. That suite proves what they carry for a real page; this one proves what they

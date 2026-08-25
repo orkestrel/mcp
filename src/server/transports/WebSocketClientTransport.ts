@@ -48,7 +48,11 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   event (the reply the {@link import('@orkestrel/mcp').MCPClientInterface} correlates by `id`); a
  *   non-JSON / non-message frame surfaces on `error` and is dropped. The socket's `close`
  *   / `error` bridge to this transport's events.
- * - **Outbound (`send`).** `send(message)` writes one masked text frame.
+ * - **Outbound (`send`).** `send(message)` writes one masked text frame. A socket write is not
+ *   confirmed, so this transport answers a closed channel from its OWN state: a `send` with no
+ *   bound socket — before `start()`, after `close()`, or after the peer ended the socket —
+ *   REJECTS with `WebSocket transport is not connected`. It neither drops the message (the
+ *   browser face's posture) nor queues it for a connection this transport is not holding.
  * - **`close()`** unsubscribes from the socket, closes it, and fires `close` (idempotent). An
  *   upgrade still on the wire is DESTROYED, so a `close()` during the handshake ends the
  *   transport at once instead of waiting for a peer that may never answer — the suspended
