@@ -2148,7 +2148,8 @@ export interface MCPClientTransportInterface {
 	 *
 	 * A transport whose channel confirms the write rejects on its failure. A transport whose
 	 * exchange reports through the emitter resolves. A transport whose channel cannot confirm a
-	 * write no-ops on a closed channel.
+	 * write answers a closed channel from its own state, and each states which in its own
+	 * remarks.
 	 *
 	 * @param message - The message to write to the wire
 	 * @returns Resolves once the message has been sent, and rejects — never throws — when the
