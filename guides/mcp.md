@@ -2132,6 +2132,7 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | `decodeEvent`            | function | Decode one SSE event's `data` string into a `JSONRPCMessage`, or `undefined` (total).                                                                                                                                  |
 | `upgradeRequestPath`     | function | Read a raw `node:http` upgrade request's path (no query) for the `createWebSocketServer` upgrade-path match.                                                                                                           |
 | `extractLines`           | function | Fold one more chunk of raw stdio bytes into a newline-framed buffer — complete `lines` + the trailing `remainder`.                                                                                                     |
+| `writeLine`              | function | Write one line to a Node writable and settle from its completion callback; a callback error or synchronous throw rejects.                                                                                              |
 | `dispatchLines`          | function | Decode and deliver each complete newline-framed line onto a `MCPClientTransportEventMap` emitter (`message` / `error`).                                                                                                |
 | `bridgeMessageTransport` | function | Adapt a message-channel `MCPClientTransportInterface` (stdio / WebSocket server transports) into the core `MCPTransportInterface` port — what `createStdioServer` / `createWebSocketServer` pipe through `bindServer`. |
 
@@ -2241,13 +2242,17 @@ server transport — newline-delimited JSON-RPC over a process's own
 `MCPClientTransportInterface`, bridges it to the core `MCPTransportInterface` port
 through `bridgeMessageTransport`, and pipes it through `bindServer` — each inbound
 JSON-RPC request runs through `mcp.dispatch`, writing a defined response back
-as one newline-terminated line (a notification writes nothing).
+as one newline-terminated line (a notification writes nothing). The server transport awaits
+the output stream's completion callback as its backpressure boundary. A callback error or
+synchronous write throw rejects `send`, and an out-of-band output `error` reaches the transport's
+domain `error` event.
 The handle's `stop()` unbinds that pump and closes the transport: the
-listeners `start()` put on `input` are removed, and `input` is paused only when
+listeners `start()` put on `input` and `output` are removed, every pending `send` rejects, and
+`input` is paused only when
 this transport started a non-flowing stream and no other `data` listener
 remains. A stopped server therefore lets the process exit rather than holding
 `process.stdin` open, and the injected streams are never destroyed or ended —
-they belong to the caller.
+they belong to the caller. A `send` after closure rejects `stdio transport is not connected`.
 
 The server preserves the caller's flowing or non-flowing state and every caller-owned listener.
 An unread stream starts with `readableFlowing === null`; Node exposes no public operation that
@@ -2918,11 +2923,11 @@ The shared transport-agnostic message carrier used by clients and server bridges
 `start` opens, `send` writes one message, and `close` tears down. Its `duplex: boolean`
 data member states whether client-initiated notifications can reach the peer.
 
-| Method  | Returns         | Behavior                                                                                                                                                                                                                                         |
-| ------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `start` | `Promise<void>` | Open the transport and arm any reply reader (a no-op for a request/response transport). A `start` that rejects must first release whatever it had already acquired.                                                                              |
-| `send`  | `Promise<void>` | Write one JSON-RPC message to the remote server; its decoded reply is emitted on the `message` event. A write that fails REJECTS; it never throws synchronously.                                                                                 |
-| `close` | `Promise<void>` | Close the transport, release everything it acquired, and fire `close` ONCE. It must SETTLE: resolving says the connection ended, rejecting says it did not, and the client believes only that answer. It is IDEMPOTENT over one closed lifetime. |
+| Method  | Returns         | Behavior                                                                                                                                                                                                                                                                                           |
+| ------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start` | `Promise<void>` | Open the transport and arm any reply reader (a no-op for a request/response transport). A `start` that rejects must first release whatever it had already acquired.                                                                                                                                |
+| `send`  | `Promise<void>` | Write one JSON-RPC message to the remote server; its decoded reply is emitted on the `message` event. A write that fails REJECTS; it never throws synchronously. A confirming channel rejects on its failure; an emitter-reporting exchange resolves; a non-confirming channel no-ops when closed. |
+| `close` | `Promise<void>` | Close the transport, release everything it acquired, and fire `close` ONCE. It must SETTLE: resolving says the connection ended, rejecting says it did not, and the client believes only that answer. It is IDEMPOTENT over one closed lifetime.                                                   |
 
 The obligations an implementation carries, because `MCPClient` depends on them
 and cannot enforce them from its side. A `start` that acquires and then rejects
@@ -2953,9 +2958,9 @@ transport that has closed. `StdioClientTransport` stops its own line
 dispatch at the call, terminates its child through the supervisor's bounded group
 kill, and tears the supervisor down within the `drain` bound that caps a
 descendant-held stdout pipe.
-`StdioServerTransport` removes the listeners it put on `input`, preserves the
-caller's flowing or non-flowing state and listeners, and does NOT destroy or end
-the injected streams. An initially unread stream settles at non-flowing because
+`StdioServerTransport` removes the listeners it put on `input` and `output`, rejects pending
+sends, preserves the caller's flowing or non-flowing state and listeners, and does NOT destroy
+or end the injected streams. An initially unread stream settles at non-flowing because
 Node exposes no public operation that restores `readableFlowing === null` after
 consumption. A later `data` listener does not resume that stream; the caller must
 call `resume()` before the listener receives data. The transport
@@ -4411,15 +4416,18 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     `options.input` (default `process.stdin`) / `options.output` (default
     `process.stdout`) in a `StdioServerTransport` and PUMPS: each inbound
     `JSONRPCMessage` that is a REQUEST runs through `mcp.dispatch`, a defined
-    response written back as a newline-terminated line (a notification writes
-    nothing); a non-request message is ignored; a `dispatch` / `send` fault
+    response written back as a newline-terminated line after the output completion
+    callback confirms it (a notification writes nothing); a non-request message is ignored; a
+    `dispatch` / `send` fault
     surfaces on the transport's `error` event. `stop()` unbinds that pump and
     closes the transport, which removes the listeners `start()` put on
-    `input`, preserves the caller's flowing or non-flowing state and listeners,
+    `input` and `output`, rejects every pending send, preserves the caller's flowing or
+    non-flowing state and listeners,
     and pauses `input` only when this transport started a non-flowing stream
     AND no other `data` listener remains — so a stopped server lets the
     process exit instead of holding `process.stdin` open. It never destroys or
-    ends the injected streams; they belong to the caller. An initially unread
+    ends the injected streams; they belong to the caller. A `send` after closure
+    rejects `stdio transport is not connected`. An initially unread
     stream closes at `readableFlowing === false`, not `null`, because Node exposes
     no public operation that restores the untouched state after consumption. A
     later `data` listener does not resume that stream; the caller must call

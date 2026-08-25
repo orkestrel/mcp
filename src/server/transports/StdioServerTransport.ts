@@ -6,7 +6,7 @@ import type {
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { Readable } from 'node:stream'
 import { Emitter } from '@orkestrel/emitter'
-import { dispatchLines, extractLines } from '../helpers.js'
+import { dispatchLines, extractLines, writeLine } from '../helpers.js'
 
 /**
  * The stdio SERVER transport for the Model Context Protocol — wraps an injectable
@@ -28,8 +28,10 @@ import { dispatchLines, extractLines } from '../helpers.js'
  *   emits `error` (never throws). `input`'s `close` bridges to this
  *   transport's `close`.
  * - **Outbound (`send`).** `send(message)` writes one newline-terminated
- *   `JSON.stringify`d line to `output`.
- * - **`close()`** removes this transport's input subscriptions and fires its `close`
+ *   `JSON.stringify`d line to `output` and awaits the writable completion callback. The
+ *   callback is the backpressure boundary and its error rejects the send.
+ * - **`close()`** removes this transport's input and output subscriptions, rejects every
+ *   pending send, and fires its `close`
  *   event (idempotent). It pauses the input only when the caller was not already reading
  *   it at `start` (`readableFlowing !== true`) AND no `data` listener remains once this
  *   transport's own is removed — so a process holding `process.stdin` can exit, and a
@@ -52,6 +54,7 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 	readonly #data = (chunk: Buffer | string): void => this.#receive(chunk.toString())
 	readonly #ending = (): void => this.#onClose()
 	readonly #failure = (error: Error): void => this.#emitter.emit('error', error)
+	readonly #pending = new Set<PromiseWithResolvers<void>>()
 	#buffer = ''
 	#started = false
 	#closed = false
@@ -94,10 +97,31 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 		this.#input.on('data', this.#data)
 		this.#input.on('close', this.#ending)
 		this.#input.on('error', this.#failure)
+		this.#output.on('error', this.#failure)
 	}
 
+	/**
+	 * Sends one newline-delimited JSON-RPC message through the caller-owned output stream.
+	 *
+	 * @remarks
+	 * The writable completion callback is the backpressure boundary. This method awaits that
+	 * callback rather than adding a `drain` listener. Closing the transport rejects every send
+	 * whose callback has not settled.
+	 *
+	 * @param message - The message to serialize and write
+	 * @returns Resolves when the output confirms the write
+	 * @throws Thrown with `stdio transport is not connected` after the transport closes
+	 * @throws Thrown with the output callback error or synchronous write failure
+	 */
 	async send(message: JSONRPCMessage): Promise<void> {
-		this.#output.write(`${JSON.stringify(message)}\n`)
+		if (this.#closed) throw new Error('stdio transport is not connected')
+		const pending = Promise.withResolvers<void>()
+		this.#pending.add(pending)
+		try {
+			await Promise.race([writeLine(this.#output, `${JSON.stringify(message)}\n`), pending.promise])
+		} finally {
+			this.#pending.delete(pending)
+		}
 	}
 
 	async close(): Promise<void> {
@@ -130,6 +154,11 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 		this.#input.removeListener('data', this.#data)
 		this.#input.removeListener('close', this.#ending)
 		this.#input.removeListener('error', this.#failure)
+		this.#output.removeListener('error', this.#failure)
+		for (const pending of this.#pending) {
+			pending.reject(new Error('stdio transport is not connected'))
+		}
+		this.#pending.clear()
 		// Different questions, asked at the moments where each is answerable: the reading
 		// taken at `start` says whether the caller was already reading, and the listener count
 		// taken HERE — after this transport's own `data` handler is gone — says whether a reader

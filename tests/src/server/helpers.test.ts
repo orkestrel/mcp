@@ -1,4 +1,5 @@
 import type { JSONRPCNotification, JSONRPCMessage, JSONRPCResponse, MCPStream } from '@src/core'
+import { Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import {
 	JSONRPC_INVALID_REQUEST,
@@ -25,6 +26,7 @@ import {
 	rejectUnknownSession,
 	sendEventStream,
 	upgradeRequestPath,
+	writeLine,
 } from '@src/server'
 import { createJSONRPCRequest, probeOwnership } from '../../setup.js'
 import { createRequestStub, createStreamStub } from '../../setupServer.js'
@@ -83,6 +85,36 @@ function rpcMessage(overrides?: Parameters<typeof createJSONRPCRequest>[0]): JSO
 function requestWithHeaders(headers?: Record<string, string>): Request {
 	return new Request('http://localhost/mcp', headers !== undefined ? { headers } : {})
 }
+
+describe('writeLine — one callback-confirmed writable write', () => {
+	it('rejects with the completion callback error', async () => {
+		const failure = new Error('write callback failed')
+		const errors: unknown[] = []
+		const output = new Writable({
+			write(_chunk, _encoding, callback) {
+				callback(failure)
+			},
+		})
+		output.on('error', (error) => errors.push(error))
+		const emitted = new Promise<void>((resolve) => output.once('error', () => resolve()))
+
+		await expect(writeLine(output, 'line\n')).rejects.toBe(failure)
+		await emitted
+
+		expect(errors).toEqual([failure])
+	})
+
+	it('converts a synchronous write throw into a rejection', async () => {
+		const failure = new Error('write threw')
+		const output = new Writable({
+			write() {
+				throw failure
+			},
+		})
+
+		await expect(writeLine(output, 'line\n')).rejects.toBe(failure)
+	})
+})
 
 // src/server/helpers.ts — `acceptsEventStream`, the pure `Accept`-header reader the MCP
 // transport uses to pick a Streamable-HTTP SSE response over a plain JSON body. It reads

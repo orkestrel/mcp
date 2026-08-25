@@ -2146,6 +2146,10 @@ export interface MCPClientTransportInterface {
 	 * throwing. The client cannot enforce this from its side — the throw and the write are
 	 * indistinguishable to it — so it is stated here, on the contract that owns it.
 	 *
+	 * A transport whose channel confirms the write rejects on its failure. A transport whose
+	 * exchange reports through the emitter resolves. A transport whose channel cannot confirm a
+	 * write no-ops on a closed channel.
+	 *
 	 * @param message - The message to write to the wire
 	 * @returns Resolves once the message has been sent, and rejects — never throws — when the
 	 * write fails

@@ -1,7 +1,8 @@
-import type { JSONRPCMessage } from '@src/core'
-import { PassThrough } from 'node:stream'
+import type { JSONRPCMessage, JSONRPCNotification, JSONRPCResponse, MCPStream } from '@src/core'
+import { PassThrough, Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
-import { StdioServerTransport } from '@src/server'
+import { MCPStreamController, MCPTextStreamController, sendStream } from '@src/core'
+import { StdioServerTransport, bridgeMessageTransport } from '@src/server'
 import { waitForDelay } from '@orkestrel/test'
 import { createJSONRPCRequest } from '../../../setup.js'
 
@@ -25,6 +26,14 @@ function collectLines(output: PassThrough): { readonly lines: () => readonly str
 		for (const line of parts.slice(0, -1)) lines.push(line)
 	})
 	return { lines: () => lines }
+}
+
+async function* responseStream(
+	notification: JSONRPCNotification,
+	response: JSONRPCResponse,
+): MCPStream {
+	yield notification
+	return response
 }
 
 describe('StdioServerTransport — inbound lines become transport messages', () => {
@@ -157,9 +166,153 @@ describe('StdioServerTransport — send writes response lines the peer decodes',
 		expect(lines().map((line) => JSON.parse(line))).toEqual([first, second])
 		await transport.close()
 	})
+
+	it('settles deferred high-water-mark sends in call order', async () => {
+		const input = new PassThrough()
+		const chunks: string[] = []
+		const releases: Array<() => void> = []
+		const output = new Writable({
+			highWaterMark: 1,
+			write(chunk, _encoding, callback) {
+				chunks.push(chunk.toString())
+				releases.push(() => callback())
+			},
+		})
+		const transport = new StdioServerTransport(input, output)
+		const settled: string[] = []
+		await transport.start()
+
+		const first = transport.send({ jsonrpc: '2.0', id: 1, result: { order: 'first' } })
+		const second = transport.send({ jsonrpc: '2.0', id: 2, result: { order: 'second' } })
+		void first.then(() => settled.push('first'))
+		void second.then(() => settled.push('second'))
+
+		expect(chunks).toEqual(['{"jsonrpc":"2.0","id":1,"result":{"order":"first"}}\n'])
+		const releaseFirst = releases.shift()
+		if (releaseFirst === undefined) throw new Error('first write was not awaiting completion')
+		releaseFirst()
+		await first
+		await Promise.resolve()
+		expect(settled).toEqual(['first'])
+		expect(chunks).toEqual([
+			'{"jsonrpc":"2.0","id":1,"result":{"order":"first"}}\n',
+			'{"jsonrpc":"2.0","id":2,"result":{"order":"second"}}\n',
+		])
+
+		const releaseSecond = releases.shift()
+		if (releaseSecond === undefined) throw new Error('second write was not awaiting completion')
+		releaseSecond()
+		await second
+		await Promise.resolve()
+		expect(settled).toEqual(['first', 'second'])
+		await transport.close()
+	})
+
+	it('delivers sendStream messages in order through a deferred high-water-mark writable', async () => {
+		const input = new PassThrough()
+		const chunks: string[] = []
+		const releases: Array<() => void> = []
+		const output = new Writable({
+			highWaterMark: 1,
+			write(chunk, _encoding, callback) {
+				chunks.push(chunk.toString())
+				releases.push(() => callback())
+			},
+		})
+		const transport = new StdioServerTransport(input, output)
+		const notification: JSONRPCNotification = {
+			jsonrpc: '2.0',
+			method: 'notifications/progress',
+		}
+		const response: JSONRPCResponse = { jsonrpc: '2.0', id: 1, result: { done: true } }
+		const closure = new AbortController()
+		const stream = new MCPTextStreamController(
+			new MCPStreamController(responseStream(notification, response), closure.signal, closure),
+		)
+		await transport.start()
+
+		const pump = sendStream(stream, bridgeMessageTransport(transport))
+		await waitForDelay()
+		expect(chunks.map((chunk) => JSON.parse(chunk))).toEqual([notification])
+		const releaseNotification = releases.shift()
+		if (releaseNotification === undefined) {
+			throw new Error('stream notification was not awaiting completion')
+		}
+		releaseNotification()
+		await waitForDelay()
+		expect(chunks.map((chunk) => JSON.parse(chunk))).toEqual([notification, response])
+
+		const releaseResponse = releases.shift()
+		if (releaseResponse === undefined)
+			throw new Error('stream response was not awaiting completion')
+		releaseResponse()
+		await pump
+		expect(closure.signal.aborted).toBe(true)
+		await transport.close()
+	})
 })
 
 describe('StdioServerTransport — lifecycle', () => {
+	it('surfaces an output error on the domain emitter and remains alive', async () => {
+		const input = new PassThrough()
+		const output = new PassThrough()
+		const transport = new StdioServerTransport(input, output)
+		const failure = new Error('output failed')
+		const errors: unknown[] = []
+		transport.emitter.on('error', (error) => errors.push(error))
+		await transport.start()
+
+		output.emit('error', failure)
+
+		expect(errors).toEqual([failure])
+		await transport.close()
+	})
+
+	it('close restores listeners on both caller-owned streams and rejects a pending send', async () => {
+		const input = new PassThrough()
+		const releases: Array<() => void> = []
+		const output = new Writable({
+			highWaterMark: 1,
+			write(_chunk, _encoding, callback) {
+				releases.push(() => callback())
+			},
+		})
+		input.on('error', () => {})
+		output.on('error', () => {})
+		const inputErrors = input.listenerCount('error')
+		const outputErrors = output.listenerCount('error')
+		const transport = new StdioServerTransport(input, output)
+		await transport.start()
+		expect(input.listenerCount('error')).toBe(inputErrors + 1)
+		expect(output.listenerCount('error')).toBe(outputErrors + 1)
+
+		const pending = transport.send({ jsonrpc: '2.0', id: 1, result: {} })
+		void pending.catch(() => {})
+		await Promise.resolve()
+		await transport.close()
+
+		await expect(pending).rejects.toThrow('stdio transport is not connected')
+		expect(input.listenerCount('error')).toBe(inputErrors)
+		expect(output.listenerCount('error')).toBe(outputErrors)
+		expect(input.destroyed).toBe(false)
+		expect(output.destroyed).toBe(false)
+		const release = releases.shift()
+		if (release === undefined) throw new Error('pending write was not awaiting completion')
+		release()
+	})
+
+	it('rejects send after close as not connected', async () => {
+		const input = new PassThrough()
+		const output = new PassThrough()
+		const transport = new StdioServerTransport(input, output)
+		await transport.start()
+		await transport.close()
+
+		await expect(transport.send({ jsonrpc: '2.0', id: 1, result: {} })).rejects.toThrow(
+			'stdio transport is not connected',
+		)
+	})
+
 	it('leaves a previously unread input non-flowing after close', async () => {
 		const input = new PassThrough()
 		const output = new PassThrough()

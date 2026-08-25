@@ -327,6 +327,35 @@ export function extractLines(buffer: string, chunk: string): LineExtraction {
 }
 
 /**
+ * Writes one line to a Node writable stream and waits for its completion callback.
+ *
+ * @remarks
+ * The completion callback is the writable channel's backpressure boundary. A callback error and
+ * a synchronous `write` throw reject the returned promise with the original value.
+ *
+ * @param output - The writable stream that receives the line
+ * @param line - The complete line to write
+ * @returns Resolves when the stream confirms the write; rejects when the write fails
+ *
+ * @example
+ * ```ts
+ * await writeLine(process.stdout, '{"jsonrpc":"2.0","method":"ping"}\n')
+ * ```
+ */
+export function writeLine(output: NodeJS.WritableStream, line: string): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		try {
+			output.write(line, (error) => {
+				if (error === undefined || error === null) resolve()
+				else reject(error)
+			})
+		} catch (error) {
+			reject(error)
+		}
+	})
+}
+
+/**
  * Decodes and delivers each complete newline-framed line onto a {@link
  * MCPClientTransportEventMap} emitter — the shared per-chunk dispatch step both stdio
  * transports run their framed lines through: the server transport frames with {@link
