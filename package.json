@@ -72,7 +72,7 @@
 		"format": "oxfmt --config .oxfmtrc.json --write .",
 		"format:check": "oxfmt --config .oxfmtrc.json --check .",
 		"lint:check": "oxlint --config .oxlintrc.json --deny-warnings .",
-		"test": "npm run test:src && npm run test:policy && npm run test:config && npm run test:guides && npm run test:conformance && npm run test:integration",
+		"test": "npm run test:src && npm run test:policy && npm run test:config && npm run test:setup && npm run test:guides && npm run test:conformance && npm run test:integration",
 		"test:src": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:core --project src:browser --project src:server",
 		"test:src:core": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:core",
 		"test:src:browser": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:browser",
@@ -82,7 +82,7 @@
 		"test:conformance": "vitest run --config vite.config.ts --no-cache --reporter=dot --project conformance",
 		"test:distribution": "vitest run --config vite.config.ts --no-cache --reporter=dot --project distribution",
 		"test:probe": "vitest run --config vite.config.ts --no-cache --reporter=verbose --project probe",
-		"test:guides": "vitest run --config vite.config.ts --reporter=dot --project guides",
+		"test:guides": "vitest run --config vite.config.ts --no-cache --reporter=dot --project guides",
 		"test:integration": "vitest run --config vite.config.ts --no-cache --reporter=dot --project integration",
 		"build": "npm run clean && npm run build:src",
 		"build:src": "npm run build:src:core && npm run build:src:browser && npm run build:src:server",
@@ -91,7 +91,8 @@
 		"build:src:server": "vite build --config configs/src/vite.server.config.ts && npm run copy dist/src/server/index.d.ts dist/src/server/index.d.cts",
 		"prepack": "npm run build",
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:distribution -- --mode release",
-		"test:bench": "vitest bench --config vite.config.ts --no-cache --project probe"
+		"test:bench": "vitest bench --config vite.config.ts --no-cache --project probe",
+		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup"
 	},
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.13",
@@ -107,7 +108,7 @@
 		"@orkestrel/guide": "^0.0.13",
 		"@orkestrel/probe": "^0.0.4",
 		"@orkestrel/router": "^0.0.11",
-		"@orkestrel/scaffold": "^0.0.51",
+		"@orkestrel/scaffold": "^0.0.52",
 		"@orkestrel/server": "^0.0.15",
 		"@orkestrel/test": "^0.0.11",
 		"@types/node": "^26.3.0",
