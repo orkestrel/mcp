@@ -191,6 +191,28 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		expect(await response.json()).toEqual({ jsonrpc: '2.0', id: 7, result: {} })
 	})
 
+	// The mint and the header check are two independent reads of the requested revision, and
+	// each is pinned to its own literal in its own unit row. This row drives them together at
+	// the older legacy revision, so a divergence between them fails here whichever side moved.
+	it('pins a session to the requested older legacy revision and accepts that header', async () => {
+		const handle = await startSession()
+		const init = await postJSON(
+			handle.base,
+			createJSONRPCRequest({ params: { protocolVersion: MCP_LEGACY_VERSION } }),
+		)
+		const id = init.headers.get(MCP_SESSION_HEADER)
+		expect((await init.clone().json()).result.protocolVersion).toBe(MCP_LEGACY_VERSION)
+		const response = await postSession(
+			handle.base,
+			id ?? undefined,
+			createJSONRPCRequest({ method: 'ping', id: 9 }),
+			{ [MCP_PROTOCOL_VERSION_HEADER]: MCP_LEGACY_VERSION },
+		)
+
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({ jsonrpc: '2.0', id: 9, result: {} })
+	})
+
 	it('a live session rejects a different supported protocol-version header', async () => {
 		const handle = await startSession()
 		const init = await postJSON(

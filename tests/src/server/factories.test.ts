@@ -12,6 +12,8 @@ import {
 	createMCPServer,
 	MCP_META_SERVER,
 	MCP_MODERN_VERSION,
+	MCP_LEGACY_VERSION,
+	MCP_PROTOCOL_VERSION,
 } from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -302,7 +304,7 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 				code: -32022,
 				message: "Unsupported MCP protocol version '2099-01-01'",
 				data: {
-					supported: [MCP_MODERN_VERSION],
+					supported: [MCP_PROTOCOL_VERSION, MCP_LEGACY_VERSION],
 					requested: '2099-01-01',
 				},
 			},

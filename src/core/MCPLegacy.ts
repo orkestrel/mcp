@@ -16,6 +16,7 @@ import type {
 import { isRecord, isString } from '@orkestrel/contract'
 import {
 	JSONRPC_INVALID_PARAMS,
+	JSONRPC_INVALID_REQUEST,
 	JSONRPC_METHOD_NOT_FOUND,
 	JSONRPC_SERVER_ERROR,
 	MCP_EXTENSION_TASKS,
@@ -27,15 +28,19 @@ import {
 	MCP_PROTOCOL_VERSION,
 } from './constants.js'
 import { buildInitializeResult, buildJSONRPCError, buildJSONRPCResult } from './helpers.js'
-import { isJSONRPCInvocation, isModernRequest } from './validators.js'
+import { parseJSONRPCMessage } from './parsers.js'
+import { isBoundedString, isJSONRPCInvocation, isModernRequest } from './validators.js'
 
 /**
  * Translates the fixed legacy method set onto one modern dispatcher.
  *
  * @remarks
- * This decorator owns no execution engine or result normalizer. Modern invocations
- * pass through untouched. Legacy tool methods acquire modern request metadata, run
- * through the configured dispatcher, and lose only fields their dated result shape
+ * This decorator answers `initialize` and `ping` itself, under the limits the configured
+ * dispatcher advertises through {@link MCPLegacy.limit}: an invocation outside the message
+ * bound earns the same id-less `-32600` refusal the dispatcher produces, whether this
+ * decorator would have answered it or forwarded it. It owns no result normalizer. Modern
+ * invocations pass through untouched. Legacy tool methods acquire modern request metadata,
+ * run through the configured dispatcher, and lose only fields their dated result shape
  * cannot represent.
  */
 export class MCPLegacy implements MCPDispatcherInterface {
@@ -84,6 +89,14 @@ export class MCPLegacy implements MCPDispatcherInterface {
 		message: string,
 		options?: MCPDispatchOptions,
 	): Promise<string | MCPTextStreamControllerInterface | undefined> {
+		// The bound the dispatcher advertises is applied BEFORE this door parses: an oversized
+		// message is refused rather than decoded, and it is refused the way the dispatcher
+		// refuses one.
+		if (!isBoundedString(message, this.limit.message)) {
+			return JSON.stringify(
+				buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Invalid Request'),
+			)
+		}
 		let parsed: unknown
 		try {
 			parsed = JSON.parse(message)
@@ -103,6 +116,14 @@ export class MCPLegacy implements MCPDispatcherInterface {
 	): Promise<JSONRPCResponse | undefined> {
 		if (invocation.id === undefined) return undefined
 		const id = invocation.id
+		// The same bound on the typed door, applied before the switch so a locally answered
+		// method and a forwarded one give one answer for an oversized invocation.
+		if (
+			parseJSONRPCMessage(invocation, { bytes: this.limit.message, depth: this.limit.depth }) ===
+			undefined
+		) {
+			return buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Invalid Request')
+		}
 		switch (invocation.method) {
 			case 'initialize': {
 				const requested = invocation.params?.['protocolVersion']

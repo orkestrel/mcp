@@ -18,6 +18,8 @@ import {
 	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
 	MCP_MODERN_VERSION,
+	MCP_LEGACY_VERSION,
+	MCP_PROTOCOL_VERSION,
 } from '@src/core'
 import { createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
@@ -312,8 +314,42 @@ describe('createMCPPostHandler', () => {
 				code: -32022,
 				message: "Unsupported MCP protocol version '2099-01-01'",
 				data: {
-					supported: [MCP_MODERN_VERSION],
+					supported: [MCP_PROTOCOL_VERSION, MCP_LEGACY_VERSION],
 					requested: '2099-01-01',
+				},
+			},
+		})
+	})
+
+	// The legacy door admits legacy revisions only, so the modern revision is unsupported THERE
+	// even though a bare server accepts it: a legacy-shaped body cannot stamp it. The retry data
+	// names the revisions this door does accept, which is what a refused client reconnects with.
+	it('rejects the modern protocol-version header on a legacy-shaped request', async () => {
+		const mcp = createCalculatorServer()
+		let requests = 0
+		mcp.emitter.on('request', () => {
+			requests += 1
+		})
+		const handler = createPostHandler(createMCPLegacy(mcp), { streaming: false })
+		const response = await handler(
+			new Request('http://localhost/mcp', {
+				method: 'POST',
+				headers: { [MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION },
+				body: JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 9 })),
+			}),
+		)
+
+		expect(response.status).toBe(400)
+		expect(requests).toBe(0)
+		expect(await response.json()).toEqual({
+			jsonrpc: '2.0',
+			id: 9,
+			error: {
+				code: -32022,
+				message: `Unsupported MCP protocol version '${MCP_MODERN_VERSION}'`,
+				data: {
+					supported: [MCP_PROTOCOL_VERSION, MCP_LEGACY_VERSION],
+					requested: MCP_MODERN_VERSION,
 				},
 			},
 		})

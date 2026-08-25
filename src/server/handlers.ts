@@ -7,9 +7,9 @@ import {
 	JSONRPC_PARSE_ERROR,
 	MCP_HEADER_MISMATCH,
 	MCP_UNSUPPORTED_VERSION,
-	SUPPORTED_PROTOCOL_VERSIONS,
+	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
 	buildJSONRPCError,
-	isMCPVersion,
+	isMCPLegacyVersion,
 	isModernRequest,
 	parseRequestContext,
 	parseJSONRPCMessage,
@@ -31,7 +31,9 @@ import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
  * Modern requests require matching protocol/method headers and a matching name header only
  * for `tools/call`; mismatch returns HTTP `400` + `-32020`. Headerless `initialize` is
  * accepted, while every other headerless request needs a live legacy session to supply its
- * pinned version. A present origin must occur in `origin.origins` unless validation is
+ * pinned version. A legacy-shaped request carrying a protocol header is admitted only for a
+ * legacy revision; any other value, the modern revision included, returns HTTP `400` + `-32022`
+ * whose `supported` names the legacy revisions this door accepts. A present origin must occur in `origin.origins` unless validation is
  * explicitly delegated upstream. Modern dispatch errors use their protocol status map; legacy
  * errors remain in-band at HTTP `200`. A streamed response composes the fetch-standard request
  * signal with response-body cancellation and supplies the result to every dispatched modern
@@ -111,13 +113,13 @@ export function createMCPPostHandler<TState = unknown>(
 			})
 		}
 		if (era === 'legacy') {
-			if (protocol !== null && !isMCPVersion(protocol)) {
+			if (protocol !== null && !isMCPLegacyVersion(protocol)) {
 				return Response.json(
 					buildJSONRPCError(
 						id,
 						MCP_UNSUPPORTED_VERSION,
 						`Unsupported MCP protocol version '${protocol}'`,
-						{ supported: SUPPORTED_PROTOCOL_VERSIONS, requested: protocol },
+						{ supported: SUPPORTED_LEGACY_PROTOCOL_VERSIONS, requested: protocol },
 					),
 					{ status: 400 },
 				)

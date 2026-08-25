@@ -1,25 +1,24 @@
 import type { JSONRPCMessage, MCPEra, MCPModernVersion } from './types.js'
-import { isModernRequest } from './validators.js'
+import { isMCPLegacyVersion, isMCPModernVersion, isModernRequest } from './validators.js'
 import { isRecord, isString } from '@orkestrel/contract'
 import { MCP_META_VERSION, SUPPORTED_PROTOCOL_VERSIONS } from './constants.js'
 
 /**
  * Infers the wire era for an MCP protocol revision.
  *
+ * @remarks
+ * The era is READ from the two era guards rather than restated here, so a revision added
+ * to {@link SUPPORTED_PROTOCOL_VERSIONS} or {@link SUPPORTED_LEGACY_PROTOCOL_VERSIONS}
+ * carries its era with it and no third list can disagree with those two.
+ *
  * @param version - The protocol revision to classify
- * @returns `'modern'` for `2026-07-28`, `'legacy'` for either supported legacy
- * revision, or `undefined` when the revision is unsupported
+ * @returns `'modern'` for a revision a bare server accepts, `'legacy'` for a revision the
+ * optional decorator accepts, or `undefined` when the revision is unsupported
  */
 export function inferEra(version: string): MCPEra | undefined {
-	switch (version) {
-		case '2026-07-28':
-			return 'modern'
-		case '2025-11-25':
-		case '2025-06-18':
-			return 'legacy'
-		default:
-			return undefined
-	}
+	if (isMCPModernVersion(version)) return 'modern'
+	if (isMCPLegacyVersion(version)) return 'legacy'
+	return undefined
 }
 
 /**

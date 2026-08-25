@@ -471,6 +471,18 @@ describe('parseMCPInputState', () => {
 		expect(parseMCPInputState(protectedPayload())).toMatchObject({ key: 'confirm' })
 	})
 
+	// The recorded revision is the binding a retry is verified against, and a stamped request
+	// cannot exercise it while exactly one modern revision exists: the era gate refuses a
+	// non-modern stamp before the recovered state is read. This row reads the binding at the
+	// parser instead, so a parser answering with the current revision rather than the one the
+	// payload carries fails here while the complete-payload rows stay green.
+	it('carries the revision the payload recorded even when it is not the modern one', () => {
+		expect(parseMCPInputState(protectedPayload({ version: '2025-11-25' }))).toMatchObject({
+			version: '2025-11-25',
+		})
+		expect(parseMCPInputState(protectedPayload())).toMatchObject({ version: '2026-07-28' })
+	})
+
 	it('rejects fractional and non-finite protected request ids', () => {
 		for (const id of [1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
 			expect(parseMCPInputState(protectedPayload({ id }))).toBeUndefined()

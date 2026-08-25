@@ -1538,11 +1538,13 @@ The dated revisions are not a branch inside the server. They are a **decorator o
 `MCPLegacy` wraps one `MCPDispatcherInterface` — the minimal `emitter` / `limit` / `dispatch` /
 `handle` surface a transport actually needs, and the one `MCPServerInterface` extends — and translates the
 fixed legacy method set onto the modern engine underneath. A modern-shaped invocation passes
-through untouched. `initialize` is answered locally and `notifications/initialized` is swallowed
-there, because both are handshake acts with no modern counterpart. `ping`, `tools/list`, and
-`tools/call`
+through untouched. `initialize` and `ping` are answered by the decorator itself and
+`notifications/initialized` is swallowed there, because the handshake acts have no modern
+counterpart and the modern seam registers no `ping`. `tools/list` and `tools/call`
 acquire modern request metadata, run through the SAME dispatcher a modern request runs through,
-and have the answer projected back into the unstamped legacy shape. Every other method is
+and have the answer projected back into the unstamped legacy shape. Every arm answers under the
+message bound the wrapped dispatcher advertises: an invocation outside it earns that
+dispatcher's own id-less `-32600`, locally answered and forwarded alike. Every other method is
 refused with `-32601` at the door.
 
 **Composition is the consumer's, and it is one call:**
@@ -1599,14 +1601,23 @@ Removing the code and keeping a row that names a deleted export fails this packa
 gate. It checks every Surface row against the public barrels in both directions and checks every
 named import in a TypeScript fence against its published package face.
 
-`MCPServer` is not on that list: it imports no `MCPLegacy` module and carries no `MCPLegacy` or
-`legacy` spelling. Its modern dispatcher still spells protocol methods shared with the decorator;
-method text alone is not legacy ownership. The modern engine therefore still compiles once the
-layer is deleted.
-`isModernRequest` survives because the modern engine reads structural key presence.
-`inferEra`, `isInitializeRequest`, `MCPLegacyResult`, `MCP_PROTOCOL_VERSION`, and
-`MCP_LEGACY_VERSION` survive for client egress and the optional decorator; the bare
-server imports no legacy revision set or legacy guard.
+`MCPServer` is not on that list: it imports no `MCPLegacy` module and carries no standalone
+`MCPLegacy` or `legacy` word, which is the property the parity gate checks. Its TSDoc names the
+`createMCPLegacy` factory inside a composition example, and its modern dispatcher still spells
+protocol methods shared with the decorator; neither a factory name inside an example nor method
+text is legacy ownership. The modern engine therefore still compiles once the layer is deleted.
+`isModernRequest` survives because the modern engine reads structural key presence. Each
+remaining survivor has its own consumer, and they are not the same one:
+
+| Survivor               | What consumes it after the layer is deleted                                                                                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inferEra`             | Nothing inside `src`. It is the published era helper, and it reads `isMCPModernVersion` then `isMCPLegacyVersion` rather than restating either set.                              |
+| `isInitializeRequest`  | Legacy server ingress: `src/server/middlewares.ts` mints and validates a session from it, and `src/server/inferers.ts` exempts a headerless `initialize` from the header demand. |
+| `MCPLegacyResult`      | The unstamped result arm of `JSONRPCResponse` in `src/core/types.ts`, its guard `isMCPLegacyResult`, and the decorator's projection.                                             |
+| `MCP_PROTOCOL_VERSION` | Client egress in `src/core/MCPClient.ts`, the legacy handshake anchor in `src/core/helpers.ts` and `src/server/inferers.ts`, and `SUPPORTED_LEGACY_PROTOCOL_VERSIONS`.           |
+| `MCP_LEGACY_VERSION`   | `SUPPORTED_LEGACY_PROTOCOL_VERSIONS` alone, which is what a client pins to and what the decorator's door accepts.                                                                |
+
+The bare server imports no legacy revision set and no legacy guard.
 
 **`MCPClient` is outside this claim, and naming that is the honest form of it.** The client is a
 working modern-and-legacy engine that none of those items touches: it sends `initialize` and
@@ -2657,7 +2668,9 @@ const reply = await server.handle(
 	`{"jsonrpc":"2.0","method":"server/discover","id":2,"params":{"_meta":{"${MCP_META_VERSION}":"${MCP_MODERN_VERSION}","${MCP_META_CAPABILITIES}":{}}}}`,
 	{ signal: controller.signal, caller: authenticatedPrincipal },
 )
-// reply advertises supportedVersions: ['2026-07-28']
+// reply → {"jsonrpc":"2.0","id":2,"result":{"supportedVersions":["2026-07-28"],
+//   "capabilities":{"tools":{}},"resultType":"complete","ttlMs":60000,"cacheScope":"private",
+//   "_meta":{"io.modelcontextprotocol/serverInfo":{"name":"docs","version":"1.0.0"}}}}
 ```
 
 #### `MCPProgressInterface`

@@ -258,7 +258,7 @@ const cases: ReadonlyArray<readonly [string, JSONRPCInvocation, JSONRPCResponse 
 	[
 		'oversized-message',
 		{ jsonrpc: '2.0', id: 24, method: 'ping', params: { text: 'x'.repeat(2048) } },
-		{ jsonrpc: '2.0', id: 24, result: {} },
+		{ jsonrpc: '2.0', error: { code: -32600, message: 'Invalid Request' } },
 	],
 	['initialized-notification', { jsonrpc: '2.0', method: 'notifications/initialized' }, undefined],
 ]

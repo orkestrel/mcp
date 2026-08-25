@@ -30,7 +30,17 @@ describe('MCP revision boundary', () => {
 
 	it('rejects every non-modern stamped revision with modern-scoped retry data', async () => {
 		const server = createCalculatorServer()
-		for (const version of [MCP_PROTOCOL_VERSION, MCP_LEGACY_VERSION, '2099-01-01']) {
+		// The trailing, leading, and prefixed variants of the modern revision are the strict
+		// guard's own boundary: nothing between the parser and `isMCPModernVersion` trims or
+		// normalizes a stamp, so each is refused and echoed back exactly as it arrived.
+		for (const version of [
+			MCP_PROTOCOL_VERSION,
+			MCP_LEGACY_VERSION,
+			'2099-01-01',
+			`${MCP_MODERN_VERSION} `,
+			` ${MCP_MODERN_VERSION}`,
+			`x${MCP_MODERN_VERSION}`,
+		]) {
 			const response = await server.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/list',
