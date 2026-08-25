@@ -13,12 +13,10 @@ import type {
 	MCPClientOptions,
 	MCPClientCapabilities,
 	MCPDiscoverResult,
-	MCPEra,
 	MCPIdentity,
 	MCPModernVersion,
 	MCPProgressHandler,
 	MCPTaskClientInterface,
-	MCPVersion,
 } from './types.js'
 import { Emitter } from '@orkestrel/emitter'
 import { Tool } from '@orkestrel/tool'
@@ -42,9 +40,8 @@ import {
 	MCP_META_CLIENT,
 	MCP_META_VERSION,
 	MCP_MODERN_VERSION,
-	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
-	SUPPORTED_CLIENT_PROTOCOL_VERSIONS,
+	SUPPORTED_PROTOCOL_VERSIONS,
 } from './constants.js'
 import { MCPError, isMCPError } from './errors.js'
 import { buildCallOutcome, buildCancelledNotification, matchesResultType } from './helpers.js'
@@ -53,24 +50,22 @@ import { parseJSONRPCMessage } from './parsers.js'
 import {
 	isJSONRPCId,
 	isJSONRPCResponse,
-	isMCPLegacyVersion,
 	isMCPModernVersion,
 	isMCPProgress,
 	isMCPResultMetaObject,
 	isMCPServerCapabilities,
-	isMCPVersion,
 } from './validators.js'
 
 /**
  * A transport-agnostic Model Context Protocol CLIENT — connects to a REMOTE MCP server
- * over an injected {@link MCPClientTransportInterface}, negotiates the modern or legacy
- * wire era, and exposes the server's tools as local {@link ToolInterface}s an agent can run.
+ * over an injected {@link MCPClientTransportInterface}, negotiates the modern revision, and
+ * exposes the server's tools as local {@link ToolInterface}s an agent can run.
  *
  * @remarks
  * - **The mirror of `MCPServer`.** The server DISPATCHES requests over a tool registry;
- *   this client ISSUES them over a transport. `connect` probes `server/discover` unless
- *   pinned legacy, falls back to `initialize` only for a legacy peer, and exposes the
- *   negotiated `version`; `tools()` lists the remote tools and wraps each as a
+ *   this client ISSUES them over a transport. `connect` probes `server/discover` and exposes
+ *   the negotiated `version`; a legacy peer requires an explicit transport adapter.
+ *   `tools()` lists the remote tools and wraps each as a
  *   local {@link ToolInterface} whose `execute` calls back through `call`; `call` runs a
  *   remote `tools/call` and reports the arm the peer answered with — a value, a durable
  *   task, or a request for more input (a remote `isError: true` throws locally, so an
@@ -127,7 +122,7 @@ export class MCPClient implements MCPClientInterface {
 	readonly #transport: MCPClientTransportInterface
 	readonly #identity: MCPIdentity
 	readonly #capabilities: MCPClientCapabilities
-	readonly #pin: MCPVersion | undefined
+	readonly #pin: MCPModernVersion | undefined
 	readonly #timeout: number
 	// The draft Tasks extension's client half, built once and held. It is given this client's
 	// own correlated-request door rather than a second path to the peer, so a task read shares
@@ -200,15 +195,14 @@ export class MCPClient implements MCPClientInterface {
 	// the teardown's drain cannot reach and no deadline is watching, so an attempt races its
 	// own raw write against this and stops waiting on a transport that may never answer.
 	#supersession = Promise.withResolvers<void>()
-	#version: MCPVersion | undefined = undefined
-	#era: MCPEra | undefined = undefined
+	#version: MCPModernVersion | undefined = undefined
 	#offer: MCPModernVersion
 
 	constructor(options: MCPClientOptions) {
 		const requested: unknown = options.version
-		if (requested !== undefined && !isMCPVersion(requested)) {
+		if (requested !== undefined && !isMCPModernVersion(requested)) {
 			throw new MCPError('Unsupported protocol version', MCP_UNSUPPORTED_VERSION, {
-				supported: SUPPORTED_CLIENT_PROTOCOL_VERSIONS,
+				supported: SUPPORTED_PROTOCOL_VERSIONS,
 				requested,
 			})
 		}
@@ -223,7 +217,7 @@ export class MCPClient implements MCPClientInterface {
 		}
 		this.#capabilities = options.capabilities ?? {}
 		this.#pin = requested
-		this.#offer = isMCPModernVersion(requested) ? requested : MCP_MODERN_VERSION
+		this.#offer = requested ?? MCP_MODERN_VERSION
 		this.#timeout = options.timeout ?? DEFAULT_MCP_REQUEST_TIMEOUT
 		this.#tasks = new MCPTaskClient({
 			request: this.#request.bind(this),
@@ -242,7 +236,7 @@ export class MCPClient implements MCPClientInterface {
 		return this.#connected
 	}
 
-	get version(): MCPVersion | undefined {
+	get version(): MCPModernVersion | undefined {
 		return this.#version
 	}
 
@@ -427,8 +421,7 @@ export class MCPClient implements MCPClientInterface {
 		const timeout = deadline
 		const caller = options?.signal
 		const report = options?.progress
-		const negotiated = this.#era === 'modern' ? this.#version : undefined
-		const modern = version ?? (isMCPModernVersion(negotiated) ? negotiated : undefined)
+		const modern = version ?? this.#version
 		const metadata = {
 			...(modern === undefined
 				? {}
@@ -515,7 +508,6 @@ export class MCPClient implements MCPClientInterface {
 			if (correlated.success && correlated.value !== undefined) {
 				const pending = this.#pending.get(correlated.value)
 				if (pending?.method === 'server/discover') {
-					this.#era = 'modern'
 					this.#settle(
 						correlated.value,
 						new MCPError(
@@ -557,7 +549,6 @@ export class MCPClient implements MCPClientInterface {
 						(owned.error.code !== JSONRPC_METHOD_NOT_FOUND &&
 							owned.error.code !== JSONRPC_INVALID_REQUEST))
 				) {
-					this.#era = 'modern'
 				}
 				if (owned.error !== undefined) {
 					this.#settle(
@@ -673,11 +664,6 @@ export class MCPClient implements MCPClientInterface {
 		this.#owner = generation
 		try {
 			if (generation !== this.#generation) throw new Error('MCP client disconnected')
-			if (this.#era === 'legacy' || isMCPLegacyVersion(this.#pin)) {
-				await this.#initialize(generation, this.#pin ?? MCP_PROTOCOL_VERSION)
-				return
-			}
-
 			let discovery: MCPDiscoverResult
 			try {
 				try {
@@ -702,16 +688,15 @@ export class MCPClient implements MCPClientInterface {
 				}
 			} catch (error) {
 				if (generation !== this.#generation) throw error
-				const fallback =
-					this.#pin !== MCP_MODERN_VERSION &&
-					this.#era === undefined &&
-					(!isMCPError(error) || error.code !== MCP_UNSUPPORTED_VERSION)
-				if (!fallback) throw error
-				await this.#initialize(generation, MCP_PROTOCOL_VERSION)
-				return
+				if (isMCPError(error) && error.code === MCP_UNSUPPORTED_VERSION) throw error
+				throw new MCPError(
+					'MCP server does not support modern negotiation; wrap the transport with createMCPLegacyClientTransport to connect to a legacy peer',
+					isMCPError(error) ? error.code : MCP_UNSUPPORTED_VERSION,
+					isMCPError(error) ? error.context : undefined,
+				)
 			}
 
-			let version: MCPVersion | undefined
+			let version: MCPModernVersion | undefined
 			if (this.#pin === undefined) {
 				version = inferVersion(discovery.supportedVersions)
 			} else if (isMCPModernVersion(this.#pin) && discovery.supportedVersions.includes(this.#pin)) {
@@ -737,7 +722,6 @@ export class MCPClient implements MCPClientInterface {
 			}
 			if (generation !== this.#generation) throw new Error('MCP client disconnected')
 			this.#version = version
-			this.#era = 'modern'
 			this.#connected = true
 			this.#emitter.emit('connect')
 		} catch (error) {
@@ -868,57 +852,6 @@ export class MCPClient implements MCPClientInterface {
 	#discharge(closed: boolean): void {
 		this.#closing = undefined
 		if (closed) this.#owner = undefined
-	}
-
-	async #initialize(generation: number, version: MCPVersion): Promise<void> {
-		const result = await this.#request(
-			'initialize',
-			{
-				protocolVersion: version,
-				capabilities: {},
-				clientInfo: this.#identity,
-			},
-			this.#timeout,
-		)
-		const protocol = isRecord(result) ? result['protocolVersion'] : undefined
-		if (protocol === undefined) {
-			throw new Error('MCP server returned no protocol version')
-		}
-		if (!isString(protocol)) {
-			throw new Error('MCP server returned a malformed protocol version')
-		}
-		if (!isMCPLegacyVersion(protocol)) {
-			throw new Error(`MCP server negotiated unsupported protocol version '${protocol}'`)
-		}
-		if (this.#pin !== undefined && protocol !== this.#pin) {
-			throw new MCPError(
-				'MCP server negotiated a different protocol version than the client pinned',
-				MCP_UNSUPPORTED_VERSION,
-				{ requested: this.#pin, negotiated: protocol },
-			)
-		}
-		// The re-asks ask different questions: one keeps a superseded attempt from
-		// writing to a transport a `disconnect` is already closing, the other keeps it from
-		// installing after that write. Install only after the handshake's last wire write
-		// lands: a failed notification must leave nothing behind for the rejecting
-		// `connect()` to strand.
-		if (generation !== this.#generation) throw new Error('MCP client disconnected')
-		// This notification carries no id, so it creates no `#pending` entry and no deadline
-		// watches it: a peer that accepts the write and never answers would hold this attempt
-		// for the client's whole life, and a teardown's drain has nothing to settle. Racing the
-		// supersession signal ends the WAIT, never the write — the write may still land in the
-		// background, and the re-ask below is what decides this attempt's outcome. `race` keeps a
-		// handler on both sides, so a write that fails after being raced away rejects nothing
-		// unhandled.
-		await Promise.race([
-			this.#transport.send({ jsonrpc: '2.0', method: 'notifications/initialized' }),
-			this.#supersession.promise,
-		])
-		if (generation !== this.#generation) throw new Error('MCP client disconnected')
-		this.#version = protocol
-		this.#era = 'legacy'
-		this.#connected = true
-		this.#emitter.emit('connect')
 	}
 
 	#timeoutRequest(id: JSONRPCId, method: string, timeout: number): void {

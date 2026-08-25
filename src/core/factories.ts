@@ -4,6 +4,7 @@ import type {
 	JSONRPCMessage,
 	MCPClientInterface,
 	MCPClientOptions,
+	MCPLegacyClientTransportOptions,
 	MCPDispatcherInterface,
 	MCPServerInterface,
 	MCPServerOptions,
@@ -12,6 +13,7 @@ import type {
 import { Emitter } from '@orkestrel/emitter'
 import { MCPClient } from './MCPClient.js'
 import { MCPLegacy } from './MCPLegacy.js'
+import { MCPLegacyClientTransport } from './MCPLegacyClientTransport.js'
 import { MCPServer } from './MCPServer.js'
 
 /**
@@ -105,6 +107,28 @@ export function createMCPLegacy(server: MCPServerInterface): MCPDispatcherInterf
  */
 export function createMCPClient(options: MCPClientOptions): MCPClientInterface {
 	return new MCPClient(options)
+}
+
+/**
+ * Decorates one client transport with explicit legacy handshake and era translation.
+ *
+ * @param transport - The transport connected to a legacy MCP peer
+ * @param options - Optional legacy handshake identity, capabilities, revision, and deadline
+ * @returns A modern-facing client transport over the legacy peer
+ *
+ * @example
+ * ```ts
+ * const transport = createMCPLegacyClientTransport(legacyTransport)
+ * const client = createMCPClient({ transport })
+ * await client.connect()
+ * client.version // '2026-07-28'
+ * ```
+ */
+export function createMCPLegacyClientTransport(
+	transport: MCPClientTransportInterface,
+	options?: MCPLegacyClientTransportOptions,
+): MCPClientTransportInterface {
+	return new MCPLegacyClientTransport(transport, options)
 }
 
 /**

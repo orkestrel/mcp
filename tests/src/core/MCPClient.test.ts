@@ -587,7 +587,7 @@ function serverWithTools(): MCPDispatcherInterface {
 	)
 }
 
-describe('MCPClient — connect (modern-and-legacy negotiation)', () => {
+describe('MCPClient — connect (modern negotiation)', () => {
 	it('rejects an invalid runtime pin synchronously during construction', () => {
 		const peer = createFixturePeer({ reply: () => undefined })
 		const options: unknown = { transport: peer, version: '2020-01-01' }
@@ -826,7 +826,7 @@ describe('MCPClient — modern discovery and fallback', () => {
 	})
 
 	it.each([JSONRPC_METHOD_NOT_FOUND, JSONRPC_INVALID_REQUEST])(
-		'falls back to legacy initialize when discovery returns %i',
+		'refuses discovery error %i and names the legacy adapter',
 		async (code) => {
 			const peer = createFixturePeer({
 				reply: (request) => {
@@ -839,10 +839,12 @@ describe('MCPClient — modern discovery and fallback', () => {
 			})
 			const client = createMCPClient({ transport: peer })
 
-			await client.connect()
+			await expect(client.connect()).rejects.toMatchObject({
+				message: expect.stringContaining('createMCPLegacyClientTransport'),
+			})
 
-			expect(client.version).toBe(MCP_PROTOCOL_VERSION)
-			expect(peer.sent).toEqual(['server/discover', 'initialize', 'notifications/initialized'])
+			expect(client.version).toBeUndefined()
+			expect(peer.sent).toEqual(['server/discover'])
 		},
 	)
 
@@ -850,7 +852,7 @@ describe('MCPClient — modern discovery and fallback', () => {
 		['an unrecognized HTTP 400', 'HTTP 400 response did not contain a recognized modern error'],
 		['an unrecognized HTTP 404', 'HTTP 404 response did not contain a recognized modern error'],
 		['a transport send failure', 'Transport closed while sending'],
-	])('falls back to legacy initialize after %s', async (_scenario, message) => {
+	])('refuses %s and names the legacy adapter', async (_scenario, message) => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method === 'server/discover') return new Error(message)
@@ -862,10 +864,12 @@ describe('MCPClient — modern discovery and fallback', () => {
 		})
 		const client = createMCPClient({ transport: peer })
 
-		await client.connect()
+		await expect(client.connect()).rejects.toMatchObject({
+			message: expect.stringContaining('createMCPLegacyClientTransport'),
+		})
 
-		expect(client.version).toBe(MCP_PROTOCOL_VERSION)
-		expect(peer.sent).toEqual(['server/discover', 'initialize', 'notifications/initialized'])
+		expect(client.version).toBeUndefined()
+		expect(peer.sent).toEqual(['server/discover'])
 	})
 
 	it('surfaces a malformed result after a parseable discovery response settles the modern era', async () => {
@@ -1086,7 +1090,7 @@ describe('MCPClient — modern discovery and fallback', () => {
 		expect(peer.sent).toEqual(['server/discover'])
 	})
 
-	it('bounds a silent discovery probe and falls back when the peer sends no answer', async () => {
+	it('bounds a silent discovery probe and names the legacy adapter in the refusal', async () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method === 'initialize' && request.id !== undefined) {
@@ -1097,10 +1101,12 @@ describe('MCPClient — modern discovery and fallback', () => {
 		})
 		const client = createMCPClient({ transport: peer, timeout: 30 })
 
-		await client.connect()
+		await expect(client.connect()).rejects.toMatchObject({
+			message: expect.stringContaining('createMCPLegacyClientTransport'),
+		})
 
-		expect(client.version).toBe(MCP_PROTOCOL_VERSION)
-		expect(peer.sent).toEqual(['server/discover', 'initialize', 'notifications/initialized'])
+		expect(client.version).toBeUndefined()
+		expect(peer.sent).toEqual(['server/discover'])
 	})
 
 	it('always gives discovery a deadline without delaying a modern HTTP peer', async () => {

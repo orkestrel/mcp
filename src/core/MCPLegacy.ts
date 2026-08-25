@@ -8,7 +8,6 @@ import type {
 	MCPDispatchOptions,
 	MCPDispatcherInterface,
 	MCPLegacyOptions,
-	MCPLegacyResult,
 	MCPLimitOptions,
 	MCPStreamControllerInterface,
 	MCPTextStreamControllerInterface,
@@ -20,14 +19,16 @@ import {
 	JSONRPC_METHOD_NOT_FOUND,
 	JSONRPC_SERVER_ERROR,
 	MCP_EXTENSION_TASKS,
-	MCP_META_CAPABILITIES,
-	MCP_META_SERVER,
-	MCP_META_VERSION,
 	MCP_MISSING_CAPABILITY,
-	MCP_MODERN_VERSION,
 	MCP_PROTOCOL_VERSION,
 } from './constants.js'
-import { buildInitializeResult, buildJSONRPCError, buildJSONRPCResult } from './helpers.js'
+import {
+	buildInitializeResult,
+	buildJSONRPCError,
+	buildJSONRPCResult,
+	legacyInvocationToModern,
+	modernResultToLegacy,
+} from './helpers.js'
 import { parseJSONRPCMessage } from './parsers.js'
 import { isBoundedString, isJSONRPCInvocation, isModernRequest } from './validators.js'
 
@@ -165,19 +166,7 @@ export class MCPLegacy implements MCPDispatcherInterface {
 	}
 
 	async #forward(request: JSONRPCRequest, options?: MCPDispatchOptions): Promise<JSONRPCResponse> {
-		const params = request.params ?? {}
-		const metadata = isRecord(params['_meta']) ? params['_meta'] : {}
-		const translated: JSONRPCRequest = {
-			...request,
-			params: {
-				...params,
-				_meta: {
-					...metadata,
-					[MCP_META_VERSION]: MCP_MODERN_VERSION,
-					[MCP_META_CAPABILITIES]: {},
-				},
-			},
-		}
+		const translated = legacyInvocationToModern(request)
 		const answer = await this.#options.dispatcher.dispatch(translated, options)
 		if (Symbol.asyncIterator in answer) {
 			answer.stop()
@@ -193,32 +182,11 @@ export class MCPLegacy implements MCPDispatcherInterface {
 				? this.#unsupported(id, this.#capability(answer))
 				: answer
 		}
-		if (answer.result.resultType !== 'complete') {
+		const projected = modernResultToLegacy(answer.result)
+		if (projected === undefined) {
 			return this.#unsupported(id, answer.result.resultType ?? 'unstamped')
 		}
-		const projected: Record<string, unknown> = {}
-		for (const [key, value] of Object.entries(answer.result)) {
-			if (key === 'resultType' || key === 'ttlMs' || key === 'cacheScope') continue
-			if (key === 'content' && Array.isArray(value)) {
-				projected[key] = value.map((entry) =>
-					isRecord(entry) && entry['type'] === 'text' && isString(entry['text'])
-						? { type: 'text', text: entry['text'] }
-						: entry,
-				)
-				continue
-			}
-			if (key !== '_meta' || !isRecord(value)) {
-				projected[key] = value
-				continue
-			}
-			const metadata: Record<string, unknown> = {}
-			for (const [name, entry] of Object.entries(value)) {
-				if (name !== MCP_META_SERVER) metadata[name] = entry
-			}
-			if (Object.keys(metadata).length > 0) projected['_meta'] = metadata
-		}
-		const result: MCPLegacyResult = projected
-		return buildJSONRPCResult(id, result)
+		return buildJSONRPCResult(id, projected)
 	}
 
 	#capability(answer: JSONRPCErrorResponse): string {

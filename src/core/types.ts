@@ -178,7 +178,7 @@ export interface MCPResult {
  * `result.resultType === undefined` narrows a {@link JSONRPCResultResponse}'s
  * `result` to the legacy arm.
  *
- * This arm exists only for the optional legacy decorator and client.
+ * This arm exists only for the optional legacy server decorator and client transport adapter.
  */
 export interface MCPLegacyResult {
 	/** Forbidden — the legacy revision has no result discriminator. */
@@ -189,7 +189,7 @@ export interface MCPLegacyResult {
 /** A modern protocol revision supported by the bare MCP server. */
 export type MCPModernVersion = '2026-07-28'
 
-/** A legacy protocol revision supported by the optional legacy decorator and client. */
+/** A legacy protocol revision supported by the optional legacy decorators. */
 export type MCPLegacyVersion = '2025-11-25' | '2025-06-18'
 
 /** A protocol revision supported by an MCP package surface. */
@@ -2185,6 +2185,29 @@ export interface MCPClientTransportInterface {
 }
 
 /**
+ * Options for the explicit legacy client transport adapter.
+ *
+ * @remarks
+ * - `identity` — the client identity sent through the legacy `clientInfo` field. Defaults to the
+ *   package client identity.
+ * - `capabilities` — the legacy handshake capability record. Defaults to an empty record.
+ * - `version` — an optional exact legacy handshake revision. Absence offers the newest supported
+ *   legacy revision and accepts the supported revision the peer selects.
+ * - `timeout` — the legacy handshake deadline in milliseconds. Default:
+ *   {@link import('./constants.js').DEFAULT_MCP_REQUEST_TIMEOUT}.
+ */
+export interface MCPLegacyClientTransportOptions {
+	/** The client identity sent during the legacy handshake. */
+	readonly identity?: MCPIdentity
+	/** The client capabilities sent during the legacy handshake. */
+	readonly capabilities?: MCPClientCapabilities
+	/** The exact legacy revision to request and require. */
+	readonly version?: MCPLegacyVersion
+	/** The legacy handshake deadline in milliseconds. */
+	readonly timeout?: number
+}
+
+/**
  * The push observation surface of an {@link MCPClientInterface} — the moments a
  * fire-and-forget observer (logging, tracing) subscribes to through `client.emitter.on`.
  *
@@ -2223,8 +2246,8 @@ export type MCPClientEventMap = {
  * @remarks
  * - `transport` — the carrier the client drives a remote MCP server over (REQUIRED;
  *   a concrete one from `src/server/mcp`, or an in-process loopback).
- * - `identity` — identifies the client in the `initialize` handshake (`clientInfo`);
- *   defaults to {@link import('./constants.js').DEFAULT_MCP_CLIENT_NAME} /
+ * - `identity` — identifies the client in modern request metadata; defaults to
+ *   {@link import('./constants.js').DEFAULT_MCP_CLIENT_NAME} /
  *   {@link import('./constants.js').DEFAULT_MCP_CLIENT_VERSION}.
  * - `capabilities` — the open client-capability record carried by every modern
  *   request; defaults to an empty record when the modern client implementation lands.
@@ -2248,11 +2271,11 @@ export interface MCPClientOptions {
 	/** The open client-capability record carried by modern requests. */
 	readonly capabilities?: MCPClientCapabilities
 	/**
-	 * An optional exact protocol revision pin; absence permits negotiation. A defined pin must
-	 * match the peer's negotiated revision. An unsupported runtime value throws an
+	 * An optional exact modern protocol revision pin; absence permits modern negotiation. A defined
+	 * pin must match the peer's discovery advertisement. An unsupported runtime value throws an
 	 * {@link MCPError} synchronously during construction.
 	 */
-	readonly version?: MCPVersion
+	readonly version?: MCPModernVersion
 	/** The per-request deadline in milliseconds (default {@link import('./constants.js').DEFAULT_MCP_REQUEST_TIMEOUT}). */
 	readonly timeout?: number
 }

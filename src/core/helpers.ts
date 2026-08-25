@@ -2,6 +2,7 @@ import type { ToolCall, ToolManagerInterface } from '@orkestrel/tool'
 import type {
 	JSONRPCErrorResponse,
 	JSONRPCId,
+	JSONRPCInvocation,
 	JSONRPCMessage,
 	JSONRPCNotification,
 	JSONRPCRequest,
@@ -40,8 +41,12 @@ import {
 	DEFAULT_MCP_CACHE_TTL,
 	JSONRPC_INVALID_PARAMS,
 	MCP_EXTENSION_TASKS,
+	MCP_META_CAPABILITIES,
+	MCP_META_CLIENT,
 	MCP_META_SERVER,
 	MCP_META_SUBSCRIPTION,
+	MCP_META_VERSION,
+	MCP_MODERN_VERSION,
 	MCP_PROTOCOL_VERSION,
 	SUPPORTED_PROTOCOL_VERSIONS,
 } from './constants.js'
@@ -746,6 +751,118 @@ export function buildModernResult<T extends object>(
 		ttlMs: ttl,
 		cacheScope: scope ?? 'private',
 		_meta: metadata,
+	}
+}
+
+/**
+ * Projects one complete modern result onto the legacy wire shape.
+ *
+ * @remarks
+ * The projection removes the modern discriminator, cache fields, and reserved server identity.
+ * A non-complete result has no legacy representation and returns `undefined`.
+ *
+ * @param result - The modern result to project
+ * @returns The legacy result, or `undefined` when the modern arm cannot be represented
+ */
+export function modernResultToLegacy(
+	result: MCPResult | MCPLegacyResult,
+): MCPLegacyResult | undefined {
+	if (result.resultType !== 'complete') return undefined
+	const projected: Record<string, unknown> = {}
+	for (const [key, value] of Object.entries(result)) {
+		if (key === 'resultType' || key === 'ttlMs' || key === 'cacheScope') continue
+		if (key === 'content' && Array.isArray(value)) {
+			projected[key] = value.map((entry) =>
+				isRecord(entry) && entry['type'] === 'text' && isString(entry['text'])
+					? { type: 'text', text: entry['text'] }
+					: entry,
+			)
+			continue
+		}
+		if (key !== '_meta' || !isRecord(value)) {
+			projected[key] = value
+			continue
+		}
+		const metadata: Record<string, unknown> = {}
+		for (const [name, entry] of Object.entries(value)) {
+			if (name !== MCP_META_SERVER) metadata[name] = entry
+		}
+		if (Object.keys(metadata).length > 0) projected['_meta'] = metadata
+	}
+	return projected
+}
+
+/**
+ * Restores one legacy result to the modern complete-result shape.
+ *
+ * @remarks
+ * Legacy `tools/list` results receive the required modern cache fields. Other legacy results are
+ * non-cacheable. Every restored result receives the server identity learned during `initialize`.
+ *
+ * @param result - The unstamped legacy result
+ * @param method - The request method whose result is being restored
+ * @param identity - The server identity learned during the legacy handshake
+ * @returns The modern complete result
+ */
+export function legacyResultToModern(
+	result: MCPLegacyResult,
+	method: string,
+	identity: MCPIdentity,
+): MCPResult {
+	return method === 'tools/list'
+		? buildModernResult(result, identity, DEFAULT_MCP_CACHE_TTL)
+		: buildModernResult(result, identity)
+}
+
+/**
+ * Stamps one legacy request for the modern dispatcher.
+ *
+ * @param request - The legacy request to translate
+ * @returns A modern request carrying the package revision and an empty capability set
+ */
+export function legacyInvocationToModern(request: JSONRPCRequest): JSONRPCRequest {
+	const params = request.params ?? {}
+	const metadata = isRecord(params['_meta']) ? params['_meta'] : {}
+	return {
+		...request,
+		params: {
+			...params,
+			_meta: {
+				...metadata,
+				[MCP_META_VERSION]: MCP_MODERN_VERSION,
+				[MCP_META_CAPABILITIES]: {},
+			},
+		},
+	}
+}
+
+/**
+ * Removes modern request metadata before an invocation reaches a legacy peer.
+ *
+ * @remarks
+ * Non-reserved metadata such as `progressToken` remains on the legacy wire. When no metadata
+ * remains, the translated parameters omit `_meta`.
+ *
+ * @param invocation - The modern invocation to translate
+ * @returns The legacy invocation with reserved modern metadata removed
+ */
+export function modernInvocationToLegacy(invocation: JSONRPCInvocation): JSONRPCInvocation {
+	const params = invocation.params
+	if (params === undefined || !isRecord(params['_meta'])) return invocation
+	const translated: Record<string, unknown> = {}
+	for (const [key, value] of Object.entries(params)) {
+		if (key !== '_meta') translated[key] = value
+	}
+	const metadata: Record<string, unknown> = {}
+	for (const [key, value] of Object.entries(params['_meta'])) {
+		if (key !== MCP_META_VERSION && key !== MCP_META_CAPABILITIES && key !== MCP_META_CLIENT) {
+			metadata[key] = value
+		}
+	}
+	if (Object.keys(metadata).length > 0) translated['_meta'] = metadata
+	return {
+		...invocation,
+		params: translated,
 	}
 }
 
