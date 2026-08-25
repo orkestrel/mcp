@@ -1698,9 +1698,9 @@ Omit `version` to offer `2025-11-25`; supply it to require one supported legacy 
 The adapter rejects an absent, malformed, unsupported, or pin-mismatched handshake result before
 the client connects. Its request deadline bounds the handshake response and each handshake write.
 
-The bare client never attempts this handshake. When `server/discover` returns `-32601`, `-32600`,
-or another failure that does not report a compatible modern revision, `connect` rejects with an
-`MCPError` whose message names `createMCPLegacyClientTransport`. Passing a legacy revision to
+The bare client never attempts this handshake. When `server/discover` returns `-32601`, `connect`
+rejects with an `MCPError` whose message names `createMCPLegacyClientTransport`; every other
+failure surfaces as itself. Passing a legacy revision to
 `createMCPClient` is rejected before the transport starts; production types do not admit that pin.
 
 ### Factories
@@ -4255,9 +4255,8 @@ on? })` drives a REMOTE server over an injected `MCPClientTransportInterface`
     order and stores the newest match. A `-32022` reads `error.context.supported`
     and, when unpinned, retries discovery under a NEW monotonic id only when that
     set contains a supported modern revision. A legacy-only offer is never stamped
-    into modern `_meta`. `-32601`, `-32600`, or another discovery failure that
-    does not report a compatible modern revision rejects with an `MCPError` whose
-    message names `createMCPLegacyClientTransport`. A discovery advertisement
+    into modern `_meta`. `-32601` rejects with an `MCPError` whose message names
+    `createMCPLegacyClientTransport`; every other discovery failure surfaces as itself. A discovery advertisement
     that omits a pinned modern revision also rejects. A rejecting `connect()` closes the connection that
     attempt opened, unless the `disconnect` that superseded it closed that
     connection first. The bare client sends NO initialization notification. The readonly `version` surface exposes the negotiated
@@ -4321,7 +4320,7 @@ on? })` drives a REMOTE server over an injected `MCPClientTransportInterface`
     applies to the probe as to every request. A public `discover()` call uses
     the ordinary request deadline. A legacy peer that refuses the method produces
     the adapter-naming error immediately. A peer that accepts the probe and answers
-    nothing costs the configured deadline before the same refusal. Legacy handshake
+    nothing surfaces the request timeout after the configured deadline. Legacy handshake
     timing belongs to the explicit adapter, whose deadline also bounds its response
     and writes. A `send` write failure rejects
     its own pending request. The same `timeout` bounds the client's WAIT on the

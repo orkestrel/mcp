@@ -688,16 +688,11 @@ export class MCPClient implements MCPClientInterface {
 				}
 			} catch (error) {
 				if (generation !== this.#generation) throw error
-				if (
-					isMCPError(error) &&
-					(error.code === MCP_UNSUPPORTED_VERSION || error.code === JSONRPC_INVALID_PARAMS)
-				) {
-					throw error
-				}
+				if (!isMCPError(error) || error.code !== JSONRPC_METHOD_NOT_FOUND) throw error
 				throw new MCPError(
 					'MCP server does not support modern negotiation; wrap the transport with createMCPLegacyClientTransport to connect to a legacy peer',
-					isMCPError(error) ? error.code : MCP_UNSUPPORTED_VERSION,
-					isMCPError(error) ? error.context : undefined,
+					error.code,
+					error.context,
 				)
 			}
 

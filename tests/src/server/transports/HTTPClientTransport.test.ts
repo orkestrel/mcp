@@ -181,13 +181,15 @@ describe('HTTPClientTransport — policy composes in front', () => {
 		const handle = await startServer(server)
 		teardown.add(() => handle.stop())
 		// No `headers` → the guard 401s the POST; the transport surfaces no `message`, so the
-		// client's `initialize` never resolves and `connect` rejects on its deadline.
+		// client's discovery request rejects on its deadline.
 		const client = createMCPClient({
 			transport: createHTTPClientTransport({ url: `${handle.base}/mcp` }),
 			timeout: 200,
 		})
 
-		await expect(client.connect()).rejects.toThrow(/timed out/)
+		await expect(client.connect()).rejects.toThrow(
+			"MCP request 'server/discover' timed out after 200ms",
+		)
 		expect(client.connected).toBe(false)
 	})
 })

@@ -16,7 +16,6 @@ import {
 	createMCPServer,
 	isMCPError,
 	JSONRPC_INVALID_PARAMS,
-	JSONRPC_INVALID_REQUEST,
 	JSONRPC_METHOD_NOT_FOUND,
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
@@ -742,48 +741,72 @@ describe('MCPClient — modern discovery and fallback', () => {
 		expect(peer.requests.map((request) => request.id)).toEqual([1])
 	})
 
-	it.each([JSONRPC_METHOD_NOT_FOUND, JSONRPC_INVALID_REQUEST])(
-		'refuses discovery error %i and names the legacy adapter',
-		async (code) => {
-			const peer = createFixturePeer({
-				reply: (request) => {
-					if (request.id === undefined) return undefined
-					if (request.method === 'server/discover') return errorResponse(request.id, code)
-					if (request.method === 'initialize')
-						return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
-					return undefined
-				},
-			})
-			const client = createMCPClient({ transport: peer })
-
-			await expect(client.connect()).rejects.toMatchObject({
-				message: expect.stringContaining('createMCPLegacyClientTransport'),
-			})
-
-			expect(client.version).toBeUndefined()
-			expect(peer.sent).toEqual(['server/discover'])
-		},
-	)
-
-	it.each([
-		['an unrecognized HTTP 400', 'HTTP 400 response did not contain a recognized modern error'],
-		['an unrecognized HTTP 404', 'HTTP 404 response did not contain a recognized modern error'],
-		['a transport send failure', 'Transport closed while sending'],
-	])('refuses %s and names the legacy adapter', async (_scenario, message) => {
+	it('surfaces a server-state discovery error without era guidance', async () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
-				if (request.method === 'server/discover') return new Error(message)
-				if (request.method === 'initialize' && request.id !== undefined) {
-					return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+				if (request.method !== 'server/discover' || request.id === undefined) return undefined
+				return {
+					jsonrpc: '2.0',
+					id: request.id,
+					error: { code: -32000, message: 'Bad Request: Server not initialized' },
 				}
-				return undefined
+			},
+		})
+		const client = createMCPClient({ transport: peer })
+		let caught: unknown
+
+		try {
+			await client.connect()
+		} catch (error) {
+			caught = error
+		}
+
+		expect(isMCPError(caught)).toBe(true)
+		if (!isMCPError(caught)) throw new Error('Expected an MCPError')
+		expect(caught.name).toBe('MCPError')
+		expect(caught.code).toBe(-32000)
+		expect(caught.message).toBe('Bad Request: Server not initialized')
+		expect(caught.context).toBeUndefined()
+		expect(client.version).toBeUndefined()
+		expect(peer.sent).toEqual(['server/discover'])
+	})
+
+	it('names the legacy adapter only for discovery method-not-found', async () => {
+		const peer = createFixturePeer({
+			reply: (request) => {
+				if (request.method !== 'server/discover' || request.id === undefined) return undefined
+				return errorResponse(request.id, JSONRPC_METHOD_NOT_FOUND)
 			},
 		})
 		const client = createMCPClient({ transport: peer })
 
 		await expect(client.connect()).rejects.toMatchObject({
+			code: JSONRPC_METHOD_NOT_FOUND,
 			message: expect.stringContaining('createMCPLegacyClientTransport'),
 		})
+
+		expect(client.version).toBeUndefined()
+		expect(peer.sent).toEqual(['server/discover'])
+	})
+
+	it.each([
+		['an auth-shaped HTTP refusal', 'HTTP 401 Unauthorized: bearer required'],
+		['an unrecognized HTTP 400', 'HTTP 400 response did not contain a recognized modern error'],
+		['an unrecognized HTTP 404', 'HTTP 404 response did not contain a recognized modern error'],
+		['a transport send failure', 'Transport closed while sending'],
+	])('surfaces %s without era guidance', async (_scenario, message) => {
+		const cause = new Error('Transport refused the discovery request')
+		const failure = new Error(message, { cause })
+		const peer = createFixturePeer({
+			reply: (request) => {
+				if (request.method === 'server/discover') return failure
+				return undefined
+			},
+		})
+		const client = createMCPClient({ transport: peer })
+
+		await expect(client.connect()).rejects.toBe(failure)
+		expect(failure.cause).toBe(cause)
 
 		expect(client.version).toBeUndefined()
 		expect(peer.sent).toEqual(['server/discover'])
@@ -1007,7 +1030,7 @@ describe('MCPClient — modern discovery and fallback', () => {
 		expect(peer.sent).toEqual(['server/discover'])
 	})
 
-	it('bounds a silent discovery probe and names the legacy adapter in the refusal', async () => {
+	it('bounds a silent discovery probe and surfaces its timeout', async () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method === 'initialize' && request.id !== undefined) {
@@ -1018,9 +1041,9 @@ describe('MCPClient — modern discovery and fallback', () => {
 		})
 		const client = createMCPClient({ transport: peer, timeout: 30 })
 
-		await expect(client.connect()).rejects.toMatchObject({
-			message: expect.stringContaining('createMCPLegacyClientTransport'),
-		})
+		await expect(client.connect()).rejects.toThrow(
+			"MCP request 'server/discover' timed out after 30ms",
+		)
 
 		expect(client.version).toBeUndefined()
 		expect(peer.sent).toEqual(['server/discover'])
@@ -1053,9 +1076,9 @@ describe('MCPClient — modern discovery and fallback', () => {
 			await modern.connect()
 			expect(modern.version).toBe('2026-07-28')
 
-			await expect(configured.connect()).rejects.toMatchObject({
-				message: expect.stringContaining('createMCPLegacyClientTransport'),
-			})
+			await expect(configured.connect()).rejects.toThrow(
+				"MCP request 'server/discover' timed out after 30ms",
+			)
 			expect(peer.requests.map((request) => request.method)).toEqual([
 				'server/discover',
 				'server/discover',
@@ -1354,12 +1377,13 @@ describe('MCPClient — id correlation', () => {
 		)
 		try {
 			const outcome = await Promise.race([connecting, waitForDelay(200).then(() => 'pending')])
-			expect(outcome).toBe('connected')
-			expect(peer.requests.slice(0, 3).map((request) => request.method)).toEqual([
-				'server/discover',
-				'initialize',
-				'notifications/initialized',
-			])
+			expect(isMCPError(outcome)).toBe(true)
+			if (!isMCPError(outcome)) throw new Error('Expected an MCPError')
+			expect(outcome.code).toBe(-32000)
+			expect(outcome.message).toBe(
+				'MCP server returned an error without a request id: Bad Request: Server not initialized',
+			)
+			expect(peer.requests.map((request) => request.method)).toEqual(['server/discover'])
 
 			const idlessClient = createMCPClient({
 				transport: createHTTPClientTransport({ url: `${peer.base}/idless` }),
@@ -1437,9 +1461,7 @@ describe('MCPClient — per-request timeout', () => {
 		peer.emitter.emit('message', { jsonrpc: '2.0', id: 2, result: { tools: [] } })
 
 		await expect(listing).resolves.toEqual([])
-		await expect(connecting).rejects.toMatchObject({
-			message: expect.stringContaining('createMCPLegacyClientTransport'),
-		})
+		await expect(connecting).rejects.toThrow("MCP request 'server/discover' timed out after 200ms")
 		expect(peer.sent).toEqual(['server/discover', 'tools/list'])
 	})
 })
