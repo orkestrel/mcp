@@ -14,6 +14,7 @@ import {
 	buildJSONRPCResult,
 	createMCPClient,
 	createMCPLegacy,
+	createMCPLegacyClientTransport,
 } from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
@@ -869,8 +870,10 @@ describe('MCPClient over a server with createMCPSession — the client echoes th
 		// were missing, `tools()` (the first post-initialize request) would 404.
 		const handle = await startSession()
 		const client = createMCPClient({
-			transport: createHTTPClientTransport({ url: `${handle.base}/mcp` }),
-			version: MCP_LEGACY_VERSION,
+			transport: createMCPLegacyClientTransport(
+				createHTTPClientTransport({ url: `${handle.base}/mcp` }),
+				{ version: MCP_LEGACY_VERSION },
+			),
 		})
 
 		await client.connect() // initialize mints the session; the transport captures it

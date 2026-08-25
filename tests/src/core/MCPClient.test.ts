@@ -24,7 +24,7 @@ import {
 	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
 	parseJSONRPCMessage,
-	SUPPORTED_CLIENT_PROTOCOL_VERSIONS,
+	SUPPORTED_PROTOCOL_VERSIONS,
 } from '@src/core'
 import { createHTTPClientTransport } from '@src/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -602,7 +602,7 @@ describe('MCPClient — connect (modern negotiation)', () => {
 		expect(isMCPError(failure)).toBe(true)
 		expect(failure).toMatchObject({
 			code: MCP_UNSUPPORTED_VERSION,
-			context: { supported: SUPPORTED_CLIENT_PROTOCOL_VERSIONS, requested: '2020-01-01' },
+			context: { supported: SUPPORTED_PROTOCOL_VERSIONS, requested: '2020-01-01' },
 		})
 		expect(peer.started).toBe(0)
 		expect(peer.sent).toEqual([])
@@ -644,89 +644,6 @@ describe('MCPClient — connect (modern negotiation)', () => {
 		const loopback = createLoopback(serverWithTools())
 		const client = createMCPClient({ transport: loopback })
 		expect(client.transport).toBe(loopback)
-	})
-
-	it('keeps a pinned legacy handshake unchanged, including its initialized notification', async () => {
-		const loopback = createLoopback(serverWithTools())
-		const client = createMCPClient({ transport: loopback, version: '2025-06-18' })
-
-		await client.connect()
-
-		expect(client.version).toBe('2025-06-18')
-		expect(loopback.sent).toEqual(['initialize', 'notifications/initialized'])
-	})
-
-	it('rejects an unsupported legacy protocol, closes, and sends no initialized notification', async () => {
-		const loopback = createFixturePeer({
-			reply: (request) => {
-				if (request.method !== 'initialize' || request.id === undefined) return undefined
-				return initializeResponse(request.id, '2099-01-01')
-			},
-		})
-		const client = createMCPClient({ transport: loopback, version: MCP_PROTOCOL_VERSION })
-
-		expect(client.version).toBeUndefined()
-		await expect(client.connect()).rejects.toThrow(
-			"MCP server negotiated unsupported protocol version '2099-01-01'",
-		)
-		expect(client.connected).toBe(false)
-		expect(client.version).toBeUndefined()
-		expect(loopback.closed).toBe(1)
-		expect(loopback.sent).toEqual(['initialize'])
-	})
-
-	it('rejects a pinned legacy reply that negotiates a different supported revision', async () => {
-		const peer = createFixturePeer({
-			reply: (request) => {
-				if (request.method !== 'initialize' || request.id === undefined) return undefined
-				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
-			},
-		})
-		const client = createMCPClient({ transport: peer, version: '2025-06-18' })
-
-		await expect(client.connect()).rejects.toMatchObject({
-			code: MCP_UNSUPPORTED_VERSION,
-			context: { requested: '2025-06-18', negotiated: MCP_PROTOCOL_VERSION },
-		})
-
-		expect(client.connected).toBe(false)
-		expect(client.version).toBeUndefined()
-		expect(peer.closed).toBe(1)
-		expect(peer.sent).toEqual(['initialize'])
-	})
-
-	it('rejects an absent legacy protocol and closes before initialization completes', async () => {
-		const loopback = createFixturePeer({
-			reply: (request) => {
-				if (request.method !== 'initialize' || request.id === undefined) return undefined
-				return { jsonrpc: '2.0', id: request.id, result: { capabilities: {} } }
-			},
-		})
-		const client = createMCPClient({ transport: loopback, version: MCP_PROTOCOL_VERSION })
-
-		await expect(client.connect()).rejects.toThrow('MCP server returned no protocol version')
-		expect(client.connected).toBe(false)
-		expect(client.version).toBeUndefined()
-		expect(loopback.closed).toBe(1)
-		expect(loopback.sent).toEqual(['initialize'])
-	})
-
-	it('rejects a malformed legacy protocol and closes before initialization completes', async () => {
-		const loopback = createFixturePeer({
-			reply: (request) => {
-				if (request.method !== 'initialize' || request.id === undefined) return undefined
-				return initializeResponse(request.id, 42)
-			},
-		})
-		const client = createMCPClient({ transport: loopback, version: MCP_PROTOCOL_VERSION })
-
-		await expect(client.connect()).rejects.toThrow(
-			'MCP server returned a malformed protocol version',
-		)
-		expect(client.connected).toBe(false)
-		expect(client.version).toBeUndefined()
-		expect(loopback.closed).toBe(1)
-		expect(loopback.sent).toEqual(['initialize'])
 	})
 })
 
@@ -1136,14 +1053,13 @@ describe('MCPClient — modern discovery and fallback', () => {
 			await modern.connect()
 			expect(modern.version).toBe('2026-07-28')
 
-			await configured.connect()
-			expect(configured.version).toBe(MCP_PROTOCOL_VERSION)
+			await expect(configured.connect()).rejects.toMatchObject({
+				message: expect.stringContaining('createMCPLegacyClientTransport'),
+			})
 			expect(peer.requests.map((request) => request.method)).toEqual([
 				'server/discover',
 				'server/discover',
 				'server/discover',
-				'initialize',
-				'notifications/initialized',
 			])
 		} finally {
 			peer.release('/silent')
@@ -1208,34 +1124,6 @@ describe('MCPClient — modern discovery and fallback', () => {
 
 		expect(peer.sent).toEqual(['server/discover', 'tools/list'])
 		expect(client.version).toBe('2026-07-28')
-	})
-
-	it('caches a legacy era across disconnect and reconnect without probing modern again', async () => {
-		const peer = createFixturePeer({
-			reply: (request) => {
-				if (request.id === undefined) return undefined
-				if (request.method === 'server/discover') {
-					return errorResponse(request.id, JSONRPC_METHOD_NOT_FOUND)
-				}
-				if (request.method === 'initialize')
-					return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
-				return undefined
-			},
-		})
-		const client = createMCPClient({ transport: peer })
-
-		await client.connect()
-		await client.disconnect()
-		await client.connect()
-
-		expect(peer.sent).toEqual([
-			'server/discover',
-			'initialize',
-			'notifications/initialized',
-			'initialize',
-			'notifications/initialized',
-		])
-		expect(client.version).toBe(MCP_PROTOCOL_VERSION)
 	})
 
 	it('stamps every modern request and sends no client notification', async () => {
@@ -1345,14 +1233,22 @@ describe('MCPClient — call() (the content round-trip)', () => {
 })
 
 describe('MCPClient — result-type safety', () => {
-	it('accepts a legacy result with no resultType', async () => {
-		const client = createMCPClient({
-			transport: createLoopback(serverWithTools()),
-			version: MCP_PROTOCOL_VERSION,
+	it('refuses a legacy result on the bare transport and names the adapter', async () => {
+		const peer = createFixturePeer({
+			reply: (request) => {
+				if (request.id === undefined) return undefined
+				if (request.method === 'server/discover') {
+					return errorResponse(request.id, JSONRPC_METHOD_NOT_FOUND)
+				}
+				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+			},
 		})
-		await client.connect()
+		const client = createMCPClient({ transport: peer })
 
-		expect(await client.call('greet', {})).toEqual({ resultType: 'complete', value: 'hello' })
+		await expect(client.connect()).rejects.toMatchObject({
+			message: expect.stringContaining('createMCPLegacyClientTransport'),
+		})
+		expect(peer.sent).toEqual(['server/discover'])
 	})
 
 	it.each(['input_required', 'task', 'future'])(
@@ -1530,12 +1426,7 @@ describe('MCPClient — per-request timeout', () => {
 
 	it('keeps the probe deadline scoped to discovery while another request is pending', async () => {
 		const peer = createFixturePeer({
-			reply: (request) => {
-				if (request.method === 'initialize' && request.id !== undefined) {
-					return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
-				}
-				return undefined
-			},
+			reply: () => undefined,
 		})
 		const client = createMCPClient({ transport: peer, timeout: 200 })
 		const connecting = client.connect()
@@ -1546,13 +1437,10 @@ describe('MCPClient — per-request timeout', () => {
 		peer.emitter.emit('message', { jsonrpc: '2.0', id: 2, result: { tools: [] } })
 
 		await expect(listing).resolves.toEqual([])
-		await connecting
-		expect(peer.sent).toEqual([
-			'server/discover',
-			'tools/list',
-			'initialize',
-			'notifications/initialized',
-		])
+		await expect(connecting).rejects.toMatchObject({
+			message: expect.stringContaining('createMCPLegacyClientTransport'),
+		})
+		expect(peer.sent).toEqual(['server/discover', 'tools/list'])
 	})
 })
 
@@ -1637,27 +1525,6 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		expect(client.version).toBeUndefined()
 	})
 
-	it('leaves the client disconnected when the initialized notification fails to send', async () => {
-		const peer = createFixturePeer({
-			reply: (request) => {
-				if (request.method === 'initialize' && request.id !== undefined) {
-					return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
-				}
-				if (request.method === 'notifications/initialized') {
-					return new Error('initialized notification failed')
-				}
-				return undefined
-			},
-		})
-		const client = createMCPClient({ transport: peer, version: MCP_PROTOCOL_VERSION })
-
-		await expect(client.connect()).rejects.toThrow('initialized notification failed')
-
-		expect(client.connected).toBe(false)
-		expect(client.version).toBeUndefined()
-		expect(peer.sent).toEqual(['initialize', 'notifications/initialized'])
-	})
-
 	it('closes the transport when a modern negotiation rejects', async () => {
 		// The peer advertises only a revision this client does not know, so discovery parses
 		// but negotiation finds no common version — a modern-path failure exit.
@@ -1718,35 +1585,6 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		expect(peer.sent).toEqual(['server/discover', 'server/discover'])
 		expect(peer.requests.map((request) => request.id)).toEqual([1, 2])
 		expect(first).toEqual(second)
-	})
-
-	it('rejects a superseded legacy connect when disconnect lands during the initialized notification', async () => {
-		// The legacy handshake's LAST write is the one that suspends: the peer accepts
-		// `initialize`, then parks `notifications/initialized` mid-write. `#initialize` has
-		// already re-asked its generation before that write, so the window this drives is the
-		// one AFTER it — a `disconnect` landing while the notification is still in flight.
-		const peer = createFixturePeer({
-			reply: (request) => {
-				if (request.method !== 'initialize' || request.id === undefined) return undefined
-				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
-			},
-			send: { park: (method) => method === 'notifications/initialized' },
-		})
-		const client = createMCPClient({ transport: peer, version: MCP_PROTOCOL_VERSION })
-		let connects = 0
-		client.emitter.on('connect', () => {
-			connects += 1
-		})
-
-		const connecting = client.connect()
-		await waitForDelay()
-		await client.disconnect()
-		peer.release()
-
-		await expect(connecting).rejects.toThrow('MCP client disconnected')
-		expect(client.connected).toBe(false)
-		expect(client.version).toBeUndefined()
-		expect(connects).toBe(0)
 	})
 
 	it("closes the transport once when a disconnect lands during a failing attempt's own close", async () => {
@@ -1884,26 +1722,6 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		expect(client.connected).toBe(false)
 	})
 
-	it('rejects a superseded legacy connect when disconnect lands during the initialize round trip', async () => {
-		// The legacy mirror of the modern install window: the peer answers `initialize` and
-		// disconnects from that answer, so the supersession lands BEFORE the handshake's last
-		// wire write. The notification must never reach a transport the teardown already closed.
-		const peer = createFixturePeer({
-			reply: (request) => {
-				if (request.method !== 'initialize' || request.id === undefined) return undefined
-				void client.disconnect()
-				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
-			},
-		})
-		const client = createMCPClient({ transport: peer, version: MCP_PROTOCOL_VERSION })
-
-		await expect(client.connect()).rejects.toThrow('MCP client disconnected')
-
-		expect(client.connected).toBe(false)
-		expect(peer.sent).toEqual(['initialize'])
-		expect(peer.lifecycle).toEqual(['start', 'close'])
-	})
-
 	it('opens one transport when the transport re-enters connect synchronously from start', async () => {
 		// The single-flight gate is published through a resolved-promise hop precisely so it is
 		// in place before the injected `start()` runs. A transport re-entering at `start()`'s
@@ -1945,88 +1763,6 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		expect(peer.started).toBe(0)
 		expect(client.connected).toBe(false)
 	})
-
-	it('leaves a live session untouched when a superseded attempt finally unwinds', async () => {
-		// TWO attempts alive at once — the interleaving every other instrument in this file
-		// misses, because each of them drives at most one. The first parks inside the handshake's
-		// LAST write, which holds no `#pending` entry for the teardown's drain to reach, and a
-		// teardown AND a fresh successful connect both complete while it is still suspended. When
-		// it finally resumes, the only session in existence belongs to somebody else: a claim
-		// that reads whether SOME session is open answers the wrong question, and the attempt
-		// closes the live one.
-		const peer = createFixturePeer({
-			reply: (request) =>
-				request.method === 'initialize' && request.id !== undefined
-					? initializeResponse(request.id, MCP_PROTOCOL_VERSION)
-					: undefined,
-			// The FIRST handshake notification — request 2 — parks; the reconnect's own notification
-			// (request 4) goes straight through, so one attempt stays suspended inside the step a
-			// fresh attempt completes.
-			send: { park: (method, count) => method === 'notifications/initialized' && count === 2 },
-		})
-		const client = createMCPClient({ transport: peer, version: MCP_PROTOCOL_VERSION })
-		const settled: string[] = []
-		void client.connect().then(
-			() => settled.push('resolved'),
-			(error: unknown) => settled.push(error instanceof Error ? error.message : String(error)),
-		)
-
-		await waitForDelay()
-		await client.disconnect()
-		await client.connect()
-
-		expect(client.connected).toBe(true)
-		expect(peer.lifecycle).toEqual(['start', 'close', 'start'])
-
-		peer.release()
-		await waitForDelay()
-
-		expect(settled).toEqual(['MCP client disconnected'])
-		// The zombie closed nothing, so the live session is still described truthfully...
-		expect(peer.lifecycle).toEqual(['start', 'close', 'start'])
-		expect(client.connected).toBe(true)
-		expect(client.version).toBe(MCP_PROTOCOL_VERSION)
-
-		// ...and its own owner still performs its close.
-		await client.disconnect()
-
-		expect(peer.lifecycle).toEqual(['start', 'close', 'start', 'close'])
-		expect(client.connected).toBe(false)
-	}, 2_000)
-
-	it('settles a superseded attempt whose wire write never lands, then admits the next connect', async () => {
-		// The adverse twin of the zombie: the parked write is NEVER released — a peer that
-		// accepts the POST and answers nothing, which a stock HTTP client transport bounds only
-		// when a `timeout` is configured. The write holds no `#pending` entry, so the drain
-		// cannot reach it and no deadline is watching it; only a signal the attempt races its own
-		// write against can settle it. The bound below turns a hang into a failure, and the
-		// connect after it proves the settlement is what admits the next attempt.
-		const peer = createFixturePeer({
-			reply: (request) =>
-				request.method === 'initialize' && request.id !== undefined
-					? initializeResponse(request.id, MCP_PROTOCOL_VERSION)
-					: undefined,
-			// The FIRST handshake notification — request 2 — parks, and is never released.
-			send: { park: (method, count) => method === 'notifications/initialized' && count === 2 },
-		})
-		const client = createMCPClient({ transport: peer, version: MCP_PROTOCOL_VERSION })
-		const settled: string[] = []
-		void client.connect().then(
-			() => settled.push('resolved'),
-			(error: unknown) => settled.push(error instanceof Error ? error.message : String(error)),
-		)
-
-		await waitForDelay()
-		await client.disconnect()
-		await waitForDelay(50)
-
-		expect(settled).toEqual(['MCP client disconnected'])
-
-		await client.connect()
-
-		expect(client.connected).toBe(true)
-		expect(peer.lifecycle).toEqual(['start', 'close', 'start'])
-	}, 2_000)
 
 	it('makes a second disconnect await the close already in flight', async () => {
 		// `hold` suspends the teardown's `close()`, so the second caller arrives while the first
@@ -2115,74 +1851,6 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		await expect(client.disconnect()).rejects.toThrow('transport close failed')
 
 		expect(peer.closed).toBe(2)
-	}, 2_000)
-
-	it('still surfaces a failing initialized notification on a reconnect after a disconnect', async () => {
-		// A settled supersession signal stays settled, so a teardown must REPLACE it as well as
-		// settle it. A reconnect racing a stale one would stop waiting for its own handshake write
-		// before that write had even been attempted, and the client would announce a connection
-		// whose last wire write failed.
-		let notifications = 0
-		const peer = createFixturePeer({
-			reply: (request) => {
-				if (request.method === 'initialize' && request.id !== undefined) {
-					return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
-				}
-				if (request.method === 'notifications/initialized') {
-					notifications += 1
-					return notifications > 1 ? new Error('initialized notification failed') : undefined
-				}
-				return undefined
-			},
-		})
-		const client = createMCPClient({ transport: peer, version: MCP_PROTOCOL_VERSION })
-
-		await client.connect()
-		await client.disconnect()
-
-		await expect(client.connect()).rejects.toThrow('initialized notification failed')
-
-		expect(client.connected).toBe(false)
-		expect(peer.lifecycle).toEqual(['start', 'close', 'start', 'close'])
-	}, 2_000)
-
-	it('waits for its own handshake write on a reconnect after an earlier disconnect', async () => {
-		// A settled supersession signal stays settled, so a teardown REPLACES it as well as
-		// settling it. A reconnect racing a stale one stops waiting for its own handshake write
-		// before that write has landed, and announces a connection over a write no peer has yet
-		// accepted. Here the RECONNECT's notification — request 4 — is parked: waiting for it is the
-		// whole point.
-		const peer = createFixturePeer({
-			reply: (request) =>
-				request.method === 'initialize' && request.id !== undefined
-					? initializeResponse(request.id, MCP_PROTOCOL_VERSION)
-					: undefined,
-			send: { park: (method, count) => method === 'notifications/initialized' && count === 4 },
-		})
-		const client = createMCPClient({ transport: peer, version: MCP_PROTOCOL_VERSION })
-		await client.connect()
-		await client.disconnect()
-
-		let reconnected = false
-		const reconnecting = client.connect().then(() => {
-			reconnected = true
-		})
-		await waitForDelay(20)
-
-		expect(reconnected).toBe(false)
-		expect(client.connected).toBe(false)
-
-		peer.release()
-		await reconnecting
-
-		expect(reconnected).toBe(true)
-		expect(client.connected).toBe(true)
-		expect(peer.sent).toEqual([
-			'initialize',
-			'notifications/initialized',
-			'initialize',
-			'notifications/initialized',
-		])
 	}, 2_000)
 
 	it('joins two reconnects issued while a superseded attempt is still opening', async () => {
@@ -2758,23 +2426,6 @@ describe('MCPClient — discovery requires resultType', () => {
 		expect(client.connected).toBe(false)
 		expect(client.version).toBeUndefined()
 		expect(peer.sent).toEqual(['server/discover'])
-	})
-
-	it('CONTROL — a legacy initialize result legitimately carries none and still connects', async () => {
-		// Drawn from OUTSIDE the rule's population: the legacy revision has no result
-		// discriminator at all, so this is the shape the refusal must never reach.
-		const peer = createFixturePeer({
-			reply: (request) => {
-				if (request.method !== 'initialize' || request.id === undefined) return undefined
-				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
-			},
-		})
-		const client = createMCPClient({ transport: peer, version: MCP_PROTOCOL_VERSION })
-
-		await client.connect()
-
-		expect(client.connected).toBe(true)
-		expect(client.version).toBe(MCP_PROTOCOL_VERSION)
 	})
 
 	it('CONTROL — a different method omitting resultType is not refused', async () => {

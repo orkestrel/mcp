@@ -13,7 +13,7 @@
 // The composition costs real sockets and real handshakes, so it is its own `integration`
 // project with its own timeout, kept out of `npm test` and required by `prepublishOnly`.
 
-import type { MCPClientInterface, MCPVersion } from '@src/core'
+import type { MCPClientInterface, MCPLegacyVersion } from '@src/core'
 import type { MCPSessionState } from '@src/server'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 import type { StartedServerInterface } from './setupServer.js'
@@ -24,6 +24,7 @@ import {
 	createDuplexClientTransport,
 	createMCPClient,
 	createMCPLegacy,
+	createMCPLegacyClientTransport,
 	createMCPServer,
 	MCP_LEGACY_VERSION,
 	MCP_MODERN_VERSION,
@@ -67,7 +68,7 @@ interface TestStackInterface {
 	 * @param version - The revision to pin, for a client that must handshake; omit for modern
 	 * @returns An unconnected client, tracked for teardown
 	 */
-	http(version?: MCPVersion): MCPClientInterface
+	http(version?: MCPLegacyVersion): MCPClientInterface
 	/**
 	 * Open a core client over the server face's WebSocket carrier.
 	 *
@@ -187,8 +188,10 @@ async function startStack(options?: TestStackOptions): Promise<TestStackInterfac
 		http(version) {
 			const transport = createHTTPClientTransport({ url: `${base}/mcp` })
 			const client = createMCPClient({
-				transport,
-				...(version === undefined ? {} : { version }),
+				transport:
+					version === undefined
+						? transport
+						: createMCPLegacyClientTransport(transport, { version }),
 			})
 			clients.push(client)
 			return client
@@ -338,9 +341,9 @@ describe('one deployment, one registry, both wire eras', () => {
 		await legacy.connect()
 		await modern.connect()
 
-		// Era is the shape of the wire and one endpoint answers both: the dated client
-		// handshook, the modern one announced its revision on the request itself.
-		expect([legacy.version, modern.version]).toEqual([MCP_LEGACY_VERSION, MCP_MODERN_VERSION])
+		// Era is the shape of the wire and one endpoint answers each: the adapter used the dated
+		// handshake while each client retained the modern consumer-visible revision.
+		expect([legacy.version, modern.version]).toEqual([MCP_MODERN_VERSION, MCP_MODERN_VERSION])
 
 		// One registry underneath both eras.
 		expect([

@@ -31,7 +31,7 @@
 > neither caller handles the other's answer), and `handle(message)` is the string
 > boundary that wraps it with `JSON.parse` / `JSON.stringify` plus the parse
 > (`-32700`) and invalid-request (`-32600`) mapping, each of whose envelopes OMITS
-> the `id` it could not read. The client mirrors it: `connect` negotiates the era once, `tools()`
+> the `id` it could not read. The client mirrors it: `connect` negotiates the modern revision, `tools()`
 > exposes the remote tools as local `ToolInterface`s, and `call` runs one — a
 > remote failure throws locally, so an agent's `ToolManager` isolates it exactly
 > like a local throw. A remote JSON-RPC error rejects with `MCPError`, preserving
@@ -83,13 +83,13 @@ it names.
 | ------------ | ------ | ----------------------------------------------------------------------------------------- |
 | `2026-07-28` | modern | Per-request `_meta` carrying the reserved protocol-version key. No handshake, no session. |
 | `2025-11-25` | legacy | The `initialize` handshake. `MCP_PROTOCOL_VERSION` — the revision this server offers.     |
-| `2025-06-18` | legacy | The `initialize` handshake. `MCP_LEGACY_VERSION` — the older anchor a client may pin.     |
+| `2025-06-18` | legacy | The `initialize` handshake. `MCP_LEGACY_VERSION` — the older anchor an adapter may pin.   |
 
 `SUPPORTED_PROTOCOL_VERSIONS` is the bare server's frozen modern set and the exact
 `server/discover` advertisement: `2026-07-28`. `SUPPORTED_LEGACY_PROTOCOL_VERSIONS`
 contains the initialize revisions that `createMCPLegacy` alone accepts.
-`SUPPORTED_CLIENT_PROTOCOL_VERSIONS` combines those era-scoped sets for client pins;
-it never becomes a server advertisement. Older revisions are deliberately absent,
+`SUPPORTED_CLIENT_PROTOCOL_VERSIONS` combines those era-scoped sets for the version guards and
+the explicit client adapter; it never becomes a bare-client or server advertisement. Older revisions are deliberately absent,
 and their absence is this package's decision rather than the ecosystem's — see
 [Declared non-goals](#declared-non-goals).
 
@@ -1609,31 +1609,19 @@ text is legacy ownership. The modern engine therefore still compiles once the la
 `isModernRequest` survives because the modern engine reads structural key presence. Each
 remaining survivor has its own consumer, and they are not the same one:
 
-| Survivor               | What consumes it after the layer is deleted                                                                                                                                      |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inferEra`             | Nothing inside `src`. It is the published era helper, and it reads `isMCPModernVersion` then `isMCPLegacyVersion` rather than restating either set.                              |
-| `isInitializeRequest`  | Legacy server ingress: `src/server/middlewares.ts` mints and validates a session from it, and `src/server/inferers.ts` exempts a headerless `initialize` from the header demand. |
-| `MCPLegacyResult`      | The unstamped result arm of `JSONRPCResponse` in `src/core/types.ts`, its guard `isMCPLegacyResult`, and the decorator's projection.                                             |
-| `MCP_PROTOCOL_VERSION` | Client egress in `src/core/MCPClient.ts`, the legacy handshake anchor in `src/core/helpers.ts` and `src/server/inferers.ts`, and `SUPPORTED_LEGACY_PROTOCOL_VERSIONS`.           |
-| `MCP_LEGACY_VERSION`   | `SUPPORTED_LEGACY_PROTOCOL_VERSIONS` alone, which is what a client pins to and what the decorator's door accepts.                                                                |
+| Survivor               | What consumes it after the layer is deleted                                                                                                                                                   |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inferEra`             | Nothing inside `src`. It is the published era helper, and it reads `isMCPModernVersion` then `isMCPLegacyVersion` rather than restating either set.                                           |
+| `isInitializeRequest`  | Legacy server ingress: `src/server/middlewares.ts` mints and validates a session from it, and `src/server/inferers.ts` exempts a headerless `initialize` from the header demand.              |
+| `MCPLegacyResult`      | The unstamped result arm of `JSONRPCResponse` in `src/core/types.ts`, its guard `isMCPLegacyResult`, and the decorator's projection.                                                          |
+| `MCP_PROTOCOL_VERSION` | Client-adapter egress in `src/core/MCPLegacyClientTransport.ts`, the legacy handshake anchor in `src/core/helpers.ts` and `src/server/inferers.ts`, and `SUPPORTED_LEGACY_PROTOCOL_VERSIONS`. |
+| `MCP_LEGACY_VERSION`   | `SUPPORTED_LEGACY_PROTOCOL_VERSIONS` plus an explicit `MCPLegacyClientTransportOptions.version` pin.                                                                                          |
 
 The bare server imports no legacy revision set and no legacy guard.
 
-**`MCPClient` is outside this claim, and naming that is the honest form of it.** The client is a
-working modern-and-legacy engine that none of those items touches: it sends `initialize` and
-`notifications/initialized`, negotiates the dated revisions, and accepts unstamped legacy
-results. Delete every one of them and that egress path is still there, which is exactly why the claim
-reads "server ingress" rather than "legacy support".
-
-**Client legacy egress is a separate open question, and nothing here answers it.** The client's
-private `initialize` handshake and the era flag it sets carry that egress, and neither is on
-that module list. The handshake sends the dated request, refuses a negotiated version whose era
-is not legacy, sends `notifications/initialized`, and records the legacy era before emitting
-`connect`. The era flag selects the handshake outright for a client already in the legacy era or
-pinned to a legacy revision, and it gates the fallback a modern `connect` takes when discovery
-fails for any reason other than an unsupported version. Removing either one changes what `MCPClient` can talk to, which is a different decision from what
-`MCPServer` will answer. It is a design question and not a defect: no clause is unsatisfied, both
-paths are tested, and no unit is scheduled against them.
+`MCPClient` remains outside the server-ingress removal list because it contains no legacy
+handshake. The bare client sends `server/discover` only and accepts only `MCPModernVersion` as an
+optional pin. Legacy egress belongs to the separate client transport decorator described next.
 
 That module list is a membership rule rather than a reassurance. The executed list lives in
 [the package guide suite](../tests/guides.test.ts), which computes the legacy-owning module set
@@ -1662,39 +1650,94 @@ code does: a modern result the dated revision has no shape for — a held-open s
 `input_required`, or a capability refusal — which is the one thing the older revision genuinely
 cannot represent.
 
+### Adapt a legacy peer at the client transport boundary
+
+The dated client handshake is not a branch inside `MCPClient`. It is a **decorator over its
+transport**. `MCPLegacyClientTransport` wraps one `MCPClientTransportInterface`, performs
+`initialize` during `start`, sends `notifications/initialized`, and answers the bare client's
+`server/discover` locally from the accepted handshake. The consumer-visible client therefore
+stays on `2026-07-28` while the wrapped transport speaks `2025-11-25` or `2025-06-18` to the peer.
+
+The decorator translates at the message boundary. A modern invocation loses the reserved
+protocol-version, client-capability, and client-identity metadata before it reaches the legacy
+peer. A legacy result gains the modern `resultType`, server identity, and cache fields before it
+reaches `MCPClient`. The shared projections live in the core helpers and are the same projections
+the server decorator uses in the opposite direction.
+
+The projections are also public when another explicit boundary needs the same wire conversion:
+
+```ts
+import {
+	legacyInvocationToModern,
+	legacyResultToModern,
+	modernInvocationToLegacy,
+	modernResultToLegacy,
+} from '@orkestrel/mcp'
+
+const request = legacyInvocationToModern({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+const legacyRequest = modernInvocationToLegacy(request)
+const result = legacyResultToModern({}, 'tools/list', { name: 'legacy', version: '1.0.0' })
+const legacyResult = modernResultToLegacy(result)
+```
+
+Wrap the transport explicitly when the peer exposes only the legacy handshake:
+
+```ts
+import { createMCPClient, createMCPLegacyClientTransport } from '@orkestrel/mcp'
+import { createHTTPClientTransport } from '@orkestrel/mcp/server'
+
+const carrier = createHTTPClientTransport({ url: 'https://legacy.example/mcp' })
+const transport = createMCPLegacyClientTransport(carrier, { version: '2025-06-18' })
+const client = createMCPClient({ transport })
+
+await client.connect()
+client.version // '2026-07-28' — the adapter keeps the dated revision on the peer side
+```
+
+Omit `version` to offer `2025-11-25`; supply it to require one supported legacy revision exactly.
+The adapter rejects an absent, malformed, unsupported, or pin-mismatched handshake result before
+the client connects. Its request deadline bounds the handshake response and each handshake write.
+
+The bare client never attempts this handshake. When `server/discover` returns `-32601`, `-32600`,
+or another failure that does not report a compatible modern revision, `connect` rejects with an
+`MCPError` whose message names `createMCPLegacyClientTransport`. Passing a legacy revision to
+`createMCPClient` is rejected before the transport starts; production types do not admit that pin.
+
 ### Factories
 
-| API                           | Kind     | Summary                                                                                                                                                                             |
-| ----------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createMCPServer`             | function | Create an `MCPServerInterface` exposing tools plus optional signed MRTR input and event-driven subscription mechanisms over JSON-RPC 2.0.                                           |
-| `createMCPLegacy`             | function | Decorate one `MCPServerInterface` with the legacy method translation — the ONE call that adds `2025-11-25` / `2025-06-18` support, and the one deleting it removes.                 |
-| `createMCPClient`             | function | Create an `MCPClientInterface` that drives a REMOTE server over an injected transport and exposes its tools as local `ToolInterface`s.                                              |
-| `createDuplexClientTransport` | function | Adapt an `MCPTransportInterface` into a `MCPClientTransportInterface` — the bridge letting `createMCPClient` run over the environment-agnostic duplex port; pair with `bindClient`. |
+| API                              | Kind     | Summary                                                                                                                                                                             |
+| -------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createMCPServer`                | function | Create an `MCPServerInterface` exposing tools plus optional signed MRTR input and event-driven subscription mechanisms over JSON-RPC 2.0.                                           |
+| `createMCPLegacy`                | function | Decorate one `MCPServerInterface` with the legacy method translation — the ONE call that adds `2025-11-25` / `2025-06-18` support, and the one deleting it removes.                 |
+| `createMCPClient`                | function | Create an `MCPClientInterface` that drives a REMOTE server over an injected transport and exposes its tools as local `ToolInterface`s.                                              |
+| `createMCPLegacyClientTransport` | function | Decorate one `MCPClientTransportInterface` with the legacy handshake and era translation while retaining a modern client surface.                                                   |
+| `createDuplexClientTransport`    | function | Adapt an `MCPTransportInterface` into a `MCPClientTransportInterface` — the bridge letting `createMCPClient` run over the environment-agnostic duplex port; pair with `bindClient`. |
 
 ### Entities
 
-| API                       | Kind  | Summary                                                                                                                                                                     |
-| ------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MCPServer`               | class | The transport-agnostic JSON-RPC dispatch core over a `ToolManagerInterface` — `dispatch` (typed) + `handle` (string).                                                       |
-| `MCPLegacy`               | class | The removable legacy decorator over ONE `MCPDispatcherInterface` — translates the dated revisions onto the modern engine and owns none.                                     |
-| `MCPMethodManager`        | class | The modern method registry `MCPServer` registers its built-ins on and resolves every modern method from — `add` + `method`.                                                 |
-| `MCPProgressReporter`     | class | One request-scoped, single-slot progress handoff with backpressure between one producer and one serial consumer.                                                            |
-| `MCPStreamController`     | class | The one cancellation engine every held-open answer leaves `dispatch` through — one pending source read, prompt closure, contained late promises.                            |
-| `MCPTextStreamController` | class | The serialized mirror of a controlled stream — translation only, delegating every lifecycle decision into the typed exchange beneath it.                                    |
-| `MCPClient`               | class | The transport-agnostic modern-and-legacy JSON-RPC client over a `MCPClientTransportInterface` — negotiate once, then `discover` / `tools` / `call`.                         |
-| `MCPTaskClient`           | class | The draft Tasks extension's client half over one correlated-request door — `task` / `update` / `abort`, no plural accessor and no schedule.                                 |
-| `MCPError`                | class | A Model Context Protocol error preserving its numeric `code` and optional `context` — a remote JSON-RPC `error.data`, or the locally detected incompatibility's own detail. |
+| API                        | Kind  | Summary                                                                                                                                                                     |
+| -------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MCPServer`                | class | The transport-agnostic JSON-RPC dispatch core over a `ToolManagerInterface` — `dispatch` (typed) + `handle` (string).                                                       |
+| `MCPLegacy`                | class | The removable legacy decorator over ONE `MCPDispatcherInterface` — translates the dated revisions onto the modern engine and owns none.                                     |
+| `MCPLegacyClientTransport` | class | The explicit legacy decorator over ONE `MCPClientTransportInterface` — handshakes with the peer and presents modern discovery and results to `MCPClient`.                   |
+| `MCPMethodManager`         | class | The modern method registry `MCPServer` registers its built-ins on and resolves every modern method from — `add` + `method`.                                                 |
+| `MCPProgressReporter`      | class | One request-scoped, single-slot progress handoff with backpressure between one producer and one serial consumer.                                                            |
+| `MCPStreamController`      | class | The one cancellation engine every held-open answer leaves `dispatch` through — one pending source read, prompt closure, contained late promises.                            |
+| `MCPTextStreamController`  | class | The serialized mirror of a controlled stream — translation only, delegating every lifecycle decision into the typed exchange beneath it.                                    |
+| `MCPClient`                | class | The transport-agnostic modern JSON-RPC client over a `MCPClientTransportInterface` — discover once, then `discover` / `tools` / `call`.                                     |
+| `MCPTaskClient`            | class | The draft Tasks extension's client half over one correlated-request door — `task` / `update` / `abort`, no plural accessor and no schedule.                                 |
+| `MCPError`                 | class | A Model Context Protocol error preserving its numeric `code` and optional `context` — a remote JSON-RPC `error.data`, or the locally detected incompatibility's own detail. |
 
 ### Constants
 
 | Constant                             | Kind  | Value                                                                                                                |
 | ------------------------------------ | ----- | -------------------------------------------------------------------------------------------------------------------- |
 | `MCP_PROTOCOL_VERSION`               | const | `'2025-11-25'` — the newest legacy initialize revision.                                                              |
-| `MCP_LEGACY_VERSION`                 | const | `'2025-06-18'` — the legacy fallback anchor.                                                                         |
+| `MCP_LEGACY_VERSION`                 | const | `'2025-06-18'` — the older supported legacy revision.                                                                |
 | `MCP_MODERN_VERSION`                 | const | `'2026-07-28'` — the modern discovery revision.                                                                      |
 | `SUPPORTED_PROTOCOL_VERSIONS`        | const | Frozen bare-server discovery set: `2026-07-28`.                                                                      |
 | `SUPPORTED_LEGACY_PROTOCOL_VERSIONS` | const | Frozen decorator handshake set: `2025-11-25`, `2025-06-18`.                                                          |
-| `SUPPORTED_CLIENT_PROTOCOL_VERSIONS` | const | Frozen client pin set spanning the modern and legacy eras.                                                           |
+| `SUPPORTED_CLIENT_PROTOCOL_VERSIONS` | const | Frozen version-guard set spanning the modern and legacy eras.                                                        |
 | `MCP_META_VERSION`                   | const | `'io.modelcontextprotocol/protocolVersion'` — reserved request-version metadata key.                                 |
 | `MCP_META_CAPABILITIES`              | const | `'io.modelcontextprotocol/clientCapabilities'` — reserved capability metadata key.                                   |
 | `MCP_META_CLIENT`                    | const | `'io.modelcontextprotocol/clientInfo'` — reserved client-identity metadata key.                                      |
@@ -1713,8 +1756,8 @@ cannot represent.
 | `JSONRPC_INVALID_PARAMS`             | const | `-32602` — the method's parameters were invalid.                                                                     |
 | `JSONRPC_INTERNAL_ERROR`             | const | `-32603` — every contained MODERN fault: provider, handler, continuation, capacity, stream source, or serialization. |
 | `JSONRPC_SERVER_ERROR`               | const | `-32000` — the code `MCPLegacy` alone uses, for a modern result the dated revision cannot represent.                 |
-| `DEFAULT_MCP_CLIENT_NAME`            | const | `'taverna'` — the default client name reported in the `initialize` handshake.                                        |
-| `DEFAULT_MCP_CLIENT_VERSION`         | const | `'1.0.0'` — the default client version reported in the `initialize` handshake.                                       |
+| `DEFAULT_MCP_CLIENT_NAME`            | const | `'taverna'` — the default client name reported in modern metadata or the adapter handshake.                          |
+| `DEFAULT_MCP_CLIENT_VERSION`         | const | `'1.0.0'` — the default client version reported in modern metadata or the adapter handshake.                         |
 | `DEFAULT_MCP_REQUEST_TIMEOUT`        | const | `30000` — the default per-request deadline (ms) an `MCPClient` applies.                                              |
 
 ### Helpers
@@ -1813,6 +1856,10 @@ cannot represent.
 | `digestJSON`                       | function | Compute the lowercase host-neutral SHA-256 digest of bounded canonical JSON.                                                                                                                                                  |
 | `buildDiscoverResult`              | function | Build the required modern `server/discover` result with supported revisions and cache stamps.                                                                                                                                 |
 | `buildModernResult`                | function | Stamp a modern result with `resultType`, server metadata, and cache fields only when a TTL is supplied.                                                                                                                       |
+| `modernResultToLegacy`             | function | Project one complete modern result onto the legacy wire shape; return `undefined` for an arm the dated revision cannot represent.                                                                                             |
+| `legacyResultToModern`             | function | Restore one legacy result to the modern complete-result shape, including the server identity and the cache fields required by `tools/list`.                                                                                   |
+| `legacyInvocationToModern`         | function | Stamp one legacy request with the modern protocol revision and an empty client capability set before modern dispatch.                                                                                                         |
+| `modernInvocationToLegacy`         | function | Remove the reserved modern request metadata before an invocation reaches a legacy peer while preserving other metadata.                                                                                                       |
 | `buildSubscriptionFilter`          | function | Intersect requested notification families and resource URIs with the server's declared support.                                                                                                                               |
 | `matchesSubscriptionNotification`  | function | Test whether a produced notification belongs to an acknowledged subscription filter.                                                                                                                                          |
 | `stampSubscriptionNotification`    | function | Stamp a delivered notification with its reserved subscription id while preserving other params and metadata.                                                                                                                  |
@@ -1950,8 +1997,9 @@ cannot represent.
 | `MCPTransportInterface`            | interface | `{ send(message: string): void \| Promise<void>; listen(handler): void; closed(handler): void; close(): void \| Promise<void> }` — the environment-agnostic duplex message-channel port `bindServer` / `bindClient` drive. `listen` and `closed` are single-handler REGISTRARS (a second call replaces the first), which is why the terminal one reads as an adjective beside the imperative `close`. |
 | `MCPClientTransportEventMap`       | type      | `{ message: [JSONRPCMessage]; close: []; error: [unknown] }` — the transport events.                                                                                                                                                                                                                                                                                                                  |
 | `MCPClientTransportInterface`      | interface | `emitter` / `session` / `duplex` data members + the `start` / `send` / `close` methods — the shared transport-agnostic carrier used by clients and server bridges.                                                                                                                                                                                                                                    |
+| `MCPLegacyClientTransportOptions`  | interface | `{ identity?; capabilities?; version?; timeout? }` — the explicit adapter's legacy handshake identity, capabilities, optional exact legacy pin, and deadline.                                                                                                                                                                                                                                         |
 | `MCPClientEventMap`                | type      | `{ connect: []; disconnect: []; notification: [JSONRPCMessage]; error: [unknown] }`.                                                                                                                                                                                                                                                                                                                  |
-| `MCPClientOptions`                 | interface | `{ on?; error?; transport; identity?; capabilities?; version?; timeout? }` — options for `createMCPClient`.                                                                                                                                                                                                                                                                                           |
+| `MCPClientOptions`                 | interface | `{ on?; error?; transport; identity?; capabilities?; version?: MCPModernVersion; timeout? }` — options for the modern-only `createMCPClient`.                                                                                                                                                                                                                                                         |
 | `MCPProgressHandler`               | type      | `(progress: MCPProgress) => void` — the caller's per-request progress consumer; supplying one is what stamps the request's progress token, so a peer reports only where someone is listening.                                                                                                                                                                                                         |
 | `MCPCallOptions`                   | interface | `{ signal?; progress? }` — per-call policy for one remote `tools/call`. Neither leaf survives the call: `signal` cancels THAT request and never the connection or a durable task, and an already-aborted one refuses it unsent.                                                                                                                                                                       |
 | `MCPCallOutcome`                   | type      | `{ resultType: 'complete'; value } \| MCPTaskResult \| MCPInputResult` — the arms the dated protocol lets a `tools/call` answer with. Narrow on `resultType`; any other is refused rather than surfaced.                                                                                                                                                                                              |
@@ -2834,7 +2882,7 @@ The completion port, configured independently of the `resources` and `prompts` p
 
 #### `MCPClientInterface`
 
-The egress mirror: `connect` negotiates the era once and stores the selected
+The egress mirror: `connect` negotiates the modern revision and stores the selected
 `version`, `discover` exposes the modern server description, `tools` wraps the
 remote tools as local `ToolInterface`s, `call` runs a remote `tools/call`,
 `disconnect` rejects pending requests, clears the negotiated revision, and
@@ -2842,29 +2890,20 @@ closes the connection it owns. Subscribe to client events through `emitter.on`.
 The `tasks` data member is the draft Tasks extension's client half — see
 [`MCPTaskClientInterface`](#mcptaskclientinterface) below.
 
-| Method       | Returns                             | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ------------ | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `connect`    | `Promise<void>`                     | Open and negotiate once: pinned legacy initializes directly; otherwise discover modern first, retry `-32022` only with a modern offer, or fall back when the peer has no modern discovery method. A second `connect` while connected is a no-op; one issued while the current attempt is in flight joins it, and one issued while an attempt a `disconnect` superseded is still unwinding outwaits it before opening the next connection; one issued while a close is still owed settles that connection first — joining a close still running rather than issuing a second one — and rejects with the fault if it fails or goes unanswered again. Whichever side owns the open connection closes it when the attempt rejects, and a close that fails, or that the client stops waiting for, returns it to the client's ownership until the transport's own answer settles it.                                                                                                                                                                                                                                                                                               |
-| `discover`   | `Promise<MCPDiscoverResult>`        | Send a request stamped with a modern revision and return its validated result, filtered to the locally supported modern set. A connected legacy revision is never copied into modern `_meta`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `disconnect` | `Promise<void>`                     | Reject every pending request, clear `version`, close the connection the client opened on the transport — an attempt still inside the transport's `start` owns none yet and closes what it opens itself — and fire `disconnect` only where the client had announced `connect`. Awaited during an in-flight `connect` it supersedes that attempt rather than waiting for it: the superseded `connect` rejects rather than resolving, and every wait it can be parked in once the transport has opened is bounded, so it settles — an attempt still suspended inside `start` settles only when that `start` does. `connected` is cleared before the teardown suspends, so it is never true once `disconnect` returns. The client's wait on the transport's `close` carries the per-request deadline, so a shutdown that never returns rejects instead of wedging the client, while that close keeps running. A `close` that faults or goes unanswered rejects the caller and leaves the connection owned, so a later `disconnect` or `connect` settles it again — joining the running close, or issuing a fresh one after a rejection. The era cache remains for this instance. |
-| `tools`      | `Promise<readonly ToolInterface[]>` | Runs `tools/list` and wraps each descriptor as a local `ToolInterface` (`inputSchema` → `parameters`; `execute` calls back through `call`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `call`       | `Promise<MCPCallOutcome>`           | Run a remote `tools/call` and report the arm the peer chose: `'complete'` carries the tool's value (`structuredContent` preferred by presence, else the text blocks parsed as JSON), `'task'` carries the durable handle, and `'input_required'` is SURFACED but cannot be continued from this client — the arm is reported faithfully and there is no supported way to answer it, which is [a declared gap](#declared-conformance-gaps). `isError: true` THROWS, and an unknown `resultType` is refused. `options.signal` cancels THIS request only; `options.progress` receives its progress frames.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Method       | Returns                             | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------ | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connect`    | `Promise<void>`                     | Open and negotiate once through modern `server/discover`; retry `-32022` only with a compatible modern offer. A peer with no modern discovery method is refused with an `MCPError` that names `createMCPLegacyClientTransport`. A second `connect` while connected is a no-op; one issued while the current attempt is in flight joins it, and one issued while an attempt a `disconnect` superseded is still unwinding outwaits it before opening the next connection; one issued while a close is still owed settles that connection first — joining a close still running rather than issuing a second one — and rejects with the fault if it fails or goes unanswered again. Whichever side owns the open connection closes it when the attempt rejects, and a close that fails, or that the client stops waiting for, returns it to the client's ownership until the transport's own answer settles it.                                                                                                                                                                                                                                                                             |
+| `discover`   | `Promise<MCPDiscoverResult>`        | Send a request stamped with a modern revision and return its validated result, filtered to the locally supported modern set. An explicit legacy transport adapter answers this request locally with a modern result.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `disconnect` | `Promise<void>`                     | Reject every pending request, clear `version`, close the connection the client opened on the transport — an attempt still inside the transport's `start` owns none yet and closes what it opens itself — and fire `disconnect` only where the client had announced `connect`. Awaited during an in-flight `connect` it supersedes that attempt rather than waiting for it: the superseded `connect` rejects rather than resolving, and every wait it can be parked in once the transport has opened is bounded, so it settles — an attempt still suspended inside `start` settles only when that `start` does. `connected` is cleared before the teardown suspends, so it is never true once `disconnect` returns. The client's wait on the transport's `close` carries the per-request deadline, so a shutdown that never returns rejects instead of wedging the client, while that close keeps running. A `close` that faults or goes unanswered rejects the caller and leaves the connection owned, so a later `disconnect` or `connect` settles it again — joining the running close, or issuing a fresh one after a rejection. The selected modern offer remains for this instance. |
+| `tools`      | `Promise<readonly ToolInterface[]>` | Runs `tools/list` and wraps each descriptor as a local `ToolInterface` (`inputSchema` → `parameters`; `execute` calls back through `call`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `call`       | `Promise<MCPCallOutcome>`           | Run a remote `tools/call` and report the arm the peer chose: `'complete'` carries the tool's value (`structuredContent` preferred by presence, else the text blocks parsed as JSON), `'task'` carries the durable handle, and `'input_required'` is SURFACED but cannot be continued from this client — the arm is reported faithfully and there is no supported way to answer it, which is [a declared gap](#declared-conformance-gaps). `isError: true` THROWS, and an unknown `resultType` is refused. `options.signal` cancels THIS request only; `options.progress` receives its progress frames.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
-**`version` is an exact pin, and pinning is how a caller refuses a dated revision.** An unpinned
-`connect` takes whatever the peer serves. It discovers modern first and falls back to the legacy
-`initialize` handshake when the peer serves no modern seam, offering `2025-11-25` and accepting
-whatever supported legacy revision the reply names, so an unpinned client can land on a dated
-revision. Pass `version` to refuse that. The pin is exact rather than a floor: a modern pin connects
-only where discovery advertises that same revision, and takes no legacy fallback; a legacy pin
-connects only where the `initialize` reply names that same revision, and is refused before
-`notifications/initialized` is written and before the connected state installs. A `version` outside
-`SUPPORTED_CLIENT_PROTOCOL_VERSIONS` throws `MCPError` `MCP_UNSUPPORTED_VERSION` from `createMCPClient`
-itself — before the emitter and the transport subscription exist — carrying
-`{ supported, requested }`, so an unsupported pin never reaches a connection at all. A supported pin
-the peer cannot serve rejects `connect` with the same code and names what the peer offered instead:
-`supported`, the revisions discovery advertised, for a modern pin; `negotiated`, the revision the
-handshake replied with, for a legacy one. There is no separate downgrade signal, because `version`
-already carries the fact: read it after `connect` to learn which revision the connection runs on.
+**`version` is an exact modern pin.** An unpinned `connect` offers `MCP_MODERN_VERSION`; a pinned
+client connects only where discovery advertises that same modern revision. A value outside
+`SUPPORTED_PROTOCOL_VERSIONS` throws `MCPError` `MCP_UNSUPPORTED_VERSION` from `createMCPClient`
+before the emitter and transport subscription exist, carrying `{ supported, requested }`. Read
+`version` after `connect` to learn the modern revision on the consumer surface. Configure a legacy
+pin on `MCPLegacyClientTransportOptions`, not on `MCPClientOptions`.
 
 Discovery is cloned as one exact owned snapshot before semantic validation. `ttlMs` is a
 nonnegative integer, every advertised revision entry is a string, unknown revision strings are
@@ -4136,7 +4175,7 @@ event)`, NOT a domain event) — so a buggy observer can never corrupt a
     exhaustive, both
     directions, so the client's table carries `discover` alongside `connect` /
     `disconnect` / `tools` / `call`, and each implementing class (`MCPServer` /
-    `MCPClient`; the transports `HTTPClientTransport` /
+    `MCPClient`; the adapter `MCPLegacyClientTransport`; the transports `HTTPClientTransport` /
     `WebSocketServerTransport` / `WebSocketClientTransport` /
     `StdioClientTransport` / `StdioServerTransport` (`src/server`) plus the
     browser face's own `HTTPClientTransport` / `WebSocketClientTransport`
@@ -4206,31 +4245,24 @@ in request`, no `as`) — is HTTP **400** with a JSON-RPC error BODY carrying no
     session id. It is MECHANISM, not policy: auth / rate-limiting / sessions
     compose IN FRONT as ordinary middleware; origin policy is only the
     consumer-provided list.
-13. **The CLIENT is the modern-and-legacy egress mirror (`src/core`).**
+13. **The CLIENT is the modern-only egress mirror (`src/core`).**
     `createMCPClient({ transport, identity?, capabilities?, version?, timeout?,
 on? })` drives a REMOTE server over an injected `MCPClientTransportInterface`
-    (transport-abstract, like the server). A pinned legacy `version` runs the
-    legacy `initialize` handshake directly. Otherwise `connect()` first issues
-    a modern `server/discover` carrying `_meta` with the offered revision,
+    (transport-abstract, like the server). `connect()` issues a modern
+    `server/discover` carrying `_meta` with the offered revision,
     client capabilities, and client identity. It intersects the peer's
     `supportedVersions` with `SUPPORTED_PROTOCOL_VERSIONS` in local preference
     order and stores the newest match. A `-32022` reads `error.context.supported`
     and, when unpinned, retries discovery under a NEW monotonic id only when that
     set contains a supported modern revision. A legacy-only offer is never stamped
-    into modern `_meta`. `-32601`, `-32600`, or an unrecognized HTTP 400
-    send failure falls back to legacy `initialize`, except when modern
-    `'2026-07-28'` is pinned. The selected era is cached for the instance's
-    lifetime. A legacy result's absent, malformed, modern, unsupported, or
-    pin-mismatched `protocolVersion` rejects, as does a discovery advertisement
-    that omits a pinned modern revision; a rejecting `connect()` closes the connection that
+    into modern `_meta`. `-32601`, `-32600`, or another discovery failure that
+    does not report a compatible modern revision rejects with an `MCPError` whose
+    message names `createMCPLegacyClientTransport`. A discovery advertisement
+    that omits a pinned modern revision also rejects. A rejecting `connect()` closes the connection that
     attempt opened, unless the `disconnect` that superseded it closed that
-    connection first. A valid legacy revision and the connected
-    state are installed only after `notifications/initialized` is written, so a
-    failed notification leaves the client disconnected. Modern connect sends
-    NO notification. The readonly `version` surface exposes the negotiated
+    connection first. The bare client sends NO initialization notification. The readonly `version` surface exposes the negotiated
     revision while connected and is `undefined` while disconnected. A parseable discovery
-    response other than the legacy fallback errors settles the modern era before result
-    validation, so a malformed or unsupported result type surfaces instead of degrading.
+    response is validated as modern, so a malformed or unsupported result type surfaces directly.
     `discover()` exposes a validated modern discovery result,
     filtering unknown advertised revisions from its `MCPVersion` collection. It validates the
     exact open server-capability shapes and exact metadata before returning, rejects malformed
@@ -4248,7 +4280,7 @@ on? })` drives a REMOTE server over an injected `MCPClientTransportInterface`
     negotiated revision, closes the connection the client opened on the
     transport — an attempt it supersedes inside `start()` owns none yet and
     closes what it opens itself — and fires `disconnect` only where the client
-    had announced `connect`, without clearing the lifetime era cache. The WAIT
+    had announced `connect`, without clearing the selected modern offer. The WAIT
     on that `close` carries the per-request deadline, the only bound that
     reaches it: a shutdown the transport accepts and never answers rejects its
     caller instead of holding `disconnect` and every later `connect()` for the
@@ -4287,20 +4319,11 @@ on? })` drives a REMOTE server over an injected `MCPClientTransportInterface`
     hanging. The discovery probe carries the same request deadline: an omitted
     `timeout` selects `DEFAULT_MCP_REQUEST_TIMEOUT`, and a configured one
     applies to the probe as to every request. A public `discover()` call uses
-    the ordinary request deadline. With no cap on that probe, what a legacy peer
-    costs an unpinned `connect` is set by what that peer does with an unknown
-    method. A reference legacy server answers `server/discover` with a JSON-RPC
-    error rather than silence — `-32601` from the TypeScript SDK server, `-32602`
-    from the Python SDK server, each read from its released 1.x server source on
-    2026-08-20 (see the
-    [TypeScript SDK shared protocol](https://github.com/modelcontextprotocol/typescript-sdk/blob/v1.x/src/shared/protocol.ts)
-    and the
-    [Python SDK server session](https://github.com/modelcontextprotocol/python-sdk/blob/v1.29.0/src/mcp/server/session.py))
-    — and every discovery failure short of `MCP_UNSUPPORTED_VERSION` falls back,
-    so against such a peer the legacy `initialize` follows one round trip behind
-    the probe. A peer that accepts the probe and answers nothing costs the
-    configured deadline before the fallback starts, and the `initialize` after it
-    carries that deadline again. A `send` write failure rejects
+    the ordinary request deadline. A legacy peer that refuses the method produces
+    the adapter-naming error immediately. A peer that accepts the probe and answers
+    nothing costs the configured deadline before the same refusal. Legacy handshake
+    timing belongs to the explicit adapter, whose deadline also bounds its response
+    and writes. A `send` write failure rejects
     its own pending request. The same `timeout` bounds the client's WAIT on the
     transport's `close`: that await holds no pending entry, so neither the drain
     nor a request deadline reaches it, and a shutdown accepted and never answered

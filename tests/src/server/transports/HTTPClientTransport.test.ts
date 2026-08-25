@@ -12,6 +12,7 @@ import {
 	MCP_PROTOCOL_VERSION,
 	createMCPClient,
 	createMCPLegacy,
+	createMCPLegacyClientTransport,
 	createMCPServer,
 } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
@@ -312,7 +313,9 @@ describe('HTTPClientTransport — lifecycle', () => {
 				return fetch(input, init)
 			},
 		})
-		const client = createMCPClient({ transport, version: MCP_LEGACY_VERSION })
+		const client = createMCPClient({
+			transport: createMCPLegacyClientTransport(transport, { version: MCP_LEGACY_VERSION }),
+		})
 
 		await client.connect()
 
@@ -377,7 +380,9 @@ describe('HTTPClientTransport — lifecycle', () => {
 				return fetch(input, init)
 			},
 		})
-		const client = createMCPClient({ transport, version: MCP_LEGACY_VERSION })
+		const client = createMCPClient({
+			transport: createMCPLegacyClientTransport(transport, { version: MCP_LEGACY_VERSION }),
+		})
 
 		await client.connect()
 		expect(protocols).toEqual([null, MCP_LEGACY_VERSION])

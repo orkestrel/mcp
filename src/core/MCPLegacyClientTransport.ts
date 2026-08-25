@@ -22,6 +22,7 @@ import {
 	MCP_MODERN_VERSION,
 	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
+	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
 } from './constants.js'
 import { MCPError } from './errors.js'
 import { legacyResultToModern, modernInvocationToLegacy } from './helpers.js'
@@ -60,10 +61,7 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 	 * @param transport - The legacy peer transport
 	 * @param options - The legacy handshake identity, capabilities, revision, and deadline
 	 */
-	constructor(
-		transport: MCPClientTransportInterface,
-		options?: MCPLegacyClientTransportOptions,
-	) {
+	constructor(transport: MCPClientTransportInterface, options?: MCPLegacyClientTransportOptions) {
 		const requested: unknown = options?.version
 		if (requested !== undefined && !isMCPLegacyVersion(requested)) {
 			throw new MCPError('Unsupported legacy protocol version', MCP_UNSUPPORTED_VERSION, {
@@ -132,20 +130,8 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 	async #initialize(): Promise<void> {
 		const handshake = Promise.withResolvers<JSONRPCResponse>()
 		this.#handshake = handshake
-		const deadline = AbortSignal.timeout(this.#timeout)
-		deadline.addEventListener(
-			'abort',
-			() =>
-				handshake.reject(
-					new MCPError(
-						`Legacy MCP handshake timed out after ${this.#timeout}ms`,
-						MCP_UNSUPPORTED_VERSION,
-					),
-				),
-			{ once: true },
-		)
 		try {
-			await this.#transport.send({
+			await this.#write({
 				jsonrpc: '2.0',
 				id: 0,
 				method: 'initialize',
@@ -155,9 +141,21 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 					clientInfo: this.#client,
 				},
 			})
+			const deadline = AbortSignal.timeout(this.#timeout)
+			deadline.addEventListener(
+				'abort',
+				() =>
+					handshake.reject(
+						new MCPError(
+							`Legacy MCP handshake timed out after ${this.#timeout}ms`,
+							MCP_UNSUPPORTED_VERSION,
+						),
+					),
+				{ once: true },
+			)
 			const response = await handshake.promise
 			this.#accept(response)
-			await this.#transport.send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+			await this.#write({ jsonrpc: '2.0', method: 'notifications/initialized' })
 		} finally {
 			if (this.#handshake === handshake) this.#handshake = undefined
 		}
@@ -169,21 +167,34 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 		}
 		const owned = attempt(() => cloneJSONRecord(response.result))
 		if (!owned.success || !isMCPLegacyResult(owned.value)) {
-			throw new MCPError(
-				'Legacy MCP handshake returned a malformed result',
-				JSONRPC_INVALID_PARAMS,
-			)
+			throw new MCPError('Legacy MCP handshake returned a malformed result', JSONRPC_INVALID_PARAMS)
 		}
 		const result = owned.value
 		const protocol = result['protocolVersion']
 		const capabilities = result['capabilities']
 		const identity = result['serverInfo']
-		if (
-			!isString(protocol) ||
-			!isMCPLegacyVersion(protocol) ||
-			!isMCPServerCapabilities(capabilities) ||
-			!isMCPIdentity(identity)
-		) {
+		if (protocol === undefined) {
+			throw new MCPError(
+				'Legacy MCP handshake returned no protocol version',
+				JSONRPC_INVALID_PARAMS,
+				result,
+			)
+		}
+		if (!isString(protocol)) {
+			throw new MCPError(
+				'Legacy MCP handshake returned a malformed protocol version',
+				JSONRPC_INVALID_PARAMS,
+				result,
+			)
+		}
+		if (!isMCPLegacyVersion(protocol)) {
+			throw new MCPError(
+				`Legacy MCP peer negotiated unsupported protocol version '${protocol}'`,
+				MCP_UNSUPPORTED_VERSION,
+				{ supported: SUPPORTED_LEGACY_PROTOCOL_VERSIONS, negotiated: protocol },
+			)
+		}
+		if (!isMCPServerCapabilities(capabilities) || !isMCPIdentity(identity)) {
 			throw new MCPError(
 				'Legacy MCP handshake returned a malformed result',
 				JSONRPC_INVALID_PARAMS,
@@ -199,6 +210,26 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 		}
 		this.#server = identity
 		this.#supported = capabilities
+	}
+
+	async #write(message: JSONRPCMessage): Promise<void> {
+		const deadline = AbortSignal.timeout(this.#timeout)
+		await Promise.race([
+			this.#transport.send(message),
+			new Promise<never>((_resolve, reject) =>
+				deadline.addEventListener(
+					'abort',
+					() =>
+						reject(
+							new MCPError(
+								`Legacy MCP handshake write timed out after ${this.#timeout}ms`,
+								MCP_UNSUPPORTED_VERSION,
+							),
+						),
+					{ once: true },
+				),
+			),
+		])
 	}
 
 	#discover(id: JSONRPCId): void {
@@ -225,7 +256,10 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 	#receive(message: JSONRPCMessage): void {
 		const owned = parseJSONRPCMessage(message)
 		if (owned === undefined) {
-			this.#emitter.emit('error', new MCPError('Legacy MCP peer returned a malformed message', JSONRPC_INVALID_PARAMS))
+			this.#emitter.emit(
+				'error',
+				new MCPError('Legacy MCP peer returned a malformed message', JSONRPC_INVALID_PARAMS),
+			)
 			return
 		}
 		const handshake = this.#handshake

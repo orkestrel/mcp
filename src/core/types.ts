@@ -2212,8 +2212,9 @@ export interface MCPLegacyClientTransportOptions {
  * fire-and-forget observer (logging, tracing) subscribes to through `client.emitter.on`.
  *
  * @remarks
- * - `connect` — era negotiation completed and the client is connected: modern after
- *   `server/discover`, legacy after `initialize` and its notification.
+ * - `connect` — modern revision negotiation completed through `server/discover`, and the client
+ *   is connected. A legacy transport adapter presents this same modern boundary after completing
+ *   its own handshake.
  * - `disconnect` — the connection this client had announced ended (every pending request
  *   rejected, and the connection it owned on the transport closed — or that close faulted or
  *   timed out, which rejects the `disconnect` caller rather than withholding this event).
@@ -2478,14 +2479,15 @@ export interface MCPTaskClientInterface {
 /**
  * A transport-agnostic Model Context Protocol CLIENT — connects to a REMOTE MCP
  * server over an injected {@link MCPClientTransportInterface}, negotiates the
- * modern or legacy wire era, and exposes the server's tools as local
+ * modern wire revision, and exposes the server's tools as local
  * {@link ToolInterface}s an agent can run.
  *
  * @remarks
  * - **The mirror of {@link MCPServerInterface}.** Where the server DISPATCHES requests
- *   over a tool registry, the client ISSUES them over a transport: `connect` probes
- *   `server/discover` first unless pinned to a legacy revision, falling back to the
- *   legacy `initialize` handshake only when the peer does not speak the modern era.
+ *   over a tool registry, the client ISSUES them over a transport: `connect` negotiates through
+ *   `server/discover`. A legacy peer requires an explicit
+ *   {@link MCPLegacyClientTransportOptions legacy transport adapter}; the bare client refuses a
+ *   peer that does not speak the modern era and names that adapter.
  *   The negotiated revision is exposed through `version`; `tools()` lists
  *   the remote tools and wraps each as a local {@link ToolInterface} whose `execute`
  *   calls back through `call`; `call(name, args)` runs a remote `tools/call` and reports
@@ -2529,10 +2531,10 @@ export interface MCPTaskClientInterface {
  */
 export interface MCPClientInterface {
 	readonly emitter: EmitterInterface<MCPClientEventMap>
-	/** Whether era negotiation has completed and the client is connected. */
+	/** Whether modern revision negotiation has completed and the client is connected. */
 	readonly connected: boolean
 	/** The negotiated protocol revision, or `undefined` while disconnected. */
-	readonly version: MCPVersion | undefined
+	readonly version: MCPModernVersion | undefined
 	/** The injected transport the client drives the remote server over. */
 	readonly transport: MCPClientTransportInterface
 	/**
@@ -2547,7 +2549,7 @@ export interface MCPClientInterface {
 	readonly tasks: MCPTaskClientInterface
 	/**
 	 * Connects to the remote server — opens a connection on the transport and negotiates the
-	 * modern or legacy wire era without exposing that choice to the caller.
+	 * modern wire revision.
 	 *
 	 * @remarks
 	 * Idempotent — a second `connect` while already connected is a no-op, and one issued
@@ -2560,8 +2562,8 @@ export interface MCPClientInterface {
 	 * or having outrun its deadline without ever confirming that the connection ended — closes that
 	 * connection FIRST, joining a close still running rather than issuing a second one, and rejects
 	 * with the fault if that close fails or goes unanswered again; so the transport is never opened
-	 * beside a connection no path has closed. An unpinned client probes `server/discover`; a pinned legacy
-	 * client and a legacy fallback run `initialize` and send `notifications/initialized`.
+	 * beside a connection no path has closed. The client probes `server/discover`; an explicit legacy
+	 * transport adapter owns any `initialize` handshake and presents a modern discovery result.
 	 * On success {@link version} contains a supported revision and the `connect` event
 	 * fires. Whichever side owns the open connection closes it when the attempt rejects — the
 	 * attempt itself, or the {@link disconnect} that superseded it — and a `close` that fails, or

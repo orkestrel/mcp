@@ -29,6 +29,7 @@ import {
 	createDuplexClientTransport,
 	createMCPClient,
 	createMCPLegacy,
+	createMCPLegacyClientTransport,
 	createMCPServer,
 	decodeBoundedMessage,
 	DEFAULT_MCP_CACHE_TTL,
@@ -658,14 +659,15 @@ describe('bindServer', () => {
 	it('serves a legacy initialize and tools/call through the decorator over a real duplex pair', async () => {
 		const [serverTransport, clientTransport] = createMemoryTransportPair()
 		const unbindServer = bindServer(createMCPLegacy(server()), serverTransport)
+		const carrier = createDuplexClientTransport(clientTransport)
 		const client = createMCPClient({
-			transport: createDuplexClientTransport(clientTransport),
-			version: '2025-06-18',
+			transport: createMCPLegacyClientTransport(carrier, { version: '2025-06-18' }),
 		})
-		const unbindClient = bindClient(client, clientTransport)
+		const bridge = createMCPClient({ transport: carrier })
+		const unbindClient = bindClient(bridge, clientTransport)
 
 		await client.connect()
-		expect(client.version).toBe('2025-06-18')
+		expect(client.version).toBe('2026-07-28')
 		expect(await client.call('add', { x: 2, y: 3 })).toEqual({ resultType: 'complete', value: 5 })
 		await client.disconnect()
 		unbindClient()
@@ -1251,7 +1253,7 @@ describe('bindClient', () => {
 		return createMCPClient({ transport: createDuplexClientTransport(transport) })
 	}
 
-	it('completes a connect handshake round trip over the duplex transport', async () => {
+	it('completes a modern discovery round trip over the duplex transport', async () => {
 		const transport = createMemoryTransport()
 		const mcp = client(transport)
 		bindClient(mcp, transport)
@@ -1265,25 +1267,19 @@ describe('bindClient', () => {
 			JSON.stringify({
 				jsonrpc: '2.0',
 				id: probe.id,
-				error: { code: -32601, message: 'Method not found: server/discover' },
-			}),
-		)
-		await waitForDelay()
-		expect(transport.sent).toHaveLength(2)
-		const initialize: { id: number; method: string } = JSON.parse(transport.sent[1] ?? '{}')
-		expect(initialize.method).toBe('initialize')
-		transport.deliver(
-			JSON.stringify({
-				jsonrpc: '2.0',
-				id: initialize.id,
-				result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: {} },
+				result: {
+					supportedVersions: ['2026-07-28'],
+					capabilities: {},
+					resultType: 'complete',
+					ttlMs: 0,
+					cacheScope: 'private',
+				},
 			}),
 		)
 		await connecting
 
 		expect(mcp.connected).toBe(true)
-		// notifications/initialized fires as the last, un-replied write.
-		expect(transport.sent).toHaveLength(3)
+		expect(transport.sent).toHaveLength(1)
 	})
 
 	it('drops a malformed inbound message rather than throwing', () => {

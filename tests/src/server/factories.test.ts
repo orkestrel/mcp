@@ -9,6 +9,7 @@ import {
 	buildCancelledNotification,
 	createMCPClient,
 	createMCPLegacy,
+	createMCPLegacyClientTransport,
 	createMCPServer,
 	MCP_META_SERVER,
 	MCP_MODERN_VERSION,
@@ -516,13 +517,15 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 	it('serves a legacy initialize and tools/call through the decorator over a real socket', async () => {
 		const handle = await startWsMCP(createMCPLegacy(createCalculatorServer()))
 		const client = createMCPClient({
-			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
-			version: '2025-06-18',
+			transport: createMCPLegacyClientTransport(
+				createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
+				{ version: '2025-06-18' },
+			),
 		})
 		teardown.add(() => closeResource(client))
 
 		await client.connect()
-		expect(client.version).toBe('2025-06-18')
+		expect(client.version).toBe(MCP_MODERN_VERSION)
 		expect(await client.call('add', {})).toEqual({ resultType: 'complete', value: 5 })
 	})
 
