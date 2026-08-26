@@ -26,7 +26,7 @@ import {
 	createMCPLegacy,
 	createMCPLegacyClientTransport,
 	createMCPServer,
-	MCP_LEGACY_VERSION,
+	MCP_FALLBACK_VERSION,
 	MCP_MODERN_VERSION,
 } from '@src/core'
 import { createMessagePortTransport } from '@src/browser'
@@ -335,7 +335,7 @@ describe('one deployment, one registry, both wire eras', () => {
 	it('answers a dated handshake statefully and a modern client on the same endpoint', async () => {
 		const stack = await startStack({ legacy: true })
 		teardown.add(() => stack.stop())
-		const legacy = stack.http(MCP_LEGACY_VERSION)
+		const legacy = stack.http(MCP_FALLBACK_VERSION)
 		const modern = stack.http()
 
 		await legacy.connect()

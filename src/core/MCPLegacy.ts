@@ -20,7 +20,7 @@ import {
 	JSONRPC_SERVER_ERROR,
 	MCP_EXTENSION_TASKS,
 	MCP_MISSING_CAPABILITY,
-	MCP_PROTOCOL_VERSION,
+	MCP_HANDSHAKE_VERSION,
 } from './constants.js'
 import {
 	buildInitializeResult,
@@ -205,7 +205,7 @@ export class MCPLegacy implements MCPDispatcherInterface {
 		return buildJSONRPCError(
 			id,
 			JSONRPC_SERVER_ERROR,
-			`Legacy protocol ${MCP_PROTOCOL_VERSION} cannot represent ${article} ${result} result`,
+			`Legacy protocol ${MCP_HANDSHAKE_VERSION} cannot represent ${article} ${result} result`,
 		)
 	}
 }

@@ -2,13 +2,13 @@ import {
 	createMCPLegacy,
 	createMCPClient,
 	JSONRPC_METHOD_NOT_FOUND,
-	MCP_LEGACY_VERSION,
+	MCP_FALLBACK_VERSION,
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
 	MCP_MODERN_VERSION,
-	MCP_PROTOCOL_VERSION,
+	MCP_HANDSHAKE_VERSION,
 	MCP_UNSUPPORTED_VERSION,
-	SUPPORTED_PROTOCOL_VERSIONS,
+	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
@@ -34,8 +34,8 @@ describe('MCP revision boundary', () => {
 		// guard's own boundary: nothing between the parser and `isMCPModernVersion` trims or
 		// normalizes a stamp, so each is refused and echoed back exactly as it arrived.
 		for (const version of [
-			MCP_PROTOCOL_VERSION,
-			MCP_LEGACY_VERSION,
+			MCP_HANDSHAKE_VERSION,
+			MCP_FALLBACK_VERSION,
 			'2099-01-01',
 			`${MCP_MODERN_VERSION} `,
 			` ${MCP_MODERN_VERSION}`,
@@ -70,10 +70,10 @@ describe('MCP revision boundary', () => {
 			await legacy.dispatch(
 				createJSONRPCRequest({
 					method: 'initialize',
-					params: { protocolVersion: MCP_LEGACY_VERSION },
+					params: { protocolVersion: MCP_FALLBACK_VERSION },
 				}),
 			),
-		).toMatchObject({ result: { protocolVersion: MCP_LEGACY_VERSION } })
+		).toMatchObject({ result: { protocolVersion: MCP_FALLBACK_VERSION } })
 		expect(await legacy.dispatch(createJSONRPCRequest({ method: 'ping' }))).toEqual({
 			jsonrpc: '2.0',
 			id: 1,
@@ -99,6 +99,6 @@ describe('MCP revision boundary', () => {
 		expect(client.version).toBe(MCP_MODERN_VERSION)
 		expect((await client.discover()).supportedVersions).toEqual([MCP_MODERN_VERSION])
 		expect((await client.tools()).map((tool) => tool.name)).toEqual(['add', 'boom'])
-		expect(SUPPORTED_PROTOCOL_VERSIONS).toEqual([MCP_MODERN_VERSION])
+		expect(SUPPORTED_MODERN_PROTOCOL_VERSIONS).toEqual([MCP_MODERN_VERSION])
 	})
 })

@@ -18,8 +18,8 @@ import {
 	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
 	MCP_MODERN_VERSION,
-	MCP_LEGACY_VERSION,
-	MCP_PROTOCOL_VERSION,
+	MCP_FALLBACK_VERSION,
+	MCP_HANDSHAKE_VERSION,
 } from '@src/core'
 import { createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
@@ -314,7 +314,7 @@ describe('createMCPPostHandler', () => {
 				code: -32022,
 				message: "Unsupported MCP protocol version '2099-01-01'",
 				data: {
-					supported: [MCP_PROTOCOL_VERSION, MCP_LEGACY_VERSION],
+					supported: [MCP_HANDSHAKE_VERSION, MCP_FALLBACK_VERSION],
 					requested: '2099-01-01',
 				},
 			},
@@ -348,7 +348,7 @@ describe('createMCPPostHandler', () => {
 				code: -32022,
 				message: `Unsupported MCP protocol version '${MCP_MODERN_VERSION}'`,
 				data: {
-					supported: [MCP_PROTOCOL_VERSION, MCP_LEGACY_VERSION],
+					supported: [MCP_HANDSHAKE_VERSION, MCP_FALLBACK_VERSION],
 					requested: MCP_MODERN_VERSION,
 				},
 			},

@@ -6,10 +6,10 @@ import {
 	buildJSONRPCResult,
 	inferRequestVersion,
 	isJSONRPCId,
-	MCP_LEGACY_VERSION,
+	MCP_FALLBACK_VERSION,
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
-	MCP_PROTOCOL_VERSION,
+	MCP_HANDSHAKE_VERSION,
 	createMCPClient,
 	createMCPLegacy,
 	createMCPLegacyClientTransport,
@@ -239,7 +239,7 @@ describe('HTTPClientTransport — lifecycle', () => {
 			},
 		})
 		const metadata = {
-			[MCP_META_VERSION]: MCP_PROTOCOL_VERSION,
+			[MCP_META_VERSION]: MCP_HANDSHAKE_VERSION,
 			[MCP_META_CAPABILITIES]: {},
 		}
 
@@ -269,9 +269,9 @@ describe('HTTPClientTransport — lifecycle', () => {
 				header.get(MCP_NAME_HEADER),
 			]),
 		).toEqual([
-			[MCP_PROTOCOL_VERSION, 'server/discover', null],
-			[MCP_PROTOCOL_VERSION, 'tools/list', null],
-			[MCP_PROTOCOL_VERSION, 'tools/call', 'add'],
+			[MCP_HANDSHAKE_VERSION, 'server/discover', null],
+			[MCP_HANDSHAKE_VERSION, 'tools/list', null],
+			[MCP_HANDSHAKE_VERSION, 'tools/call', 'add'],
 		])
 	})
 
@@ -350,12 +350,12 @@ describe('HTTPClientTransport — lifecycle', () => {
 			},
 		})
 		const client = createMCPClient({
-			transport: createMCPLegacyClientTransport(transport, { version: MCP_LEGACY_VERSION }),
+			transport: createMCPLegacyClientTransport(transport, { version: MCP_FALLBACK_VERSION }),
 		})
 
 		await client.connect()
 
-		expect(protocols).toEqual([null, MCP_LEGACY_VERSION])
+		expect(protocols).toEqual([null, MCP_FALLBACK_VERSION])
 		expect(methods).toEqual([null, null])
 		expect(names).toEqual([null, null])
 		await client.disconnect()
@@ -417,16 +417,16 @@ describe('HTTPClientTransport — lifecycle', () => {
 			},
 		})
 		const client = createMCPClient({
-			transport: createMCPLegacyClientTransport(transport, { version: MCP_LEGACY_VERSION }),
+			transport: createMCPLegacyClientTransport(transport, { version: MCP_FALLBACK_VERSION }),
 		})
 
 		await client.connect()
-		expect(protocols).toEqual([null, MCP_LEGACY_VERSION])
+		expect(protocols).toEqual([null, MCP_FALLBACK_VERSION])
 
 		await client.disconnect()
 		await transport.send({ jsonrpc: '2.0', id: 99, method: 'ping', params: {} })
 
-		expect(protocols).toEqual([null, MCP_LEGACY_VERSION, null])
+		expect(protocols).toEqual([null, MCP_FALLBACK_VERSION, null])
 	})
 })
 

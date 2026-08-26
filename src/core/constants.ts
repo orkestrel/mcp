@@ -12,35 +12,35 @@ import type { MCPLegacyVersion, MCPModernVersion, MCPVersion } from './types.js'
  * and defines no `initialize`, so it can never be the handshake's version — a client that offers
  * it is asking to negotiate a revision with no negotiation.
  */
-export const MCP_PROTOCOL_VERSION: MCPLegacyVersion = '2025-11-25'
+export const MCP_HANDSHAKE_VERSION: MCPLegacyVersion = '2025-11-25'
 
-/** The legacy fallback anchor used when an initialize request cannot be accepted as modern. */
-export const MCP_LEGACY_VERSION: MCPLegacyVersion = '2025-06-18'
+/** The older legacy revision the optional legacy decorator accepts and an adapter can pin. */
+export const MCP_FALLBACK_VERSION: MCPLegacyVersion = '2025-06-18'
 
 /** The modern revision offered by an unpinned client during discovery. */
 export const MCP_MODERN_VERSION: MCPModernVersion = '2026-07-28'
 
 /**
- * The MCP protocol revisions a bare server accepts and advertises.
+ * The modern MCP protocol revisions a bare server accepts and advertises.
  *
  * @remarks
  * Frozen in discovery-advertisement order. Legacy revisions are absent because
  * only {@link SUPPORTED_LEGACY_PROTOCOL_VERSIONS} and the optional legacy
  * decorator own them.
  */
-export const SUPPORTED_PROTOCOL_VERSIONS: readonly MCPModernVersion[] = Object.freeze([
+export const SUPPORTED_MODERN_PROTOCOL_VERSIONS: readonly MCPModernVersion[] = Object.freeze([
 	MCP_MODERN_VERSION,
 ])
 
 /** The protocol revisions accepted by the optional legacy decorator. */
 export const SUPPORTED_LEGACY_PROTOCOL_VERSIONS: readonly MCPLegacyVersion[] = Object.freeze([
-	MCP_PROTOCOL_VERSION,
-	MCP_LEGACY_VERSION,
+	MCP_HANDSHAKE_VERSION,
+	MCP_FALLBACK_VERSION,
 ])
 
-/** The protocol revisions the client can use across modern and legacy peers. */
-export const SUPPORTED_CLIENT_PROTOCOL_VERSIONS: readonly MCPVersion[] = Object.freeze([
-	...SUPPORTED_PROTOCOL_VERSIONS,
+/** The protocol revisions the `isMCPVersion` guard admits, spanning the modern and legacy eras. */
+export const SUPPORTED_MCP_VERSIONS: readonly MCPVersion[] = Object.freeze([
+	...SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 	...SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
 ])
 

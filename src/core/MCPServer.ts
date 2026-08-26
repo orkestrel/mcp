@@ -57,7 +57,7 @@ import {
 	MCP_META_SERVER,
 	MCP_MISSING_CAPABILITY,
 	MCP_UNSUPPORTED_VERSION,
-	SUPPORTED_PROTOCOL_VERSIONS,
+	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from './constants.js'
 import {
 	buildDiscoverResult,
@@ -397,7 +397,7 @@ export class MCPServer implements MCPServerInterface {
 				id,
 				MCP_UNSUPPORTED_VERSION,
 				`Unsupported protocol version: ${context.version}`,
-				{ supported: SUPPORTED_PROTOCOL_VERSIONS, requested: context.version },
+				{ supported: SUPPORTED_MODERN_PROTOCOL_VERSIONS, requested: context.version },
 			)
 		}
 		// No blanket rejection of a continuation carrier on a non-tool method. Core owns the

@@ -82,13 +82,13 @@ it names.
 | Revision     | Era    | How a request announces it                                                                |
 | ------------ | ------ | ----------------------------------------------------------------------------------------- |
 | `2026-07-28` | modern | Per-request `_meta` carrying the reserved protocol-version key. No handshake, no session. |
-| `2025-11-25` | legacy | The `initialize` handshake. `MCP_PROTOCOL_VERSION` — the revision this server offers.     |
-| `2025-06-18` | legacy | The `initialize` handshake. `MCP_LEGACY_VERSION` — the older anchor an adapter may pin.   |
+| `2025-11-25` | legacy | The `initialize` handshake. `MCP_HANDSHAKE_VERSION` — the revision this server offers.    |
+| `2025-06-18` | legacy | The `initialize` handshake. `MCP_FALLBACK_VERSION` — the older anchor an adapter may pin. |
 
-`SUPPORTED_PROTOCOL_VERSIONS` is the bare server's frozen modern set and the exact
+`SUPPORTED_MODERN_PROTOCOL_VERSIONS` is the bare server's frozen modern set and the exact
 `server/discover` advertisement: `2026-07-28`. `SUPPORTED_LEGACY_PROTOCOL_VERSIONS`
 contains the initialize revisions that `createMCPLegacy` alone accepts.
-`SUPPORTED_CLIENT_PROTOCOL_VERSIONS` combines those era-scoped sets for the version guards and
+`SUPPORTED_MCP_VERSIONS` combines those era-scoped sets for the version guards and
 the explicit client adapter; it never becomes a bare-client or server advertisement. Older revisions are deliberately absent,
 and their absence is this package's decision rather than the ecosystem's — see
 [Declared non-goals](#declared-non-goals).
@@ -1814,13 +1814,13 @@ text is legacy ownership. The modern engine therefore still compiles once the la
 `isModernRequest` survives because the modern engine reads structural key presence. Each
 remaining survivor has its own consumer, and they are not the same one:
 
-| Survivor               | What consumes it after the layer is deleted                                                                                                                                                   |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inferEra`             | Nothing inside `src`. It is the published era helper, and it reads `isMCPModernVersion` then `isMCPLegacyVersion` rather than restating either set.                                           |
-| `isInitializeRequest`  | Legacy server ingress: `src/server/middlewares.ts` mints and validates a session from it, and `src/server/inferers.ts` exempts a headerless `initialize` from the header demand.              |
-| `MCPLegacyResult`      | The unstamped result arm of `JSONRPCResponse` in `src/core/types.ts`, its guard `isMCPLegacyResult`, and the decorator's projection.                                                          |
-| `MCP_PROTOCOL_VERSION` | Client-adapter egress in `src/core/MCPLegacyClientTransport.ts`, the legacy handshake anchor in `src/core/helpers.ts` and `src/server/inferers.ts`, and `SUPPORTED_LEGACY_PROTOCOL_VERSIONS`. |
-| `MCP_LEGACY_VERSION`   | `SUPPORTED_LEGACY_PROTOCOL_VERSIONS` plus an explicit `MCPLegacyClientTransportOptions.version` pin.                                                                                          |
+| Survivor                | What consumes it after the layer is deleted                                                                                                                                                   |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inferEra`              | Nothing inside `src`. It is the published era helper, and it reads `isMCPModernVersion` then `isMCPLegacyVersion` rather than restating either set.                                           |
+| `isInitializeRequest`   | Legacy server ingress: `src/server/middlewares.ts` mints and validates a session from it, and `src/server/inferers.ts` exempts a headerless `initialize` from the header demand.              |
+| `MCPLegacyResult`       | The unstamped result arm of `JSONRPCResponse` in `src/core/types.ts`, its guard `isMCPLegacyResult`, and the decorator's projection.                                                          |
+| `MCP_HANDSHAKE_VERSION` | Client-adapter egress in `src/core/MCPLegacyClientTransport.ts`, the legacy handshake anchor in `src/core/helpers.ts` and `src/server/inferers.ts`, and `SUPPORTED_LEGACY_PROTOCOL_VERSIONS`. |
+| `MCP_FALLBACK_VERSION`  | `SUPPORTED_LEGACY_PROTOCOL_VERSIONS` plus an explicit `MCPLegacyClientTransportOptions.version` pin.                                                                                          |
 
 The bare server imports no legacy revision set and no legacy guard.
 
@@ -1949,12 +1949,12 @@ Passing a legacy revision to
 
 | Constant                             | Kind  | Value                                                                                                                |
 | ------------------------------------ | ----- | -------------------------------------------------------------------------------------------------------------------- |
-| `MCP_PROTOCOL_VERSION`               | const | `'2025-11-25'` — the newest legacy initialize revision.                                                              |
-| `MCP_LEGACY_VERSION`                 | const | `'2025-06-18'` — the older supported legacy revision.                                                                |
+| `MCP_HANDSHAKE_VERSION`              | const | `'2025-11-25'` — the newest legacy initialize revision.                                                              |
+| `MCP_FALLBACK_VERSION`               | const | `'2025-06-18'` — the older supported legacy revision.                                                                |
 | `MCP_MODERN_VERSION`                 | const | `'2026-07-28'` — the modern discovery revision.                                                                      |
-| `SUPPORTED_PROTOCOL_VERSIONS`        | const | Frozen bare-server discovery set: `2026-07-28`.                                                                      |
+| `SUPPORTED_MODERN_PROTOCOL_VERSIONS` | const | Frozen bare-server discovery set: `2026-07-28`.                                                                      |
 | `SUPPORTED_LEGACY_PROTOCOL_VERSIONS` | const | Frozen decorator handshake set: `2025-11-25`, `2025-06-18`.                                                          |
-| `SUPPORTED_CLIENT_PROTOCOL_VERSIONS` | const | Frozen version-guard set spanning the modern and legacy eras.                                                        |
+| `SUPPORTED_MCP_VERSIONS`             | const | Frozen version-guard set spanning the modern and legacy eras.                                                        |
 | `MCP_META_VERSION`                   | const | `'io.modelcontextprotocol/protocolVersion'` — reserved request-version metadata key.                                 |
 | `MCP_META_CAPABILITIES`              | const | `'io.modelcontextprotocol/clientCapabilities'` — reserved capability metadata key.                                   |
 | `MCP_META_CLIENT`                    | const | `'io.modelcontextprotocol/clientInfo'` — reserved client-identity metadata key.                                      |
@@ -3141,7 +3141,7 @@ The `tasks` data member is the stable Tasks extension's client half — see
 
 **`version` is an exact modern pin.** An unpinned `connect` offers `MCP_MODERN_VERSION`; a pinned
 client connects only where discovery advertises that same modern revision. A value outside
-`SUPPORTED_PROTOCOL_VERSIONS` throws `MCPError` `MCP_UNSUPPORTED_VERSION` from `createMCPClient`
+`SUPPORTED_MODERN_PROTOCOL_VERSIONS` throws `MCPError` `MCP_UNSUPPORTED_VERSION` from `createMCPClient`
 before the emitter and transport subscription exist, carrying `{ supported, requested }`. Read
 `version` after `connect` to learn the modern revision on the consumer surface. Configure a legacy
 pin on `MCPLegacyClientTransportOptions`, not on `MCPClientOptions`.
@@ -4314,7 +4314,7 @@ capabilities: { tools: {} }, serverInfo: { name, version } }`, the version NEGOT
    LEGACY subset only: the client's `params.protocolVersion` is echoed when it is a
    supported LEGACY revision, and every other request — the modern `'2026-07-28'`,
    an unsupported revision, a non-string, or an absent one — falls back to the
-   newest supported legacy revision (`MCP_PROTOCOL_VERSION`, `'2025-11-25'`). A
+   newest supported legacy revision (`MCP_HANDSHAKE_VERSION`, `'2025-11-25'`). A
    handshake is a legacy act, so it can only ever settle on a legacy revision; a
    client asking to `initialize` at `'2026-07-28'` is asking to negotiate a
    revision that defines no negotiation, and the client decides what to do with
@@ -4506,7 +4506,7 @@ on? })` drives a REMOTE server over an injected `MCPClientTransportInterface`
     (transport-abstract, like the server). `connect()` issues a modern
     `server/discover` carrying `_meta` with the offered revision,
     client capabilities, and client identity. It intersects the peer's
-    `supportedVersions` with `SUPPORTED_PROTOCOL_VERSIONS` in local preference
+    `supportedVersions` with `SUPPORTED_MODERN_PROTOCOL_VERSIONS` in local preference
     order and stores the newest match. A `-32022` reads `error.context.supported`
     and, when unpinned, retries discovery under a NEW monotonic id only when that
     set contains a supported modern revision. A legacy-only offer is never stamped

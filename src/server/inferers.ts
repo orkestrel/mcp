@@ -12,7 +12,7 @@ import {
 	MCP_HEADER_MISMATCH,
 	MCP_META_VERSION,
 	MCP_MISSING_CAPABILITY,
-	MCP_PROTOCOL_VERSION,
+	MCP_HANDSHAKE_VERSION,
 	MCP_UNSUPPORTED_VERSION,
 	isInitializeRequest,
 	isMCPLegacyVersion,
@@ -67,7 +67,7 @@ export function inferHeaderIssue(
 		return {
 			header: 'MCP-Protocol-Version',
 			reason: 'missing',
-			message: `Required MCP-Protocol-Version header is missing; this server offers '${MCP_PROTOCOL_VERSION}'.`,
+			message: `Required MCP-Protocol-Version header is missing; this server offers '${MCP_HANDSHAKE_VERSION}'.`,
 		}
 	}
 	const message = reference
@@ -142,7 +142,7 @@ export function inferHeaderIssue(
  */
 export function inferLegacyVersion(request: JSONRPCInvocation): MCPLegacyVersion {
 	const requested = request.params?.['protocolVersion']
-	return isMCPLegacyVersion(requested) ? requested : MCP_PROTOCOL_VERSION
+	return isMCPLegacyVersion(requested) ? requested : MCP_HANDSHAKE_VERSION
 }
 
 /**

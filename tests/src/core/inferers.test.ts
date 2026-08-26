@@ -3,7 +3,7 @@ import {
 	inferEra,
 	inferVersion,
 	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
-	SUPPORTED_PROTOCOL_VERSIONS,
+	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from '@src/core'
 
 describe('inferEra', () => {
@@ -25,13 +25,13 @@ describe('inferEra', () => {
 	// holds, so a revision added to a set without an era reads as a failure here rather than
 	// as a silently unclassified revision at every call site.
 	it('gives every member of each supported set the era of that set', () => {
-		expect(SUPPORTED_PROTOCOL_VERSIONS.map((version) => inferEra(version))).toEqual(
-			SUPPORTED_PROTOCOL_VERSIONS.map(() => 'modern'),
+		expect(SUPPORTED_MODERN_PROTOCOL_VERSIONS.map((version) => inferEra(version))).toEqual(
+			SUPPORTED_MODERN_PROTOCOL_VERSIONS.map(() => 'modern'),
 		)
 		expect(SUPPORTED_LEGACY_PROTOCOL_VERSIONS.map((version) => inferEra(version))).toEqual(
 			SUPPORTED_LEGACY_PROTOCOL_VERSIONS.map(() => 'legacy'),
 		)
-		expect(SUPPORTED_PROTOCOL_VERSIONS.length).toBeGreaterThan(0)
+		expect(SUPPORTED_MODERN_PROTOCOL_VERSIONS.length).toBeGreaterThan(0)
 		expect(SUPPORTED_LEGACY_PROTOCOL_VERSIONS.length).toBeGreaterThan(0)
 		expect(inferEra('2020-01-01')).toBeUndefined()
 	})

@@ -47,8 +47,8 @@ import {
 	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
 	MCP_MODERN_VERSION,
-	MCP_PROTOCOL_VERSION,
-	SUPPORTED_PROTOCOL_VERSIONS,
+	MCP_HANDSHAKE_VERSION,
+	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from './constants.js'
 import { MCPError } from './errors.js'
 import { parseJSONRPCMessage } from './parsers.js'
@@ -1022,7 +1022,7 @@ export function buildSubscriptionResult(
 export function buildDiscoverResult(options: MCPServerOptions): MCPDiscoverResult {
 	return buildModernResult(
 		{
-			supportedVersions: SUPPORTED_PROTOCOL_VERSIONS,
+			supportedVersions: SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 			capabilities: {
 				tools: {},
 				...(options.resources === undefined
@@ -1078,7 +1078,7 @@ export function buildInitializeResult(
 	version: string,
 	requested?: string,
 ): MCPLegacyResult {
-	const protocolVersion = isMCPLegacyVersion(requested) ? requested : MCP_PROTOCOL_VERSION
+	const protocolVersion = isMCPLegacyVersion(requested) ? requested : MCP_HANDSHAKE_VERSION
 	return {
 		protocolVersion,
 		capabilities: { tools: {} },

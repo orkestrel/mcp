@@ -61,11 +61,11 @@ import {
 	MCP_META_SERVER,
 	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
-	MCP_PROTOCOL_VERSION,
+	MCP_HANDSHAKE_VERSION,
 	MCP_MISSING_CAPABILITY,
 	MCP_UNSUPPORTED_VERSION,
 	MCPTextStreamController,
-	SUPPORTED_PROTOCOL_VERSIONS,
+	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -830,7 +830,7 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 
 		expect(response?.error?.code).toBe(MCP_UNSUPPORTED_VERSION)
 		expect(response?.error?.data).toEqual({
-			supported: SUPPORTED_PROTOCOL_VERSIONS,
+			supported: SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 			requested: '2099-01-01',
 		})
 	})
@@ -853,7 +853,7 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 		)
 
 		expect(response?.result).toEqual({
-			supportedVersions: SUPPORTED_PROTOCOL_VERSIONS,
+			supportedVersions: SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 			capabilities: { tools: {} },
 			instructions: 'Use the available tools.',
 			resultType: 'complete',
@@ -2690,7 +2690,7 @@ describe('MCPServer — initialize', () => {
 		const result = resultOf(response)
 
 		expect(response?.id).toBe(1)
-		expect(result['protocolVersion']).toBe(MCP_PROTOCOL_VERSION)
+		expect(result['protocolVersion']).toBe(MCP_HANDSHAKE_VERSION)
 		expect(result['capabilities']).toEqual({ tools: {} })
 		expect(result['serverInfo']).toEqual({ name: 'test-server', version: '1.2.3' })
 	})
@@ -2700,7 +2700,7 @@ describe('MCPServer — initialize', () => {
 			await server().dispatch(createJSONRPCRequest({ params: { protocolVersion: '2025-03-26' } })),
 		)
 
-		expect(resultOf(response)['protocolVersion']).toBe(MCP_PROTOCOL_VERSION)
+		expect(resultOf(response)['protocolVersion']).toBe(MCP_HANDSHAKE_VERSION)
 	})
 
 	it('falls back to the default for an unsupported requested version', async () => {
@@ -2708,7 +2708,7 @@ describe('MCPServer — initialize', () => {
 			await server().dispatch(createJSONRPCRequest({ params: { protocolVersion: '1999-01-01' } })),
 		)
 
-		expect(resultOf(response)['protocolVersion']).toBe(MCP_PROTOCOL_VERSION)
+		expect(resultOf(response)['protocolVersion']).toBe(MCP_HANDSHAKE_VERSION)
 	})
 
 	it('ignores a non-string requested version (falls back to the default)', async () => {
@@ -2716,7 +2716,7 @@ describe('MCPServer — initialize', () => {
 			await server().dispatch(createJSONRPCRequest({ params: { protocolVersion: 42 } })),
 		)
 
-		expect(resultOf(response)['protocolVersion']).toBe(MCP_PROTOCOL_VERSION)
+		expect(resultOf(response)['protocolVersion']).toBe(MCP_HANDSHAKE_VERSION)
 	})
 })
 

@@ -20,7 +20,7 @@ import {
 	JSONRPC_INTERNAL_ERROR,
 	JSONRPC_INVALID_PARAMS,
 	MCP_MODERN_VERSION,
-	MCP_PROTOCOL_VERSION,
+	MCP_HANDSHAKE_VERSION,
 	MCP_UNSUPPORTED_VERSION,
 	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
 } from './constants.js'
@@ -182,7 +182,7 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 				id: 0,
 				method: 'initialize',
 				params: {
-					protocolVersion: this.#pin ?? MCP_PROTOCOL_VERSION,
+					protocolVersion: this.#pin ?? MCP_HANDSHAKE_VERSION,
 					capabilities: this.#capabilities,
 					clientInfo: this.#client,
 				},

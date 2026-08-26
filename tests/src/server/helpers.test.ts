@@ -6,7 +6,7 @@ import {
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
 	MCP_MODERN_VERSION,
-	MCP_PROTOCOL_VERSION,
+	MCP_HANDSHAKE_VERSION,
 	buildJSONRPCError,
 	MCPStreamController,
 	parseJSONRPCMessage,
@@ -259,7 +259,7 @@ describe('inferHeaderIssue — one diagnosis across modern and legacy headers', 
 		expect(inferHeaderIssue(requestWithHeaders(), createJSONRPCRequest())).toBeUndefined()
 		expect(
 			inferHeaderIssue(
-				requestWithHeaders({ [MCP_PROTOCOL_VERSION_HEADER]: MCP_PROTOCOL_VERSION }),
+				requestWithHeaders({ [MCP_PROTOCOL_VERSION_HEADER]: MCP_HANDSHAKE_VERSION }),
 				createJSONRPCRequest({ method: 'tools/list' }),
 			),
 		).toBeUndefined()
@@ -448,7 +448,7 @@ describe('inferHeaderIssue — one diagnosis across modern and legacy headers', 
 		expect(
 			inferHeaderIssue(
 				requestWithHeaders({ [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' }),
-				MCP_PROTOCOL_VERSION,
+				MCP_HANDSHAKE_VERSION,
 			),
 		).toEqual({
 			header: 'MCP-Protocol-Version',

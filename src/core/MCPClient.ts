@@ -48,7 +48,7 @@ import {
 	MCP_META_VERSION,
 	MCP_MODERN_VERSION,
 	MCP_UNSUPPORTED_VERSION,
-	SUPPORTED_PROTOCOL_VERSIONS,
+	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from './constants.js'
 import { MCPError, isMCPError } from './errors.js'
 import { buildCallOutcome, buildCancelledNotification, matchesResultType } from './helpers.js'
@@ -220,7 +220,7 @@ export class MCPClient implements MCPClientInterface {
 		const error = options.error
 		if (requested !== undefined && !isMCPModernVersion(requested)) {
 			throw new MCPError('Unsupported protocol version', MCP_UNSUPPORTED_VERSION, {
-				supported: SUPPORTED_PROTOCOL_VERSIONS,
+				supported: SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 				requested,
 			})
 		}

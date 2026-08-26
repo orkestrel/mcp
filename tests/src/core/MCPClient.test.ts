@@ -22,10 +22,10 @@ import {
 	MCP_META_CLIENT,
 	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
-	MCP_PROTOCOL_VERSION,
+	MCP_HANDSHAKE_VERSION,
 	MCP_UNSUPPORTED_VERSION,
 	parseJSONRPCMessage,
-	SUPPORTED_PROTOCOL_VERSIONS,
+	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from '@src/core'
 import { createHTTPClientTransport } from '@src/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -490,7 +490,7 @@ async function startErrorPeer(): Promise<ErrorPeerInterface> {
 				silent.resolve()
 				return
 			}
-			sendHTTPResponse(response, 200, initializeResponse(message.id, MCP_PROTOCOL_VERSION))
+			sendHTTPResponse(response, 200, initializeResponse(message.id, MCP_HANDSHAKE_VERSION))
 			return
 		}
 		if (request.url === '/connect') {
@@ -501,7 +501,7 @@ async function startErrorPeer(): Promise<ErrorPeerInterface> {
 				})
 				return
 			}
-			sendHTTPResponse(response, 200, initializeResponse(message.id, MCP_PROTOCOL_VERSION))
+			sendHTTPResponse(response, 200, initializeResponse(message.id, MCP_HANDSHAKE_VERSION))
 			return
 		}
 		const path = request.url ?? ''
@@ -610,7 +610,7 @@ describe('MCPClient — connect (modern negotiation)', () => {
 		expect(isMCPError(failure)).toBe(true)
 		expect(failure).toMatchObject({
 			code: MCP_UNSUPPORTED_VERSION,
-			context: { supported: SUPPORTED_PROTOCOL_VERSIONS, requested: '2020-01-01' },
+			context: { supported: SUPPORTED_MODERN_PROTOCOL_VERSIONS, requested: '2020-01-01' },
 		})
 		expect(peer.started).toBe(0)
 		expect(peer.sent).toEqual([])
@@ -717,7 +717,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id, [MCP_PROTOCOL_VERSION])
+				return discoverResponse(request.id, [MCP_HANDSHAKE_VERSION])
 			},
 		})
 		const client = createMCPClient({ transport: peer, version: '2026-07-28' })
@@ -826,10 +826,10 @@ describe('MCPClient — modern discovery', () => {
 			reply: (request) => {
 				if (request.id === undefined) return undefined
 				if (request.method === 'server/discover') {
-					return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+					return initializeResponse(request.id, MCP_HANDSHAKE_VERSION)
 				}
 				if (request.method === 'initialize') {
-					return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+					return initializeResponse(request.id, MCP_HANDSHAKE_VERSION)
 				}
 				return undefined
 			},
@@ -1023,7 +1023,7 @@ describe('MCPClient — modern discovery', () => {
 					}
 				}
 				if (request.method === 'initialize') {
-					return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+					return initializeResponse(request.id, MCP_HANDSHAKE_VERSION)
 				}
 				return undefined
 			},
@@ -1043,7 +1043,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method === 'initialize' && request.id !== undefined) {
-					return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+					return initializeResponse(request.id, MCP_HANDSHAKE_VERSION)
 				}
 				return undefined
 			},
@@ -2559,7 +2559,7 @@ describe('MCPClient — discovery requires resultType', () => {
 						},
 					}
 				}
-				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+				return initializeResponse(request.id, MCP_HANDSHAKE_VERSION)
 			},
 		})
 		const client = createMCPClient({ transport: peer })

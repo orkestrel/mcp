@@ -14,7 +14,7 @@ import {
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
 	MCP_META_VERSION,
-	MCP_PROTOCOL_VERSION,
+	MCP_HANDSHAKE_VERSION,
 	MCP_UNSUPPORTED_VERSION,
 } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
@@ -196,7 +196,7 @@ describe('MCPLegacyClientTransport', () => {
 
 		await expect(client.connect()).rejects.toMatchObject({
 			code: MCP_UNSUPPORTED_VERSION,
-			context: { requested: '2025-06-18', negotiated: MCP_PROTOCOL_VERSION },
+			context: { requested: '2025-06-18', negotiated: MCP_HANDSHAKE_VERSION },
 		})
 		expect(client.connected).toBe(false)
 		expect(peer.closed).toBe(1)
@@ -272,7 +272,7 @@ describe('MCPLegacyClientTransport', () => {
 					jsonrpc: '2.0',
 					id: request.id,
 					result: {
-						protocolVersion: MCP_PROTOCOL_VERSION,
+						protocolVersion: MCP_HANDSHAKE_VERSION,
 						capabilities: { tools: {} },
 						serverInfo: { name: 'legacy-peer', version: '1.0.0' },
 						...(handshakes === 1 ? { instructions: 'Use read-only tools' } : {}),
@@ -301,7 +301,7 @@ describe('MCPLegacyClientTransport', () => {
 							jsonrpc: '2.0',
 							id: request.id,
 							result: {
-								protocolVersion: MCP_PROTOCOL_VERSION,
+								protocolVersion: MCP_HANDSHAKE_VERSION,
 								capabilities: { tools: {} },
 								serverInfo: { name: 'legacy-peer', version: '1.0.0' },
 								resultType: 'complete',
@@ -485,7 +485,7 @@ describe('MCPLegacyClientTransport', () => {
 			reply: (request) => {
 				if (request.method !== 'initialize' || request.id === undefined) return undefined
 				void client.disconnect()
-				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
+				return initializeResponse(request.id, MCP_HANDSHAKE_VERSION)
 			},
 		})
 		client = createMCPClient({ transport: createMCPLegacyClientTransport(peer) })

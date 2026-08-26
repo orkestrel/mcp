@@ -77,9 +77,9 @@ import {
 	MCP_META_SUBSCRIPTION,
 	MCP_META_SERVER,
 	MCP_META_VERSION,
-	SUPPORTED_CLIENT_PROTOCOL_VERSIONS,
+	SUPPORTED_MCP_VERSIONS,
 	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
-	SUPPORTED_PROTOCOL_VERSIONS,
+	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from './constants.js'
 import { serializeJSON } from './helpers.js'
 
@@ -1335,20 +1335,20 @@ export function isJSONRPCId(value: unknown): value is JSONRPCId {
  * Determines whether a value is a supported {@link MCPVersion}.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when the value is one of {@link SUPPORTED_CLIENT_PROTOCOL_VERSIONS}
+ * @returns `true` when the value is one of {@link SUPPORTED_MCP_VERSIONS}
  */
 export function isMCPVersion(value: unknown): value is MCPVersion {
-	return isString(value) && SUPPORTED_CLIENT_PROTOCOL_VERSIONS.some((version) => version === value)
+	return isString(value) && SUPPORTED_MCP_VERSIONS.some((version) => version === value)
 }
 
 /**
  * Determines whether a value is a modern protocol revision accepted by a bare server.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when the value is one of {@link SUPPORTED_PROTOCOL_VERSIONS}
+ * @returns `true` when the value is one of {@link SUPPORTED_MODERN_PROTOCOL_VERSIONS}
  */
 export function isMCPModernVersion(value: unknown): value is MCPModernVersion {
-	return isString(value) && SUPPORTED_PROTOCOL_VERSIONS.some((version) => version === value)
+	return isString(value) && SUPPORTED_MODERN_PROTOCOL_VERSIONS.some((version) => version === value)
 }
 
 /**

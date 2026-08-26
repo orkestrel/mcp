@@ -7,7 +7,7 @@ import type { StartedServerInterface } from '../../setupServer.js'
 import { request } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-	MCP_LEGACY_VERSION,
+	MCP_FALLBACK_VERSION,
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
 	MCP_MODERN_VERSION,
@@ -199,15 +199,15 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		const handle = await startSession()
 		const init = await postJSON(
 			handle.base,
-			createJSONRPCRequest({ params: { protocolVersion: MCP_LEGACY_VERSION } }),
+			createJSONRPCRequest({ params: { protocolVersion: MCP_FALLBACK_VERSION } }),
 		)
 		const id = init.headers.get(MCP_SESSION_HEADER)
-		expect((await init.clone().json()).result.protocolVersion).toBe(MCP_LEGACY_VERSION)
+		expect((await init.clone().json()).result.protocolVersion).toBe(MCP_FALLBACK_VERSION)
 		const response = await postSession(
 			handle.base,
 			id ?? undefined,
 			createJSONRPCRequest({ method: 'ping', id: 9 }),
-			{ [MCP_PROTOCOL_VERSION_HEADER]: MCP_LEGACY_VERSION },
+			{ [MCP_PROTOCOL_VERSION_HEADER]: MCP_FALLBACK_VERSION },
 		)
 
 		expect(response.status).toBe(200)
@@ -872,7 +872,7 @@ describe('MCPClient over a server with createMCPSession — the client echoes th
 		const client = createMCPClient({
 			transport: createMCPLegacyClientTransport(
 				createHTTPClientTransport({ url: `${handle.base}/mcp` }),
-				{ version: MCP_LEGACY_VERSION },
+				{ version: MCP_FALLBACK_VERSION },
 			),
 		})
 
