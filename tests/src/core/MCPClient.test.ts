@@ -30,6 +30,8 @@ import { createTool, createToolManager } from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
 import { createServer } from 'node:http'
 import { createSignal, waitForDelay } from '@orkestrel/test'
+import { isRecord } from '@orkestrel/contract'
+import { createInputServer } from '../../setup.js'
 
 const NATIVE_ABORT_TIMEOUT = AbortSignal.timeout
 const RECORDED_ABORT_DEADLINES: number[] = []
@@ -584,34 +586,6 @@ function serverWithTools(): MCPDispatcherInterface {
 			tools: toolRegistry(),
 		}),
 	)
-}
-
-function serverWithInput(): MCPDispatcherInterface {
-	return createMCPServer({
-		identity: { name: 'input-loopback', version: '1.2.3' },
-		tools: toolRegistry(),
-		input: {
-			continuation: {
-				seal: (value) => Promise.resolve(value),
-				open: (value) => Promise.resolve(value),
-			},
-			ttl: 60_000,
-			principal: () => 'operator-1',
-			elicit: ({ response }) =>
-				response === undefined
-					? {
-							request: {
-								message: 'Approve this call?',
-								requestedSchema: {
-									type: 'object',
-									properties: { approved: { type: 'boolean' } },
-									required: ['approved'],
-								},
-							},
-						}
-					: undefined,
-		},
-	})
 }
 
 describe('MCPClient — connect (modern negotiation)', () => {
@@ -1270,20 +1244,42 @@ describe('MCPClient — call() (the content round-trip)', () => {
 		if (continued === undefined || plain === undefined) {
 			throw new Error('Expected the peer to receive the continued and plain calls')
 		}
-		expect(continued.params?.['arguments']).toBe(args)
-		expect(continued.params).toMatchObject({
-			name: 'NAME',
-			arguments: args,
-			requestState: 'protected-state',
-			inputResponses: responses,
-		})
-		expect(Object.hasOwn(plain.params ?? {}, 'requestState')).toBe(false)
-		expect(Object.hasOwn(plain.params ?? {}, 'inputResponses')).toBe(false)
+		const sent = continued.params
+		const bare = plain.params
+		if (sent === undefined || bare === undefined) {
+			throw new Error('Expected both tools/call requests to carry params')
+		}
+		const carried = sent['arguments']
+		const reserved = sent['_meta']
+		if (!isRecord(carried) || !isRecord(reserved)) {
+			throw new Error('Expected the recorded arguments and reserved metadata to be records')
+		}
+
+		expect(carried).toBe(args)
+		expect(sent['name']).toBe('NAME')
+		expect(sent['requestState']).toBe('protected-state')
+		expect(sent['inputResponses']).toBe(responses)
+		// The pair rides at the TOP level and nowhere else. A subset match over `params` admits
+		// an implementation that ALSO buries the pair under `arguments` or under the reserved
+		// `_meta`, and either one changes what a peer reads while the top-level keys still look
+		// right, so each wrong home is refused by name.
+		expect(Object.hasOwn(carried, 'requestState')).toBe(false)
+		expect(Object.hasOwn(carried, 'inputResponses')).toBe(false)
+		expect(Object.hasOwn(reserved, 'requestState')).toBe(false)
+		expect(Object.hasOwn(reserved, 'inputResponses')).toBe(false)
+		// The caller's own object is read, never written: identity alone cannot see an
+		// implementation that placed the pair by mutating `args` in place, because the recorded
+		// arguments and the caller's object are then the same object carrying the same keys.
+		expect(Object.hasOwn(args, 'requestState')).toBe(false)
+		expect(Object.hasOwn(args, 'inputResponses')).toBe(false)
+		expect(args).toEqual({ operation: 'release', nested: { approved: false } })
+		expect(Object.hasOwn(bare, 'requestState')).toBe(false)
+		expect(Object.hasOwn(bare, 'inputResponses')).toBe(false)
 	})
 
 	it('continues an input-required call with protected state and responses', async () => {
 		const client = createMCPClient({
-			transport: createLoopback(serverWithInput()),
+			transport: createLoopback(createInputServer(toolRegistry())),
 			capabilities: { elicitation: {} },
 		})
 		await client.connect()
@@ -1313,7 +1309,7 @@ describe('MCPClient — call() (the content round-trip)', () => {
 
 	it('keeps changed retry arguments under the server digest refusal', async () => {
 		const client = createMCPClient({
-			transport: createLoopback(serverWithInput()),
+			transport: createLoopback(createInputServer(toolRegistry())),
 			capabilities: { elicitation: {} },
 		})
 		await client.connect()
@@ -1327,19 +1323,32 @@ describe('MCPClient — call() (the content round-trip)', () => {
 		}
 		const key = Object.keys(first.inputRequests)[0]
 		if (key === undefined) throw new Error('Expected an input request key')
+		const answers = { [key]: { action: 'accept', content: { approved: true } } }
 
+		// The refusal is read by its MESSAGE, not by `-32602` alone: the required-together gate
+		// earlier in the same retry ingress answers that identical code, so the code on its own
+		// cannot say which gate ran.
 		await expect(
 			client.call(
 				'echo',
 				{ value: 'altered' },
-				{
-					input: {
-						state: first.requestState,
-						responses: { [key]: { action: 'accept', content: { approved: true } } },
-					},
-				},
+				{ input: { state: first.requestState, responses: answers } },
 			),
-		).rejects.toMatchObject({ code: JSONRPC_INVALID_PARAMS })
+		).rejects.toMatchObject({
+			code: JSONRPC_INVALID_PARAMS,
+			message: 'Invalid params: request state could not be verified for this retry',
+		})
+
+		// The same protected state, replayed with the ORIGINAL arguments, still completes. That
+		// is what makes the refusal above the digest binding rather than a state the failed
+		// retry had spent or a carrier the server could not recover at all.
+		expect(
+			await client.call(
+				'echo',
+				{ value: 'original' },
+				{ input: { state: first.requestState, responses: answers } },
+			),
+		).toEqual({ resultType: 'complete', value: { echoed: 'original' } })
 	})
 
 	it('returns a structured value on the complete arm', async () => {

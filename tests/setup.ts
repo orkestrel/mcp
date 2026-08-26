@@ -3,6 +3,7 @@
 // `tests/setupServer.ts`.
 
 import type { SSEEvent } from '@orkestrel/sse'
+import type { ToolManagerInterface } from '@orkestrel/tool'
 import type {
 	MCPClientTransportEventMap,
 	MCPClientTransportInterface,
@@ -361,6 +362,57 @@ export function createCalculatorServer(): MCPServerInterface {
 		}),
 	)
 	return createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
+}
+
+/**
+ * Build an {@link MCPServerInterface} whose every first-round `tools/call` asks for a form
+ * elicitation, so a client-side scenario can drive the input continuation end to end.
+ *
+ * @remarks
+ * The continuation port is the identity adapter — `seal` and `open` hand the value straight
+ * back — which keeps the protected state readable to the scenario while leaving every binding
+ * the server writes into it intact. The registry is a parameter because the tools a
+ * continuation scenario needs belong to that scenario, not to the input configuration.
+ *
+ * The `elicit` selector answers on the round it can tell apart: a first round arrives with no
+ * response and receives the approval question, and a retry arrives carrying one and receives
+ * `undefined`, which is what lets the tool run.
+ *
+ * @param tools - The registry whose tools the returned server dispatches `tools/call` against
+ * @returns An MCP server configured with a 60-second input continuation window
+ *
+ * @example
+ * ```ts
+ * const server = createInputServer(createToolManager())
+ * server.identity.name // 'input-loopback'
+ * ```
+ */
+export function createInputServer(tools: ToolManagerInterface): MCPServerInterface {
+	return createMCPServer({
+		identity: { name: 'input-loopback', version: '1.2.3' },
+		tools,
+		input: {
+			continuation: {
+				seal: (value) => Promise.resolve(value),
+				open: (value) => Promise.resolve(value),
+			},
+			ttl: 60_000,
+			principal: () => 'operator-1',
+			elicit: ({ response }) =>
+				response === undefined
+					? {
+							request: {
+								message: 'Approve this call?',
+								requestedSchema: {
+									type: 'object',
+									properties: { approved: { type: 'boolean' } },
+									required: ['approved'],
+								},
+							},
+						}
+					: undefined,
+		},
+	})
 }
 
 // ── Exchange-ownership instrument (shared by every pump, and by the control) ─
