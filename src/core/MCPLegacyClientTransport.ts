@@ -56,7 +56,7 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 	readonly #capabilities: MCPClientCapabilities
 	readonly #pin: MCPLegacyVersion | undefined
 	readonly #timeout: number
-	readonly #methods = new Map<JSONRPCId, readonly [method: string, deadline: AbortSignal]>()
+	readonly #correlations = new Map<JSONRPCId, { readonly method: string }>()
 	#handshake: PromiseWithResolvers<JSONRPCResponse> | undefined = undefined
 	#instructions: string | undefined = undefined
 	#server: MCPIdentity | undefined = undefined
@@ -124,14 +124,15 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 			return
 		}
 		const id = message.id
-		let correlation: readonly [method: string, deadline: AbortSignal] | undefined
+		let correlation: { readonly method: string } | undefined
 		if (id !== undefined) {
-			correlation = [message.method, AbortSignal.timeout(this.#timeout)]
-			this.#methods.set(id, correlation)
-			correlation[1].addEventListener(
+			correlation = { method: message.method }
+			this.#correlations.set(id, correlation)
+			const deadline = AbortSignal.timeout(this.#timeout)
+			deadline.addEventListener(
 				'abort',
 				() => {
-					if (this.#methods.get(id) !== correlation) return
+					if (this.#correlations.get(id) !== correlation) return
 					this.#reject(
 						id,
 						new MCPError(
@@ -146,16 +147,29 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 		try {
 			await this.#transport.send(modernInvocationToLegacy(message))
 		} catch (error) {
-			if (id !== undefined && this.#methods.get(id) === correlation) this.#methods.delete(id)
+			if (id !== undefined && this.#correlations.get(id) === correlation) {
+				this.#correlations.delete(id)
+			}
 			throw error
 		}
 	}
 
+	/**
+	 * Closes the wrapped transport and clears retained adapter state.
+	 *
+	 * @remarks
+	 * The cleared handshake state — the server identity, the supported reading, and the retained
+	 * `instructions` value — is unobservable between `close()` and the next accepted handshake.
+	 * Discovery answers the pre-handshake refusal in that window, and the accepted handshake
+	 * reassigns the state unconditionally.
+	 *
+	 * @returns Resolves after the wrapped transport closes
+	 */
 	async close(): Promise<void> {
 		this.#instructions = undefined
 		this.#server = undefined
 		this.#supported = undefined
-		this.#methods.clear()
+		this.#correlations.clear()
 		await this.#transport.close()
 	}
 
@@ -278,7 +292,7 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 				id,
 				new MCPError(
 					'Legacy MCP transport has not completed its handshake',
-					JSONRPC_INVALID_PARAMS,
+					JSONRPC_INTERNAL_ERROR,
 				),
 			)
 			return
@@ -316,13 +330,13 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 			this.#emitter.emit('message', owned)
 			return
 		}
-		const correlation = this.#methods.get(owned.id)
+		const correlation = this.#correlations.get(owned.id)
 		if (correlation === undefined) {
 			this.#emitter.emit('message', owned)
 			return
 		}
-		this.#methods.delete(owned.id)
-		const method = correlation[0]
+		this.#correlations.delete(owned.id)
+		const method = correlation.method
 		if (owned.error !== undefined) {
 			this.#emitter.emit('message', owned)
 			return
@@ -331,7 +345,7 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 		if (identity === undefined || !isMCPLegacyResult(owned.result)) {
 			this.#reject(
 				owned.id,
-				new MCPError('Legacy MCP peer returned a malformed result', JSONRPC_INVALID_PARAMS),
+				new MCPError('Legacy MCP peer returned a malformed result', JSONRPC_INTERNAL_ERROR),
 			)
 			return
 		}
@@ -343,7 +357,7 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 	}
 
 	#reject(id: JSONRPCId, error: MCPError): void {
-		this.#methods.delete(id)
+		this.#correlations.delete(id)
 		this.#emitter.emit('error', error)
 		this.#emitter.emit('message', buildJSONRPCError(id, error.code, error.message))
 	}

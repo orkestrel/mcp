@@ -1699,6 +1699,10 @@ The adapter rejects an absent, malformed, unsupported, or pin-mismatched handsha
 the client connects. Its request deadline bounds the handshake response, each handshake write, and
 each forwarded correlated request. The adapter reserves wire id `0` while that handshake window is
 open; do not send unrelated id-`0` traffic through the wrapped carrier until `start()` settles.
+Before an accepted handshake, local `server/discover` answers with a correlated `-32603`. A
+forwarded request also answers with a correlated `-32603` when its deadline expires or the peer
+returns a malformed result that cannot be translated. A peer-originated JSON-RPC error passes
+through with its code unchanged.
 
 The bare client never attempts this handshake. When `server/discover` returns `-32601`, `connect`
 rejects with an `MCPError` whose message names `createMCPLegacyClientTransport`. A legacy peer that
@@ -2040,10 +2044,11 @@ The core `limit.message` bound applies specifically where a transport supplies a
 `MCPServer.handle`; the HTTP route owns and parses its Fetch `Request` body before typed dispatch.
 
 The HTTP client transport does not mint or refresh credentials. A guarded server requires the
-consumer to supply its bearer through `headers`, for example
-`{ authorization: 'Bearer …' }`. If that bearer is missing and the guard returns a non-JSON-RPC
-`401` JSON body, `send()` rejects with an error naming HTTP `401` and the invalid JSON-RPC body
-shape. A valid correlated JSON-RPC error body is still emitted at any HTTP status.
+consumer to supply its bearer through `headers`. Use `ACCESS_TOKEN` for the bearer credential, for
+example, `{ authorization: 'Bearer ACCESS_TOKEN' }`. If that bearer is missing and the guard
+returns a non-JSON-RPC `401` JSON body, `send()` rejects with an error naming HTTP `401` and the
+invalid JSON-RPC body shape. A valid correlated JSON-RPC error body is still emitted at any HTTP
+status.
 
 ```ts
 import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
@@ -2204,6 +2209,7 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | `acceptsEventStream`     | function | Whether the request's `Accept` header contains `text/event-stream`.                                                                                                                                                    |
 | `createReadableStream`   | function | Build a `ReadableStream` from its `pull` and `cancel` behaviours, supplied as arguments rather than an inline source object.                                                                                           |
 | `allowsOrigin`           | function | Allow an absent or canonical loopback-literal Origin; require every other present serialized Origin in the explicit list unless validation is delegated upstream.                                                      |
+| `buildResponseError`     | function | Build the error for a non-success HTTP response that carried no JSON-RPC message, naming its status and body shape.                                                                                                    |
 | `inferHeaderIssue`       | function | Derive the first missing or mismatched modern, stateless-legacy, or active-session header issue; `undefined` when the applicable fields agree.                                                                         |
 | `inferLegacyVersion`     | function | Pin a supported requested legacy revision, otherwise select the newest supported legacy revision.                                                                                                                      |
 | `inferStatus`            | function | Map a dispatch outcome to its era-aware HTTP status while preserving legacy in-band `200` errors.                                                                                                                      |
@@ -2266,12 +2272,7 @@ vanished is no longer held, and closing a dead one is a no-op, so a departed cli
 neither throws nor delays the stop.
 
 ```ts
-import {
-	createMCPClient,
-	createMCPLegacy,
-	createMCPLegacyClientTransport,
-	createMCPServer,
-} from '@orkestrel/mcp'
+import { createMCPClient, createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createWebSocketClientTransport, createWebSocketServer } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/tool'
 
@@ -2433,7 +2434,12 @@ have existed. The transport reports that lifetime on its `error` event, so a par
 readable as partial rather than as the child's whole output.
 
 ```ts
-import { createMCPClient, createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
+import {
+	createMCPClient,
+	createMCPLegacy,
+	createMCPLegacyClientTransport,
+	createMCPServer,
+} from '@orkestrel/mcp'
 import { createStdioClientTransport, createStdioServer } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/tool'
 
@@ -3383,6 +3389,7 @@ gates, and the SSE decoders — useful in a custom route or test harness.
 import {
 	acceptsEventStream,
 	allowsOrigin,
+	buildResponseError,
 	createMCPPostHandler,
 	createReadableStream,
 	decodeEvent,
@@ -3443,6 +3450,10 @@ inferHeaderIssue(posted, { ...call, method: 'tools/list' })?.message
 const reply = await fetch('http://localhost:3000/mcp')
 const messages = await readEventStream(reply)
 decodeEvent('{"jsonrpc":"2.0","id":1,"result":{}}')
+buildResponseError(
+	new Response('', { status: 503, headers: { 'content-type': 'text/event-stream' } }),
+	'text/event-stream',
+).message // 'HTTP 503 response contained a text/event-stream body without a JSON-RPC message'
 upgradeRequestPath(rawUpgradeRequest) // the incoming upgrade request's pathname
 ```
 

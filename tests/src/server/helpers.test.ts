@@ -14,6 +14,7 @@ import {
 import {
 	acceptsEventStream,
 	allowsOrigin,
+	buildResponseError,
 	decodeEvent,
 	inferHeaderIssue,
 	MCP_METHOD_HEADER,
@@ -517,6 +518,42 @@ describe('decodeEvent — one SSE data payload → its JSON-RPC message', () => 
 	it('is undefined for valid JSON that is not a JSON-RPC message', () => {
 		// Parses fine, but `parseJSONRPCMessage` rejects it (no `jsonrpc`) → dropped.
 		expect(decodeEvent(JSON.stringify({ method: 'ping', id: 1 }))).toBeUndefined()
+	})
+})
+
+describe('buildResponseError — non-success HTTP reply without a JSON-RPC message', () => {
+	it('names an event stream that yielded no message', () => {
+		const response = new Response('', {
+			status: 503,
+			headers: { 'content-type': 'text/event-stream' },
+		})
+
+		expect(buildResponseError(response, 'text/event-stream')).toEqual(
+			new Error('HTTP 503 response contained a text/event-stream body without a JSON-RPC message'),
+		)
+	})
+
+	it('names a JSON body that parsed to no message', () => {
+		const response = Response.json({ error: 'unavailable' }, { status: 502 })
+
+		expect(buildResponseError(response, 'application/json')).toEqual(
+			new Error(
+				'HTTP 502 response contained an application/json body that was not a JSON-RPC message',
+			),
+		)
+	})
+
+	it('distinguishes an absent content type from an unsupported one', () => {
+		expect(buildResponseError(new Response('', { status: 500 }), '')).toEqual(
+			new Error('HTTP 500 response contained a body without a content type'),
+		)
+		const response = new Response('', {
+			status: 415,
+			headers: { 'content-type': 'text/plain' },
+		})
+		expect(buildResponseError(response, 'text/plain')).toEqual(
+			new Error("HTTP 415 response contained an unsupported 'text/plain' body"),
+		)
 	})
 })
 

@@ -21,6 +21,33 @@ import { isString } from '@orkestrel/contract'
 import { MCP_SESSION_HEADER } from './constants.js'
 
 /**
+ * Builds the error for a non-success HTTP response that carried no JSON-RPC message.
+ *
+ * @param response - The response whose status is reported
+ * @param type - The response's content type, or an empty string when absent
+ * @returns An error naming the HTTP status and unsupported response shape
+ *
+ * @example
+ * ```ts
+ * const error = buildResponseError(new Response('', { status: 500 }), '')
+ * ```
+ */
+export function buildResponseError(response: Response, type: string): Error {
+	if (type.includes('application/json')) {
+		return new Error(
+			`HTTP ${response.status} response contained an application/json body that was not a JSON-RPC message`,
+		)
+	}
+	if (type.includes('text/event-stream')) {
+		return new Error(
+			`HTTP ${response.status} response contained a text/event-stream body without a JSON-RPC message`,
+		)
+	}
+	const shape = type === '' ? 'a body without a content type' : `an unsupported '${type}' body`
+	return new Error(`HTTP ${response.status} response contained ${shape}`)
+}
+
+/**
  * Creates a readable stream from its pull and cancellation behaviours.
  *
  * @param pull - The behaviour that supplies the stream's next chunk

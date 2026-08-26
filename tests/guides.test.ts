@@ -5,7 +5,12 @@
 import type { JSONRPCMessage, MCPDispatcherInterface } from '@src/core'
 import type { ChildProcess } from 'node:child_process'
 import type { ScratchInterface } from '@orkestrel/test/server'
-import { createMCPLegacy, createMCPServer } from '@src/core'
+import {
+	createMCPClient,
+	createMCPLegacy,
+	createMCPLegacyClientTransport,
+	createMCPServer,
+} from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -996,6 +1001,32 @@ describe('guides/mcp.md § stdio transport — what the spawned child actually r
 const LEGACY_INITIALIZE =
 	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"guide","version":"1.0.0"}}}'
 
+/** A legacy-only stdio peer that answers the adapter handshake and refuses other requests. */
+const LEGACY_PEER_SCRIPT = `
+const readline = require('node:readline')
+const rl = readline.createInterface({ input: process.stdin })
+rl.on('line', (line) => {
+	const message = JSON.parse(line)
+	if (message.id === undefined) return
+	const response = message.method === 'initialize'
+		? {
+				jsonrpc: '2.0',
+				id: message.id,
+				result: {
+					protocolVersion: '2025-11-25',
+					capabilities: { tools: {} },
+					serverInfo: { name: 'legacy-peer', version: '1.0.0' },
+				},
+			}
+		: {
+				jsonrpc: '2.0',
+				id: message.id,
+				error: { code: -32601, message: 'Method not found: ' + message.method },
+			}
+	process.stdout.write(JSON.stringify(response) + '\\n')
+})
+`
+
 /** Read one newline-framed reply off a stdio server's injected output stream. */
 async function readStdioReply(output: PassThrough): Promise<unknown> {
 	let buffer = ''
@@ -1033,6 +1064,30 @@ function createGuideServer(): ReturnType<typeof createMCPServer> {
 		tools: createToolManager(),
 	})
 }
+
+/** Drives the fence's consumer-side adapter over a spawned legacy stdio peer. */
+async function readGuideClientVersion(): Promise<string | undefined> {
+	const carrier = createStdioClientTransport({
+		command: process.execPath,
+		args: ['-e', LEGACY_PEER_SCRIPT],
+	})
+	const client = createMCPClient({
+		transport: createMCPLegacyClientTransport(carrier, { timeout: 10_000 }),
+		timeout: 10_000,
+	})
+	try {
+		await client.connect()
+		return client.version
+	} finally {
+		await client.disconnect()
+	}
+}
+
+describe('guides/mcp.md § stdio transport — what the consumer-visible client exposes', () => {
+	it('keeps the client modern through the legacy stdio adapter', async () => {
+		await expect(readGuideClientVersion()).resolves.toBe('2026-07-28')
+	})
+})
 
 describe('guides/mcp.md § stdio transport — what the composed server answers', () => {
 	it('answers a legacy initialize, as the composed fence claims', async () => {

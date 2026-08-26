@@ -20,7 +20,7 @@ import {
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
 } from '../constants.js'
-import { readEventStream } from '../helpers.js'
+import { buildResponseError, readEventStream } from '../helpers.js'
 
 /**
  * The HTTP CLIENT transport for the Model Context Protocol — a
@@ -201,42 +201,21 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 	async #deliver(response: Response): Promise<void> {
 		if (response.status === 202) return
 		const type = response.headers.get('content-type') ?? ''
+		let messages: readonly JSONRPCMessage[] = []
+		let failure: { readonly error: unknown } | undefined
 		try {
 			if (type.includes('text/event-stream')) {
-				const messages = await readEventStream(response)
-				for (const message of messages) this.#capture(message)
-				if (!response.ok && messages.length === 0) throw this.#responseError(response, type)
-				return
-			}
-			if (type.includes('application/json')) {
+				messages = await readEventStream(response)
+			} else if (type.includes('application/json')) {
 				const message = parseJSONRPCMessage(await response.json())
-				if (message !== undefined) {
-					this.#capture(message)
-					return
-				}
-				if (!response.ok) throw this.#responseError(response, type)
-				return
+				if (message !== undefined) messages = [message]
 			}
-			if (!response.ok) throw this.#responseError(response, type)
 		} catch (error) {
-			if (!response.ok) throw this.#responseError(response, type)
-			this.#emitter.emit('error', error)
+			failure = { error }
 		}
-	}
-
-	#responseError(response: Response, type: string): Error {
-		if (type.includes('application/json')) {
-			return new Error(
-				`HTTP ${response.status} response contained an application/json body that was not a JSON-RPC message`,
-			)
-		}
-		if (type.includes('text/event-stream')) {
-			return new Error(
-				`HTTP ${response.status} response contained a text/event-stream body without a JSON-RPC message`,
-			)
-		}
-		const shape = type === '' ? 'a body without a content type' : `an unsupported '${type}' body`
-		return new Error(`HTTP ${response.status} response contained ${shape}`)
+		for (const message of messages) this.#capture(message)
+		if (!response.ok && messages.length === 0) throw buildResponseError(response, type)
+		if (failure !== undefined) this.#emitter.emit('error', failure.error)
 	}
 
 	// Capture the negotiated SUPPORTED protocol from the initialize result before emitting

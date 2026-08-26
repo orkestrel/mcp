@@ -352,7 +352,7 @@ describe('MCPLegacyClientTransport', () => {
 				jsonrpc: '2.0',
 				id: 7,
 				error: {
-					code: -32602,
+					code: -32603,
 					message: 'Legacy MCP transport has not completed its handshake',
 				},
 			},
@@ -377,7 +377,7 @@ describe('MCPLegacyClientTransport', () => {
 			{
 				jsonrpc: '2.0',
 				id: 7,
-				error: { code: -32602, message: 'Legacy MCP peer returned a malformed result' },
+				error: { code: -32603, message: 'Legacy MCP peer returned a malformed result' },
 			},
 			{ jsonrpc: '2.0', id: 7, result: { tools: [] } },
 		])
