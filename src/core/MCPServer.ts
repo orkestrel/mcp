@@ -124,7 +124,7 @@ import {
  * - **One modern seam.** `server/discover`, `tools/list`, `tools/call`, and
  *   `subscriptions/listen` are always registered; `resources/*`, `prompts/*`, and
  *   `completion/complete` register independently when their respective host ports are
- *   configured — plus `tasks/get`, `tasks/update`, and `tasks/cancel` when the draft Tasks
+ *   configured — plus `tasks/get`, `tasks/update`, and `tasks/cancel` when the stable Tasks
  *   extension is configured — and every method is resolved from the registry on
  *   every dispatch: the same path a later method or a consumer's own takes, with an
  *   unregistered method still answering `-32601`.
@@ -343,7 +343,7 @@ export class MCPServer implements MCPServerInterface {
 				this.#suggest(request, completion, options),
 			)
 		}
-		// The draft Tasks extension's methods register ONLY when a consumer configured
+		// The stable Tasks extension's methods register ONLY when a consumer configured
 		// the extension. An unconfigured server never registers them, so they resolve to nothing
 		// and the modern branch answers `-32601` through the same unregistered-method path any
 		// other unknown method takes — the honest reply from a server that does not implement an
@@ -810,7 +810,7 @@ export class MCPServer implements MCPServerInterface {
 		return 'jsonrpc' in result ? result : buildJSONRPCResult(id, result)
 	}
 
-	// The task decision, and the WHOLE of this server's half of the draft Tasks extension.
+	// The task decision, and the WHOLE of this server's half of the stable Tasks extension.
 	//
 	// Its position between `#input` and `#progress` is the ordering the extension implies.
 	// MRTR runs FIRST because a call still asking its operator a question has not yet been
@@ -1383,9 +1383,9 @@ export class MCPServer implements MCPServerInterface {
 	// refused before its parameters are read at all. The code is the GENERIC
 	// missing-required-client-capability code, the same one the elicitation path answers — the
 	// tasks and elicitation refusals are told apart by `data.requiredCapabilities` alone, because
-	// they are instances of the same condition rather than distinct conditions. (The extension's own draft prose still shows
-	// `-32003` in examples; the dated core schema fixes `-32021`, and a peer implements the
-	// dated schema.)
+	// they are instances of the same condition rather than distinct conditions. (The extension's
+	// own prose examples show `-32003`; the dated core schema fixes `-32021`, and a peer
+	// implements the dated schema.)
 	#named(request: JSONRPCRequest): string | JSONRPCErrorResponse {
 		const id = request.id
 		const context = parseRequestContext(request, {

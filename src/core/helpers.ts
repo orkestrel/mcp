@@ -93,26 +93,29 @@ export function isFormElicitationSupported(value: unknown): boolean {
 }
 
 /**
- * Determines whether a client capability record declares the draft Tasks extension.
+ * Determines whether a client capability record declares the stable Tasks extension.
  *
  * @remarks
- * The declaration lives at `extensions['io.modelcontextprotocol/tasks']` and its value is
- * an empty object, so this is a PRESENCE check: the extension defines no options, and a
- * server that read one would be reading a field no client can meaningfully set. The value
- * must still be a record, because that is the shape the capability record declares — a
- * `true` or a string there is a client speaking a different protocol, not a shorthand.
+ * The declaration lives at `extensions['io.modelcontextprotocol/tasks']` and the schema
+ * types its value EXACTLY EMPTY — `Record<string, never>`, an object with no additional
+ * properties. So the key's presence is the whole declaration, and the value carries the
+ * whole of the check: a `true` or a string there is a client speaking a different protocol
+ * rather than a shorthand, and a member inside the object is a client declaring an option
+ * this extension does not define. Both are refused, because a server that accepted either
+ * would be reading a shape no peer can produce from the snapshot's own schema.
  *
  * A client declares this PER REQUEST. Nothing here consults a session, because the modern
  * revision is stateless and a capability declared once at connect time says nothing about
  * the request in hand. Total over hostile input.
  *
  * @param value - The client capability record to inspect
- * @returns `true` when the tasks extension is declared
+ * @returns `true` when the tasks extension is declared as the schema's empty object
  *
  * @example
  * ```ts
  * isTaskSupported({ extensions: { 'io.modelcontextprotocol/tasks': {} } }) // true
  * isTaskSupported({ extensions: {} }) // false — the key is the declaration
+ * isTaskSupported({ extensions: { 'io.modelcontextprotocol/tasks': { on: true } } }) // false
  * ```
  */
 export function isTaskSupported(value: unknown): boolean {
@@ -120,7 +123,9 @@ export function isTaskSupported(value: unknown): boolean {
 	if (!owned.success) return false
 	try {
 		const extensions = owned.value['extensions']
-		return isRecord(extensions) && isRecord(extensions[MCP_EXTENSION_TASKS])
+		if (!isRecord(extensions)) return false
+		const declaration = extensions[MCP_EXTENSION_TASKS]
+		return isRecord(declaration) && Object.keys(declaration).length === 0
 	} catch {
 		return false
 	}

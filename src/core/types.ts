@@ -730,8 +730,11 @@ export type MCPExecutionHandler = (
 // OUTLIVES the request that created it: the server answers `resultType: 'task'`
 // immediately, and the client comes back for the outcome later.
 //
-// The extension is DRAFT (`io.modelcontextprotocol/tasks`, `specification/draft`)
-// and carries no stability guarantee; every type below can change with it.
+// The extension is the STABLE, immutable snapshot dated 2026-07-28
+// (`io.modelcontextprotocol/tasks`), whose generated schema id is
+// `https://modelcontextprotocol.io/ext-tasks/2026-07-28/schema.json`. That snapshot is
+// fixed, so every type in this family is written against it and a later revision arrives
+// as its own dated snapshot rather than as a change to this one.
 //
 // The whole of it is CONSUMER-OWNED. This package decides one thing — whether the
 // call in hand is deferred — and otherwise carries requests to the manager below
@@ -798,16 +801,64 @@ export type MCPTask = {
  * `completed` carries the deferred call's result, `failed` carries the JSON-RPC error
  * that ended it, and `working` / `cancelled` carry nothing extra. Narrow on `status`.
  *
- * `result` is an open {@link MCPResult} rather than an {@link MCPCallResult}: only
- * `tools/call` can be deferred, but the payload is the deferred method's
- * own result and the extension says nothing that fixes it to one method forever.
+ * `result` is an OPEN RECORD rather than an {@link MCPResult} or an
+ * {@link MCPCallResult}, because the schema declares it one: a completed task's payload
+ * is whatever the deferred method answered, and the extension constrains nothing inside
+ * it — not even a `resultType`. Only `tools/call` can be deferred today, and the
+ * extension says nothing that fixes the payload to one method forever, so a reader that
+ * knows which call it deferred narrows this record with that method's own guard.
  */
 export type MCPTaskDetail =
 	| (MCPTask & { readonly status: 'working' })
 	| (MCPTask & { readonly status: 'input_required'; readonly inputRequests: MCPInputRequestMap })
-	| (MCPTask & { readonly status: 'completed'; readonly result: MCPResult })
+	| (MCPTask & {
+			readonly status: 'completed'
+			readonly result: Readonly<Record<string, unknown>>
+	  })
 	| (MCPTask & { readonly status: 'failed'; readonly error: JSONRPCError })
 	| (MCPTask & { readonly status: 'cancelled' })
+
+/**
+ * The wire answer to `tasks/get` — one snapshot under the completed-result stamp.
+ *
+ * @remarks
+ * DISTINCT from {@link MCPTaskDetail}, and the distinction is the whole point. A detail is
+ * what the consumer's {@link MCPTaskManagerInterface} answers, unstamped, because a durable
+ * store knows nothing about the request that read it. This is what a `tasks/get` REPLY
+ * carries: the schema types that reply as the detail intersected with the standard result,
+ * so `resultType: 'complete'` is required rather than incidental and a peer that omits it
+ * has answered something other than the method's declared result.
+ *
+ * `complete`, not `task`. Only the creation answer ({@link MCPTaskResult}) carries
+ * `resultType: 'task'`; reading a task is an ordinary completed call whose payload happens
+ * to be a task.
+ */
+export type MCPTaskDetailResult = MCPTaskDetail & {
+	readonly resultType: 'complete'
+	/** Open modern protocol metadata, including reserved namespaced keys. */
+	readonly _meta?: MCPResultMetaObject
+}
+
+/**
+ * The parameters of a `notifications/tasks` frame — one snapshot, flat, optionally stamped
+ * with the subscription that delivered it.
+ *
+ * @remarks
+ * FLAT, and that is the schema's shape rather than a choice: the extension types these
+ * parameters as the notification envelope intersected with the detail, so every task field
+ * sits directly under `params` and no `task` wrapper member exists. Narrow on `status`
+ * exactly as with {@link MCPTaskDetail}.
+ *
+ * The index signature is the envelope's own openness, carried through. `_meta` is optional
+ * because the reserved subscription stamp is present only on a frame delivered down a
+ * `subscriptions/listen` stream and absent on one delivered any other way — see
+ * {@link MCPNotificationMetaObject}.
+ */
+export type MCPTaskNotificationParams = MCPTaskDetail & {
+	/** Open notification metadata, including the reserved subscription stamp. */
+	readonly _meta?: MCPNotificationMetaObject
+	readonly [key: string]: unknown
+}
 
 /**
  * The modern `tools/call` result announcing that the call became a durable task.
@@ -982,7 +1033,7 @@ export type MCPTaskHandler = (
 ) => string | undefined | Promise<string | undefined>
 
 /**
- * Consumer policy for the server's draft Tasks extension.
+ * Consumer policy for the server's stable Tasks extension.
  *
  * @remarks
  * Supplying this is what turns the extension on: an unconfigured server advertises
@@ -1285,6 +1336,24 @@ export type MCPResultMetaObject = MCPMetaObject & {
 }
 
 /**
+ * Open notification metadata with the dated reserved subscription field.
+ *
+ * @remarks
+ * The subscription id is OPTIONAL here, and that is the schema's own split rather than
+ * this package hedging. A frame delivered down a `subscriptions/listen` stream carries the
+ * stamp naming the listen request that agreed to it; the same notification delivered any
+ * other way carries no stamp, because there is no subscription to name. A required key
+ * would refuse a frame the protocol permits.
+ *
+ * Compare {@link MCPSubscriptionResultMetaObject}, where the same key is REQUIRED: that one
+ * sits on the terminating result of a stream, so a subscription always exists to name.
+ */
+export type MCPNotificationMetaObject = MCPMetaObject & {
+	/** The JSON-RPC id of the `subscriptions/listen` request whose stream delivered the frame. */
+	readonly 'io.modelcontextprotocol/subscriptionId'?: JSONRPCId
+}
+
+/**
  * The validated per-request context projected from a modern request's reserved
  * `_meta` keys.
  *
@@ -1331,6 +1400,25 @@ export interface MCPSubscriptionFilter {
 	readonly resourcesListChanged?: boolean
 	/** Receives `notifications/resources/updated` for these resource URIs. */
 	readonly resourceSubscriptions?: readonly string[]
+	/**
+	 * Receives `notifications/tasks` for these task identifiers.
+	 *
+	 * @remarks
+	 * The wire placement is `params.notifications.taskIds`, beside `resourceSubscriptions`,
+	 * and that placement is THIS PACKAGE'S READING rather than a settled fact: the Tasks
+	 * extension declares the fragment carrying this member without composing it into the
+	 * `subscriptions/listen` request, so no source states where the fragment lands. The
+	 * spelling itself is the schema's and is carried verbatim under the same wire-key
+	 * exemption as its siblings.
+	 *
+	 * The server honours the member only when a consumer configured BOTH a task manager and
+	 * a subscription producer: the manager resolves each requested identifier before the
+	 * acknowledgement agrees to it, and the producer is what a transition frame arrives
+	 * through. Either one missing leaves nothing to deliver, so the acknowledgement omits
+	 * the member. That fact is DERIVED from the two configured options at the moment the
+	 * listen request is answered; no third flag records it, so it cannot drift from them.
+	 */
+	readonly taskIds?: readonly string[]
 }
 
 /** The required metadata on a graceful `subscriptions/listen` result. */
@@ -1787,7 +1875,7 @@ export interface MCPJSONLimitOptions {
  * {@link MCPServerEventMap}, wired at construction. `input` enables modern
  * `tools/call` multi-round trips: the consumer decides when input is needed and
  * supplies principal/continuation/TTL policy, while MCP assigns the request key and
- * owns the protected wire round trip. `task` enables the draft Tasks extension: the
+ * owns the protected wire round trip. `task` enables the stable Tasks extension: the
  * consumer supplies the durable store and the deferral decision, while MCP owns the
  * capability gate and the `resultType: 'task'` answer. `limit` configures the server's
  * hostile-input and live-subscription bounds; every omitted leaf uses
@@ -1830,12 +1918,12 @@ export interface MCPServerOptions {
 	/** Optional event-driven producer for the modern `subscriptions/listen` method. */
 	readonly subscription?: MCPSubscriptionOptions
 	/**
-	 * Optional draft Tasks extension; the durable store and the deferral decision are consumer-supplied.
+	 * Optional Tasks extension; the durable store and the deferral decision are consumer-supplied.
 	 *
 	 * @remarks
 	 * Omitting it leaves every existing path untouched — nothing is advertised, no call is
-	 * deferred, and `tasks/*` stays unregistered. The extension is DRAFT and carries no
-	 * stability guarantee.
+	 * deferred, and `tasks/*` stays unregistered. The extension is the STABLE, immutable
+	 * snapshot dated 2026-07-28, so the shape this option admits is fixed.
 	 */
 	readonly task?: MCPTaskOptions
 	/** Hostile-input and live-resource bounds; omitted leaves use secure defaults. */
@@ -2407,7 +2495,7 @@ export interface MCPTaskClientOptions {
 }
 
 /**
- * The CLIENT half of the draft Tasks extension — reading, answering, and stopping a durable
+ * The CLIENT half of the stable Tasks extension — reading, answering, and stopping a durable
  * task the peer created.
  *
  * @remarks
@@ -2426,8 +2514,11 @@ export interface MCPTaskClientOptions {
  * beside it. It supplies no timer, no scheduler, no terminal-await helper, and no cache,
  * because it has no durable place to keep a task, no way to know when the application still
  * cares, and no lifetime to hang a timer on that outlives the request. Schedule the reads
- * yourself, or wait for the peer to push: an inbound task notification arrives on the client's
- * existing `notification` event at zero new mechanism.
+ * yourself, or wait for the peer to push. A task notification the server stamped for a
+ * subscription is claimed by the `listen` stream that asked for it and does not re-emit
+ * through the `MCPClientEventMap` `notification` event, so a subscribed consumer reads its
+ * transitions from the stream it opened; an unstamped notification arrives on that event at
+ * no added mechanism.
  *
  * Every method authorizes on the peer's side, so a task belonging to another principal is
  * indistinguishable from one that never existed and one whose TTL purged it — each is
@@ -2446,7 +2537,7 @@ export interface MCPTaskClientInterface {
 	 *
 	 * The peer's payload is carried VERBATIM once it proves well-formed. A modern result's own
 	 * `resultType: 'complete'` and `_meta` stamps therefore ride along on the snapshot, because
-	 * rebuilding the object to drop them would also drop the unrecognized draft members this
+	 * rebuilding the object to drop them would also drop the unrecognized members this
 	 * package deliberately preserves.
 	 *
 	 * @param id - The `taskId` to read
@@ -2567,7 +2658,7 @@ export interface MCPClientInterface {
 	/** The injected transport the client drives the remote server over. */
 	readonly transport: MCPClientTransportInterface
 	/**
-	 * The draft Tasks extension's client half — reading, answering, and stopping a durable task.
+	 * The stable Tasks extension's client half — reading, answering, and stopping a durable task.
 	 *
 	 * @remarks
 	 * Always present, because the `tasks/*` methods are ordinary requests a client may

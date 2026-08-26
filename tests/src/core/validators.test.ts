@@ -85,7 +85,10 @@ import {
 	isMCPServerCapabilities,
 	isMCPStringArguments,
 	isJSONRPCError,
+	isMCPNotificationMetaObject,
 	isMCPTaskDetail,
+	isMCPTaskDetailResult,
+	isMCPTaskNotification,
 	isMCPTaskResult,
 	isMCPTaskStatus,
 	isMCPTextResource,
@@ -102,6 +105,7 @@ import {
 	MCP_MISSING_CAPABILITY,
 	MCP_META_CAPABILITIES,
 	MCP_META_SERVER,
+	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
 	MCP_UNSUPPORTED_VERSION,
 	MCPError,
@@ -679,9 +683,15 @@ describe('isMCPSubscriptionFilter', () => {
 				promptsListChanged: false,
 				resourcesListChanged: true,
 				resourceSubscriptions: ['resource://one'],
+				taskIds: ['task-1', 'task-2'],
 				extension: { future: true },
 			}),
 		).toBe(true)
+		// The task family opts in exactly as the resource family does, and an empty request is a
+		// caller asking for no task at all rather than for every task.
+		expect(isMCPSubscriptionFilter({ taskIds: [] })).toBe(true)
+		// Request order and duplicates are the caller's, and this guard normalizes neither.
+		expect(isMCPSubscriptionFilter({ taskIds: ['b', 'a', 'b'] })).toBe(true)
 	})
 
 	it('rejects invalid recognized fields and remains total over hostile input', () => {
@@ -690,6 +700,12 @@ describe('isMCPSubscriptionFilter', () => {
 			{ promptsListChanged: 1 },
 			{ resourcesListChanged: null },
 			{ resourceSubscriptions: ['resource://one', 2] },
+			// A malformed `taskIds` fails the whole filter rather than being dropped, so the listen
+			// request carrying it is refused instead of quietly agreeing to a narrower subscription.
+			{ taskIds: 'task-1' },
+			{ taskIds: ['task-1', 7] },
+			{ taskIds: [null] },
+			{ taskIds: {} },
 			null,
 			[],
 		]) {
@@ -1638,12 +1654,17 @@ describe('isModernRequest', () => {
 	})
 })
 
-describe('draft Tasks extension validators', () => {
+describe('stable Tasks extension validators', () => {
 	it('reads the extension declaration as presence under the extensions record', () => {
 		expect(isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: {} } })).toBe(true)
-		// Presence only — an extension that later defines options must not retroactively
-		// make an option-free declaration invalid.
-		expect(isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: { later: {} } } })).toBe(true)
+		// Re-ruled from `true`: the authority declares the capability EXACTLY empty
+		// (`TasksExtensionCapability = Record<string, never>`), so a member under the key is a
+		// peer declaring something this extension does not define, not a forward-compatible
+		// option this package must tolerate.
+		expect(isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: { later: {} } } })).toBe(false)
+		expect(isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: { enabled: true } } })).toBe(
+			false,
+		)
 		expect(isTaskSupported({ extensions: {} })).toBe(false)
 		expect(isTaskSupported({ [MCP_EXTENSION_TASKS]: {} })).toBe(false)
 		expect(isTaskSupported({ extensions: { 'io.modelcontextprotocol/task': {} } })).toBe(false)
@@ -1698,6 +1719,10 @@ describe('draft Tasks extension validators', () => {
 		expect(isMCPTaskResult({ ...created, lastUpdatedAt: null })).toBe(false)
 		expect(isMCPTaskResult({ ...created, ttlMs: 'forever' })).toBe(false)
 		expect(isMCPTaskResult({ ...created, ttlMs: Number.NaN })).toBe(false)
+		// The authority formats both durations `int`, so a fractional millisecond is a peer
+		// speaking a shape the schema does not admit rather than a rounding the reader absorbs.
+		expect(isMCPTaskResult({ ...created, ttlMs: 60_000.5 })).toBe(false)
+		expect(isMCPTaskResult({ ...created, pollIntervalMs: 2_500.5 })).toBe(false)
 		expect(isMCPTaskResult({ ...created, statusMessage: 7 })).toBe(false)
 		expect(isMCPTaskResult({ ...created, pollIntervalMs: 'often' })).toBe(false)
 		expect(isMCPTaskResult({ ...created, _meta: { [MCP_META_SERVER]: { name: 'a' } } })).toBe(false)
@@ -1724,6 +1749,9 @@ describe('draft Tasks extension validators', () => {
 		expect(isMCPTaskDetail({ ...working, status: 'done' })).toBe(false)
 		expect(isMCPTaskDetail({ ...working, ttlMs: Number.NaN })).toBe(false)
 		expect(isMCPTaskDetail({ ...working, pollIntervalMs: 'often' })).toBe(false)
+		// The `int` formats again, on the read side the manager answers through.
+		expect(isMCPTaskDetail({ ...working, ttlMs: 60_000.5 })).toBe(false)
+		expect(isMCPTaskDetail({ ...working, pollIntervalMs: 2_500.5 })).toBe(false)
 		// `input_required` owes its requests, `completed` its result, `failed` its error.
 		expect(isMCPTaskDetail({ ...working, status: 'input_required' })).toBe(false)
 		expect(
@@ -1737,13 +1765,25 @@ describe('draft Tasks extension validators', () => {
 		expect(
 			isMCPTaskDetail({ ...working, status: 'completed', result: { resultType: 'complete' } }),
 		).toBe(true)
+		// Re-ruled from `false`: the authority declares a completed task's `result` an OPEN object
+		// (`result: { [key: string]: unknown }`) rather than a protocol result, so nothing inside it
+		// is this guard's to enforce — a `_meta` the extension never constrained included.
 		expect(
 			isMCPTaskDetail({
 				...working,
 				status: 'completed',
 				result: { resultType: 'complete', _meta: { 'not a legal key': 1 } },
 			}),
-		).toBe(false)
+		).toBe(true)
+		// The same widening from the other side: an open object owes no discriminator, and a
+		// non-object is still refused because the authority fixes `result` to an object.
+		expect(isMCPTaskDetail({ ...working, status: 'completed', result: {} })).toBe(true)
+		expect(
+			isMCPTaskDetail({ ...working, status: 'completed', result: { pages: 3, done: true } }),
+		).toBe(true)
+		expect(isMCPTaskDetail({ ...working, status: 'completed', result: 'done' })).toBe(false)
+		expect(isMCPTaskDetail({ ...working, status: 'completed', result: null })).toBe(false)
+		expect(isMCPTaskDetail({ ...working, status: 'completed', result: [] })).toBe(false)
 		expect(isMCPTaskDetail({ ...working, status: 'failed' })).toBe(false)
 		expect(
 			isMCPTaskDetail({ ...working, status: 'failed', error: { code: -32603, message: 'x' } }),
@@ -1751,6 +1791,114 @@ describe('draft Tasks extension validators', () => {
 		expect(
 			isMCPTaskDetail({ ...working, status: 'failed', error: { code: -32603.5, message: 'x' } }),
 		).toBe(false)
+	})
+
+	// The READ REPLY, which is not the snapshot. The schema stamps a `tasks/get` answer
+	// `resultType: 'complete'`, so the two guards must disagree on exactly that member — a guard
+	// that accepted an unstamped payload here would have collapsed the two shapes back together.
+	it('separates the wire tasks/get answer from the manager’s own snapshot', () => {
+		const detail = {
+			taskId: 'task-1',
+			status: 'working',
+			createdAt: '1970-01-01T00:00:01.000Z',
+			lastUpdatedAt: '1970-01-01T00:00:01.000Z',
+			ttlMs: null,
+		}
+		const answered = { ...detail, resultType: 'complete' }
+
+		expect(isMCPTaskDetailResult(answered)).toBe(true)
+		expect(isMCPTaskDetail(answered)).toBe(true)
+		// The disagreement, in the direction that matters: a manager's answer is not a reply.
+		expect(isMCPTaskDetail(detail)).toBe(true)
+		expect(isMCPTaskDetailResult(detail)).toBe(false)
+		// `complete`, never `task` — that discriminator belongs to the creation answer.
+		expect(isMCPTaskDetailResult({ ...detail, resultType: 'task' })).toBe(false)
+		expect(isMCPTaskResult({ ...detail, resultType: 'task' })).toBe(true)
+		// The payload still owes what its status owes, and the stamp does not excuse it.
+		expect(isMCPTaskDetailResult({ ...answered, status: 'completed' })).toBe(false)
+		expect(isMCPTaskDetailResult({ ...answered, status: 'completed', result: {} })).toBe(true)
+		// Result metadata is checked when present, because a reply is a result.
+		expect(
+			isMCPTaskDetailResult({ ...answered, _meta: { [MCP_META_SERVER]: { name: 'peer' } } }),
+		).toBe(false)
+		expect(
+			isMCPTaskDetailResult({
+				...answered,
+				_meta: { [MCP_META_SERVER]: { name: 'peer', version: '1.0.0' } },
+			}),
+		).toBe(true)
+		for (const value of createHostileCorpus()) {
+			expect(isMCPTaskDetailResult(value)).toBe(false)
+		}
+	})
+
+	// The ADMISSION guard a consumer's producer frame passes through before a subscribed client
+	// can ever see it. Both halves are load-bearing: the method literal alone admits any params,
+	// and the params alone admit any method.
+	it('admits a notifications/tasks frame whose params hold together as a snapshot', () => {
+		const detail = {
+			taskId: 'task-1',
+			status: 'working',
+			createdAt: '1970-01-01T00:00:01.000Z',
+			lastUpdatedAt: '1970-01-01T00:00:01.000Z',
+			ttlMs: null,
+		}
+		const frame = { jsonrpc: '2.0', method: 'notifications/tasks', params: detail }
+
+		expect(isMCPTaskNotification(frame)).toBe(true)
+		// Flat: every task field sits directly under `params`, and a wrapper is a different shape.
+		expect(isMCPTaskNotification({ ...frame, params: { task: detail } })).toBe(false)
+		expect(isMCPTaskNotification({ ...frame, method: 'notifications/task' })).toBe(false)
+		expect(isMCPTaskNotification({ ...frame, method: 'notifications/resources/updated' })).toBe(
+			false,
+		)
+		expect(isMCPTaskNotification({ ...frame, params: { taskId: 'task-1' } })).toBe(false)
+		expect(isMCPTaskNotification({ ...frame, params: undefined })).toBe(false)
+		// A request is not a notification, whatever its method says.
+		expect(isMCPTaskNotification({ ...frame, id: 1 })).toBe(false)
+		expect(isMCPTaskNotification({ ...frame, jsonrpc: '1.0' })).toBe(false)
+		// `_meta` is the SERVER'S to write, so its absence is normal and its presence is only
+		// checked for shape. A producer that stamps nothing is the ordinary case.
+		expect(Object.hasOwn(frame.params, '_meta')).toBe(false)
+		expect(isMCPTaskNotification({ ...frame, params: { ...detail, _meta: {} } })).toBe(true)
+		expect(
+			isMCPTaskNotification({
+				...frame,
+				params: { ...detail, _meta: { [MCP_META_SUBSCRIPTION]: 7 } },
+			}),
+		).toBe(true)
+		expect(
+			isMCPTaskNotification({
+				...frame,
+				params: { ...detail, _meta: { [MCP_META_SUBSCRIPTION]: null } },
+			}),
+		).toBe(false)
+		expect(
+			isMCPTaskNotification({ ...frame, params: { ...detail, _meta: { 'not a legal key': 1 } } }),
+		).toBe(false)
+		for (const value of createHostileCorpus()) {
+			expect(isMCPTaskNotification(value)).toBe(false)
+		}
+	})
+
+	// The stamp's own guard. The reserved key is OPTIONAL here and REQUIRED on a stream's
+	// terminating result, so the two metadata guards must disagree on an empty record.
+	it('accepts notification metadata with or without the reserved subscription stamp', () => {
+		expect(isMCPNotificationMetaObject({})).toBe(true)
+		expect(isMCPNotificationMetaObject({ [MCP_META_SUBSCRIPTION]: 7 })).toBe(true)
+		expect(isMCPNotificationMetaObject({ [MCP_META_SUBSCRIPTION]: 'listen-1' })).toBe(true)
+		expect(isMCPNotificationMetaObject({ [MCP_META_SUBSCRIPTION]: null })).toBe(false)
+		expect(isMCPNotificationMetaObject({ [MCP_META_SUBSCRIPTION]: { id: 1 } })).toBe(false)
+		expect(isMCPNotificationMetaObject({ 'not a legal key': 1 })).toBe(false)
+		// An EMPTY record is legal metadata, so the shared corpus cannot be swept for `false` here
+		// the way a guard demanding named members is: its empty and null-prototype rows are
+		// genuine acceptances. Totality over that corpus is proven for every published guard by
+		// the sweep later in this file; what this row owes is the non-object refusal.
+		for (const value of [undefined, null, 0, '', 'null', true, [], () => undefined, new Map()]) {
+			expect(isMCPNotificationMetaObject(value)).toBe(false)
+		}
+		// The disagreement with the stream's terminating result, where the same key is required.
+		expect(isMCPSubscriptionResult({ resultType: 'complete', _meta: {} })).toBe(false)
 	})
 })
 
@@ -1858,7 +2006,10 @@ const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = 
 	isMCPStringArguments,
 	isMCPSubscriptionFilter,
 	isMCPSubscriptionResult,
+	isMCPNotificationMetaObject,
 	isMCPTaskDetail,
+	isMCPTaskDetailResult,
+	isMCPTaskNotification,
 	isMCPTaskResult,
 	isMCPTaskStatus,
 	isMCPTextResource,

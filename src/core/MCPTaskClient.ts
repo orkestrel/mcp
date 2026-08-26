@@ -6,10 +6,10 @@ import type {
 } from './types.js'
 import { JSONRPC_INVALID_PARAMS } from './constants.js'
 import { MCPError } from './errors.js'
-import { isMCPTaskDetail } from './validators.js'
+import { isMCPTaskDetailResult } from './validators.js'
 
 /**
- * The CLIENT half of the draft Tasks extension — the `tasks/*` methods over one
+ * The CLIENT half of the stable Tasks extension — the `tasks/*` methods over one
  * correlated-request door, exposed as an {@link import('./types.js').MCPClientInterface}'s
  * `tasks`.
  *
@@ -55,14 +55,20 @@ export class MCPTaskClient implements MCPTaskClientInterface {
 
 	async task(id: string): Promise<MCPTaskDetail> {
 		const result = await this.#request('tasks/get', { taskId: id }, this.#timeout)
-		// PROVEN, not assumed. The peer is the untrusted half here exactly as a consumer's
-		// manager is on the server side, and the same guard the server proves its answer with
-		// before writing it proves this one before a caller narrows on `status`. A snapshot that
-		// does not hold together is refused with the code a malformed payload earns, not passed
-		// on as a task whose `status` a caller would then switch over.
-		if (!isMCPTaskDetail(result)) {
+		// PROVEN, not assumed, and proven as the REPLY rather than as a bare snapshot. The peer
+		// is the untrusted half here exactly as a consumer's manager is on the server side, and
+		// the shape the peer owes is the schema's `tasks/get` result — the snapshot under
+		// `resultType: 'complete'` — not the unstamped detail a manager hands its own server. A
+		// payload that does not hold together, or one carrying no stamp, is refused with the code
+		// a malformed answer earns rather than passed on as a task a caller would narrow `status`
+		// over.
+		if (!isMCPTaskDetailResult(result)) {
 			throw new MCPError('MCP server returned an invalid task', JSONRPC_INVALID_PARAMS)
 		}
+		// The declared answer is the SNAPSHOT, because that is what a caller of this port asked
+		// for and the stamp is the wire's business. The value travels whole all the same: owning
+		// a foreign answer narrows nothing, so the peer's `resultType` and `_meta` reach the
+		// caller instead of being stripped by a copy this package had no reason to make.
 		return result
 	}
 

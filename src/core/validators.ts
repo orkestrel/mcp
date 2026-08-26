@@ -34,6 +34,7 @@ import type {
 	MCPLegacyResult,
 	MCPLoggingLevel,
 	MCPMetaObject,
+	MCPNotificationMetaObject,
 	MCPProgress,
 	MCPPaginationParams,
 	MCPPrompt,
@@ -52,6 +53,8 @@ import type {
 	MCPSubscriptionFilter,
 	MCPSubscriptionResult,
 	MCPTaskDetail,
+	MCPTaskDetailResult,
+	MCPTaskNotificationParams,
 	MCPTaskResult,
 	MCPTaskStatus,
 	MCPTextResource,
@@ -113,6 +116,32 @@ export function isMCPResultMetaObject(value: unknown): value is MCPResultMetaObj
 	if (!owned.success || !Object.keys(owned.value).every((key) => isMCPMetaKey(key))) return false
 	const identity = owned.value[MCP_META_SERVER]
 	return isUndefined(identity) || isMCPIdentity(identity)
+}
+
+/**
+ * Determines whether a value is exact notification metadata with a valid reserved
+ * subscription id.
+ *
+ * @remarks
+ * The reserved key is OPTIONAL, so a frame delivered outside a `subscriptions/listen`
+ * stream passes with no stamp at all. When the key IS present its value must be a valid
+ * {@link JSONRPCId}, because a stamp naming nothing addressable is worse than no stamp.
+ *
+ * @param value - The unknown value to inspect
+ * @returns `true` when the value is exact metadata whose subscription stamp, if present, is valid
+ *
+ * @example
+ * ```ts
+ * isMCPNotificationMetaObject({}) // true — an unstamped frame carries no subscription
+ * isMCPNotificationMetaObject({ 'io.modelcontextprotocol/subscriptionId': 7 }) // true
+ * isMCPNotificationMetaObject({ 'io.modelcontextprotocol/subscriptionId': null }) // false
+ * ```
+ */
+export function isMCPNotificationMetaObject(value: unknown): value is MCPNotificationMetaObject {
+	const owned = attempt(() => cloneJSONRecord(value))
+	if (!owned.success || !Object.keys(owned.value).every((key) => isMCPMetaKey(key))) return false
+	const subscription = owned.value[MCP_META_SUBSCRIPTION]
+	return isUndefined(subscription) || isJSONRPCId(subscription)
 }
 
 /** Determines whether a value is one dated MCP logging level. */
@@ -1018,7 +1047,8 @@ export function isMCPCallResult(value: unknown): value is MCPCallResult {
  * shape. The manager is consumer-supplied, so its types are a promise rather than a
  * proof: this is what stands between a manager that answers a numeric `taskId` and a
  * client that would receive one. `ttlMs` accepts `null` because the schema uses it to
- * mean "no expiry", which is distinct from an absent field.
+ * mean "no expiry", which is distinct from an absent field, and both durations must be
+ * INTEGER milliseconds because the schema formats them `int`.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the value is a well-formed `resultType: 'task'` result
@@ -1044,9 +1074,9 @@ export function isMCPTaskResult(value: unknown): value is MCPTaskResult {
 			isMCPTaskStatus(result['status']) &&
 			isString(result['createdAt']) &&
 			isString(result['lastUpdatedAt']) &&
-			(lifetime === null || isFiniteNumber(lifetime)) &&
+			(lifetime === null || isInteger(lifetime)) &&
 			(isUndefined(message) || isString(message)) &&
-			(isUndefined(interval) || isFiniteNumber(interval)) &&
+			(isUndefined(interval) || isInteger(interval)) &&
 			(isUndefined(metadata) || isMCPResultMetaObject(metadata))
 		)
 	} catch {
@@ -1086,9 +1116,14 @@ export function isMCPTaskStatus(value: unknown): value is MCPTaskStatus {
  * the requests to answer, `completed` owns the deferred call's result, `failed` owns the
  * JSON-RPC error that ended it, and `working` / `cancelled` own nothing further.
  *
- * Unrecognized members stay valid, because the extension is DRAFT and a manager tracking a
- * later revision must not be refused by this one. What is checked is what this package
- * publishes as the contract.
+ * A `completed` task's `result` is checked as an OBJECT and no further. The schema declares
+ * it an open record, so its contents belong to whichever method was deferred; a guard that
+ * demanded a protocol result here would refuse payloads the extension permits.
+ * `ttlMs` and `pollIntervalMs` are integer milliseconds, per the schema's `int` formats.
+ *
+ * Unrecognized members stay valid, because this guard reads a value a consumer's manager
+ * produced, and a guard over a foreign contract enforces the published contract and no more.
+ * What is checked is what this package publishes as the contract.
  *
  * @param value - The unknown value to inspect
  * @returns Whether the value is a well-formed {@link MCPTaskDetail}
@@ -1115,19 +1150,96 @@ export function isMCPTaskDetail(value: unknown): value is MCPTaskDetail {
 			!isMCPTaskStatus(status) ||
 			!isString(detail['createdAt']) ||
 			!isString(detail['lastUpdatedAt']) ||
-			(lifetime !== null && !isFiniteNumber(lifetime)) ||
+			(lifetime !== null && !isInteger(lifetime)) ||
 			(!isUndefined(message) && !isString(message)) ||
-			(!isUndefined(interval) && !isFiniteNumber(interval))
+			(!isUndefined(interval) && !isInteger(interval))
 		) {
 			return false
 		}
 		if (status === 'input_required') return isMCPInputRequestMap(detail['inputRequests'])
-		if (status === 'completed') return isMCPResult(detail['result'])
+		if (status === 'completed') return isRecord(detail['result'])
 		if (status === 'failed') return isJSONRPCError(detail['error'])
 		return true
 	} catch {
 		return false
 	}
+}
+
+/**
+ * Determines whether a value is the wire answer to `tasks/get`.
+ *
+ * @remarks
+ * {@link isMCPTaskDetail} plus the stamp the METHOD owes. The schema types a `tasks/get`
+ * reply as the detail intersected with the standard result, so `resultType: 'complete'` is
+ * part of the answer rather than decoration on it — and an unstamped payload, or one
+ * carrying the creation answer's `resultType: 'task'`, is a peer answering some other
+ * shape. Use this guard wherever a `tasks/get` REPLY is read; use
+ * {@link isMCPTaskDetail} wherever a consumer's manager answers directly.
+ *
+ * `_meta` is checked only when present, and only as result metadata: the server identity a
+ * peer stamps there is the peer's to write.
+ *
+ * @param value - The unknown value to inspect
+ * @returns Whether the value is a well-formed {@link MCPTaskDetailResult}
+ *
+ * @example
+ * ```ts
+ * isMCPTaskDetailResult({ resultType: 'complete', taskId: 'a', status: 'working',
+ *   createdAt: '', lastUpdatedAt: '', ttlMs: null }) // true
+ * isMCPTaskDetailResult({ taskId: 'a', status: 'working', createdAt: '',
+ *   lastUpdatedAt: '', ttlMs: null }) // false — the reply owes its `resultType`
+ * ```
+ */
+export function isMCPTaskDetailResult(value: unknown): value is MCPTaskDetailResult {
+	const owned = attempt(() => cloneJSONRecord(value))
+	if (!owned.success) return false
+	const result = owned.value
+	if (result['resultType'] !== 'complete') return false
+	const metadata = result['_meta']
+	if (!isUndefined(metadata) && !isMCPResultMetaObject(metadata)) return false
+	return isMCPTaskDetail(result)
+}
+
+/**
+ * Determines whether a value is a `notifications/tasks` frame carrying a task snapshot.
+ *
+ * @remarks
+ * The ADMISSION guard for a task transition: a subscription producer is consumer-written,
+ * so the frame it hands over is foreign input, and this is what stands between a mutated
+ * or half-built snapshot and a subscribed client. Both halves are checked — the method
+ * literal the extension fixes, and params that hold together as an
+ * {@link MCPTaskDetail} — because either alone admits a frame the other rejects.
+ *
+ * `_meta` is checked for SHAPE WHEN PRESENT and nothing more. The reserved subscription
+ * stamp is the SERVER'S to write, after this guard admits the frame and the matcher agrees
+ * to it, so a guard that demanded the stamp would refuse every frame a producer emits.
+ *
+ * @param value - The unknown value to inspect
+ * @returns Whether the value is a well-formed `notifications/tasks` notification
+ *
+ * @example
+ * ```ts
+ * isMCPTaskNotification({ jsonrpc: '2.0', method: 'notifications/tasks',
+ *   params: { taskId: 'a', status: 'working', createdAt: '', lastUpdatedAt: '',
+ *     ttlMs: null } }) // true
+ * isMCPTaskNotification({ jsonrpc: '2.0', method: 'notifications/tasks',
+ *   params: { taskId: 'a' } }) // false — the params owe a whole snapshot
+ * ```
+ */
+export function isMCPTaskNotification(value: unknown): value is JSONRPCNotification & {
+	readonly method: 'notifications/tasks'
+	readonly params: MCPTaskNotificationParams
+} {
+	const owned = attempt(() => cloneJSONRecord(value))
+	if (!owned.success) return false
+	const notification = owned.value
+	if (!isJSONRPCNotification(notification)) return false
+	if (notification['method'] !== 'notifications/tasks') return false
+	const params = notification['params']
+	if (!isRecord(params)) return false
+	const metadata = params['_meta']
+	if (!isUndefined(metadata) && !isMCPNotificationMetaObject(metadata)) return false
+	return isMCPTaskDetail(params)
 }
 
 // Every guard here is a TOTAL function over the already-`JSON.parse`d
@@ -1253,10 +1365,14 @@ export function isMCPLegacyVersion(value: unknown): value is MCPLegacyVersion {
  * Determines whether a value is an MCP {@link MCPSubscriptionFilter}.
  *
  * @remarks
- * Every filter field is optional. Boolean notification families accept only booleans, and
- * `resourceSubscriptions` accepts only an array of string URIs. Unknown fields remain open
- * for protocol extensions and are ignored by the built-in subscription matcher. Total over
- * hostile input.
+ * Every filter field is optional. Boolean notification families accept only booleans,
+ * `resourceSubscriptions` accepts only an array of string URIs, and `taskIds` accepts only
+ * an array of string task identifiers. Unknown fields remain open for protocol extensions
+ * and are ignored by the built-in subscription matcher. Total over hostile input.
+ *
+ * A malformed `taskIds` is refused here rather than dropped, so the listen request that
+ * carried it fails outright instead of quietly agreeing to a narrower subscription than
+ * the caller asked for.
  *
  * @param value - The unknown value to inspect
  * @returns `true` when every recognized filter field has its protocol shape
@@ -1272,7 +1388,9 @@ export function isMCPSubscriptionFilter(value: unknown): value is MCPSubscriptio
 	const resources = filter['resourcesListChanged']
 	if (!isUndefined(resources) && !isBoolean(resources)) return false
 	const subscriptions = filter['resourceSubscriptions']
-	return isUndefined(subscriptions) || arrayOf(isString)(subscriptions)
+	if (!isUndefined(subscriptions) && !arrayOf(isString)(subscriptions)) return false
+	const tasks = filter['taskIds']
+	return isUndefined(tasks) || arrayOf(isString)(tasks)
 }
 
 /**

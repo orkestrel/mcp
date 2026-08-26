@@ -4802,7 +4802,7 @@ describe('MCPServer — W02-B: custom carriers and the resolved-option seam', ()
 	})
 })
 
-// ── W03-A: the draft Tasks extension ─────────────────────────────────────────
+// ── W03-A: the stable Tasks extension ────────────────────────────────────────
 //
 // The extension puts the whole task lifecycle on the CONSUMER's side of a port, so what
 // is under test here is a decision and an answer: does this server defer, and does it
@@ -4873,7 +4873,7 @@ function fixedTaskManager(created: MCPTask): MCPTaskManagerInterface {
 	}
 }
 
-describe('MCPServer — W03-A: the draft Tasks extension', () => {
+describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	it('defers a declared call and answers the manager task as a flat modern result', async () => {
 		const tasks = new TestTaskManager()
 		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
@@ -5560,8 +5560,9 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 				},
 			],
 		])
-		// Off-contract in a way TypeScript accepts and the wire cannot: a `_meta` key outside the
-		// dated metadata grammar, which is exactly the class of defect a declared type cannot catch.
+		// Off-contract in a way TypeScript accepts and the wire cannot: a FRACTIONAL `ttlMs`, where
+		// the declared type says `number | null` and the schema formats the field `int`. That is
+		// exactly the class of defect a declared type cannot catch.
 		const malformed = new Map<string, MCPTaskDetail>([
 			[
 				'lying',
@@ -5570,8 +5571,8 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 					status: 'completed',
 					createdAt: 'a',
 					lastUpdatedAt: 'b',
-					ttlMs: null,
-					result: { resultType: 'complete', _meta: { 'not a legal key': 1 } },
+					ttlMs: 1_000.5,
+					result: { resultType: 'complete' },
 				},
 			],
 		])
@@ -5911,10 +5912,10 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 					status: 'completed',
 					createdAt: 'a',
 					lastUpdatedAt: 'b',
-					ttlMs: null,
 					// Off-contract in a way TypeScript accepts and the published union does not:
-					// a `_meta` key outside the dated metadata grammar.
-					result: { resultType: 'complete', _meta: { 'not a legal key': 1 } },
+					// a fractional `ttlMs`, where the schema formats the field `int`.
+					ttlMs: 1_000.5,
+					result: { resultType: 'complete' },
 				}),
 			invoked,
 		)

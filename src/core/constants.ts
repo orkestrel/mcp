@@ -60,10 +60,11 @@ export const MCP_META_SERVER = 'io.modelcontextprotocol/serverInfo'
 export const MCP_META_SUBSCRIPTION = 'io.modelcontextprotocol/subscriptionId'
 
 /**
- * The reserved extension key identifying the draft Tasks extension.
+ * The reserved extension key identifying the stable Tasks extension.
  *
  * @remarks
- * The ONE spelling of it in this package. A client declares it per REQUEST, under
+ * The ONE spelling of it in this package, and the identity of the immutable snapshot dated
+ * 2026-07-28 this package implements. A client declares it per REQUEST, under
  * `_meta['io.modelcontextprotocol/clientCapabilities'].extensions`; a server advertises it
  * under `server/discover`'s `capabilities.extensions`. Both sides carry an empty object —
  * the extension defines no options, so presence is the entire declaration.
@@ -83,8 +84,8 @@ export const MCP_HEADER_MISMATCH = -32020
  * `error.data.requiredCapabilities` alone (`{ elicitation: {} }` against
  * `{ extensions: { 'io.modelcontextprotocol/tasks': {} } }`). They are instances of the same
  * condition, so a separate numeral would describe the same fact twice. The Tasks extension's
- * own draft prose still shows `-32003` in examples; the dated core schema fixes this code,
- * and the dated schema is what a peer implements against.
+ * own prose examples show `-32003`; the dated core schema fixes this code, and the dated
+ * schema is what a peer implements against.
  */
 export const MCP_MISSING_CAPABILITY = -32021
 

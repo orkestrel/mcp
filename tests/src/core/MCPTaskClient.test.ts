@@ -17,7 +17,7 @@ import {
 	TestTaskManager,
 } from '../../setup.js'
 
-// The CLIENT half of the draft Tasks extension, over a real MCPServer with the extension
+// The CLIENT half of the stable Tasks extension, over a real MCPServer with the extension
 // configured, reached through a real in-process transport that records every frame it carries
 // and when it carried it (no mocks, no fake clock).
 //
@@ -195,7 +195,17 @@ describe('MCPTaskClient — the shape', () => {
 		const client = new MCPTaskClient({
 			request: async (method, params, deadline) => {
 				issued.push([method, params, deadline])
-				return { taskId: 't', status: 'working', createdAt: '', lastUpdatedAt: '', ttlMs: null }
+				// Re-ruled from a bare snapshot: the wire `tasks/get` answer is
+				// `Result & DetailedTask & { resultType: 'complete' }`, so a fixture standing in for
+				// a peer owes the stamp a peer sends.
+				return {
+					taskId: 't',
+					status: 'working',
+					createdAt: '',
+					lastUpdatedAt: '',
+					ttlMs: null,
+					resultType: 'complete',
+				}
 			},
 			timeout: 25,
 		})
@@ -222,11 +232,55 @@ describe('MCPTaskClient — the shape', () => {
 				createdAt: '',
 				lastUpdatedAt: '',
 				ttlMs: null,
+				resultType: 'complete',
 			}),
 		})
 
 		const failure = await client.task('t').catch((error: unknown) => error)
 		expect(isMCPError(failure) && failure.code).toBe(JSONRPC_INVALID_PARAMS)
+	})
+
+	// The wire `tasks/get` answer and the manager's own snapshot are DIFFERENT shapes: the
+	// authority stamps the read result `resultType: 'complete'`, and an unstamped payload is a
+	// peer that answered something other than the method's declared result.
+	it('refuses a peer answer that carries no completed-result stamp', async () => {
+		const detail = {
+			taskId: 't',
+			status: 'working',
+			createdAt: '',
+			lastUpdatedAt: '',
+			ttlMs: null,
+		}
+		const unstamped = new MCPTaskClient({ request: async () => detail })
+		const miscast = new MCPTaskClient({
+			request: async () => ({ ...detail, resultType: 'task' }),
+		})
+
+		for (const client of [unstamped, miscast]) {
+			const failure = await client.task('t').catch((error: unknown) => error)
+			expect(isMCPError(failure) && failure.code).toBe(JSONRPC_INVALID_PARAMS)
+		}
+	})
+
+	// The stamp travels WHOLE. Owning a foreign value narrows nothing, so the server identity a
+	// peer wrote under `_meta` reaches the caller rather than being stripped on the way through.
+	it('carries the peer’s result stamp and metadata through to the caller', async () => {
+		const client = new MCPTaskClient({
+			request: async () => ({
+				taskId: 't',
+				status: 'working',
+				createdAt: '',
+				lastUpdatedAt: '',
+				ttlMs: null,
+				resultType: 'complete',
+				_meta: { 'io.modelcontextprotocol/serverInfo': { name: 'peer', version: '1.0.0' } },
+			}),
+		})
+
+		const detail = await client.task('t')
+		expect(detail.status).toBe('working')
+		expect(Object.hasOwn(detail, 'resultType')).toBe(true)
+		expect(Object.hasOwn(detail, '_meta')).toBe(true)
 	})
 })
 

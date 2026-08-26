@@ -133,7 +133,7 @@ export class MCPClient implements MCPClientInterface {
 	readonly #capabilities: MCPClientCapabilities
 	readonly #pin: MCPModernVersion | undefined
 	readonly #timeout: number
-	// The draft Tasks extension's client half, built once and held. It is given this client's
+	// The stable Tasks extension's client half, built once and held. It is given this client's
 	// own correlated-request door rather than a second path to the peer, so a task read shares
 	// the id space, the pending table, the deadline, and the `disconnect` drain with every other
 	// request — and `#request` stays private, because publishing it would be a general

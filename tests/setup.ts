@@ -1140,7 +1140,7 @@ export function createRecordingTransport(mcp: MCPServerInterface): TestTransport
 }
 
 /**
- * Create a real {@link MCPServerInterface} with the draft Tasks extension configured — one
+ * Create a real {@link MCPServerInterface} with the stable Tasks extension configured — one
  * `render` tool, and a `defer` that turns every call into a durable task.
  *
  * @remarks
@@ -1162,7 +1162,7 @@ export function createTaskServer(tasks: MCPTaskManagerInterface): MCPServerInter
 	})
 }
 
-/** The client capabilities that declare the draft Tasks extension — the whole declaration. */
+/** The client capabilities that declare the stable Tasks extension — the whole declaration. */
 export const TASK_CAPABILITIES: MCPClientCapabilities = Object.freeze({
 	extensions: Object.freeze({ [MCP_EXTENSION_TASKS]: Object.freeze({}) }),
 })

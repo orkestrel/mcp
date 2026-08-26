@@ -1616,7 +1616,11 @@ describe('the resolved method options', () => {
 describe('the subscription filter contract', () => {
 	it('pins the subscription filter keys to their wire spellings', () => {
 		expectTypeOf<keyof MCPSubscriptionFilter>().toEqualTypeOf<
-			'toolsListChanged' | 'promptsListChanged' | 'resourcesListChanged' | 'resourceSubscriptions'
+			| 'toolsListChanged'
+			| 'promptsListChanged'
+			| 'resourcesListChanged'
+			| 'resourceSubscriptions'
+			| 'taskIds'
 		>()
 
 		const honoured = buildSubscriptionFilter(
