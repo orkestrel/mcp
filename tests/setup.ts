@@ -3,6 +3,7 @@
 // `tests/setupServer.ts`.
 
 import type { SSEEvent } from '@orkestrel/sse'
+import type { RecorderInterface } from '@orkestrel/test'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 import type {
 	MCPClientTransportEventMap,
@@ -46,7 +47,7 @@ import {
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
 import { createSSEParser } from '@orkestrel/sse'
-import { waitForDelay } from '@orkestrel/test'
+import { createRecorder, waitForDelay } from '@orkestrel/test'
 
 /**
  * Narrow an untyped value to an {@link MCPMethodHandler} the way a DYNAMIC registration must.
@@ -727,13 +728,17 @@ export function createHostilePeer(server: MCPServerInterface): HostilePeerInterf
  * scenario opens its exchange with.
  *
  * @param id - The request id the exchange is correlated by
+ * @param notifications - The filter the request asks for. Default: `{ toolsListChanged: true }`
  * @returns The modern subscription request
  */
-export function createSubscriptionRequest(id: JSONRPCId): JSONRPCRequest {
+export function createSubscriptionRequest(
+	id: JSONRPCId,
+	notifications: MCPSubscriptionFilter = { toolsListChanged: true },
+): JSONRPCRequest {
 	return createJSONRPCRequest({
 		method: 'subscriptions/listen',
 		id,
-		params: { notifications: { toolsListChanged: true }, _meta: MODERN_METADATA },
+		params: { notifications, _meta: MODERN_METADATA },
 	})
 }
 
@@ -920,8 +925,17 @@ export interface MCPTestLoopbackInterface extends MCPClientTransportInterface {
 /**
  * Creates a real MCP server whose subscription source is supplied by the test scenario.
  *
+ * @remarks
+ * `tasks` is what turns the task family of the filter on, and supplying it is the ONLY door:
+ * the server derives task-stream support from a configured manager beside a configured
+ * producer, so a scenario that omits the manager is the negative half of that derivation
+ * rather than a differently configured server. The manager also authorizes each requested
+ * identifier before the acknowledgement agrees to it, so the store a scenario seeds is what
+ * decides the acknowledged set.
+ *
  * @param listen - The real server subscription producer
  * @param notifications - The notification families the server advertises
+ * @param tasks - The durable store the server resolves requested task identifiers through
  * @returns A real in-process MCP server with the built-in subscription method registered
  */
 export function createSubscriptionServer(
@@ -932,11 +946,13 @@ export function createSubscriptionServer(
 		resourcesListChanged: true,
 		resourceSubscriptions: ['resource://one', 'resource://two'],
 	},
+	tasks?: MCPTaskManagerInterface,
 ): MCPServerInterface {
 	return createMCPServer({
 		identity: { name: 'subscription-server', version: '1.0.0' },
 		tools: createToolManager(),
 		subscription: { notifications, listen },
+		...(tasks === undefined ? {} : { task: { tasks, defer: () => undefined } }),
 	})
 }
 
@@ -1211,6 +1227,7 @@ export class TestTaskManager implements MCPTaskManagerInterface {
 	readonly #guarded: boolean
 	readonly #ttl: number | null
 	readonly #poll: number | undefined
+	readonly #reads = createRecorder<readonly [string]>()
 	#instant = 0
 
 	constructor(options: TestTaskOptions = {}) {
@@ -1233,6 +1250,20 @@ export class TestTaskManager implements MCPTaskManagerInterface {
 		return [...this.#details.values()]
 	}
 
+	/**
+	 * Every identifier {@link task} was asked to resolve, in call order.
+	 *
+	 * @remarks
+	 * The store is the ONLY place a task resolution can be observed from, so this recorder is
+	 * what a claim about WHEN the package reads the store is measured against. Read the count
+	 * at two moments and compare them: a count that rose proves the recorder sees a read at
+	 * all, and a count that then held proves the reads a scenario is asserting the absence of
+	 * did not happen.
+	 */
+	get reads(): RecorderInterface<readonly [string]> {
+		return this.#reads
+	}
+
 	/** Await every started worker — the deterministic stand-in for polling `tasks/get`. */
 	async settle(): Promise<void> {
 		await Promise.all([...this.#running])
@@ -1250,6 +1281,35 @@ export class TestTaskManager implements MCPTaskManagerInterface {
 		for (const [id, detail] of this.#details) {
 			if (detail.ttlMs !== null) this.#details.delete(id)
 		}
+	}
+
+	/**
+	 * Write one `working` task into the store under an identifier the scenario chooses.
+	 *
+	 * @remarks
+	 * The identifiers {@link start} mints are cryptographic and unpredictable, which is what the
+	 * port asks a manager for and what makes them useless to a scenario that must NAME a task
+	 * before any call exists — a subscription filter carries identifiers a client already holds.
+	 * A store writing a task out of band is what a durable store does, so this is the ordinary
+	 * case rather than a shortcut: the task carries this manager's own `ttlMs` and poll hint,
+	 * so a seeded task purges and reads exactly as a started one does. It runs no worker, so it
+	 * stays `working` until {@link abort} moves it and {@link settle} is unaffected.
+	 *
+	 * @param id - The `taskId` the store files the task under
+	 * @returns The stored snapshot
+	 */
+	seed(id: string): MCPTaskDetail {
+		const stamp = this.#stamp()
+		const detail: MCPTaskDetail = {
+			taskId: id,
+			status: 'working',
+			createdAt: stamp,
+			lastUpdatedAt: stamp,
+			ttlMs: this.#ttl,
+			...(this.#poll === undefined ? {} : { pollIntervalMs: this.#poll }),
+		}
+		this.#details.set(id, detail)
+		return detail
 	}
 
 	async start(key: string, context: MCPTaskContext, options: MCPMethodOptions): Promise<MCPTask> {
@@ -1302,6 +1362,7 @@ export class TestTaskManager implements MCPTaskManagerInterface {
 	// Distinguishing them HERE — by throwing for the unauthorized case, say — is what would
 	// turn the store into an enumeration oracle, so it does not.
 	async task(id: string, options?: MCPMethodOptions): Promise<MCPTaskDetail | undefined> {
+		this.#reads.handler(id)
 		if (this.#guarded && options?.caller !== this.#owner) return undefined
 		return this.#details.get(id)
 	}

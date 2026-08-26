@@ -583,6 +583,65 @@ describe('subscription helpers', () => {
 		).toBe(false)
 	})
 
+	// The tasks family is the one filter member the server cannot honour from its own
+	// configuration alone, so the candidate set is gated by a boolean the caller derives rather
+	// than by an intersection against a supported list. The supported filter's own `taskIds`
+	// is therefore never consulted — asserted here so an intersection added later reddens.
+	it('carries requested task identifiers only when the server can push tasks', () => {
+		const requested = { toolsListChanged: true, taskIds: ['task-b', 'task-a', 'task-b'] }
+		const supported = { toolsListChanged: true, taskIds: ['task-z'] }
+
+		expect(buildSubscriptionFilter(requested, supported)).toEqual({ toolsListChanged: true })
+		expect(buildSubscriptionFilter(requested, supported, true)).toEqual({
+			toolsListChanged: true,
+			// Request order and duplicates are the caller's, and the candidate set normalizes
+			// neither — the acknowledged set is compared against this order downstream.
+			taskIds: ['task-b', 'task-a', 'task-b'],
+		})
+		// An empty request asks for no task at all rather than for every task, so the member is
+		// omitted entirely instead of acknowledged as an empty array.
+		expect(Object.hasOwn(buildSubscriptionFilter({ taskIds: [] }, {}, true), 'taskIds')).toBe(false)
+	})
+
+	// The ADMISSION half of the tasks family, and both of its halves are load-bearing: the guard
+	// decides the producer frame holds together as a snapshot, and the AGREED SET decides whether
+	// this subscription asked for that snapshot at all.
+	it('delivers a task frame only for an agreed identifier that holds as a snapshot', () => {
+		const detail = {
+			taskId: 'task-agreed',
+			status: 'working',
+			createdAt: '1970-01-01T00:00:01.000Z',
+			lastUpdatedAt: '1970-01-01T00:00:01.000Z',
+			ttlMs: null,
+		}
+		const frame: JSONRPCNotification = {
+			jsonrpc: '2.0',
+			method: 'notifications/tasks',
+			params: detail,
+		}
+		const filter: MCPSubscriptionFilter = { taskIds: ['task-agreed'] }
+
+		expect(matchesSubscriptionNotification(frame, filter)).toBe(true)
+		// Outside the agreed set: the same well-formed snapshot under a different identifier.
+		expect(
+			matchesSubscriptionNotification(
+				{ ...frame, params: { ...detail, taskId: 'task-other' } },
+				filter,
+			),
+		).toBe(false)
+		// A filter that agreed to no task admits none, and neither spelling of "none" is a
+		// spelling of "every".
+		expect(matchesSubscriptionNotification(frame, {})).toBe(false)
+		expect(matchesSubscriptionNotification(frame, { taskIds: [] })).toBe(false)
+		// The guard's half: an agreed identifier whose params are not a snapshot is still refused.
+		expect(
+			matchesSubscriptionNotification({ ...frame, params: { taskId: 'task-agreed' } }, filter),
+		).toBe(false)
+		expect(matchesSubscriptionNotification({ ...frame, params: { task: detail } }, filter)).toBe(
+			false,
+		)
+	})
+
 	it('stamps notifications while preserving metadata and overriding an offered stream id', () => {
 		expect(
 			stampSubscriptionNotification(

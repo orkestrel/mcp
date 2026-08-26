@@ -75,6 +75,7 @@ import {
 	createJSONRPCNotification,
 	createJSONRPCRequest,
 	createHostilePeer,
+	createSubscriptionRequest,
 	isMCPMethodHandler,
 	MODERN_METADATA,
 	MemoryResourceManager,
@@ -6220,6 +6221,195 @@ describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () 
 		)
 
 		expect(answers).toEqual([undefined, undefined, undefined])
+	})
+})
+
+// The junction of the two families: a `subscriptions/listen` request naming task identifiers.
+// The AGREED SET is decided once, at acknowledgement, by reading the consumer's durable store —
+// and it is the same set the delivery matcher is handed, so an acknowledgement that names an
+// identifier is a promise the stream keeps and an omission is a promise never made.
+describe('MCPServer — W03-B: the tasks family on a subscriptions/listen stream', () => {
+	// The oracle risk INVERTED: the invariant is not that a caller learns nothing, it is that an
+	// omission never says WHICH refusal produced it. The port collapses never-existed, purged,
+	// and not-yours into one `undefined`, so the acknowledgement must collapse them too.
+	it('omits an identifier the store refuses, with nothing that says which refusal it was', async () => {
+		const purged = new TestTaskManager({ ttl: 60_000 })
+		purged.seed('task-ghost')
+		purged.purge()
+		const guarded = new TestTaskManager({ owner: 'owner-1' })
+		guarded.seed('task-ghost')
+		const request = createSubscriptionRequest('listen-omit', { taskIds: ['task-ghost'] })
+		const acknowledgements: string[] = []
+		const terminals: string[] = []
+		const errors: boolean[] = []
+
+		for (const tasks of [new TestTaskManager(), purged, guarded]) {
+			const closed = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+			await closed.writable.close()
+			const mcp = taskServer(
+				{ tasks, defer: () => undefined },
+				{ subscription: { notifications: {}, listen: () => closed.readable } },
+			)
+			const [messages, response] = await drainStream(
+				streamOf(await mcp.dispatch(request, { caller: 'owner-2' })),
+			)
+			acknowledgements.push(JSON.stringify(messages))
+			terminals.push(JSON.stringify(response))
+			errors.push(isJSONRPCErrorResponse(response))
+		}
+
+		// The never-existed, the purged, and the unauthorized read produce the SAME bytes, so a
+		// caller holding all three acknowledgements can separate none of them.
+		expect(new Set(acknowledgements).size).toBe(1)
+		expect(JSON.parse(acknowledgements[0] ?? 'null')).toEqual([
+			{
+				jsonrpc: '2.0',
+				method: 'notifications/subscriptions/acknowledged',
+				params: { notifications: {}, _meta: { [MCP_META_SUBSCRIPTION]: 'listen-omit' } },
+			},
+		])
+		// And nothing else distinguishes them: no error arm, and one identical terminal.
+		expect(errors).toEqual([false, false, false])
+		expect(new Set(terminals).size).toBe(1)
+		// The omission came from a REFUSED READ rather than from a member nobody looked at.
+		expect(purged.reads.calls).toEqual([['task-ghost']])
+		expect(guarded.reads.calls).toEqual([['task-ghost']])
+	})
+
+	it('acknowledges the resolved identifiers in request order with duplicates intact', async () => {
+		const tasks = new TestTaskManager()
+		tasks.seed('task-b')
+		tasks.seed('task-a')
+		const closed = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		await closed.writable.close()
+		const mcp = taskServer(
+			{ tasks, defer: () => undefined },
+			{ subscription: { notifications: {}, listen: () => closed.readable } },
+		)
+
+		const [messages] = await drainStream(
+			streamOf(
+				await mcp.dispatch(
+					createSubscriptionRequest('listen-order', {
+						taskIds: ['task-b', 'task-gone', 'task-a', 'task-b'],
+					}),
+				),
+			),
+		)
+
+		// Request order survives, the duplicate survives as a duplicate, and only the identifier
+		// the store refused is gone.
+		expect(messages[0]?.params?.['notifications']).toEqual({
+			taskIds: ['task-b', 'task-a', 'task-b'],
+		})
+		// One read per requested entry, in request order: the resolution deduplicates nothing
+		// either, so a normalization added anywhere in the path reddens here.
+		expect(tasks.reads.calls).toEqual([['task-b'], ['task-gone'], ['task-a'], ['task-b']])
+	})
+
+	// The DERIVED support fact, from both sides. Neither half alone can honour the member, and
+	// no third flag records the conclusion — so each half's absence is proven separately.
+	it('omits the member entirely when the server cannot push tasks', async () => {
+		const tasks = new TestTaskManager()
+		tasks.seed('task-a')
+		const closed = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		await closed.writable.close()
+		// A producer with no manager: nothing can authorize an identifier.
+		const unmanaged = server(undefined, { notifications: {}, listen: () => closed.readable })
+		// A manager with no producer: nothing can carry a transition.
+		const unproduced = taskServer({ tasks, defer: () => undefined })
+		const request = createSubscriptionRequest('listen-off', { taskIds: ['task-a'] })
+
+		const [fromUnmanaged] = await drainStream(streamOf(await unmanaged.dispatch(request)))
+		const [fromUnproduced] = await drainStream(streamOf(await unproduced.dispatch(request)))
+
+		expect(fromUnmanaged[0]?.params?.['notifications']).toEqual({})
+		expect(fromUnproduced[0]?.params?.['notifications']).toEqual({})
+		// A server that cannot push tasks reads no store at all, so the omission is not a
+		// resolution that happened to refuse everything.
+		expect(tasks.reads.count).toBe(0)
+	})
+
+	// The tripwire for the fixed-agreed-set lifetime. A future edit that re-resolves identifiers
+	// at delivery puts the durable store on the hot path of every frame, and this is what sees it.
+	it('delivers an agreed identifier with no store read at delivery time', async () => {
+		const tasks = new TestTaskManager()
+		tasks.seed('task-live')
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const writer = source.writable.getWriter()
+		const mcp = taskServer(
+			{ tasks, defer: () => undefined },
+			{ subscription: { notifications: {}, listen: () => source.readable } },
+		)
+		const stream = streamOf(
+			await mcp.dispatch(createSubscriptionRequest('listen-live', { taskIds: ['task-live'] })),
+		)
+
+		const acknowledgement = await stream.next()
+		if (acknowledgement.done) throw new Error('expected a subscription acknowledgement')
+		// THE POSITIVE CONTROL. Acknowledgement resolves the identifier, so a counter that could
+		// not see a store read would read zero here and the silence below would mean nothing.
+		const resolved = tasks.reads.count
+		const drained = drainStream(stream)
+		for (const at of ['1970-01-01T00:00:02.000Z', '1970-01-01T00:00:03.000Z']) {
+			await writer.write({
+				jsonrpc: '2.0',
+				method: 'notifications/tasks',
+				params: {
+					taskId: 'task-live',
+					status: 'working',
+					createdAt: '1970-01-01T00:00:01.000Z',
+					lastUpdatedAt: at,
+					ttlMs: null,
+				},
+			})
+		}
+		await writer.close()
+		const [messages] = await drained
+
+		expect(resolved).toBe(1)
+		expect(acknowledgement.value.params?.['notifications']).toEqual({ taskIds: ['task-live'] })
+		expect(
+			messages.map((frame) => [frame.params?.['lastUpdatedAt'], frame.params?.['_meta']]),
+		).toEqual([
+			['1970-01-01T00:00:02.000Z', { [MCP_META_SUBSCRIPTION]: 'listen-live' }],
+			['1970-01-01T00:00:03.000Z', { [MCP_META_SUBSCRIPTION]: 'listen-live' }],
+		])
+		// Delivering two frames read the store exactly as often as delivering none did.
+		expect(tasks.reads.count).toBe(resolved)
+	})
+
+	it('refuses a malformed taskIds member as invalid params before reading the store', async () => {
+		const tasks = new TestTaskManager()
+		const closed = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		await closed.writable.close()
+		const mcp = taskServer(
+			{ tasks, defer: () => undefined },
+			{ subscription: { notifications: {}, listen: () => closed.readable } },
+		)
+
+		const refusals = await Promise.all(
+			[{ taskIds: 'task-a' }, { taskIds: ['task-a', 7] }, { taskIds: {} }].map(
+				async (notifications) =>
+					responseOf(
+						await mcp.dispatch(
+							createJSONRPCRequest({
+								method: 'subscriptions/listen',
+								id: 'listen-bad',
+								params: { notifications, _meta: MODERN_METADATA },
+							}),
+						),
+					)?.error?.code,
+			),
+		)
+
+		expect(refusals).toEqual([
+			JSONRPC_INVALID_PARAMS,
+			JSONRPC_INVALID_PARAMS,
+			JSONRPC_INVALID_PARAMS,
+		])
+		// A refused request never reaches the resolution, so a malformed array is not a probe.
+		expect(tasks.reads.count).toBe(0)
 	})
 })
 

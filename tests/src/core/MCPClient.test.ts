@@ -37,6 +37,7 @@ import {
 	createInputServer,
 	createLoopbackTransport,
 	createSubscriptionServer,
+	TestTaskManager,
 } from '../../setup.js'
 
 const NATIVE_ABORT_TIMEOUT = AbortSignal.timeout
@@ -3453,6 +3454,87 @@ describe('MCPClient — subscriptions/listen', () => {
 				},
 			},
 		})
+	})
+
+	// END TO END, with nothing replaced: a consumer's durable store, a consumer's producer, the
+	// server's built-in stream, a real in-process transport, and a real client. The identifier a
+	// producer names is what decides delivery, and the agreed set was fixed by a store read that
+	// happened once, before the first frame existed.
+	it('carries a task transition to a subscribed client, filtered and stamped', async () => {
+		const tasks = new TestTaskManager()
+		tasks.seed('task-alpha')
+		tasks.seed('task-beta')
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const server = createSubscriptionServer(() => source.readable, {}, tasks)
+		const transport = createLoopbackTransport(server)
+		const client = createMCPClient({ transport })
+		await client.connect()
+		const stream = client.listen(
+			{ taskIds: ['task-alpha', 'task-beta'] },
+			{ signal: new AbortController().signal },
+		)
+		const writer = source.writable.getWriter()
+
+		const acknowledgement = await stream.next()
+		// Read after the acknowledgement resolved the set and before any frame is produced —
+		// the reading every delivery below is compared against. The positive control proving
+		// this counter can move at all is in tests/src/core/MCPServer.test.ts.
+		const resolved = tasks.reads.count
+		for (const taskId of ['task-alpha', 'task-gamma', 'task-beta']) {
+			await writer.write({
+				jsonrpc: '2.0',
+				method: 'notifications/tasks',
+				params: {
+					taskId,
+					status: 'working',
+					createdAt: '1970-01-01T00:00:01.000Z',
+					lastUpdatedAt: '1970-01-01T00:00:02.000Z',
+					ttlMs: null,
+				},
+			})
+		}
+		await writer.close()
+
+		expect(acknowledgement.value).toEqual({
+			jsonrpc: '2.0',
+			method: 'notifications/subscriptions/acknowledged',
+			params: {
+				notifications: { taskIds: ['task-alpha', 'task-beta'] },
+				_meta: { [MCP_META_SUBSCRIPTION]: 2 },
+			},
+		})
+		expect((await stream.next()).value).toEqual({
+			jsonrpc: '2.0',
+			method: 'notifications/tasks',
+			params: {
+				taskId: 'task-alpha',
+				status: 'working',
+				createdAt: '1970-01-01T00:00:01.000Z',
+				lastUpdatedAt: '1970-01-01T00:00:02.000Z',
+				ttlMs: null,
+				_meta: { [MCP_META_SUBSCRIPTION]: 2 },
+			},
+		})
+		// `task-gamma` was produced between the two, and the client never sees it: the next read
+		// is `task-beta`, so the frame naming an identifier outside the agreed set was dropped.
+		expect((await stream.next()).value).toMatchObject({
+			method: 'notifications/tasks',
+			params: { taskId: 'task-beta', _meta: { [MCP_META_SUBSCRIPTION]: 2 } },
+		})
+		expect(await stream.next()).toEqual({
+			done: true,
+			value: {
+				resultType: 'complete',
+				_meta: {
+					[MCP_META_SUBSCRIPTION]: 2,
+					'io.modelcontextprotocol/serverInfo': {
+						name: 'subscription-server',
+						version: '1.0.0',
+					},
+				},
+			},
+		})
+		expect(tasks.reads.count).toBe(resolved)
 	})
 
 	it('keeps concurrent subscriptions isolated by their stamped request ids', async () => {
