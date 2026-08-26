@@ -42,6 +42,7 @@ import {
 	resolveConformanceRunner,
 	startConformance,
 } from './setupConformance.js'
+import { normalize } from 'node:path'
 
 describe('the pinned runner', () => {
 	it('resolves the installed entry and reports the release the manifest pins', async () => {
@@ -49,7 +50,7 @@ describe('the pinned runner', () => {
 		const entry = resolveConformanceRunner()
 
 		expect(CONFORMANCE_ENTRY).toBe(`${CONFORMANCE_PACKAGE}/dist/index.js`)
-		expect(entry).toContain(CONFORMANCE_PACKAGE)
+		expect(entry).toContain(normalize(CONFORMANCE_PACKAGE))
 		// The manifest is the single authority for the version, and the build on disk is what
 		// actually runs, so the pin is checked against what that build says about itself.
 		expect((await executeRunner(['--version'])).trim()).toBe(release)
