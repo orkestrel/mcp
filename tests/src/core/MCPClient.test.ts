@@ -3013,6 +3013,39 @@ describe('MCPClient — request-scoped progress', () => {
 		expect(notifications).toEqual([])
 	})
 
+	it('claims stale-stamped progress for the active call before subscription routing', async () => {
+		const peer = callPeer(() => undefined)
+		const client = createMCPClient({ transport: peer, timeout: 5_000 })
+		await client.connect()
+		const seen: unknown[] = []
+		const notifications: JSONRPCMessage[] = []
+		client.emitter.on('notification', (message) => notifications.push(message))
+
+		const pending = client.call('slow', {}, { progress: (progress) => seen.push(progress) })
+		const id = requestId(peer, 2)
+		peer.emitter.emit('message', {
+			jsonrpc: '2.0',
+			method: 'notifications/progress',
+			params: {
+				progressToken: id,
+				progress: 1,
+				_meta: { [MCP_META_SUBSCRIPTION]: 9_999 },
+			},
+		})
+		await waitForDelay()
+
+		expect(seen).toEqual([
+			{
+				progressToken: id,
+				progress: 1,
+				_meta: { [MCP_META_SUBSCRIPTION]: 9_999 },
+			},
+		])
+		expect(notifications).toEqual([])
+		await client.disconnect()
+		await expect(pending).rejects.toThrow(/disconnected/)
+	})
+
 	it('stamps the token on the watched request and not on its unwatched sibling', async () => {
 		// One assertion over BOTH shapes, so the claim cannot be satisfied by a client that
 		// stamps nothing at all: the watched request must carry the token AND the unwatched
@@ -3511,6 +3544,32 @@ describe('MCPClient — subscriptions/listen', () => {
 		expect(seen).toEqual([])
 	})
 
+	it('discards stale-stamped frames that no active call or subscription claims', async () => {
+		const peer = callPeer(() => undefined)
+		const client = createMCPClient({ transport: peer })
+		await client.connect()
+		const seen: JSONRPCMessage[] = []
+		client.emitter.on('notification', (message) => seen.push(message))
+
+		peer.emitter.emit('message', {
+			jsonrpc: '2.0',
+			method: 'notifications/custom',
+			params: { _meta: { [MCP_META_SUBSCRIPTION]: 9_999 } },
+		})
+		peer.emitter.emit('message', {
+			jsonrpc: '2.0',
+			method: 'notifications/progress',
+			params: {
+				progressToken: 8_888,
+				progress: 1,
+				_meta: { [MCP_META_SUBSCRIPTION]: 9_999 },
+			},
+		})
+		await waitForDelay()
+
+		expect(seen).toEqual([])
+	})
+
 	it('rejects a peer subscription error with MCPError', async () => {
 		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const transport = createLoopbackTransport(createSubscriptionServer(() => source.readable))
@@ -3552,6 +3611,33 @@ describe('MCPClient — subscriptions/listen', () => {
 		const stream = client.listen(undefined, { signal: controller.signal })
 
 		await expect(stream.next()).rejects.toBe(reason)
+		expect(transport.messages.map((message) => message.method)).toEqual(['server/discover'])
+	})
+
+	it('snapshots an accessor signal before a later read aborts it', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const transport = createLoopbackTransport(createSubscriptionServer(() => source.readable))
+		const client = createMCPClient({ transport })
+		await client.connect()
+		const captured = new AbortController()
+		const replacement = new AbortController()
+		const reason = new Error('captured signal stopped')
+		let reads = 0
+		const options = {
+			get signal(): AbortSignal {
+				reads += 1
+				if (reads === 1) return captured.signal
+				captured.abort(reason)
+				return replacement.signal
+			},
+		}
+		const stream = client.listen({ toolsListChanged: true }, options)
+
+		void options.signal
+		const [read] = await Promise.allSettled([stream.next()])
+
+		expect(read).toEqual({ status: 'rejected', reason })
+		expect(reads).toBe(2)
 		expect(transport.messages.map((message) => message.method)).toEqual(['server/discover'])
 	})
 

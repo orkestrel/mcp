@@ -1237,6 +1237,69 @@ async function readGuideSubscription(): Promise<GuideSubscriptionReading> {
 	}
 }
 
+/** What the method row's progress-before-discard sentence observed. */
+interface GuideProgressReading {
+	readonly progress: readonly unknown[]
+	readonly notifications: readonly string[]
+}
+
+/** Drive active progress and unclaimed stale stamps through the same client transport door. */
+async function readGuideProgressClaim(): Promise<GuideProgressReading> {
+	const release = Promise.withResolvers<void>()
+	const tools = createToolManager()
+	tools.add(
+		createTool({
+			name: 'slow',
+			execute: async () => {
+				await release.promise
+				return 'done'
+			},
+		}),
+	)
+	const transport = createLoopbackTransport(
+		createMCPServer({ identity: { name: 'progress-server', version: '1.0.0' }, tools }),
+	)
+	const client = createMCPClient({ transport })
+	const progress: unknown[] = []
+	const notifications: string[] = []
+	client.emitter.on('notification', (message) => {
+		if ('method' in message) notifications.push(message.method)
+	})
+	await client.connect()
+
+	const call = client.call('slow', {}, { progress: (report) => progress.push(report) })
+	const id = transport.messages.find((message) => message.method === 'tools/call')?.id
+	if (id === undefined) throw new Error('Expected the guide call to carry an id')
+	transport.receive({
+		jsonrpc: '2.0',
+		method: 'notifications/progress',
+		params: {
+			progressToken: id,
+			progress: 1,
+			_meta: { [MCP_META_SUBSCRIPTION]: 9_999 },
+		},
+	})
+	transport.receive({
+		jsonrpc: '2.0',
+		method: 'notifications/custom',
+		params: { _meta: { [MCP_META_SUBSCRIPTION]: 9_999 } },
+	})
+	transport.receive({
+		jsonrpc: '2.0',
+		method: 'notifications/progress',
+		params: {
+			progressToken: 8_888,
+			progress: 2,
+			_meta: { [MCP_META_SUBSCRIPTION]: 9_999 },
+		},
+	})
+	await Promise.resolve()
+	release.resolve()
+	await call
+	await client.disconnect()
+	return { progress, notifications }
+}
+
 /** What one run of the section's bad-`capacity` clause observed. */
 interface GuideCapacityReading {
 	/** The reason the first read rejected with, or `undefined` when that read resolved. */
@@ -1327,6 +1390,19 @@ describe('guides/mcp.md § Consume a subscription from a client — what the str
 		expect(reading.frames).toContain('notifications/prompts/list_changed')
 		expect(reading.frames).not.toContain('notifications/message')
 		expect(reading.unstamped).toEqual(['notifications/message'])
+	})
+
+	it('claims active progress before dropping other stale-stamped frames', async () => {
+		const reading = await readGuideProgressClaim()
+
+		expect(reading.progress).toEqual([
+			{
+				progressToken: 2,
+				progress: 1,
+				_meta: { [MCP_META_SUBSCRIPTION]: 9_999 },
+			},
+		])
+		expect(reading.notifications).toEqual([])
 	})
 
 	// The section states that EVERY stamped frame arrives, and the bounded queue is the mechanism

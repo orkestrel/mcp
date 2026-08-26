@@ -216,6 +216,8 @@ export class MCPClient implements MCPClientInterface {
 
 	constructor(options: MCPClientOptions) {
 		const requested: unknown = options.version
+		const on = options.on
+		const error = options.error
 		if (requested !== undefined && !isMCPModernVersion(requested)) {
 			throw new MCPError('Unsupported protocol version', MCP_UNSUPPORTED_VERSION, {
 				supported: SUPPORTED_PROTOCOL_VERSIONS,
@@ -223,8 +225,8 @@ export class MCPClient implements MCPClientInterface {
 			})
 		}
 		this.#emitter = new Emitter<MCPClientEventMap>({
-			...(options.on !== undefined ? { on: options.on } : {}),
-			...(options.error !== undefined ? { error: options.error } : {}),
+			...(on === undefined ? {} : { on }),
+			...(error === undefined ? {} : { error }),
 		})
 		this.#transport = options.transport
 		this.#identity = options.identity ?? {
@@ -399,12 +401,46 @@ export class MCPClient implements MCPClientInterface {
 		return tools
 	}
 
-	async *listen(
+	listen(
 		notifications: MCPSubscriptionFilter | undefined,
 		options: MCPListenOptions,
 	): MCPSubscriptionStream {
-		options.signal.throwIfAborted()
+		const signal = options.signal
 		const capacity = options.capacity ?? DEFAULT_MCP_SUBSCRIPTION_CAPACITY
+		return this.#openSubscription(notifications, signal, capacity)
+	}
+
+	async call(
+		name: string,
+		args: Readonly<Record<string, unknown>>,
+		options?: MCPCallOptions,
+	): Promise<MCPCallOutcome> {
+		const input = options?.input
+		const result = await this.#request(
+			'tools/call',
+			{
+				name,
+				arguments: args,
+				...(input === undefined
+					? {}
+					: {
+							requestState: input.state,
+							inputResponses: input.responses,
+						}),
+			},
+			this.#timeout,
+			undefined,
+			options,
+		)
+		return buildCallOutcome(name, result)
+	}
+
+	async *#openSubscription(
+		notifications: MCPSubscriptionFilter | undefined,
+		signal: AbortSignal,
+		capacity: number,
+	): MCPSubscriptionStream {
+		signal.throwIfAborted()
 		if (!isInteger(capacity) || capacity < 1) {
 			throw new MCPError(
 				'MCP subscription capacity must be a positive integer',
@@ -439,11 +475,11 @@ export class MCPClient implements MCPClientInterface {
 			terminal?: MCPSubscriptionResult
 			failure?: { readonly reason: unknown }
 		} = { queue: [], capacity }
-		const abort = this.#abortSubscription.bind(this, id, options.signal)
-		options.signal.addEventListener('abort', abort, { once: true })
+		const abort = this.#abortSubscription.bind(this, id, signal)
+		signal.addEventListener('abort', abort, { once: true })
 		this.#pending.set(id, {
 			method,
-			signal: options.signal,
+			signal,
 			abort,
 			subscription,
 		})
@@ -471,30 +507,6 @@ export class MCPClient implements MCPClientInterface {
 		} finally {
 			this.#cancelSubscription(id, new Error('MCP subscription closed by its consumer'))
 		}
-	}
-
-	async call(
-		name: string,
-		args: Readonly<Record<string, unknown>>,
-		options?: MCPCallOptions,
-	): Promise<MCPCallOutcome> {
-		const result = await this.#request(
-			'tools/call',
-			{
-				name,
-				arguments: args,
-				...(options?.input === undefined
-					? {}
-					: {
-							requestState: options.input.state,
-							inputResponses: options.input.responses,
-						}),
-			},
-			this.#timeout,
-			undefined,
-			options,
-		)
-		return buildCallOutcome(name, result)
 	}
 
 	// Issue a request and await its correlated response, bounded by the per-request
@@ -699,8 +711,8 @@ export class MCPClient implements MCPClientInterface {
 		}
 		// A server-initiated message. A progress frame a caller is waiting on is claimed by
 		// that caller; everything else is surfaced for the consumer to react to.
-		if ('method' in owned && this.#routeSubscription(owned)) return
 		if ('method' in owned && this.#reportProgress(owned)) return
+		if ('method' in owned && this.#routeSubscription(owned)) return
 		this.#emitter.emit('notification', owned)
 	}
 
