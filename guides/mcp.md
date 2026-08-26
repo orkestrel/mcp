@@ -903,6 +903,11 @@ bound. That is a client-side bound, not transport backpressure — see
 [Declared conformance gaps](#declared-conformance-gaps) for what a duplex carrier delivers
 incrementally and what an HTTP one does not.
 
+A `capacity` that is not a positive integer is refused: the client throws `MCPError` `-32602`.
+The refusal lands on the FIRST READ, because the body is a generator and nothing in it runs
+until then, and it lands before the request is built or written — so the transport carries no
+`subscriptions/listen` frame for a subscription refused this way.
+
 ```ts
 import {
 	type MCPSubscriptionResult,
@@ -921,7 +926,8 @@ const stream = client.listen(
 
 const opened = await stream.next()
 opened.done // false — the acknowledgement is a yield
-opened.value.method // 'notifications/subscriptions/acknowledged'
+// The yield arm carries the notification; narrow on `done` before reading its member.
+if (opened.done === false) opened.value.method // 'notifications/subscriptions/acknowledged'
 
 let closure: MCPSubscriptionResult | undefined
 for (;;) {
@@ -2128,7 +2134,7 @@ Passing a legacy revision to
 | `MCPRequestFunction`               | type      | `(method, params, deadline) => Promise<unknown>` — the correlated-request door an `MCPTaskClientInterface` issues through. It resolves the peer's `result` UNVALIDATED and rejects with an `MCPError` for an error response.                                                                                                                                                                                                                                                                                                                                   |
 | `MCPTaskClientOptions`             | interface | `{ request; timeout? }` — construction options for `MCPTaskClient`; an omitted `timeout` leaves every task request unbounded.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `MCPTaskClientInterface`           | interface | The extension's client half — the `task` / `update` / `abort` methods. `MCPTaskManagerInterface` minus `start`, because creation is never the client's decision, and with the same missing plural accessor.                                                                                                                                                                                                                                                                                                                                                    |
-| `MCPClientInterface`               | interface | `emitter` / `connected` / `version` / `transport` / `tasks` data members + the `connect` / `discover` / `disconnect` / `tools` / `call` methods.                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `MCPClientInterface`               | interface | `emitter` / `connected` / `version` / `transport` / `tasks` data members + the `connect` / `discover` / `disconnect` / `tools` / `listen` / `call` methods.                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 The `emitter`, `identity`, `methods`, and `limit` members of `MCPServerInterface` are
 `readonly` data members (Surface rows, above) — its call-signature methods
@@ -3856,8 +3862,8 @@ failures invites over-reading in a way a run with ten did not. These bounds fix 
 - It says nothing about **this package's own client consuming a held-open exchange**. The
   runner's client consumes one and reports it (`server-sse-multiple-streams`, 2 passed / 0
   failed), so the server half is exactly what that scenario proves; `MCPClient.listen` is
-  proven by this package's own tests over a duplex carrier instead — see the entry below for
-  the carrier limit that survives.
+  proven by this package's own tests over a duplex carrier instead — see the following entry
+  for the carrier limit that survives.
 - It is a **protocol conformance runner, not an IDE integration**. Passing it is evidence
   about the wire, not evidence that any particular host application can drive this server.
 - It proves **nothing about the browser face**. Not one byte of `@orkestrel/mcp/browser`

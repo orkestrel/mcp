@@ -3597,6 +3597,42 @@ describe('MCPClient — subscriptions/listen', () => {
 		await expect(stream.next()).rejects.toThrow('subscription frame queue overflow')
 	})
 
+	// A subscription carries no request deadline: the configured `timeout` bounds a correlated
+	// request, and a stream that outlives it is the guide's claim rather than an accident. The
+	// read is parked BEFORE the wait, so a deadline registered on this subscription would settle
+	// it while nothing was written, and the frame that follows would arrive too late.
+	it('delivers to a read parked past the configured request deadline', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const transport = createLoopbackTransport(createSubscriptionServer(() => source.readable))
+		const client = createMCPClient({ transport, timeout: 25 })
+		await client.connect()
+		const stream = client.listen(
+			{ toolsListChanged: true },
+			{ signal: new AbortController().signal },
+		)
+		await stream.next()
+		const parked = Promise.allSettled([stream.next()])
+
+		await waitForDelay(50)
+		await source.writable
+			.getWriter()
+			.write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+
+		expect(await parked).toEqual([
+			{
+				status: 'fulfilled',
+				value: {
+					done: false,
+					value: {
+						jsonrpc: '2.0',
+						method: 'notifications/tools/list_changed',
+						params: { _meta: { [MCP_META_SUBSCRIPTION]: 2 } },
+					},
+				},
+			},
+		])
+	})
+
 	it('rejects a parked subscription read when the client disconnects', async () => {
 		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const transport = createLoopbackTransport(createSubscriptionServer(() => source.readable))

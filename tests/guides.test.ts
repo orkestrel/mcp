@@ -16,6 +16,7 @@ import {
 	createMCPLegacy,
 	createMCPLegacyClientTransport,
 	createMCPServer,
+	isMCPError,
 	isMCPSubscriptionResult,
 	MCP_META_SUBSCRIPTION,
 } from '@src/core'
@@ -1154,6 +1155,8 @@ const GUIDE_UNSTAMPED_NOTIFICATION: JSONRPCNotification = {
 /** What one run of the fence's reads observed, in the order the fence reads them. */
 interface GuideSubscriptionReading {
 	readonly opened: IteratorResult<JSONRPCNotification, MCPSubscriptionResult>
+	/** The method the fence reads behind its `opened.done === false` guard. */
+	readonly acknowledged: string | undefined
 	readonly frames: readonly string[]
 	readonly closure: MCPSubscriptionResult | undefined
 	readonly proven: boolean
@@ -1188,6 +1191,10 @@ async function readGuideSubscription(): Promise<GuideSubscriptionReading> {
 		capacity: 16,
 	})
 	const opened = await stream.next()
+	// The fence's own narrowing, transcribed: the member read sits behind `opened.done === false`,
+	// so a run where the first read is not a yield reports no method rather than reading one.
+	let acknowledged: string | undefined
+	if (opened.done === false) acknowledged = opened.value.method
 
 	// Both injections ride the same transport door, while the subscription is live: the stamped
 	// one must enter the stream and the unstamped one must not.
@@ -1220,7 +1227,42 @@ async function readGuideSubscription(): Promise<GuideSubscriptionReading> {
 	if (terminal.done === true) closure = terminal.value
 	subscription.abort()
 	await client.disconnect()
-	return { opened, frames, closure, proven: isMCPSubscriptionResult(closure), unstamped }
+	return {
+		opened,
+		acknowledged,
+		frames,
+		closure,
+		proven: isMCPSubscriptionResult(closure),
+		unstamped,
+	}
+}
+
+/** What one run of the section's bad-`capacity` clause observed. */
+interface GuideCapacityReading {
+	/** The reason the first read rejected with, or `undefined` when that read resolved. */
+	readonly refusal: unknown
+	/** Every method the transport carried up to and including that read. */
+	readonly methods: readonly string[]
+}
+
+/** Drive the capacity clause: a `capacity` below one fails the first read, before any write. */
+async function readGuideCapacityRefusal(): Promise<GuideCapacityReading> {
+	const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+	const transport = createLoopbackTransport(
+		createSubscriptionServer(() => source.readable, GUIDE_SUBSCRIPTION_FILTER),
+	)
+	const client = createMCPClient({ transport })
+	await client.connect()
+
+	const stream = client.listen(GUIDE_SUBSCRIPTION_FILTER, {
+		signal: new AbortController().signal,
+		capacity: 0,
+	})
+	// The read is settled rather than awaited: the clause's subject is WHICH way it settles.
+	const [read] = await Promise.allSettled([stream.next()])
+	const methods = transport.messages.map((message) => message.method)
+	await client.disconnect()
+	return { refusal: read.status === 'rejected' ? read.reason : undefined, methods }
 }
 
 /** The families the burst reading asks for and the server honours, so every write matches. */
@@ -1269,9 +1311,7 @@ describe('guides/mcp.md § Consume a subscription from a client — what the str
 		const reading = await readGuideSubscription()
 
 		expect(reading.opened.done).toBe(false)
-		expect(reading.opened.value).toMatchObject({
-			method: 'notifications/subscriptions/acknowledged',
-		})
+		expect(reading.acknowledged).toBe('notifications/subscriptions/acknowledged')
 		expect(reading.frames).toEqual([
 			'notifications/prompts/list_changed',
 			'notifications/tools/list_changed',
@@ -1294,5 +1334,16 @@ describe('guides/mcp.md § Consume a subscription from a client — what the str
 	// before the first read is exactly that case, and it is the read the sentence rests on.
 	it('delivers every frame that arrived before the first read', async () => {
 		expect(await readBurstSubscription()).toEqual(BURST_METHODS)
+	})
+
+	// The section states a refusal — `-32602` on the first read, before anything is sent — and a
+	// substring check would pass whatever the client did. So the refusal is executed: its coded
+	// error is read, and the transport's own record answers whether the request was written.
+	it('refuses a capacity below one on the first read and sends nothing', async () => {
+		const reading = await readGuideCapacityRefusal()
+
+		expect(reading.refusal).toMatchObject({ code: -32602 })
+		expect(isMCPError(reading.refusal)).toBe(true)
+		expect(reading.methods).toEqual(['server/discover'])
 	})
 })
