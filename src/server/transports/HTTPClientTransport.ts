@@ -60,8 +60,10 @@ import { readEventStream } from '../helpers.js'
  *   aborted read surfaces on `error` and the `send` reporting it resolves. `close()` is
  *   idempotent (one `close` event per connected lifetime), and `start()` opens the next one.
  * - **Total at the boundary.** Every reply is narrowed (`parseJSONRPCMessage`,
- *   the SSE decoder) — a non-message reply is dropped, never asserted; a `fetch` /
- *   decode failure surfaces on the `error` event rather than escaping `send`.
+ *   the SSE decoder). A non-message success reply is dropped, never asserted. A non-success
+ *   reply that carries no valid JSON-RPC message rejects `send` with its HTTP status and body
+ *   shape. A valid JSON-RPC error body is emitted at any HTTP status. A `fetch` / decode failure
+ *   on a success response surfaces on the `error` event rather than escaping `send`.
  * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); fires
  *   `message` per decoded reply, `error` on a fault, and `close` on `close()`.
  *
@@ -193,23 +195,48 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 
 	// Decode a reply and emit each carried message. A 202 (notification accepted) has no
 	// body — emit nothing. An `application/json` body is one envelope; a `text/event-stream`
-	// body is decoded with the core SSEParser (one or more `data:` events). A decode failure
+	// body is decoded with the core SSEParser (one or more `data:` events). A non-success reply
+	// with no valid envelope rejects with its status and body shape. A success decode failure
 	// surfaces on `error` rather than escaping.
 	async #deliver(response: Response): Promise<void> {
 		if (response.status === 202) return
 		const type = response.headers.get('content-type') ?? ''
 		try {
 			if (type.includes('text/event-stream')) {
-				for (const message of await readEventStream(response)) this.#capture(message)
+				const messages = await readEventStream(response)
+				for (const message of messages) this.#capture(message)
+				if (!response.ok && messages.length === 0) throw this.#responseError(response, type)
 				return
 			}
 			if (type.includes('application/json')) {
 				const message = parseJSONRPCMessage(await response.json())
-				if (message !== undefined) this.#capture(message)
+				if (message !== undefined) {
+					this.#capture(message)
+					return
+				}
+				if (!response.ok) throw this.#responseError(response, type)
+				return
 			}
+			if (!response.ok) throw this.#responseError(response, type)
 		} catch (error) {
+			if (!response.ok) throw this.#responseError(response, type)
 			this.#emitter.emit('error', error)
 		}
+	}
+
+	#responseError(response: Response, type: string): Error {
+		if (type.includes('application/json')) {
+			return new Error(
+				`HTTP ${response.status} response contained an application/json body that was not a JSON-RPC message`,
+			)
+		}
+		if (type.includes('text/event-stream')) {
+			return new Error(
+				`HTTP ${response.status} response contained a text/event-stream body without a JSON-RPC message`,
+			)
+		}
+		const shape = type === '' ? 'a body without a content type' : `an unsupported '${type}' body`
+		return new Error(`HTTP ${response.status} response contained ${shape}`)
 	}
 
 	// Capture the negotiated SUPPORTED protocol from the initialize result before emitting

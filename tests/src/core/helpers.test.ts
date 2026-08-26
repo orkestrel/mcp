@@ -41,8 +41,12 @@ import {
 	MCP_META_SERVER,
 	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
+	legacyInvocationToModern,
+	legacyResultToModern,
 	matchesResultType,
 	matchesSubscriptionNotification,
+	modernInvocationToLegacy,
+	modernResultToLegacy,
 	MCPStreamController,
 	MCPTextStreamController,
 	readCancelledId,
@@ -461,6 +465,65 @@ describe('buildModernResult', () => {
 			cacheScope: 'private',
 			_meta: { extension: true, [MCP_META_SERVER]: identity },
 		})
+	})
+})
+
+describe('era projections', () => {
+	it('removes modern stamps and returns undefined for an unstamped result', () => {
+		expect(
+			modernResultToLegacy({
+				resultType: 'complete',
+				tools: [],
+				ttlMs: 60_000,
+				cacheScope: 'private',
+				_meta: { [MCP_META_SERVER]: { name: 'server', version: '1.0.0' } },
+			}),
+		).toEqual({ tools: [] })
+		expect(modernResultToLegacy({ tools: [] })).toBeUndefined()
+	})
+
+	it('adds cache stamps only to a legacy tools/list result', () => {
+		const identity = { name: 'server', version: '1.0.0' }
+
+		expect(legacyResultToModern({ tools: [] }, 'tools/list', identity)).toMatchObject({
+			resultType: 'complete',
+			ttlMs: DEFAULT_MCP_CACHE_TTL,
+			cacheScope: 'private',
+		})
+		const call = legacyResultToModern({ content: [] }, 'tools/call', identity)
+		expect(call).toMatchObject({ resultType: 'complete', content: [] })
+		expect(Object.hasOwn(call, 'ttlMs')).toBe(false)
+		expect(Object.hasOwn(call, 'cacheScope')).toBe(false)
+	})
+
+	it('adds modern metadata to a params-less legacy request', () => {
+		expect(legacyInvocationToModern({ jsonrpc: '2.0', id: 1, method: 'tools/list' })).toEqual({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/list',
+			params: {
+				_meta: {
+					[MCP_META_VERSION]: '2026-07-28',
+					[MCP_META_CAPABILITIES]: {},
+				},
+			},
+		})
+	})
+
+	it('omits _meta when removing modern metadata empties it', () => {
+		expect(
+			modernInvocationToLegacy({
+				jsonrpc: '2.0',
+				id: 1,
+				method: 'tools/list',
+				params: {
+					_meta: {
+						[MCP_META_VERSION]: '2026-07-28',
+						[MCP_META_CAPABILITIES]: {},
+					},
+				},
+			}),
+		).toEqual({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })
 	})
 })
 

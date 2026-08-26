@@ -34,7 +34,6 @@ import {
 	DEFAULT_MCP_CLIENT_VERSION,
 	DEFAULT_MCP_REQUEST_TIMEOUT,
 	JSONRPC_INVALID_PARAMS,
-	JSONRPC_INVALID_REQUEST,
 	JSONRPC_METHOD_NOT_FOUND,
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
@@ -543,13 +542,6 @@ export class MCPClient implements MCPClientInterface {
 			const correlation = owned.id
 			const pending = this.#pending.get(correlation)
 			if (pending !== undefined) {
-				if (
-					pending.method === 'server/discover' &&
-					(owned.error === undefined ||
-						(owned.error.code !== JSONRPC_METHOD_NOT_FOUND &&
-							owned.error.code !== JSONRPC_INVALID_REQUEST))
-				) {
-				}
 				if (owned.error !== undefined) {
 					this.#settle(
 						correlation,

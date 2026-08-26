@@ -180,21 +180,55 @@ describe('HTTPClientTransport — policy composes in front', () => {
 		server.use(createBearerGuard('topsecret'))
 		const handle = await startServer(server)
 		teardown.add(() => handle.stop())
-		// No `headers` → the guard 401s the POST; the transport surfaces no `message`, so the
-		// client's discovery request rejects on its deadline.
+		// No `headers` → the guard 401s the POST and the transport rejects the exchange from
+		// the invalid JSON-RPC body.
 		const client = createMCPClient({
 			transport: createHTTPClientTransport({ url: `${handle.base}/mcp` }),
 			timeout: 200,
 		})
 
 		await expect(client.connect()).rejects.toThrow(
-			"MCP request 'server/discover' timed out after 200ms",
+			'HTTP 401 response contained an application/json body that was not a JSON-RPC message',
 		)
 		expect(client.connected).toBe(false)
 	})
 })
 
 describe('HTTPClientTransport — lifecycle', () => {
+	it('rejects a non-success JSON body that is not a JSON-RPC message', async () => {
+		const transport = createHTTPClientTransport({
+			url: 'http://localhost/mcp',
+			fetch: () => Promise.resolve(Response.json({ error: 'unauthorized' }, { status: 401 })),
+		})
+
+		await expect(
+			transport.send({ jsonrpc: '2.0', id: 1, method: 'server/discover' }),
+		).rejects.toThrow(
+			'HTTP 401 response contained an application/json body that was not a JSON-RPC message',
+		)
+	})
+
+	it('emits a valid JSON-RPC error body from a non-success response', async () => {
+		const transport = createHTTPClientTransport({
+			url: 'http://localhost/mcp',
+			fetch: () =>
+				Promise.resolve(
+					Response.json(
+						{ jsonrpc: '2.0', id: 1, error: { code: -32601, message: 'Missing' } },
+						{ status: 401 },
+					),
+				),
+		})
+		const messages: JSONRPCMessage[] = []
+		transport.emitter.on('message', (message) => messages.push(message))
+
+		await transport.send({ jsonrpc: '2.0', id: 1, method: 'server/discover' })
+
+		expect(messages).toEqual([
+			{ jsonrpc: '2.0', id: 1, error: { code: -32601, message: 'Missing' } },
+		])
+	})
+
 	it('stamps modern POSTs from the message and scopes Mcp-Name to tools/call', async () => {
 		const headers: Headers[] = []
 		const transport = createHTTPClientTransport({

@@ -73,13 +73,14 @@ export function createMCPLegacy(server: MCPServerInterface): MCPDispatcherInterf
 /**
  * Creates a transport-agnostic Model Context Protocol CLIENT — connects to a REMOTE
  * MCP server over an injected {@link import('./types.js').MCPClientTransportInterface},
- * runs the `initialize` handshake, and exposes the server's tools as local
+ * negotiates the modern revision through `server/discover`, and exposes the server's tools as local
  * {@link import('@orkestrel/tool').ToolInterface}s an agent can run.
  *
  * @remarks
  * The egress mirror of {@link createMCPServer}: where the server exposes a local tool
- * registry over MCP, the client USES a remote server's tools. `connect()` handshakes,
- * validates and exposes the negotiated protocol, `tools()` lists + wraps the remote
+ * registry over MCP, the client USES a remote server's tools. `connect()` discovers,
+ * validates, and exposes the negotiated modern protocol; a legacy peer requires
+ * {@link createMCPLegacyClientTransport}. `tools()` lists + wraps the remote
  * tools (each `execute` calls back over the wire),
  * and `call(name, args)` runs a remote `tools/call` (a remote tool failure throws
  * locally, so an agent's {@link import('@orkestrel/tool').ToolManagerInterface}

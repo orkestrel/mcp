@@ -2193,8 +2193,12 @@ export interface MCPClientTransportInterface {
  * - `capabilities` — the legacy handshake capability record. Defaults to an empty record.
  * - `version` — an optional exact legacy handshake revision. Absence offers the newest supported
  *   legacy revision and accepts the supported revision the peer selects.
- * - `timeout` — the legacy handshake deadline in milliseconds. Default:
+ * - `timeout` — the legacy handshake, handshake-write, and forwarded-request deadline in
+ *   milliseconds. Default:
  *   {@link import('./constants.js').DEFAULT_MCP_REQUEST_TIMEOUT}.
+ *
+ * The adapter reserves JSON-RPC wire id `0` for its handshake while `start()` is waiting for
+ * the peer. Do not send unrelated id-`0` traffic through the wrapped transport in that window.
  */
 export interface MCPLegacyClientTransportOptions {
 	/** The client identity sent during the legacy handshake. */
@@ -2203,7 +2207,7 @@ export interface MCPLegacyClientTransportOptions {
 	readonly capabilities?: MCPClientCapabilities
 	/** The exact legacy revision to request and require. */
 	readonly version?: MCPLegacyVersion
-	/** The legacy handshake deadline in milliseconds. */
+	/** The legacy handshake and forwarded-request deadline in milliseconds. */
 	readonly timeout?: number
 }
 
@@ -2246,15 +2250,17 @@ export type MCPClientEventMap = {
  *
  * @remarks
  * - `transport` — the carrier the client drives a remote MCP server over (REQUIRED;
- *   a concrete one from `src/server/mcp`, or an in-process loopback).
+ *   a concrete one from `src/server/mcp`, or an in-process loopback). The bare client negotiates
+ *   the modern revision through `server/discover`; wrap the carrier with
+ *   {@link import('./factories.js').createMCPLegacyClientTransport} for a legacy peer.
  * - `identity` — identifies the client in modern request metadata; defaults to
  *   {@link import('./constants.js').DEFAULT_MCP_CLIENT_NAME} /
  *   {@link import('./constants.js').DEFAULT_MCP_CLIENT_VERSION}.
  * - `capabilities` — the open client-capability record carried by every modern
- *   request; defaults to an empty record when the modern client implementation lands.
- * - `version` — an optional protocol pin; absence lets the modern client negotiate.
- * - `timeout` — the per-request deadline in milliseconds: a `tools/list` / `tools/call`
- *   / `initialize` that the server does not answer within it REJECTS (the pending
+ *   request; defaults to an empty record.
+ * - `version` — an optional modern protocol pin; absence lets `server/discover` negotiate.
+ * - `timeout` — the per-request deadline in milliseconds: a `server/discover` / `tools/list` /
+ *   `tools/call` that the server does not answer within it REJECTS (the pending
  *   request is settled by an `AbortSignal.timeout(timeout)` deadline — never a raw
  *   `setTimeout`). The same deadline bounds the client's WAIT on the transport's `close`, so a
  *   shutdown the transport accepts and never answers rejects its caller instead of wedging the

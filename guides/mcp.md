@@ -1696,11 +1696,19 @@ client.version // '2026-07-28' — the adapter keeps the dated revision on the p
 
 Omit `version` to offer `2025-11-25`; supply it to require one supported legacy revision exactly.
 The adapter rejects an absent, malformed, unsupported, or pin-mismatched handshake result before
-the client connects. Its request deadline bounds the handshake response and each handshake write.
+the client connects. Its request deadline bounds the handshake response, each handshake write, and
+each forwarded correlated request. The adapter reserves wire id `0` while that handshake window is
+open; do not send unrelated id-`0` traffic through the wrapped carrier until `start()` settles.
 
 The bare client never attempts this handshake. When `server/discover` returns `-32601`, `connect`
-rejects with an `MCPError` whose message names `createMCPLegacyClientTransport`; every other
-failure surfaces as itself. Passing a legacy revision to
+rejects with an `MCPError` whose message names `createMCPLegacyClientTransport`. A legacy peer that
+refuses the method with any other code surfaces that code unchanged. Reference servers differ here:
+the TypeScript SDK v1.x server answers an unknown method with `-32601`, while the Python SDK v1.29.0
+server answers it with `-32602`, as read from their released sources on 2026-08-20 (see the
+[TypeScript SDK shared protocol](https://github.com/modelcontextprotocol/typescript-sdk/blob/v1.x/src/shared/protocol.ts)
+and the
+[Python SDK server session](https://github.com/modelcontextprotocol/python-sdk/blob/v1.29.0/src/mcp/server/session.py)).
+Passing a legacy revision to
 `createMCPClient` is rejected before the transport starts; production types do not admit that pin.
 
 ### Factories
@@ -2031,6 +2039,12 @@ a compressed/body-size guard is front-middleware policy the consumer composes, s
 The core `limit.message` bound applies specifically where a transport supplies a raw string to
 `MCPServer.handle`; the HTTP route owns and parses its Fetch `Request` body before typed dispatch.
 
+The HTTP client transport does not mint or refresh credentials. A guarded server requires the
+consumer to supply its bearer through `headers`, for example
+`{ authorization: 'Bearer …' }`. If that bearer is missing and the guard returns a non-JSON-RPC
+`401` JSON body, `send()` rejects with an error naming HTTP `401` and the invalid JSON-RPC body
+shape. A valid correlated JSON-RPC error body is still emitted at any HTTP status.
+
 ```ts
 import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createMCPRoutes } from '@orkestrel/mcp/server'
@@ -2252,7 +2266,12 @@ vanished is no longer held, and closing a dead one is a no-op, so a departed cli
 neither throws nor delays the stop.
 
 ```ts
-import { createMCPClient, createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
+import {
+	createMCPClient,
+	createMCPLegacy,
+	createMCPLegacyClientTransport,
+	createMCPServer,
+} from '@orkestrel/mcp'
 import { createWebSocketClientTransport, createWebSocketServer } from '@orkestrel/mcp/server'
 import { createToolManager } from '@orkestrel/tool'
 
@@ -2426,11 +2445,10 @@ const mcp = createMCPServer({
 createStdioServer(createMCPLegacy(mcp)).start() // answers `initialize` too; pass `mcp` alone for modern-only
 
 // A client spawns a stdio MCP server as a child process and drives it the same way:
-const client = createMCPClient({
-	transport: createStdioClientTransport({ command: 'node', args: ['./server.js'] }),
-})
+const carrier = createStdioClientTransport({ command: 'node', args: ['./server.js'] })
+const client = createMCPClient({ transport: createMCPLegacyClientTransport(carrier) })
 await client.connect()
-client.version // the revision negotiated with that child — legacy where it serves no modern seam
+client.version // '2026-07-28' — the consumer-visible client stays modern
 const tools = await client.tools()
 ```
 
@@ -4318,7 +4336,7 @@ on? })` drives a REMOTE server over an injected `MCPClientTransportInterface`
     hanging. The discovery probe carries the same request deadline: an omitted
     `timeout` selects `DEFAULT_MCP_REQUEST_TIMEOUT`, and a configured one
     applies to the probe as to every request. A public `discover()` call uses
-    the ordinary request deadline. A legacy peer that refuses the method produces
+    the ordinary request deadline. A peer that answers `server/discover` with `-32601` produces
     the adapter-naming error immediately. A peer that accepts the probe and answers
     nothing surfaces the request timeout after the configured deadline. Legacy handshake
     timing belongs to the explicit adapter, whose deadline also bounds its response
@@ -4343,9 +4361,12 @@ application/json` and an `Accept` of BOTH `application/json` and
     `application/json` body is narrowed with `parseJSONRPCMessage`; a
     `text/event-stream` body is decoded with `@orkestrel/sse`'s `SSEParser`
     (`readEventStream`); a `202` (a notification accepted) carries no body
-    and emits nothing. It is TOTAL at the boundary: a non-message reply is
-    dropped, never asserted; a `fetch` / decode failure surfaces on the
-    `error` event rather than escaping `send`. `fetch` defaults to
+    and emits nothing. It is TOTAL at the boundary: a non-message success reply is
+    dropped, never asserted; a non-success reply with no valid JSON-RPC message rejects
+    `send` with its HTTP status and body shape, while a valid JSON-RPC error body is emitted
+    at any status. A guarded server requires the consumer to supply its bearer through
+    `headers`; the transport does not mint or refresh credentials. A `fetch` / decode failure
+    on a success response surfaces on the `error` event rather than escaping `send`. `fetch` defaults to
     `globalThis.fetch` (injectable). EVERY `fetch` call carries a `signal`,
     with or without a `timeout`: `send` mints one `AbortController` per
     exchange and holds it in a pending set, so `close()` aborts the fetch and

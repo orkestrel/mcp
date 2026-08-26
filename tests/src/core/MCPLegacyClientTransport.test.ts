@@ -25,10 +25,12 @@ interface LegacyPeerInterface extends MCPClientTransportInterface {
 	readonly violations: readonly string[]
 	readonly closed: number
 	readonly lifecycle: readonly string[]
+	deliver(message: JSONRPCMessage): void
 	release(): void
 }
 
 interface LegacyPeerOptions {
+	readonly drop?: (method: string, count: number) => boolean
 	readonly park?: (method: string, count: number) => boolean
 	readonly reply?: (
 		request: JSONRPCInvocation,
@@ -88,6 +90,7 @@ function createLegacyPeer(options?: LegacyPeerOptions): LegacyPeerInterface {
 				emitter.emit('message', scripted)
 				return
 			}
+			if (options?.drop?.(message.method, count) === true) return
 			if (message.id === undefined) return
 			if (message.method === 'initialize') {
 				emitter.emit(
@@ -134,6 +137,9 @@ function createLegacyPeer(options?: LegacyPeerOptions): LegacyPeerInterface {
 		async close() {
 			closed += 1
 			lifecycle.push('close')
+		},
+		deliver(message) {
+			emitter.emit('message', message)
 		},
 		release() {
 			for (const resolve of held.splice(0)) resolve()
@@ -256,6 +262,148 @@ describe('MCPLegacyClientTransport', () => {
 		)
 	})
 
+	it('preserves legacy instructions in discovery and clears them across reconnect', async () => {
+		let handshakes = 0
+		const peer = createLegacyPeer({
+			reply: (request) => {
+				if (request.method !== 'initialize' || request.id === undefined) return undefined
+				handshakes += 1
+				return {
+					jsonrpc: '2.0',
+					id: request.id,
+					result: {
+						protocolVersion: MCP_PROTOCOL_VERSION,
+						capabilities: { tools: {} },
+						serverInfo: { name: 'legacy-peer', version: '1.0.0' },
+						...(handshakes === 1 ? { instructions: 'Use read-only tools' } : {}),
+					},
+				}
+			},
+		})
+		const client = createMCPClient({ transport: createMCPLegacyClientTransport(peer) })
+
+		await client.connect()
+		await expect(client.discover()).resolves.toMatchObject({
+			instructions: 'Use read-only tools',
+		})
+		await client.disconnect()
+		await client.connect()
+		const discovery = await client.discover()
+
+		expect(Object.hasOwn(discovery, 'instructions')).toBe(false)
+	})
+
+	it('refuses a stamped legacy handshake result', async () => {
+		const peer = createLegacyPeer({
+			reply: (request) =>
+				request.method === 'initialize' && request.id !== undefined
+					? {
+							jsonrpc: '2.0',
+							id: request.id,
+							result: {
+								protocolVersion: MCP_PROTOCOL_VERSION,
+								capabilities: { tools: {} },
+								serverInfo: { name: 'legacy-peer', version: '1.0.0' },
+								resultType: 'complete',
+							},
+						}
+					: undefined,
+		})
+		const client = createMCPClient({ transport: createMCPLegacyClientTransport(peer) })
+
+		await expect(client.connect()).rejects.toThrow(
+			'Legacy MCP handshake returned a malformed result',
+		)
+		expect(client.connected).toBe(false)
+	})
+
+	it('claims a foreign id-0 response while the handshake reservation is open', async () => {
+		const peer = createLegacyPeer({ park: (method) => method === 'initialize' })
+		const transport = createMCPLegacyClientTransport(peer, { timeout: 30 })
+		const starting = transport.start()
+		await waitForDelay()
+
+		peer.deliver({
+			jsonrpc: '2.0',
+			id: 0,
+			error: { code: -32601, message: 'foreign id-0 response' },
+		})
+		peer.release()
+
+		await expect(starting).rejects.toMatchObject({
+			code: -32601,
+			message: 'foreign id-0 response',
+		})
+	})
+
+	it('answers discovery before the handshake with a correlated error', async () => {
+		const peer = createLegacyPeer()
+		const transport = createMCPLegacyClientTransport(peer)
+		const messages: JSONRPCMessage[] = []
+		const errors: unknown[] = []
+		transport.emitter.on('message', (message) => messages.push(message))
+		transport.emitter.on('error', (error) => errors.push(error))
+
+		await transport.send({ jsonrpc: '2.0', id: 7, method: 'server/discover' })
+
+		expect(errors).toHaveLength(1)
+		expect(messages).toEqual([
+			{
+				jsonrpc: '2.0',
+				id: 7,
+				error: {
+					code: -32602,
+					message: 'Legacy MCP transport has not completed its handshake',
+				},
+			},
+		])
+	})
+
+	it('answers a malformed correlated result and forgets its method', async () => {
+		const peer = createLegacyPeer({ drop: (method) => method === 'tools/list' })
+		const transport = createMCPLegacyClientTransport(peer)
+		const messages: JSONRPCMessage[] = []
+		const errors: unknown[] = []
+		transport.emitter.on('message', (message) => messages.push(message))
+		transport.emitter.on('error', (error) => errors.push(error))
+		await transport.start()
+		await transport.send({ jsonrpc: '2.0', id: 7, method: 'tools/list' })
+
+		peer.deliver({ jsonrpc: '2.0', id: 7, result: { resultType: 'complete' } })
+		peer.deliver({ jsonrpc: '2.0', id: 7, result: { tools: [] } })
+
+		expect(errors).toHaveLength(1)
+		expect(messages).toEqual([
+			{
+				jsonrpc: '2.0',
+				id: 7,
+				error: { code: -32602, message: 'Legacy MCP peer returned a malformed result' },
+			},
+			{ jsonrpc: '2.0', id: 7, result: { tools: [] } },
+		])
+	})
+
+	it('bounds a forwarded request that receives no peer response', async () => {
+		const peer = createLegacyPeer({ drop: (method) => method === 'tools/list' })
+		const transport = createMCPLegacyClientTransport(peer, { timeout: 20 })
+		const messages: JSONRPCMessage[] = []
+		transport.emitter.on('message', (message) => messages.push(message))
+		await transport.start()
+
+		await transport.send({ jsonrpc: '2.0', id: 7, method: 'tools/list' })
+		await waitForDelay(30)
+		peer.deliver({ jsonrpc: '2.0', id: 7, result: { tools: [] } })
+
+		expect(messages).toEqual([
+			{
+				jsonrpc: '2.0',
+				id: 7,
+				error: { code: -32603, message: 'Legacy MCP request timed out after 20ms' },
+			},
+			{ jsonrpc: '2.0', id: 7, result: { tools: [] } },
+		])
+	})
+
 	it('converts a legacy tools/list result to the modern consumer shape', async () => {
 		const peer = createLegacyPeer()
 		const client = createMCPClient({ transport: createMCPLegacyClientTransport(peer) })
@@ -374,7 +522,7 @@ describe('MCPLegacyClientTransport', () => {
 		expect(peer.lifecycle).toEqual(['start', 'close', 'start'])
 	})
 
-	it('bounds an adapter handshake write that never lands and admits the next connect', async () => {
+	it('supersedes a permanently parked handshake write and admits the next connect', async () => {
 		const peer = createLegacyPeer({
 			park: (method, count) => method === 'notifications/initialized' && count === 2,
 		})
@@ -382,12 +530,13 @@ describe('MCPLegacyClientTransport', () => {
 			transport: createMCPLegacyClientTransport(peer, { timeout: 30 }),
 		})
 
-		await expect(client.connect()).rejects.toThrow(
-			'Legacy MCP handshake write timed out after 30ms',
-		)
-		expect(peer.lifecycle).toEqual(['start', 'close'])
+		const first = client.connect()
+		await waitForDelay()
+		await client.disconnect()
+		const second = client.connect()
 
-		await client.connect()
+		await expect(first).rejects.toThrow('Legacy MCP handshake write timed out after 30ms')
+		await second
 
 		expect(client.connected).toBe(true)
 		expect(peer.lifecycle).toEqual(['start', 'close', 'start'])
@@ -450,16 +599,6 @@ describe('MCPLegacyClientTransport', () => {
 			{ method: 'initialize' },
 			{ method: 'notifications/initialized' },
 		])
-		expect(client.version).toBe('2026-07-28')
-	})
-
-	it('CONTROL — accepts the unstamped legacy handshake result through the adapter', async () => {
-		const peer = createLegacyPeer()
-		const client = createMCPClient({ transport: createMCPLegacyClientTransport(peer) })
-
-		await client.connect()
-
-		expect(client.connected).toBe(true)
 		expect(client.version).toBe('2026-07-28')
 	})
 

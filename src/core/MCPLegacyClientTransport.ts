@@ -17,15 +17,20 @@ import {
 	DEFAULT_MCP_CLIENT_NAME,
 	DEFAULT_MCP_CLIENT_VERSION,
 	DEFAULT_MCP_REQUEST_TIMEOUT,
+	JSONRPC_INTERNAL_ERROR,
 	JSONRPC_INVALID_PARAMS,
-	MCP_META_SERVER,
 	MCP_MODERN_VERSION,
 	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
 	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
 } from './constants.js'
 import { MCPError } from './errors.js'
-import { legacyResultToModern, modernInvocationToLegacy } from './helpers.js'
+import {
+	buildJSONRPCError,
+	buildModernResult,
+	legacyResultToModern,
+	modernInvocationToLegacy,
+} from './helpers.js'
 import { parseJSONRPCMessage } from './parsers.js'
 import {
 	isJSONRPCResponse,
@@ -41,7 +46,8 @@ import {
  * @remarks
  * `start` performs the legacy `initialize` handshake. The adapter answers
  * `server/discover` locally from that handshake, removes modern request metadata before writes,
- * and restores legacy results to modern complete-result shapes before delivery.
+ * restores legacy results to modern complete-result shapes before delivery, and bounds retained
+ * request correlations with the configured deadline.
  */
 export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 	readonly #emitter = new Emitter<MCPClientTransportEventMap>()
@@ -50,8 +56,9 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 	readonly #capabilities: MCPClientCapabilities
 	readonly #pin: MCPLegacyVersion | undefined
 	readonly #timeout: number
-	readonly #methods = new Map<JSONRPCId, string>()
+	readonly #methods = new Map<JSONRPCId, readonly [method: string, deadline: AbortSignal]>()
 	#handshake: PromiseWithResolvers<JSONRPCResponse> | undefined = undefined
+	#instructions: string | undefined = undefined
 	#server: MCPIdentity | undefined = undefined
 	#supported: MCPServerCapabilities | undefined = undefined
 
@@ -116,11 +123,36 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 			this.#discover(message.id)
 			return
 		}
-		if (message.id !== undefined) this.#methods.set(message.id, message.method)
-		await this.#transport.send(modernInvocationToLegacy(message))
+		const id = message.id
+		let correlation: readonly [method: string, deadline: AbortSignal] | undefined
+		if (id !== undefined) {
+			correlation = [message.method, AbortSignal.timeout(this.#timeout)]
+			this.#methods.set(id, correlation)
+			correlation[1].addEventListener(
+				'abort',
+				() => {
+					if (this.#methods.get(id) !== correlation) return
+					this.#reject(
+						id,
+						new MCPError(
+							`Legacy MCP request timed out after ${this.#timeout}ms`,
+							JSONRPC_INTERNAL_ERROR,
+						),
+					)
+				},
+				{ once: true },
+			)
+		}
+		try {
+			await this.#transport.send(modernInvocationToLegacy(message))
+		} catch (error) {
+			if (id !== undefined && this.#methods.get(id) === correlation) this.#methods.delete(id)
+			throw error
+		}
 	}
 
 	async close(): Promise<void> {
+		this.#instructions = undefined
 		this.#server = undefined
 		this.#supported = undefined
 		this.#methods.clear()
@@ -173,6 +205,7 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 		const protocol = result['protocolVersion']
 		const capabilities = result['capabilities']
 		const identity = result['serverInfo']
+		const instructions = result['instructions']
 		if (protocol === undefined) {
 			throw new MCPError(
 				'Legacy MCP handshake returned no protocol version',
@@ -194,7 +227,11 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 				{ supported: SUPPORTED_LEGACY_PROTOCOL_VERSIONS, negotiated: protocol },
 			)
 		}
-		if (!isMCPServerCapabilities(capabilities) || !isMCPIdentity(identity)) {
+		if (
+			!isMCPServerCapabilities(capabilities) ||
+			!isMCPIdentity(identity) ||
+			(instructions !== undefined && !isString(instructions))
+		) {
 			throw new MCPError(
 				'Legacy MCP handshake returned a malformed result',
 				JSONRPC_INVALID_PARAMS,
@@ -208,6 +245,7 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 				{ requested: this.#pin, negotiated: protocol },
 			)
 		}
+		this.#instructions = instructions
 		this.#server = identity
 		this.#supported = capabilities
 	}
@@ -236,20 +274,27 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 		const identity = this.#server
 		const capabilities = this.#supported
 		if (identity === undefined || capabilities === undefined) {
-			this.#emitter.emit('error', new Error('Legacy MCP transport has not completed its handshake'))
+			this.#reject(
+				id,
+				new MCPError(
+					'Legacy MCP transport has not completed its handshake',
+					JSONRPC_INVALID_PARAMS,
+				),
+			)
 			return
 		}
 		this.#emitter.emit('message', {
 			jsonrpc: '2.0',
 			id,
-			result: {
-				supportedVersions: [MCP_MODERN_VERSION],
-				capabilities,
-				resultType: 'complete',
-				ttlMs: 0,
-				cacheScope: 'private',
-				_meta: { [MCP_META_SERVER]: identity },
-			},
+			result: buildModernResult(
+				{
+					supportedVersions: [MCP_MODERN_VERSION],
+					capabilities,
+					...(this.#instructions === undefined ? {} : { instructions: this.#instructions }),
+				},
+				identity,
+				0,
+			),
 		})
 	}
 
@@ -271,20 +316,21 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 			this.#emitter.emit('message', owned)
 			return
 		}
-		const method = this.#methods.get(owned.id)
-		if (method === undefined) {
+		const correlation = this.#methods.get(owned.id)
+		if (correlation === undefined) {
 			this.#emitter.emit('message', owned)
 			return
 		}
 		this.#methods.delete(owned.id)
+		const method = correlation[0]
 		if (owned.error !== undefined) {
 			this.#emitter.emit('message', owned)
 			return
 		}
 		const identity = this.#server
 		if (identity === undefined || !isMCPLegacyResult(owned.result)) {
-			this.#emitter.emit(
-				'error',
+			this.#reject(
+				owned.id,
 				new MCPError('Legacy MCP peer returned a malformed result', JSONRPC_INVALID_PARAMS),
 			)
 			return
@@ -294,5 +340,11 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 			id: owned.id,
 			result: legacyResultToModern(owned.result, method, identity),
 		})
+	}
+
+	#reject(id: JSONRPCId, error: MCPError): void {
+		this.#methods.delete(id)
+		this.#emitter.emit('error', error)
+		this.#emitter.emit('message', buildJSONRPCError(id, error.code, error.message))
 	}
 }

@@ -646,7 +646,7 @@ describe('MCPClient — connect (modern negotiation)', () => {
 	})
 })
 
-describe('MCPClient — modern discovery and fallback', () => {
+describe('MCPClient — modern discovery', () => {
 	it('exposes discover() and stamps its request with version, capabilities, and client identity', async () => {
 		const loopback = createLoopback(serverWithTools())
 		const client = createMCPClient({
@@ -1256,24 +1256,6 @@ describe('MCPClient — call() (the content round-trip)', () => {
 })
 
 describe('MCPClient — result-type safety', () => {
-	it('refuses a legacy result on the bare transport and names the adapter', async () => {
-		const peer = createFixturePeer({
-			reply: (request) => {
-				if (request.id === undefined) return undefined
-				if (request.method === 'server/discover') {
-					return errorResponse(request.id, JSONRPC_METHOD_NOT_FOUND)
-				}
-				return initializeResponse(request.id, MCP_PROTOCOL_VERSION)
-			},
-		})
-		const client = createMCPClient({ transport: peer })
-
-		await expect(client.connect()).rejects.toMatchObject({
-			message: expect.stringContaining('createMCPLegacyClientTransport'),
-		})
-		expect(peer.sent).toEqual(['server/discover'])
-	})
-
 	it.each(['input_required', 'task', 'future'])(
 		'rejects resultType %s with an MCPError that names it',
 		async (resultType) => {

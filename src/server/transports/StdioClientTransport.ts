@@ -63,7 +63,7 @@ import { dispatchLines } from '../helpers.js'
  * ```ts
  * const transport = new StdioClientTransport({ command: 'node', args: ['./server.js'] })
  * const client = new MCPClient({ transport })
- * await client.connect() // start() spawns the child, then the MCP initialize runs over stdio
+ * await client.connect() // start() spawns the child, then modern discovery runs over stdio
  * ```
  */
 export class StdioClientTransport implements StdioClientTransportInterface {
