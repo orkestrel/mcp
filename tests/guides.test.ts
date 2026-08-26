@@ -2,7 +2,13 @@
 // repository's own guides/README.md manifest. The constants below are this package's
 // own, and are what a sibling package changes.
 
-import type { JSONRPCMessage, MCPDispatcherInterface } from '@src/core'
+import type {
+	JSONRPCId,
+	JSONRPCMessage,
+	JSONRPCNotification,
+	MCPDispatcherInterface,
+	MCPSubscriptionResult,
+} from '@src/core'
 import type { ChildProcess } from 'node:child_process'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import {
@@ -10,6 +16,8 @@ import {
 	createMCPLegacy,
 	createMCPLegacyClientTransport,
 	createMCPServer,
+	isMCPSubscriptionResult,
+	MCP_META_SUBSCRIPTION,
 } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -35,7 +43,7 @@ import {
 } from '@orkestrel/guide'
 import { requireValue, waitForCondition } from '@orkestrel/test'
 import { createScratch, readInventory } from '@orkestrel/test/server'
-import { waitForSettlement } from './setup.js'
+import { createLoopbackTransport, createSubscriptionServer, waitForSettlement } from './setup.js'
 import { findMissingNamedImports } from './setupServer.js'
 
 /** Every fence language this package's guides are allowed to use. */
@@ -1112,5 +1120,179 @@ describe('guides/mcp.md § stdio transport — what the composed server answers'
 			id: 1,
 			error: { code: -32601, message: 'Method not found: initialize' },
 		})
+	})
+})
+
+// ── The client subscription fence, executed ──────────────────────────────────
+//
+// `guides/mcp.md` § Consume a subscription from a client claims an ORDER and a SHAPE: the
+// acknowledgement is the first YIELD, every stamped frame follows it in wire order, and the
+// graceful terminal is the generator's RETURN value rather than a yield. Parity proves that
+// `listen` exists and proves no sentence about what it delivers. So the fence's reads are
+// transcribed here and driven against a real in-process `MCPServer` over the duplex loopback —
+// the carrier the same section names as the one that delivers incrementally.
+//
+// Membership rule of the instrument: a notification carrying this subscription's reserved id
+// enters the stream, and one carrying no id does not. Both are injected through the SAME
+// transport door while the subscription is live, so the negative reading reports on the
+// stamping rather than on a delivery path that was dead. A route that claimed every inbound
+// notification would satisfy every ordering assertion here and fail the membership row.
+
+/** The honoured families the fence's filter names, as its own fence spells them. */
+const GUIDE_SUBSCRIPTION_FILTER = Object.freeze({
+	toolsListChanged: true,
+	resourceSubscriptions: Object.freeze(['resource://guide']),
+})
+
+/** The unstamped server notification that must stay outside the subscription stream. */
+const GUIDE_UNSTAMPED_NOTIFICATION: JSONRPCNotification = {
+	jsonrpc: '2.0',
+	method: 'notifications/message',
+	params: { level: 'info', data: 'outside every subscription' },
+}
+
+/** What one run of the fence's reads observed, in the order the fence reads them. */
+interface GuideSubscriptionReading {
+	readonly opened: IteratorResult<JSONRPCNotification, MCPSubscriptionResult>
+	readonly frames: readonly string[]
+	readonly closure: MCPSubscriptionResult | undefined
+	readonly proven: boolean
+	readonly unstamped: readonly string[]
+}
+
+/** Report the id the client minted for its `subscriptions/listen` request. */
+function findListenId(messages: readonly JSONRPCMessage[]): JSONRPCId | undefined {
+	for (const message of messages) {
+		if (!('method' in message) || message.method !== 'subscriptions/listen') continue
+		if ('id' in message) return message.id
+	}
+	return undefined
+}
+
+/** Drive the fence's `listen` reads against a real subscription server over the loopback. */
+async function readGuideSubscription(): Promise<GuideSubscriptionReading> {
+	const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+	const transport = createLoopbackTransport(
+		createSubscriptionServer(() => source.readable, GUIDE_SUBSCRIPTION_FILTER),
+	)
+	const client = createMCPClient({ transport })
+	const unstamped: string[] = []
+	client.emitter.on('notification', (message) => {
+		if ('method' in message) unstamped.push(message.method)
+	})
+	await client.connect()
+
+	const subscription = new AbortController()
+	const stream = client.listen(GUIDE_SUBSCRIPTION_FILTER, {
+		signal: subscription.signal,
+		capacity: 16,
+	})
+	const opened = await stream.next()
+
+	// Both injections ride the same transport door, while the subscription is live: the stamped
+	// one must enter the stream and the unstamped one must not.
+	transport.receive({
+		jsonrpc: '2.0',
+		method: 'notifications/prompts/list_changed',
+		params: { _meta: { [MCP_META_SUBSCRIPTION]: findListenId(transport.messages) } },
+	})
+	transport.receive(GUIDE_UNSTAMPED_NOTIFICATION)
+	const frames: string[] = []
+	const injected = await stream.next()
+	if (injected.done === false) frames.push(injected.value.method)
+
+	// The fence's own shape: one read per frame, so the consumer is parked when each arrives.
+	const writer = source.writable.getWriter()
+	await writer.write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+	const tools = await stream.next()
+	if (tools.done === false) frames.push(tools.value.method)
+	await writer.write({
+		jsonrpc: '2.0',
+		method: 'notifications/resources/updated',
+		params: { uri: 'resource://guide' },
+	})
+	const resources = await stream.next()
+	if (resources.done === false) frames.push(resources.value.method)
+	await writer.close()
+
+	let closure: MCPSubscriptionResult | undefined
+	const terminal = await stream.next()
+	if (terminal.done === true) closure = terminal.value
+	subscription.abort()
+	await client.disconnect()
+	return { opened, frames, closure, proven: isMCPSubscriptionResult(closure), unstamped }
+}
+
+/** The families the burst reading asks for and the server honours, so every write matches. */
+const BURST_SUBSCRIPTION_FILTER = Object.freeze({
+	toolsListChanged: true,
+	promptsListChanged: true,
+	resourcesListChanged: true,
+})
+
+/** The frames the burst reading writes before it reads anything, in wire order. */
+const BURST_METHODS = Object.freeze([
+	'notifications/tools/list_changed',
+	'notifications/prompts/list_changed',
+	'notifications/resources/list_changed',
+])
+
+/** Write every frame before the first read — the burst the bounded queue exists to retain. */
+async function readBurstSubscription(): Promise<readonly string[]> {
+	const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+	const transport = createLoopbackTransport(
+		createSubscriptionServer(() => source.readable, BURST_SUBSCRIPTION_FILTER),
+	)
+	const client = createMCPClient({ transport })
+	await client.connect()
+	const subscription = new AbortController()
+	const stream = client.listen(BURST_SUBSCRIPTION_FILTER, { signal: subscription.signal })
+	await stream.next()
+
+	const writer = source.writable.getWriter()
+	for (const method of BURST_METHODS) await writer.write({ jsonrpc: '2.0', method })
+	await writer.close()
+
+	const frames: string[] = []
+	for (;;) {
+		const frame = await stream.next()
+		if (frame.done === true) break
+		frames.push(frame.value.method)
+	}
+	subscription.abort()
+	await client.disconnect()
+	return frames
+}
+
+describe('guides/mcp.md § Consume a subscription from a client — what the stream delivers', () => {
+	it('yields the acknowledgement first, then the stamped frames, and returns the terminal', async () => {
+		const reading = await readGuideSubscription()
+
+		expect(reading.opened.done).toBe(false)
+		expect(reading.opened.value).toMatchObject({
+			method: 'notifications/subscriptions/acknowledged',
+		})
+		expect(reading.frames).toEqual([
+			'notifications/prompts/list_changed',
+			'notifications/tools/list_changed',
+			'notifications/resources/updated',
+		])
+		expect(reading.closure?.resultType).toBe('complete')
+		expect(reading.proven).toBe(true)
+	})
+
+	it('claims a stamped frame and declines an unstamped one arriving the same way', async () => {
+		const reading = await readGuideSubscription()
+
+		expect(reading.frames).toContain('notifications/prompts/list_changed')
+		expect(reading.frames).not.toContain('notifications/message')
+		expect(reading.unstamped).toEqual(['notifications/message'])
+	})
+
+	// The section states that EVERY stamped frame arrives, and the bounded queue is the mechanism
+	// that makes it true for frames arriving faster than the consumer reads. A burst written
+	// before the first read is exactly that case, and it is the read the sentence rests on.
+	it('delivers every frame that arrived before the first read', async () => {
+		expect(await readBurstSubscription()).toEqual(BURST_METHODS)
 	})
 })

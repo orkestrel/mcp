@@ -4,6 +4,7 @@ import type {
 	JSONRPCId,
 	JSONRPCInvocation,
 	JSONRPCMessage,
+	JSONRPCNotification,
 	JSONRPCResponse,
 	MCPDispatcherInterface,
 } from '@src/core'
@@ -19,6 +20,7 @@ import {
 	JSONRPC_METHOD_NOT_FOUND,
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
+	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
 	MCP_PROTOCOL_VERSION,
 	MCP_UNSUPPORTED_VERSION,
@@ -31,7 +33,11 @@ import { createEmitter } from '@orkestrel/emitter'
 import { createServer } from 'node:http'
 import { createSignal, waitForDelay } from '@orkestrel/test'
 import { isRecord } from '@orkestrel/contract'
-import { createInputServer } from '../../setup.js'
+import {
+	createInputServer,
+	createLoopbackTransport,
+	createSubscriptionServer,
+} from '../../setup.js'
 
 const NATIVE_ABORT_TIMEOUT = AbortSignal.timeout
 const RECORDED_ABORT_DEADLINES: number[] = []
@@ -3318,6 +3324,305 @@ describe('MCPClient — an uncorrelated response is discarded', () => {
 		})
 
 		expect(seen).toEqual([])
+	})
+})
+
+describe('MCPClient — subscriptions/listen', () => {
+	it('sends the method and an empty notifications member when the filter is undefined', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const server = createSubscriptionServer(() => source.readable)
+		const transport = createLoopbackTransport(server)
+		const client = createMCPClient({ transport })
+		await client.connect()
+
+		const stream = client.listen(undefined, { signal: new AbortController().signal })
+		const acknowledgement = await stream.next()
+		const request = transport.messages.find((message) => message.method === 'subscriptions/listen')
+
+		expect(request?.method).toBe('subscriptions/listen')
+		expect(request?.params?.['notifications']).toEqual({})
+		expect(acknowledgement).toEqual({
+			done: false,
+			value: {
+				jsonrpc: '2.0',
+				method: 'notifications/subscriptions/acknowledged',
+				params: {
+					notifications: {},
+					_meta: { [MCP_META_SUBSCRIPTION]: 2 },
+				},
+			},
+		})
+		await stream.return({ resultType: 'complete', _meta: { [MCP_META_SUBSCRIPTION]: 2 } })
+		expect(transport.messages.map((message) => message.method)).toEqual([
+			'server/discover',
+			'subscriptions/listen',
+			'notifications/cancelled',
+		])
+	})
+
+	it('yields stamped frames in order as owned snapshots and returns the validated result', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const server = createSubscriptionServer(() => source.readable)
+		const transport = createLoopbackTransport(server)
+		const client = createMCPClient({ transport })
+		await client.connect()
+		const stream = client.listen(
+			{ toolsListChanged: true, resourceSubscriptions: ['resource://one'] },
+			{ signal: new AbortController().signal },
+		)
+		const writer = source.writable.getWriter()
+
+		expect((await stream.next()).value).toMatchObject({
+			method: 'notifications/subscriptions/acknowledged',
+		})
+		const tools = { jsonrpc: '2.0' as const, method: 'notifications/tools/list_changed' }
+		const resource = {
+			jsonrpc: '2.0' as const,
+			method: 'notifications/resources/updated',
+			params: { uri: 'resource://one', detail: { revision: 1 } },
+		}
+		await writer.write(tools)
+		await writer.write(resource)
+		resource.params.uri = 'resource://mutated'
+		resource.params.detail.revision = 2
+
+		expect(await stream.next()).toEqual({
+			done: false,
+			value: {
+				jsonrpc: '2.0',
+				method: 'notifications/tools/list_changed',
+				params: { _meta: { [MCP_META_SUBSCRIPTION]: 2 } },
+			},
+		})
+		expect(await stream.next()).toEqual({
+			done: false,
+			value: {
+				jsonrpc: '2.0',
+				method: 'notifications/resources/updated',
+				params: {
+					uri: 'resource://one',
+					detail: { revision: 1 },
+					_meta: { [MCP_META_SUBSCRIPTION]: 2 },
+				},
+			},
+		})
+		await writer.close()
+		expect(await stream.next()).toEqual({
+			done: true,
+			value: {
+				resultType: 'complete',
+				_meta: {
+					[MCP_META_SUBSCRIPTION]: 2,
+					'io.modelcontextprotocol/serverInfo': {
+						name: 'subscription-server',
+						version: '1.0.0',
+					},
+				},
+			},
+		})
+	})
+
+	it('keeps concurrent subscriptions isolated by their stamped request ids', async () => {
+		const tools = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const resources = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const server = createSubscriptionServer((filter) =>
+			filter.toolsListChanged === true ? tools.readable : resources.readable,
+		)
+		const transport = createLoopbackTransport(server)
+		const client = createMCPClient({ transport })
+		await client.connect()
+		const signal = new AbortController()
+		const toolStream = client.listen({ toolsListChanged: true }, { signal: signal.signal })
+		const resourceStream = client.listen(
+			{ resourceSubscriptions: ['resource://two'] },
+			{ signal: signal.signal },
+		)
+
+		const toolAcknowledgement = await Promise.race([
+			toolStream.next(),
+			waitForDelay(50).then(() => 'timed out'),
+		])
+		const resourceAcknowledgement = await Promise.race([
+			resourceStream.next(),
+			waitForDelay(50).then(() => 'timed out'),
+		])
+		expect(toolAcknowledgement).not.toBe('timed out')
+		expect(resourceAcknowledgement).not.toBe('timed out')
+		await tools.writable.getWriter().write({
+			jsonrpc: '2.0',
+			method: 'notifications/tools/list_changed',
+		})
+		await resources.writable.getWriter().write({
+			jsonrpc: '2.0',
+			method: 'notifications/resources/updated',
+			params: { uri: 'resource://two' },
+		})
+
+		expect((await toolStream.next()).value).toMatchObject({
+			method: 'notifications/tools/list_changed',
+			params: { _meta: { [MCP_META_SUBSCRIPTION]: 2 } },
+		})
+		expect((await resourceStream.next()).value).toMatchObject({
+			method: 'notifications/resources/updated',
+			params: { _meta: { [MCP_META_SUBSCRIPTION]: 3 } },
+		})
+		signal.abort()
+	})
+
+	it('keeps an unstamped notification on the client notification event', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const transport = createLoopbackTransport(createSubscriptionServer(() => source.readable))
+		const client = createMCPClient({ transport })
+		await client.connect()
+		const stream = client.listen(undefined, { signal: new AbortController().signal })
+		await stream.next()
+		const seen: JSONRPCMessage[] = []
+		client.emitter.on('notification', (message) => seen.push(message))
+		const notification = { jsonrpc: '2.0' as const, method: 'notifications/custom' }
+
+		transport.receive(notification)
+
+		expect(seen).toEqual([notification])
+		await stream.return({ resultType: 'complete', _meta: { [MCP_META_SUBSCRIPTION]: 2 } })
+	})
+
+	it('drops a late stamped frame after its subscription has closed', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const transport = createLoopbackTransport(createSubscriptionServer(() => source.readable))
+		const client = createMCPClient({ transport })
+		await client.connect()
+		const stream = client.listen(undefined, { signal: new AbortController().signal })
+		const acknowledgement = await Promise.race([
+			stream.next(),
+			waitForDelay(50).then(() => 'timed out'),
+		])
+		expect(acknowledgement).not.toBe('timed out')
+		await source.writable.getWriter().close()
+		await stream.next()
+		const seen: JSONRPCMessage[] = []
+		client.emitter.on('notification', (message) => seen.push(message))
+
+		transport.receive({
+			jsonrpc: '2.0',
+			method: 'notifications/tools/list_changed',
+			params: { _meta: { [MCP_META_SUBSCRIPTION]: 2 } },
+		})
+
+		expect(seen).toEqual([])
+	})
+
+	it('rejects a peer subscription error with MCPError', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const transport = createLoopbackTransport(createSubscriptionServer(() => source.readable))
+		const client = createMCPClient({ transport })
+		await client.connect()
+		const stream = client.listen(undefined, { signal: new AbortController().signal })
+		await stream.next()
+		const parked = stream.next()
+
+		await source.writable.getWriter().abort(new Error('producer failed'))
+
+		await expect(parked).rejects.toMatchObject({ code: -32_603 })
+		await expect(parked).rejects.toSatisfy(isMCPError)
+	})
+
+	it('rejects a malformed subscription terminal with MCPError', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const transport = createLoopbackTransport(createSubscriptionServer(() => source.readable))
+		const client = createMCPClient({ transport })
+		await client.connect()
+		const stream = client.listen(undefined, { signal: new AbortController().signal })
+		await stream.next()
+		const parked = stream.next()
+
+		transport.receive({ jsonrpc: '2.0', id: 2, result: { resultType: 'complete', _meta: {} } })
+
+		await expect(parked).rejects.toMatchObject({ code: JSONRPC_INVALID_PARAMS })
+		await expect(parked).rejects.toSatisfy(isMCPError)
+	})
+
+	it('rejects the first read of a pre-aborted stream without sending', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const transport = createLoopbackTransport(createSubscriptionServer(() => source.readable))
+		const client = createMCPClient({ transport })
+		await client.connect()
+		const controller = new AbortController()
+		const reason = new Error('already stopped')
+		controller.abort(reason)
+		const stream = client.listen(undefined, { signal: controller.signal })
+
+		await expect(stream.next()).rejects.toBe(reason)
+		expect(transport.messages.map((message) => message.method)).toEqual(['server/discover'])
+	})
+
+	it('rejects a parked read with the abort reason and sends notifications/cancelled', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const transport = createLoopbackTransport(createSubscriptionServer(() => source.readable))
+		const client = createMCPClient({ transport })
+		await client.connect()
+		const controller = new AbortController()
+		const stream = client.listen(undefined, { signal: controller.signal })
+		await stream.next()
+		const parked = stream.next()
+		const reason = new Error('subscription stopped')
+
+		controller.abort(reason)
+
+		await expect(parked).rejects.toBe(reason)
+		expect(transport.messages.map((message) => message.method)).toEqual([
+			'server/discover',
+			'subscriptions/listen',
+			'notifications/cancelled',
+		])
+	})
+
+	it('fails loudly when the subscription frame queue reaches capacity', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const transport = createLoopbackTransport(createSubscriptionServer(() => source.readable))
+		const client = createMCPClient({ transport })
+		await client.connect()
+		const stream = client.listen(
+			{ toolsListChanged: true },
+			{
+				signal: new AbortController().signal,
+				capacity: 1,
+			},
+		)
+		await stream.next()
+		const writer = source.writable.getWriter()
+		await writer.write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+		await writer.write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+		await waitForDelay()
+
+		await expect(stream.next()).rejects.toThrow('subscription frame queue overflow')
+	})
+
+	it('rejects a parked subscription read when the client disconnects', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const transport = createLoopbackTransport(createSubscriptionServer(() => source.readable))
+		const client = createMCPClient({ transport })
+		await client.connect()
+		const stream = client.listen(undefined, { signal: new AbortController().signal })
+		await stream.next()
+		const parked = stream.next()
+
+		await client.disconnect()
+
+		await expect(parked).rejects.toThrow('MCP client disconnected')
+	})
+
+	it('rejects a parked subscription read when the transport closes', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const transport = createLoopbackTransport(createSubscriptionServer(() => source.readable))
+		const client = createMCPClient({ transport })
+		await client.connect()
+		const stream = client.listen(undefined, { signal: new AbortController().signal })
+		await stream.next()
+		const parked = stream.next()
+
+		await transport.close()
+
+		await expect(parked).rejects.toThrow('MCP transport closed')
 	})
 })
 

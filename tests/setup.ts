@@ -8,6 +8,7 @@ import type {
 	MCPClientTransportEventMap,
 	MCPClientTransportInterface,
 	JSONRPCId,
+	JSONRPCInvocation,
 	JSONRPCMessage,
 	JSONRPCNotification,
 	JSONRPCRequest,
@@ -24,6 +25,8 @@ import type {
 	MCPResourceReadParams,
 	MCPResourceTemplatePage,
 	MCPServerInterface,
+	MCPSubscriptionFilter,
+	MCPSubscriptionHandler,
 	MCPStreamControllerInterface,
 	MCPTransportInterface,
 	MCPTask,
@@ -907,22 +910,67 @@ export function readMethods(frames: readonly JSONRPCMessage[]): readonly string[
  * @param mcp - The MCP server to dispatch requests against in-process
  * @returns A working duplex {@link MCPClientTransportInterface} with no `session` (stateless)
  */
-export function createLoopbackTransport(mcp: MCPServerInterface): MCPClientTransportInterface {
+export interface MCPTestLoopbackInterface extends MCPClientTransportInterface {
+	/** The client invocations delivered to the real server, in wire order. */
+	readonly messages: readonly JSONRPCInvocation[]
+	/** Delivers one peer-originated frame through the transport's real message event. */
+	receive(message: JSONRPCMessage): void
+}
+
+/**
+ * Creates a real MCP server whose subscription source is supplied by the test scenario.
+ *
+ * @param listen - The real server subscription producer
+ * @param notifications - The notification families the server advertises
+ * @returns A real in-process MCP server with the built-in subscription method registered
+ */
+export function createSubscriptionServer(
+	listen: MCPSubscriptionHandler,
+	notifications: MCPSubscriptionFilter = {
+		toolsListChanged: true,
+		promptsListChanged: true,
+		resourcesListChanged: true,
+		resourceSubscriptions: ['resource://one', 'resource://two'],
+	},
+): MCPServerInterface {
+	return createMCPServer({
+		identity: { name: 'subscription-server', version: '1.0.0' },
+		tools: createToolManager(),
+		subscription: { notifications, listen },
+	})
+}
+
+export function createLoopbackTransport(mcp: MCPServerInterface): MCPTestLoopbackInterface {
 	const emitter = createEmitter<MCPClientTransportEventMap>()
+	const messages: JSONRPCInvocation[] = []
 	return {
 		emitter,
 		session: undefined,
+		get messages() {
+			return messages
+		},
 		// An in-process channel carries a frame in either direction at any moment, so the
 		// loopback is duplex — a client notification reaches `dispatch` like any other message.
 		duplex: true,
 		async start() {},
 		async send(message) {
 			if (!('method' in message)) return
+			messages.push(message)
 			const answer = await mcp.dispatch(message)
-			// The loopback carries unary replies only; a held-open answer is a different
-			// arm and never arrives for the methods these scenarios drive.
-			if (answer === undefined || Symbol.asyncIterator in answer) return
+			if (answer === undefined) return
+			// Before the subscription client rows, no existing scenario produced this held-open
+			// arm. Iterating it is a strict extension of the unary loopback below: each yielded
+			// notification is delivered immediately, followed by the iterator's terminal response.
+			if (Symbol.asyncIterator in answer) {
+				for (let frame = await answer.next(); ; frame = await answer.next()) {
+					emitter.emit('message', frame.value)
+					if (frame.done === true) return
+				}
+			}
 			emitter.emit('message', answer)
+		},
+		receive(message) {
+			emitter.emit('message', message)
 		},
 		async close() {
 			emitter.emit('close')

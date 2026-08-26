@@ -1345,6 +1345,21 @@ export type MCPSubscriptionResult = {
 	readonly _meta: MCPSubscriptionResultMetaObject
 }
 
+/** A client subscription's owned notifications and graceful terminal result. */
+export type MCPSubscriptionStream = AsyncGenerator<
+	JSONRPCNotification,
+	MCPSubscriptionResult,
+	unknown
+>
+
+/** Per-subscription cancellation and bounded buffering policy. */
+export interface MCPListenOptions {
+	/** Aborts the subscription and rejects its pending read with the signal reason. */
+	readonly signal: AbortSignal
+	/** The maximum number of delivered frames retained while no read is parked. */
+	readonly capacity?: number
+}
+
 // THE MODERN METHOD SEAM — the per-request execution options a handler receives,
 // the held-open result arms, and the registrable method contract the modern
 // dispatch branch runs every method through. `MCPLegacy` keeps the legacy
@@ -2649,6 +2664,17 @@ export interface MCPClientInterface {
 	 * @returns The remote tools as local {@link ToolInterface}s, in server order
 	 */
 	tools(): Promise<readonly ToolInterface[]>
+	/**
+	 * Listens for the remote server's matching subscription notifications.
+	 *
+	 * @param notifications - The requested filter, or `undefined` for an empty filter
+	 * @param options - Required cancellation and optional queue-capacity policy
+	 * @returns The acknowledgement and matching notifications, with the graceful result on closure
+	 */
+	listen(
+		notifications: MCPSubscriptionFilter | undefined,
+		options: MCPListenOptions,
+	): MCPSubscriptionStream
 	/**
 	 * Calls a remote tool by name — runs `tools/call` and reports which permitted arm
 	 * the peer answered with.

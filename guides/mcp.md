@@ -873,6 +873,75 @@ const server = createMCPServer({
 server.methods.method('subscriptions/listen') // registered on the same modern seam
 ```
 
+### Consume a subscription from a client
+
+`client.listen(notifications, options)` opens one `subscriptions/listen` stream and returns an
+`MCPSubscriptionStream` — an `AsyncGenerator` whose YIELDS are notifications and whose RETURN
+value is the graceful `MCPSubscriptionResult`. Pass `undefined` for the filter to ask for the
+server's whole honoured set; the client sends `params.notifications: {}`, which is the member the
+server requires and the empty object the filter guard accepts. The generator writes nothing until
+the first read, so a signal already aborted rejects that read without sending a request at all.
+
+**The acknowledgement is the first yield, and the terminal is the return value.** Every frame the
+server stamps with this subscription's id arrives as an owned snapshot, in wire order, starting
+with `notifications/subscriptions/acknowledged`. The graceful close is a correlated JSON-RPC
+result rather than a notification, so it reaches you as the generator's return value and never as
+a yield. A `for await` loop discards that value by construction — drive `next()` and read `done`
+where the closure result matters.
+
+**`options.signal` is required because the subscription is yours to end.** A subscription has no
+request timeout: the only closures are an abort, an iterator `return()`, the peer completing, and
+the connection failing. A consumer that drops the stream without either handle remains its owner —
+the registration stays live, and no timer reclaims it, because this package has no lifetime to
+hang one on. `disconnect()` and transport loss reject every active subscription, which is the
+other end of the same obligation.
+
+**`options.capacity` bounds what the client retains while nobody reads.** It defaults to
+`DEFAULT_MCP_SUBSCRIPTION_CAPACITY` (`64`), and a frame arriving at a full queue fails the
+subscription loudly with `MCPError` `-32603` rather than dropping the frame or growing without
+bound. That is a client-side bound, not transport backpressure — see
+[Declared conformance gaps](#declared-conformance-gaps) for what a duplex carrier delivers
+incrementally and what an HTTP one does not.
+
+```ts
+import {
+	type MCPSubscriptionResult,
+	createMCPClient,
+	isMCPSubscriptionResult,
+} from '@orkestrel/mcp'
+
+const client = createMCPClient({ transport })
+await client.connect()
+
+const subscription = new AbortController()
+const stream = client.listen(
+	{ toolsListChanged: true, resourceSubscriptions: ['resource://guide'] },
+	{ signal: subscription.signal, capacity: 16 },
+)
+
+const opened = await stream.next()
+opened.done // false — the acknowledgement is a yield
+opened.value.method // 'notifications/subscriptions/acknowledged'
+
+let closure: MCPSubscriptionResult | undefined
+for (;;) {
+	const frame = await stream.next()
+	if (frame.done === true) {
+		closure = frame.value // the validated graceful terminal
+		break
+	}
+	frame.value.method // one owned notification, stamped with this subscription's id
+}
+closure?.resultType // 'complete'
+// The total guard the client proves the terminal with, re-applicable to any value you hold —
+// `stream.return(value)` takes one of these, so build it and prove it the same way.
+isMCPSubscriptionResult(closure) // true
+
+// Either handle closes the subscription and writes `notifications/cancelled` on a duplex
+// carrier. Abandoning the stream with neither leaves the registration live.
+subscription.abort()
+```
+
 ### Execute rich results and request-scoped progress
 
 `MCPServerOptions.execution` is the explicit modern execution port above the live
@@ -1808,6 +1877,7 @@ Passing a legacy revision to
 | `DEFAULT_MCP_CLIENT_NAME`            | const | `'taverna'` — the default client name reported in modern metadata or the adapter handshake.                          |
 | `DEFAULT_MCP_CLIENT_VERSION`         | const | `'1.0.0'` — the default client version reported in modern metadata or the adapter handshake.                         |
 | `DEFAULT_MCP_REQUEST_TIMEOUT`        | const | `30000` — the default per-request deadline (ms) an `MCPClient` applies.                                              |
+| `DEFAULT_MCP_SUBSCRIPTION_CAPACITY`  | const | `64` — the default number of subscription frames `listen` retains while no read is parked.                           |
 
 ### Helpers
 
@@ -1864,6 +1934,7 @@ Passing a legacy revision to
 | `isInitializeRequest`              | function | Total guard — a `JSONRPCInvocation` whose `method` is `'initialize'`.                                                                                                                                                         |
 | `isMCPVersion`                     | function | Total guard — narrows a string to a supported `MCPVersion`.                                                                                                                                                                   |
 | `isMCPSubscriptionFilter`          | function | Total guard — validates the recognized wire fields of an open modern subscription filter.                                                                                                                                     |
+| `isMCPSubscriptionResult`          | function | Total guard — a complete result carrying a valid reserved subscription id; the graceful terminal `listen` returns.                                                                                                            |
 | `isFormElicitationSupported`       | function | Determines whether client capabilities authorize form elicitation; an empty `elicitation` object means form-only.                                                                                                             |
 | `isMCPElicitFieldSchema`           | function | Total guard for one restricted single-field form-elicitation schema.                                                                                                                                                          |
 | `isMCPElicitSchema`                | function | Total guard for the restricted issued object schema, open to unrecognized annotations.                                                                                                                                        |
@@ -2026,6 +2097,8 @@ Passing a legacy revision to
 | `MCPSubscriptionFilter`            | interface | Optional tool, prompt, resource-list, and resource-URI notification families for `subscriptions/listen`; its keys are verbatim wire spellings.                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `MCPSubscriptionResultMetaObject`  | type      | Result-metadata intersection requiring the reserved subscription id.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `MCPSubscriptionResult`            | type      | `{ resultType: 'complete'; _meta: MCPSubscriptionResultMetaObject }` — a graceful subscription closure.                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `MCPSubscriptionStream`            | type      | `AsyncGenerator<JSONRPCNotification, MCPSubscriptionResult, unknown>` — what `MCPClientInterface.listen` returns: the acknowledgement and every owned frame as yields, the graceful terminal as the return value.                                                                                                                                                                                                                                                                                                                                              |
+| `MCPListenOptions`                 | interface | `{ signal: AbortSignal; capacity?: number }` — one subscription's cancellation handle and queue bound; `signal` is required, so the bag is required with it.                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `MCPDispatchOptions`               | interface | `{ signal?: AbortSignal; caller?: unknown }` — the CALLER-facing per-request options; `caller` is consumer-asserted and never protocol-verified, inspected, validated, or serialized by this package.                                                                                                                                                                                                                                                                                                                                                          |
 | `MCPMethodOptions`                 | interface | `{ signal: AbortSignal; caller?: unknown }` — the RESOLVED mirror a dispatched method receives; `signal` is required because dispatch resolves one at the single ingress.                                                                                                                                                                                                                                                                                                                                                                                      |
 | `MCPSubscriptionHandler`           | type      | `(notifications, options) => AsyncIterable<JSONRPCNotification>` (or a promise of one) — an event-driven notification producer.                                                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -2946,6 +3019,7 @@ The completion port, configured independently of the `resources` and `prompts` p
 The egress mirror: `connect` negotiates the modern revision and stores the selected
 `version`, `discover` exposes the modern server description, `tools` wraps the
 remote tools as local `ToolInterface`s, `call` runs a remote `tools/call`,
+`listen` opens one `subscriptions/listen` stream, and
 `disconnect` rejects pending requests, clears the negotiated revision, and
 closes the connection it owns. Subscribe to client events through `emitter.on`.
 The `tasks` data member is the draft Tasks extension's client half — see
@@ -2957,6 +3031,7 @@ The `tasks` data member is the draft Tasks extension's client half — see
 | `discover`   | `Promise<MCPDiscoverResult>`        | Send a request stamped with a modern revision and return its validated result, filtered to the locally supported modern set. An explicit legacy transport adapter answers this request locally with a modern result.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `disconnect` | `Promise<void>`                     | Reject every pending request, clear `version`, close the connection the client opened on the transport — an attempt still inside the transport's `start` owns none yet and closes what it opens itself — and fire `disconnect` only where the client had announced `connect`. Awaited during an in-flight `connect` it supersedes that attempt rather than waiting for it: the superseded `connect` rejects rather than resolving, and every wait it can be parked in once the transport has opened is bounded, so it settles — an attempt still suspended inside `start` settles only when that `start` does. `connected` is cleared before the teardown suspends, so it is never true once `disconnect` returns. The client's wait on the transport's `close` carries the per-request deadline, so a shutdown that never returns rejects instead of wedging the client, while that close keeps running. A `close` that faults or goes unanswered rejects the caller and leaves the connection owned, so a later `disconnect` or `connect` settles it again — joining the running close, or issuing a fresh one after a rejection. The selected modern offer remains for this instance. |
 | `tools`      | `Promise<readonly ToolInterface[]>` | Runs `tools/list` and wraps each descriptor as a local `ToolInterface` (`inputSchema` → `parameters`; `execute` calls back through `call`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `listen`     | `MCPSubscriptionStream`             | Open one `subscriptions/listen` stream. The generator sends nothing until the first read, and that read carries `params.notifications` — the filter you passed, or `{}` for an `undefined` one. The stream yields the `notifications/subscriptions/acknowledged` frame first, then every notification the server stamps with this subscription's id, each an owned snapshot; a stamped frame naming no active subscription is dropped. Graceful closure RETURNS the validated `MCPSubscriptionResult`, which arrives as a correlated JSON-RPC result rather than a notification; a peer error, a malformed terminal, `disconnect`, and transport loss all reject instead. No request timeout applies — closure is abort, `return()`, peer completion, or connection failure. `options.signal` is required and closes exactly this subscription: a signal already aborted rejects the first read without sending anything, and a later abort rejects a parked read with the signal's reason and writes `notifications/cancelled` on a duplex carrier. `options.capacity` bounds the frames retained while no read is parked, defaulting to `DEFAULT_MCP_SUBSCRIPTION_CAPACITY`.           |
 | `call`       | `Promise<MCPCallOutcome>`           | Run a remote `tools/call` and report the arm the peer chose: `'complete'` carries the tool's value (`structuredContent` preferred by presence, else the text blocks parsed as JSON), `'task'` carries the durable handle, and `'input_required'` carries the peer's input requests with the protected state that continues them — answer it with a second `call` carrying `options.input`, as [Produce a form elicitation for the call in hand](#produce-a-form-elicitation-for-the-call-in-hand) works through. `isError: true` THROWS, and an unknown `resultType` is refused. `options.signal` cancels THIS request only; `options.progress` receives its progress frames; `options.input` carries the retry's protected state and responses, and that retry repeats the original `name` and byte-identical `arguments`.                                                                                                                                                                                                                                                                                                                                                              |
 
 **`version` is an exact modern pin.** An unpinned `connect` offers `MCP_MODERN_VERSION`; a pinned
@@ -3780,8 +3855,9 @@ failures invites over-reading in a way a run with ten did not. These bounds fix 
   session mint, no TTL sweep, no `mcp-session-id` round trip is covered by this number.
 - It says nothing about **this package's own client consuming a held-open exchange**. The
   runner's client consumes one and reports it (`server-sse-multiple-streams`, 2 passed / 0
-  failed), so the server half is exactly what that scenario proves; the unproven half is
-  `MCPClient`'s — see the entry below.
+  failed), so the server half is exactly what that scenario proves; `MCPClient.listen` is
+  proven by this package's own tests over a duplex carrier instead — see the entry below for
+  the carrier limit that survives.
 - It is a **protocol conformance runner, not an IDE integration**. Passing it is evidence
   about the wire, not evidence that any particular host application can drive this server.
 - It proves **nothing about the browser face**. Not one byte of `@orkestrel/mcp/browser`
@@ -3809,27 +3885,31 @@ those, so they are stated here rather than left for a consumer to discover on th
 Each entry names the clause, what it costs, and who could close it — including where
 the honest answer is that nothing inside this package will.
 
-**Client-side consumption of a held-open Streamable HTTP exchange — unreachable, not
-unfixed.** The server half is complete: a registered method returns a held-open stream, the
-route pumps it as SSE, and a foreign client that opens `subscriptions/listen` consumes it
-incrementally. This package's own client cannot open that exchange at all. `MCPClient`
-contains no `subscriptions/listen` initiator and no stream API of any kind, so there is no
-shipped caller for whom a held-open reply could be consumed as it arrives; the HTTP client
-transports therefore buffer a `text/event-stream` reply to completion and deliver its events
-together. **What it costs:** nothing to any exchange this client can start — every
-one of them is a single request with a single reply. It costs the day a subscription API is
-added, because that API and this consumption are the same feature. **Closer:** a client-side
-subscription API, which does not exist and is not scheduled.
+**Incremental client-side consumption of a held-open Streamable HTTP exchange — duplex-only.**
+`MCPClient.listen` opens `subscriptions/listen` and consumes the reply as it arrives, and over a
+duplex carrier that is what happens: each stamped frame is delivered the moment the transport
+carries it. The HTTP client transports buffer a `text/event-stream` reply to completion before
+they emit anything, so a `listen` over an HTTP client transport yields its acknowledgement,
+every frame, and its terminal together when the stream closes. The subscription API is correct
+over that carrier and useless for the reason a subscription exists. **What it costs:** a
+long-lived HTTP subscription reports nothing until it ends, so an HTTP consumer that wants
+frames as they happen has no carrier here — use the WebSocket, stdio, or `MessagePort` face
+instead. **Closer:** the transport-ingress backpressure capability — a per-request awaited
+delivery handler and `signal` on `send`, with incremental HTTP decoding on the server and
+browser faces.
 
-**A per-request abort on the HTTP client transport — unreachable for the same reason.**
-`MCPClientTransportInterface.send` takes a message and no per-request options, so a caller
-cannot hand one request its own cancellation; the transports carry only a construction-time
-`timeout`, applied uniformly through `AbortSignal.timeout`. This is downstream of the entry
-above rather than independent of it: with no incrementally consumed stream, there is no
-in-flight exchange to close, and a unary POST is over before a caller could reach it. **What
-it costs:** a caller cannot abandon one outstanding request without abandoning the transport.
-**Closer:** a per-request options bag on `send` — the same seam the neighbouring entries
-need, which is why they would return as ONE unit and never separately.
+**A per-request abort reaching one in-flight HTTP fetch — partly closed, and the rest needs the
+same seam.** `listen` carries a required per-subscription `signal`: aborting it closes that
+subscription, releases its registration, and writes `notifications/cancelled` on a duplex
+carrier, so a caller CAN abandon one long-lived exchange without abandoning the transport.
+`MCPClientTransportInterface.send` still takes a message and no per-request options, and the
+HTTP transports carry only a construction-time `timeout` applied uniformly through
+`AbortSignal.timeout`. So the signal ends the client's interest in the subscription and cannot
+cancel the fetch already in flight underneath it. **What it costs:** an aborted HTTP
+subscription stops delivering to its consumer while its request runs to completion on the wire.
+**Closer:** the same transport-ingress backpressure capability — a per-request options bag on
+`send` carrying that `signal`, which is why this entry and the one preceding it would return as
+ONE unit and never separately.
 
 **`-32020` refresh-and-retry-once — not implemented, and a retry could not fix it.** A
 client that receives `-32020` (a protocol-version header the peer refuses) might be expected

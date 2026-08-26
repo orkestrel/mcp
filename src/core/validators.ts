@@ -50,6 +50,7 @@ import type {
 	MCPResultMetaObject,
 	MCPServerCapabilities,
 	MCPSubscriptionFilter,
+	MCPSubscriptionResult,
 	MCPTaskDetail,
 	MCPTaskResult,
 	MCPTaskStatus,
@@ -70,6 +71,7 @@ import {
 	isUndefined,
 } from '@orkestrel/contract'
 import {
+	MCP_META_SUBSCRIPTION,
 	MCP_META_SERVER,
 	MCP_META_VERSION,
 	SUPPORTED_CLIENT_PROTOCOL_VERSIONS,
@@ -1271,6 +1273,23 @@ export function isMCPSubscriptionFilter(value: unknown): value is MCPSubscriptio
 	if (!isUndefined(resources) && !isBoolean(resources)) return false
 	const subscriptions = filter['resourceSubscriptions']
 	return isUndefined(subscriptions) || arrayOf(isString)(subscriptions)
+}
+
+/**
+ * Determines whether a value is a graceful `subscriptions/listen` result.
+ *
+ * @param value - The unknown value to inspect
+ * @returns `true` when the result is complete and carries a valid subscription id
+ */
+export function isMCPSubscriptionResult(value: unknown): value is MCPSubscriptionResult {
+	const owned = attempt(() => cloneJSONRecord(value))
+	if (!owned.success || owned.value['resultType'] !== 'complete') return false
+	const metadata = owned.value['_meta']
+	return (
+		isMCPResultMetaObject(metadata) &&
+		isRecord(metadata) &&
+		isJSONRPCId(metadata[MCP_META_SUBSCRIPTION])
+	)
 }
 
 /**

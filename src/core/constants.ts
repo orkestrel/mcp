@@ -188,3 +188,6 @@ export const DEFAULT_MCP_CLIENT_VERSION = '1.0.0'
  * is unset — a request the remote server does not answer within it rejects.
  */
 export const DEFAULT_MCP_REQUEST_TIMEOUT = 30_000
+
+/** The default number of subscription frames retained while no client read is parked. */
+export const DEFAULT_MCP_SUBSCRIPTION_CAPACITY = 64

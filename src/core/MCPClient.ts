@@ -5,6 +5,7 @@ import type {
 	JSONRPCId,
 	JSONRPCInvocation,
 	JSONRPCMessage,
+	JSONRPCNotification,
 	JSONRPCRequest,
 	MCPCallOptions,
 	MCPCallOutcome,
@@ -14,8 +15,12 @@ import type {
 	MCPClientCapabilities,
 	MCPDiscoverResult,
 	MCPIdentity,
+	MCPListenOptions,
 	MCPModernVersion,
 	MCPProgressHandler,
+	MCPSubscriptionFilter,
+	MCPSubscriptionResult,
+	MCPSubscriptionStream,
 	MCPTaskClientInterface,
 } from './types.js'
 import { Emitter } from '@orkestrel/emitter'
@@ -33,10 +38,13 @@ import {
 	DEFAULT_MCP_CLIENT_NAME,
 	DEFAULT_MCP_CLIENT_VERSION,
 	DEFAULT_MCP_REQUEST_TIMEOUT,
+	DEFAULT_MCP_SUBSCRIPTION_CAPACITY,
+	JSONRPC_INTERNAL_ERROR,
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_METHOD_NOT_FOUND,
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
+	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
 	MCP_MODERN_VERSION,
 	MCP_UNSUPPORTED_VERSION,
@@ -48,11 +56,13 @@ import { inferVersion } from './inferers.js'
 import { parseJSONRPCMessage } from './parsers.js'
 import {
 	isJSONRPCId,
+	isJSONRPCNotification,
 	isJSONRPCResponse,
 	isMCPModernVersion,
 	isMCPProgress,
 	isMCPResultMetaObject,
 	isMCPServerCapabilities,
+	isMCPSubscriptionResult,
 } from './validators.js'
 
 /**
@@ -145,8 +155,8 @@ export class MCPClient implements MCPClientInterface {
 	readonly #pending = new Map<
 		JSONRPCId,
 		{
-			readonly resolve: (value: unknown) => void
-			readonly reject: (reason?: unknown) => void
+			readonly resolve?: (value: unknown) => void
+			readonly reject?: (reason?: unknown) => void
 			readonly method: string
 			readonly deadline?: AbortSignal
 			readonly timeout?: () => void
@@ -159,6 +169,13 @@ export class MCPClient implements MCPClientInterface {
 			// naming this request's token. It needs no explicit release — dropping the entry is
 			// the release, and a frame arriving afterwards finds nothing and stays a notification.
 			readonly progress?: MCPProgressHandler
+			readonly subscription?: {
+				readonly queue: JSONRPCNotification[]
+				readonly capacity: number
+				waiter?: PromiseWithResolvers<JSONRPCNotification | MCPSubscriptionResult>
+				terminal?: MCPSubscriptionResult
+				failure?: { readonly reason: unknown }
+			}
 		}
 	>()
 	#nextId = 0
@@ -225,6 +242,7 @@ export class MCPClient implements MCPClientInterface {
 		// One message subscription for the client's whole life: a response settles its
 		// pending request by id; anything else is a server notification.
 		this.#transport.emitter.on('message', (message) => this.#receive(message))
+		this.#transport.emitter.on('close', () => this.#loseTransport())
 	}
 
 	get emitter(): EmitterInterface<MCPClientEventMap> {
@@ -379,6 +397,80 @@ export class MCPClient implements MCPClientInterface {
 			tools.push(this.#tool(name, descriptor))
 		}
 		return tools
+	}
+
+	async *listen(
+		notifications: MCPSubscriptionFilter | undefined,
+		options: MCPListenOptions,
+	): MCPSubscriptionStream {
+		options.signal.throwIfAborted()
+		const capacity = options.capacity ?? DEFAULT_MCP_SUBSCRIPTION_CAPACITY
+		if (!isInteger(capacity) || capacity < 1) {
+			throw new MCPError(
+				'MCP subscription capacity must be a positive integer',
+				JSONRPC_INVALID_PARAMS,
+			)
+		}
+		this.#nextId += 1
+		const id = this.#nextId
+		const method = 'subscriptions/listen'
+		const modern = this.#version
+		const request: JSONRPCRequest = {
+			jsonrpc: '2.0',
+			id,
+			method,
+			params: {
+				notifications: notifications ?? {},
+				...(modern === undefined
+					? {}
+					: {
+							_meta: {
+								[MCP_META_VERSION]: modern,
+								[MCP_META_CAPABILITIES]: this.#capabilities,
+								[MCP_META_CLIENT]: this.#identity,
+							},
+						}),
+			},
+		}
+		const subscription: {
+			readonly queue: JSONRPCNotification[]
+			readonly capacity: number
+			waiter?: PromiseWithResolvers<JSONRPCNotification | MCPSubscriptionResult>
+			terminal?: MCPSubscriptionResult
+			failure?: { readonly reason: unknown }
+		} = { queue: [], capacity }
+		const abort = this.#abortSubscription.bind(this, id, options.signal)
+		options.signal.addEventListener('abort', abort, { once: true })
+		this.#pending.set(id, {
+			method,
+			signal: options.signal,
+			abort,
+			subscription,
+		})
+		this.#transport.send(request).catch((error: unknown) => this.#settle(id, error, true))
+		try {
+			for (;;) {
+				if (subscription.failure !== undefined) throw subscription.failure.reason
+				// A queued frame outranks a terminal that has already landed: graceful closure ends
+				// what the peer will SEND, never what the consumer has yet to read, so the frames
+				// still queued behind it are delivered before the result returns. Failure keeps its
+				// precedence over both, and pays nothing for it — `#settle` empties the queue on
+				// that path, so there is no frame left to drain and the reason is the whole answer.
+				const queued = subscription.queue.shift()
+				if (queued !== undefined) {
+					yield queued
+					continue
+				}
+				if (subscription.terminal !== undefined) return subscription.terminal
+				const waiter = Promise.withResolvers<JSONRPCNotification | MCPSubscriptionResult>()
+				subscription.waiter = waiter
+				const frame = await waiter.promise
+				if ('method' in frame) yield frame
+				else return frame
+			}
+		} finally {
+			this.#cancelSubscription(id, new Error('MCP subscription closed by its consumer'))
+		}
 	}
 
 	async call(
@@ -557,6 +649,21 @@ export class MCPClient implements MCPClientInterface {
 						new MCPError(owned.error.message, owned.error.code, owned.error.data),
 						true,
 					)
+				} else if (pending.subscription !== undefined) {
+					if (
+						!isMCPSubscriptionResult(owned.result) ||
+						owned.result['_meta'][MCP_META_SUBSCRIPTION] !== correlation
+					) {
+						this.#settle(
+							correlation,
+							new MCPError(
+								'MCP server returned a malformed subscription result',
+								JSONRPC_INVALID_PARAMS,
+								owned.result,
+							),
+							true,
+						)
+					} else this.#settle(correlation, owned.result, false)
 				} else {
 					const resultType = isRecord(owned.result) ? owned.result['resultType'] : undefined
 					const metadata = isRecord(owned.result) ? owned.result['_meta'] : undefined
@@ -592,8 +699,34 @@ export class MCPClient implements MCPClientInterface {
 		}
 		// A server-initiated message. A progress frame a caller is waiting on is claimed by
 		// that caller; everything else is surfaced for the consumer to react to.
+		if ('method' in owned && this.#routeSubscription(owned)) return
 		if ('method' in owned && this.#reportProgress(owned)) return
 		this.#emitter.emit('notification', owned)
+	}
+
+	#routeSubscription(message: JSONRPCInvocation): boolean {
+		if (!isJSONRPCNotification(message)) return false
+		const metadata = message.params?.['_meta']
+		if (!isRecord(metadata)) return false
+		const id = metadata[MCP_META_SUBSCRIPTION]
+		if (!isJSONRPCId(id)) return false
+		const subscription = this.#pending.get(id)?.subscription
+		if (subscription === undefined) return true
+		const waiter = subscription.waiter
+		if (waiter !== undefined) {
+			delete subscription.waiter
+			waiter.resolve(message)
+			return true
+		}
+		if (subscription.queue.length >= subscription.capacity) {
+			this.#cancelSubscription(
+				id,
+				new MCPError('MCP subscription frame queue overflow', JSONRPC_INTERNAL_ERROR),
+			)
+			return true
+		}
+		subscription.queue.push(message)
+		return true
 	}
 
 	// Route one inbound `notifications/progress` frame to the request whose caller asked for
@@ -884,6 +1017,35 @@ export class MCPClient implements MCPClientInterface {
 		this.#settle(id, new Error(`MCP request '${method}' was aborted`, { cause: reason }), true)
 	}
 
+	#abortSubscription(id: JSONRPCId, signal: AbortSignal): void {
+		this.#cancelSubscription(id, signal.reason)
+	}
+
+	#cancelSubscription(id: JSONRPCId, reason: unknown): void {
+		if (this.#pending.get(id)?.subscription === undefined) return
+		if (this.#transport.duplex) {
+			this.#transport
+				.send(buildCancelledNotification(id, isString(reason) ? reason : undefined))
+				.catch((error: unknown) => this.#emitter.emit('error', error))
+		}
+		this.#settle(id, reason, true)
+	}
+
+	#loseTransport(): void {
+		const announced = this.#connected
+		this.#generation += 1
+		this.#connected = false
+		this.#version = undefined
+		this.#owner = undefined
+		const supersession = this.#supersession
+		this.#supersession = Promise.withResolvers<void>()
+		supersession.resolve()
+		for (const id of this.#pending.keys()) {
+			this.#settle(id, new Error('MCP transport closed'), true)
+		}
+		if (announced) this.#emitter.emit('disconnect')
+	}
+
 	#settle(id: JSONRPCId, value: unknown, failed: boolean): void {
 		const pending = this.#pending.get(id)
 		if (pending === undefined) return
@@ -897,7 +1059,21 @@ export class MCPClient implements MCPClientInterface {
 		if (pending.signal !== undefined && pending.abort !== undefined) {
 			pending.signal.removeEventListener('abort', pending.abort)
 		}
-		if (failed) pending.reject(value)
-		else pending.resolve(value)
+		const subscription = pending.subscription
+		if (subscription !== undefined) {
+			const waiter = subscription.waiter
+			delete subscription.waiter
+			if (failed) {
+				subscription.queue.length = 0
+				if (waiter === undefined) subscription.failure = { reason: value }
+				else waiter.reject(value)
+			} else if (isMCPSubscriptionResult(value)) {
+				if (waiter === undefined) subscription.terminal = value
+				else waiter.resolve(value)
+			}
+			return
+		}
+		if (failed) pending.reject?.(value)
+		else pending.resolve?.(value)
 	}
 }

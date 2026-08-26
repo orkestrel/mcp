@@ -92,6 +92,7 @@ import {
 	isMCPVersion,
 	isModernRequest,
 	isMCPSubscriptionFilter,
+	isMCPSubscriptionResult,
 	isRFC3339Date,
 	isRFC3339DateTime,
 	isStandardBase64,
@@ -697,6 +698,40 @@ describe('isMCPSubscriptionFilter', () => {
 		const { proxy, revoke } = Proxy.revocable({}, {})
 		revoke()
 		expect(isMCPSubscriptionFilter(proxy)).toBe(false)
+	})
+})
+
+describe('isMCPSubscriptionResult', () => {
+	it('accepts a complete result carrying a JSON-RPC subscription id', () => {
+		expect(
+			isMCPSubscriptionResult({
+				resultType: 'complete',
+				_meta: { 'io.modelcontextprotocol/subscriptionId': 'listen-1' },
+			}),
+		).toBe(true)
+		expect(
+			isMCPSubscriptionResult({
+				resultType: 'complete',
+				_meta: { 'io.modelcontextprotocol/subscriptionId': 0 },
+				extension: true,
+			}),
+		).toBe(true)
+	})
+
+	it('rejects malformed terminals and remains total over hostile input', () => {
+		for (const value of [
+			{ resultType: 'task', _meta: { 'io.modelcontextprotocol/subscriptionId': 1 } },
+			{ resultType: 'complete' },
+			{ resultType: 'complete', _meta: {} },
+			{ resultType: 'complete', _meta: { 'io.modelcontextprotocol/subscriptionId': null } },
+			null,
+			[],
+		]) {
+			expect(isMCPSubscriptionResult(value)).toBe(false)
+		}
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(isMCPSubscriptionResult(proxy)).toBe(false)
 	})
 })
 
@@ -1822,6 +1857,7 @@ const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = 
 	isMCPServerCapabilities,
 	isMCPStringArguments,
 	isMCPSubscriptionFilter,
+	isMCPSubscriptionResult,
 	isMCPTaskDetail,
 	isMCPTaskResult,
 	isMCPTaskStatus,
