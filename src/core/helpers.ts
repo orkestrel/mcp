@@ -877,13 +877,14 @@ export function modernInvocationToLegacy(invocation: JSONRPCInvocation): JSONRPC
  *
  * @param requested - The notification families requested by the client
  * @param supported - The notification families the server can actually produce
- * @param tasks - If `true`, includes requested task identifiers; if `false`, omits them
+ * @param enabled - If `true`, carries the requested task identifiers into the filter; if `false`,
+ *   omits them. Default: `false`
  * @returns The exact subset the server will honour
  */
 export function buildSubscriptionFilter(
 	requested: MCPSubscriptionFilter,
 	supported: MCPSubscriptionFilter,
-	tasks = false,
+	enabled = false,
 ): MCPSubscriptionFilter {
 	const toolsListChanged =
 		requested.toolsListChanged === true && supported.toolsListChanged === true
@@ -895,7 +896,7 @@ export function buildSubscriptionFilter(
 	const resourceSubscriptions = requested.resourceSubscriptions?.filter((uri) =>
 		supportedResources.has(uri),
 	)
-	const taskIds = tasks ? requested.taskIds : undefined
+	const taskIds = enabled ? requested.taskIds : undefined
 	return {
 		...(toolsListChanged ? { toolsListChanged: true } : {}),
 		...(promptsListChanged ? { promptsListChanged: true } : {}),

@@ -322,7 +322,7 @@ directions.
 The modern branch answers from ONE registry, `server.methods`. The built-in
 methods are registered on it at construction — plus the `tasks/*` methods
 when the stable Tasks extension is configured — so a method
-added later is not a special case. It is simply the next registration,
+added later is not a special case. It is the next registration,
 dispatched by the same lookup, and a name with no handler still answers
 `-32601`:
 
@@ -882,7 +882,7 @@ the agreed identifiers, and stamps it with the subscription id. The server honou
 only when a consumer configured BOTH `task` and `subscription`: the manager is what resolves
 an identifier and the producer is what a transition arrives through, so either one missing
 leaves nothing to deliver and the acknowledgement omits the member. That fact is DERIVED from
-the two options at the moment the listen request is answered; no third flag records it, so it
+the two options at the moment the listen request is answered; no stored flag records it, so it
 cannot drift from them.
 
 **Each requested identifier is authorized before the acknowledgement agrees to it.** The
@@ -910,8 +910,8 @@ not: every frame the producer yields that passes the filter is stamped and writt
 stream, in producer order. A transition emitted before this subscription existed is not
 resent, so a client that needs the state it missed reads it with `tasks/get`.
 
-The helpers behind that path are the same two the other families use, with the tasks argument
-supplied:
+The helpers behind that path are `buildSubscriptionFilter` and
+`matchesSubscriptionNotification`, the ones the other families use, with `enabled` supplied:
 
 ```ts
 import {
@@ -922,7 +922,7 @@ import {
 } from '@orkestrel/mcp'
 
 const asked = { taskIds: ['task-alpha', 'task-beta', 'task-alpha'] }
-// The third argument is the derived support fact. `false` drops the member before the
+// The `enabled` parameter is the derived support fact. `false` drops the member before the
 // acknowledgement can name it; `true` carries the request through unresolved.
 buildSubscriptionFilter(asked, {}, false) // {}
 const agreed = buildSubscriptionFilter(asked, {}, true)
@@ -1332,7 +1332,7 @@ tool execution. A continuation or policy provider rejection is infrastructure fa
 receives detail-free `-32603`, with the caught value on the server's `error` event — as does
 a port that opens SUCCESSFULLY onto a payload this server never authored, or onto one
 outside the state bound, because the client wrote neither and cannot act on being told it
-was at fault. A carrier the port simply cannot recover, and an invalid resolved principal,
+was at fault. A carrier the port cannot recover, and an invalid resolved principal,
 elicitation, or carrier, remain `-32602`. Recovered state is bounded before parsing.
 
 Place the retry through the `input` group on `MCPCallOptions`. The `state` and `responses`
@@ -2082,7 +2082,7 @@ Passing a legacy revision to
 | `legacyResultToModern`             | function | Restore one legacy result to the modern complete-result shape, including the server identity and the cache fields required by `tools/list`.                                                                                   |
 | `legacyInvocationToModern`         | function | Stamp one legacy request with the modern protocol revision and an empty client capability set before modern dispatch.                                                                                                         |
 | `modernInvocationToLegacy`         | function | Remove the reserved modern request metadata before an invocation reaches a legacy peer while preserving other metadata.                                                                                                       |
-| `buildSubscriptionFilter`          | function | Intersect requested notification families and resource URIs with the server's declared support; a `true` third argument carries the requested task identifiers through unresolved and unnormalized.                           |
+| `buildSubscriptionFilter`          | function | Intersect requested notification families and resource URIs with the server's declared support; `enabled` set to `true` carries the requested task identifiers through unresolved and unnormalized.                           |
 | `matchesSubscriptionNotification`  | function | Test whether a produced notification belongs to an acknowledged subscription filter; a `notifications/tasks` frame must also pass `isMCPTaskNotification` and name an agreed identifier.                                      |
 | `stampSubscriptionNotification`    | function | Stamp a delivered notification with its reserved subscription id while preserving other params and metadata.                                                                                                                  |
 | `buildSubscriptionAcknowledgement` | function | Build the first id-carrying acknowledgement with the exact honoured notification subset.                                                                                                                                      |
@@ -3914,20 +3914,33 @@ is a different decision from an empty allowlist and deserves its own word.
 
 ## Declared conformance gaps
 
+The conformance project is a foreign-runner exchange and a schema-authority comparison,
+and each measures something the other cannot.
+
 A reproducible run is `npm run test:conformance`: it starts the real Streamable HTTP
 server from this package's source and runs `@modelcontextprotocol/conformance` — the
 release `package.json` pins as a development dependency — against specification revision
 `2026-07-28`. That is a genuine foreign MCP client driving this surface end to end, and
-the current recorded result is **23 passed / 0 failed**, the
+the recorded result is **23 passed / 0 failed**, the
 `dns-rebinding-protection` security regression guard (2 passed) included. There is no
 remaining failing scenario in that run.
 
-It is a project of its own — `tests/conformance.test.ts` over the fixture in
+The comparison starts no server and drives no client. It reads the stable Tasks
+extension's published schema from the vendored mirror
+`tests/mirrors/ext-tasks-2026-07-28-schema.json`, and the `TASK_SCHEMA_DIGEST` constant in
+`tests/setupConformance.ts` pins that file's raw bytes: a changed byte throws at module
+load, before a comparison row runs, so no row reads a mirror this package has not pinned.
+Each comparison row projects one schema coordinate — a task variant, a result composition,
+a notification shape, a subscription fragment — and compares it with the shape this
+package ships, so a contract that drifts from the authority reddens the row naming the
+coordinate.
+
+They share one project — `tests/conformance.test.ts` over the fixture in
 `tests/setupConformance.ts` — and `npm test` gates it. It spawns a foreign process and
 drives it over a real socket, but the runner is a pinned development dependency resolved
-from `node_modules` and the socket is loopback, so the run is offline and hermetic. Its
-baseline is recorded scenario by scenario rather than as one total, so a scenario that
-silently stops running fails the run instead of disappearing into a matching sum.
+from `node_modules` and the socket is loopback, so the run is offline and hermetic. The
+runner's baseline is recorded scenario by scenario rather than as one total, so a scenario
+that silently stops running fails the run instead of disappearing into a matching sum.
 
 **That number has been wrong before, in the same way each time, and the fixture was the
 cause — so read the fixture before quoting the number.** It was first recorded as

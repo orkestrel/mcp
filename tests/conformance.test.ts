@@ -55,7 +55,7 @@ const EXPECTED: readonly ConformanceScenario[] = [
 ]
 
 describe('Tasks schema authority pins', () => {
-	it('pins the schema raw-byte digest before parsing', () => {
+	it("pins the vendored schema's raw-byte digest", () => {
 		expect(
 			readConformanceDrift(
 				'Tasks schema bytes',
