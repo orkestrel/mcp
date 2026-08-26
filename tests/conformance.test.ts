@@ -8,9 +8,23 @@ import type { ConformanceResult, ConformanceScenario } from './setupConformance.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { DEFAULT_MCP_PATH } from '@src/server'
 import {
+	TASK_SCHEMA_CAPABILITY_ROWS,
+	TASK_SCHEMA_CREATE_ROWS,
+	TASK_SCHEMA_DETAIL_ROWS,
+	TASK_SCHEMA_DIGEST,
+	TASK_SCHEMA_ID_ROWS,
+	TASK_SCHEMA_METHOD_ROWS,
+	TASK_SCHEMA_NOTIFICATION_ROWS,
+	TASK_SCHEMA_PATH,
+	TASK_SCHEMA_RESULT_ROWS,
+	TASK_SCHEMA_STATUS_ROWS,
+	TASK_SCHEMA_SUBSCRIPTION_ROWS,
+	TASK_SCHEMA_TASK_ROWS,
 	executeConformance,
 	executeRunner,
+	readConformanceDrift,
 	readConformanceRelease,
+	readFileDigest,
 	startConformance,
 } from './setupConformance.js'
 
@@ -39,6 +53,87 @@ const EXPECTED: readonly ConformanceScenario[] = [
 	{ name: 'prompts-get-with-image', passed: 1, failed: 0 },
 	{ name: 'dns-rebinding-protection', passed: 2, failed: 0 },
 ]
+
+describe('Tasks schema authority pins', () => {
+	it('pins the schema raw-byte digest before parsing', () => {
+		expect(
+			readConformanceDrift(
+				'Tasks schema bytes',
+				readFileDigest(TASK_SCHEMA_PATH),
+				'SHA-256',
+				TASK_SCHEMA_DIGEST,
+			),
+		).toBeUndefined()
+	})
+
+	it.each(TASK_SCHEMA_ID_ROWS)('$symbol matches the Tasks schema', (row) => {
+		expect(
+			readConformanceDrift(row.symbol, row.expected, 'Tasks schema', row.model),
+		).toBeUndefined()
+	})
+})
+
+describe('Tasks schema task conformance', () => {
+	it.each(TASK_SCHEMA_TASK_ROWS)('$symbol matches the Tasks schema', (row) => {
+		expect(
+			readConformanceDrift(row.symbol, row.expected, 'Tasks schema', row.model),
+		).toBeUndefined()
+	})
+
+	it.each(TASK_SCHEMA_STATUS_ROWS)('$symbol matches the Tasks schema', (row) => {
+		expect(
+			readConformanceDrift(row.symbol, row.expected, 'Tasks schema', row.model),
+		).toBeUndefined()
+	})
+
+	it.each(TASK_SCHEMA_DETAIL_ROWS)('$symbol matches the Tasks schema', (row) => {
+		expect(
+			readConformanceDrift(row.symbol, row.expected, 'Tasks schema', row.model),
+		).toBeUndefined()
+	})
+})
+
+describe('Tasks schema result conformance', () => {
+	it.each(TASK_SCHEMA_CREATE_ROWS)('$symbol matches the Tasks schema', (row) => {
+		expect(
+			readConformanceDrift(row.symbol, row.expected, 'Tasks schema', row.model),
+		).toBeUndefined()
+	})
+
+	it.each(TASK_SCHEMA_RESULT_ROWS)('$symbol matches the Tasks schema', (row) => {
+		expect(
+			readConformanceDrift(row.symbol, row.expected, 'Tasks schema', row.model),
+		).toBeUndefined()
+	})
+})
+
+describe('Tasks schema notification conformance', () => {
+	it.each(TASK_SCHEMA_NOTIFICATION_ROWS)('$symbol matches the Tasks schema', (row) => {
+		expect(
+			readConformanceDrift(row.symbol, row.expected, 'Tasks schema', row.model),
+		).toBeUndefined()
+	})
+
+	it.each(TASK_SCHEMA_SUBSCRIPTION_ROWS)('$symbol matches the Tasks schema', (row) => {
+		expect(
+			readConformanceDrift(row.symbol, row.expected, 'Tasks schema', row.model),
+		).toBeUndefined()
+	})
+})
+
+describe('Tasks schema capability and method conformance', () => {
+	it.each(TASK_SCHEMA_CAPABILITY_ROWS)('$symbol matches the Tasks schema', (row) => {
+		expect(
+			readConformanceDrift(row.symbol, row.expected, 'Tasks schema', row.model),
+		).toBeUndefined()
+	})
+
+	it.each(TASK_SCHEMA_METHOD_ROWS)('$symbol matches the Tasks schema', (row) => {
+		expect(
+			readConformanceDrift(row.symbol, row.expected, 'Tasks schema', row.model),
+		).toBeUndefined()
+	})
+})
 
 describe('MCP server conformance', () => {
 	// `host` stays optional because `afterAll` runs even when `beforeAll` threw, and the

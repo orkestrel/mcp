@@ -25,10 +25,12 @@ import type {
 	MCPServerOptions,
 } from '@src/core'
 import type { StartedServerInterface } from './setupServer.js'
+import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import { isRecord } from '@orkestrel/contract'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
@@ -81,6 +83,591 @@ export interface ConformanceResult {
 	/** The runner's own total of failed checks. */
 	readonly failed: number
 }
+
+/** Describes one direct comparison with the vendored Tasks extension schema. */
+export interface TaskSchemaRow {
+	/** The schema coordinate the row proves. */
+	readonly symbol: string
+	/** The package's pinned projection of the coordinate. */
+	readonly expected: string
+	/** The projection read from the vendored schema. */
+	readonly model: string
+}
+
+/** Pins the raw Tasks extension schema bytes used by this suite. */
+export const TASK_SCHEMA_DIGEST = 'bf30afb7ac251e3e22c037b7a685f60ef6603031b5484c0d08b1fa0bbe86d460'
+
+/** Pins the identifier declared by the Tasks extension schema. */
+export const TASK_SCHEMA_ID = 'https://modelcontextprotocol.io/ext-tasks/2026-07-28/schema.json'
+
+/** Resolves the vendored Tasks extension schema mirror. */
+export const TASK_SCHEMA_PATH = fileURLToPath(
+	new URL('./mirrors/ext-tasks-2026-07-28-schema.json', import.meta.url),
+)
+
+/** The JSON Schema spelling of an integer millisecond value in the Tasks extension. */
+export const TASK_INTEGER_SCHEMA = Object.freeze({
+	type: 'integer',
+	minimum: -9007199254740991,
+	maximum: 9007199254740991,
+})
+
+/** The properties every task variant shares. */
+export const TASK_PROPERTIES: readonly string[] = [
+	'taskId',
+	'status',
+	'statusMessage',
+	'createdAt',
+	'lastUpdatedAt',
+	'ttlMs',
+	'pollIntervalMs',
+]
+
+/** The properties every task owes. */
+export const TASK_REQUIRED: readonly string[] = [
+	'taskId',
+	'status',
+	'createdAt',
+	'lastUpdatedAt',
+	'ttlMs',
+]
+
+/** Formats an authority value for a direct conformance comparison. */
+export function formatConformanceValue(value: unknown): string {
+	if (value === undefined) return 'undefined'
+	if (typeof value === 'string') return value
+	let serialized: string | undefined
+	try {
+		serialized = JSON.stringify(value)
+	} catch {
+		serialized = undefined
+	}
+	return serialized === undefined ? String(value) : serialized
+}
+
+/** Formats a direct schema-drift message. */
+export function formatConformanceDrift(symbol: string, authority: string, value: unknown): string {
+	return `${symbol} drifted; ${authority}=${formatConformanceValue(value)}`
+}
+
+/** Reports a drift message when a direct comparison differs. */
+export function readConformanceDrift(
+	symbol: string,
+	local: unknown,
+	authority: string,
+	value: unknown,
+): string | undefined {
+	return Object.is(local, value) ? undefined : formatConformanceDrift(symbol, authority, value)
+}
+
+/** Computes the SHA-256 digest of a file's raw bytes. */
+export function readFileDigest(path: string): string {
+	return createHash('sha256').update(readFileSync(path)).digest('hex')
+}
+
+/** Reads one nested schema value without assuming its shape. */
+export function readSchemaPath(root: unknown, path: ReadonlyArray<string | number>): unknown {
+	let value = root
+	for (const segment of path) {
+		if (Array.isArray(value)) {
+			if (typeof segment !== 'number') return undefined
+			value = value[segment]
+			continue
+		}
+		if (!isRecord(value) || typeof segment !== 'string') return undefined
+		value = Reflect.get(value, segment)
+	}
+	return value
+}
+
+/** Loads the digest-pinned Tasks extension schema. */
+export function readTaskSchema(path: string, digest: string = TASK_SCHEMA_DIGEST): unknown {
+	const actual = readFileDigest(path)
+	if (actual !== digest) {
+		throw new Error(formatConformanceDrift('Tasks schema bytes', 'SHA-256', digest))
+	}
+	const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+	if (!isRecord(parsed)) throw new Error('The Tasks extension schema root is not a record')
+	return parsed
+}
+
+/** Holds the parsed Tasks extension schema used to construct each comparison row. */
+export const TASK_SCHEMA = readTaskSchema(TASK_SCHEMA_PATH)
+
+/** Builds one row from a direct schema path. */
+export function createTaskSchemaRow(
+	symbol: string,
+	expected: unknown,
+	path: ReadonlyArray<string | number>,
+): TaskSchemaRow {
+	return {
+		symbol,
+		expected: formatConformanceValue(expected),
+		model: formatConformanceValue(readSchemaPath(TASK_SCHEMA, path)),
+	}
+}
+
+/** Builds one row from a projected schema value. */
+export function createTaskProjectionRow(
+	symbol: string,
+	expected: unknown,
+	model: unknown,
+): TaskSchemaRow {
+	return {
+		symbol,
+		expected: formatConformanceValue(expected),
+		model: formatConformanceValue(model),
+	}
+}
+
+/** Reads whether the Tasks schema requires one `Task` property. */
+export function readTaskRequiredness(member: string): boolean {
+	const required = readSchemaPath(TASK_SCHEMA, ['$defs', 'Task', 'required'])
+	return Array.isArray(required) && required.includes(member)
+}
+
+/** Projects one `DetailedTask` variant onto its status and owed payload. */
+export function readTaskVariant(index: number): unknown {
+	const variant = readSchemaPath(TASK_SCHEMA, ['$defs', 'DetailedTask', 'anyOf', index])
+	if (!isRecord(variant)) return undefined
+	const properties = Reflect.get(variant, 'properties')
+	const required = Reflect.get(variant, 'required')
+	if (!isRecord(properties) || !Array.isArray(required)) return undefined
+	const status = readSchemaPath(properties, ['status', 'const'])
+	if (status === 'input_required') {
+		return {
+			status,
+			required,
+			payload: {
+				inputRequests: Reflect.get(properties, 'inputRequests'),
+			},
+		}
+	}
+	if (status === 'completed') {
+		return {
+			status,
+			required,
+			payload: { result: Reflect.get(properties, 'result') },
+		}
+	}
+	if (status === 'failed') {
+		return {
+			status,
+			required,
+			payload: { error: Reflect.get(properties, 'error') },
+		}
+	}
+	return { status, required, payload: {} }
+}
+
+/** Projects the flat `CreateTaskResult` composition. */
+export function readCreateTaskResult(): unknown {
+	const properties = readSchemaPath(TASK_SCHEMA, [
+		'$defs',
+		'CreateTaskResult',
+		'allOf',
+		1,
+		'properties',
+	])
+	if (!isRecord(properties)) return undefined
+	return {
+		base: readSchemaPath(TASK_SCHEMA, ['$defs', 'CreateTaskResult', 'allOf', 0, '$ref']),
+		properties: Object.keys(properties),
+		required: readSchemaPath(TASK_SCHEMA, ['$defs', 'CreateTaskResult', 'allOf', 1, 'required']),
+		nested: Reflect.has(properties, 'task'),
+		resultType: readSchemaPath(TASK_SCHEMA, [
+			'$defs',
+			'CreateTaskResult',
+			'allOf',
+			2,
+			'properties',
+			'resultType',
+			'const',
+		]),
+	}
+}
+
+/** Projects one completed task-result composition. */
+export function readCompleteTaskResult(definition: string): unknown {
+	const detail = readSchemaPath(TASK_SCHEMA, ['$defs', definition, 'allOf', 1, 'anyOf'])
+	const result = Array.isArray(detail) ? 2 : 1
+	return {
+		base: readSchemaPath(TASK_SCHEMA, ['$defs', definition, 'allOf', 0, '$ref']),
+		detail: Array.isArray(detail),
+		resultType: readSchemaPath(TASK_SCHEMA, [
+			'$defs',
+			definition,
+			'allOf',
+			result,
+			'properties',
+			'resultType',
+			'const',
+		]),
+	}
+}
+
+/** Projects the flat task-status notification parameters. */
+export function readTaskNotificationShape(): unknown {
+	const variants = readSchemaPath(TASK_SCHEMA, [
+		'$defs',
+		'TaskStatusNotificationParams',
+		'allOf',
+		1,
+		'anyOf',
+	])
+	if (!Array.isArray(variants)) return undefined
+	const statuses: unknown[] = []
+	for (let index = 0; index < variants.length; index += 1) {
+		statuses.push(
+			readSchemaPath(TASK_SCHEMA, [
+				'$defs',
+				'TaskStatusNotificationParams',
+				'allOf',
+				1,
+				'anyOf',
+				index,
+				'properties',
+				'status',
+				'const',
+			]),
+		)
+	}
+	return {
+		base: readSchemaPath(TASK_SCHEMA, [
+			'$defs',
+			'TaskStatusNotificationParams',
+			'allOf',
+			0,
+			'$ref',
+		]),
+		statuses,
+		nested:
+			readSchemaPath(TASK_SCHEMA, [
+				'$defs',
+				'TaskStatusNotificationParams',
+				'allOf',
+				1,
+				'properties',
+				'task',
+			]) !== undefined,
+	}
+}
+
+/** Projects the metadata inherited by task-status notification parameters. */
+export function readTaskNotificationMetadata(): unknown {
+	return {
+		params: readSchemaPath(TASK_SCHEMA, ['$defs', 'NotificationParams', 'properties', '_meta']),
+		metadata: {
+			type: readSchemaPath(TASK_SCHEMA, ['$defs', 'NotificationMetaObject', 'type']),
+			properties: readSchemaPath(TASK_SCHEMA, ['$defs', 'NotificationMetaObject', 'properties']),
+		},
+	}
+}
+
+/** Projects one task-subscription fragment. */
+export function readTaskSubscription(definition: string): unknown {
+	return {
+		type: readSchemaPath(TASK_SCHEMA, ['$defs', definition, 'type']),
+		properties: readSchemaPath(TASK_SCHEMA, ['$defs', definition, 'properties']),
+		required: readSchemaPath(TASK_SCHEMA, ['$defs', definition, 'required']),
+	}
+}
+
+/** Projects the Tasks extension capability's exactly-empty object schema. */
+export function readTaskCapability(): unknown {
+	return {
+		type: readSchemaPath(TASK_SCHEMA, ['$defs', 'TasksExtensionCapability', 'type']),
+		propertyNames: readSchemaPath(TASK_SCHEMA, [
+			'$defs',
+			'TasksExtensionCapability',
+			'propertyNames',
+		]),
+		additionalProperties: readSchemaPath(TASK_SCHEMA, [
+			'$defs',
+			'TasksExtensionCapability',
+			'additionalProperties',
+		]),
+	}
+}
+
+/** Covers `Task` requiredness, `ttlMs` nullability, and integer spellings. */
+export const TASK_SCHEMA_TASK_ROWS: readonly TaskSchemaRow[] = [
+	...TASK_PROPERTIES.map((member) =>
+		createTaskProjectionRow(
+			`Task.${member} required`,
+			TASK_REQUIRED.includes(member),
+			readTaskRequiredness(member),
+		),
+	),
+	createTaskSchemaRow('Task.ttlMs nullable', 'null', [
+		'$defs',
+		'Task',
+		'properties',
+		'ttlMs',
+		'anyOf',
+		1,
+		'type',
+	]),
+	createTaskSchemaRow('Task.ttlMs integer schema', TASK_INTEGER_SCHEMA, [
+		'$defs',
+		'Task',
+		'properties',
+		'ttlMs',
+		'anyOf',
+		0,
+	]),
+	createTaskSchemaRow('Task.pollIntervalMs integer schema', TASK_INTEGER_SCHEMA, [
+		'$defs',
+		'Task',
+		'properties',
+		'pollIntervalMs',
+	]),
+]
+
+/** Covers each `TaskStatus` member. */
+export const TASK_SCHEMA_STATUS_ROWS: readonly TaskSchemaRow[] = [
+	createTaskSchemaRow('TaskStatus.working', 'working', [
+		'$defs',
+		'TaskStatus',
+		'anyOf',
+		0,
+		'const',
+	]),
+	createTaskSchemaRow('TaskStatus.input_required', 'input_required', [
+		'$defs',
+		'TaskStatus',
+		'anyOf',
+		1,
+		'const',
+	]),
+	createTaskSchemaRow('TaskStatus.completed', 'completed', [
+		'$defs',
+		'TaskStatus',
+		'anyOf',
+		2,
+		'const',
+	]),
+	createTaskSchemaRow('TaskStatus.failed', 'failed', ['$defs', 'TaskStatus', 'anyOf', 3, 'const']),
+	createTaskSchemaRow('TaskStatus.cancelled', 'cancelled', [
+		'$defs',
+		'TaskStatus',
+		'anyOf',
+		4,
+		'const',
+	]),
+]
+
+/** Covers each `DetailedTask` variant and the payload it owes. */
+export const TASK_SCHEMA_DETAIL_ROWS: readonly TaskSchemaRow[] = [
+	createTaskProjectionRow(
+		'DetailedTask.working',
+		{ status: 'working', required: TASK_REQUIRED, payload: {} },
+		readTaskVariant(0),
+	),
+	createTaskProjectionRow(
+		'DetailedTask.input_required',
+		{
+			status: 'input_required',
+			required: [...TASK_REQUIRED, 'inputRequests'],
+			payload: { inputRequests: { $ref: '#/$defs/InputRequests' } },
+		},
+		readTaskVariant(1),
+	),
+	createTaskProjectionRow(
+		'DetailedTask.completed',
+		{
+			status: 'completed',
+			required: [...TASK_REQUIRED, 'result'],
+			payload: {
+				result: {
+					type: 'object',
+					propertyNames: { type: 'string' },
+					additionalProperties: {},
+				},
+			},
+		},
+		readTaskVariant(2),
+	),
+	createTaskProjectionRow(
+		'DetailedTask.failed',
+		{
+			status: 'failed',
+			required: [...TASK_REQUIRED, 'error'],
+			payload: { error: { $ref: '#/$defs/Error' } },
+		},
+		readTaskVariant(3),
+	),
+	createTaskProjectionRow(
+		'DetailedTask.cancelled',
+		{ status: 'cancelled', required: TASK_REQUIRED, payload: {} },
+		readTaskVariant(4),
+	),
+]
+
+/** Covers the flat creation result. */
+export const TASK_SCHEMA_CREATE_ROWS: readonly TaskSchemaRow[] = [
+	createTaskProjectionRow(
+		'CreateTaskResult',
+		{
+			base: '#/$defs/Result',
+			properties: TASK_PROPERTIES,
+			required: TASK_REQUIRED,
+			nested: false,
+			resultType: 'task',
+		},
+		readCreateTaskResult(),
+	),
+]
+
+/** Covers the completed get, update, and cancel result shapes. */
+export const TASK_SCHEMA_RESULT_ROWS: readonly TaskSchemaRow[] = [
+	createTaskProjectionRow(
+		'GetTaskResult',
+		{ base: '#/$defs/Result', detail: true, resultType: 'complete' },
+		readCompleteTaskResult('GetTaskResult'),
+	),
+	createTaskProjectionRow(
+		'UpdateTaskResult',
+		{ base: '#/$defs/Result', detail: false, resultType: 'complete' },
+		readCompleteTaskResult('UpdateTaskResult'),
+	),
+	createTaskProjectionRow(
+		'CancelTaskResult',
+		{ base: '#/$defs/Result', detail: false, resultType: 'complete' },
+		readCompleteTaskResult('CancelTaskResult'),
+	),
+]
+
+/** Covers task-status notification flatness and metadata. */
+export const TASK_SCHEMA_NOTIFICATION_ROWS: readonly TaskSchemaRow[] = [
+	createTaskProjectionRow(
+		'TaskStatusNotificationParams flatness',
+		{
+			base: '#/$defs/NotificationParams',
+			statuses: ['working', 'input_required', 'completed', 'failed', 'cancelled'],
+			nested: false,
+		},
+		readTaskNotificationShape(),
+	),
+	createTaskProjectionRow(
+		'TaskStatusNotificationParams metadata',
+		{
+			params: { $ref: '#/$defs/NotificationMetaObject' },
+			metadata: {
+				type: 'object',
+				properties: {
+					'io.modelcontextprotocol/subscriptionId': {
+						$ref: '#/$defs/RequestId',
+					},
+				},
+			},
+		},
+		readTaskNotificationMetadata(),
+	),
+]
+
+/** Covers the request-side and acknowledged-side `taskIds` fragments. */
+export const TASK_SCHEMA_SUBSCRIPTION_ROWS: readonly TaskSchemaRow[] = [
+	createTaskProjectionRow(
+		'TaskSubscriptionNotifications.taskIds',
+		{
+			type: 'object',
+			properties: {
+				taskIds: { type: 'array', items: { type: 'string' } },
+			},
+		},
+		readTaskSubscription('TaskSubscriptionNotifications'),
+	),
+	createTaskProjectionRow(
+		'TaskSubscriptionAcknowledgedNotifications.taskIds',
+		{
+			type: 'object',
+			properties: {
+				taskIds: { type: 'array', items: { type: 'string' } },
+			},
+		},
+		readTaskSubscription('TaskSubscriptionAcknowledgedNotifications'),
+	),
+]
+
+/** Covers the exactly-empty Tasks extension capability. */
+export const TASK_SCHEMA_CAPABILITY_ROWS: readonly TaskSchemaRow[] = [
+	createTaskProjectionRow(
+		'TasksExtensionCapability',
+		{
+			type: 'object',
+			propertyNames: { type: 'string' },
+			additionalProperties: { not: {} },
+		},
+		readTaskCapability(),
+	),
+]
+
+/** Covers every method literal declared by the schema. */
+export const TASK_SCHEMA_METHOD_ROWS: readonly TaskSchemaRow[] = [
+	createTaskSchemaRow('CancelTaskRequest.method', 'tasks/cancel', [
+		'$defs',
+		'CancelTaskRequest',
+		'allOf',
+		1,
+		'properties',
+		'method',
+		'const',
+	]),
+	createTaskSchemaRow('GetTaskRequest.method', 'tasks/get', [
+		'$defs',
+		'GetTaskRequest',
+		'allOf',
+		1,
+		'properties',
+		'method',
+		'const',
+	]),
+	createTaskSchemaRow('TaskStatusNotification.method', 'notifications/tasks', [
+		'$defs',
+		'TaskStatusNotification',
+		'allOf',
+		1,
+		'properties',
+		'method',
+		'const',
+	]),
+	createTaskSchemaRow('UpdateTaskRequest.method', 'tasks/update', [
+		'$defs',
+		'UpdateTaskRequest',
+		'allOf',
+		1,
+		'properties',
+		'method',
+		'const',
+	]),
+	createTaskSchemaRow('CreateMessageRequest.method', 'sampling/createMessage', [
+		'$defs',
+		'CreateMessageRequest',
+		'properties',
+		'method',
+		'const',
+	]),
+	createTaskSchemaRow('ElicitRequest.method', 'elicitation/create', [
+		'$defs',
+		'ElicitRequest',
+		'properties',
+		'method',
+		'const',
+	]),
+	createTaskSchemaRow('ListRootsRequest.method', 'roots/list', [
+		'$defs',
+		'ListRootsRequest',
+		'properties',
+		'method',
+		'const',
+	]),
+]
+
+/** Covers the schema identifier. */
+export const TASK_SCHEMA_ID_ROWS: readonly TaskSchemaRow[] = [
+	createTaskSchemaRow('Tasks schema $id', TASK_SCHEMA_ID, ['$id']),
+]
 
 // ── The tool fixture ─────────────────────────────────────────────────────────
 
@@ -139,7 +726,11 @@ export function buildConformanceTools(): ToolManagerInterface {
 		createTool({
 			name: 'test_image_content',
 			description: 'Exercise the declared image-content conformance gap.',
-			execute: () => ({ type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }),
+			execute: () => ({
+				type: 'image',
+				data: 'iVBORw0KGgo=',
+				mimeType: 'image/png',
+			}),
 		}),
 	)
 	tools.add(
@@ -153,7 +744,11 @@ export function buildConformanceTools(): ToolManagerInterface {
 		createTool({
 			name: 'test_audio_content',
 			description: 'Exercise the declared audio-content conformance gap.',
-			execute: () => ({ type: 'audio', data: 'UklGRg==', mimeType: 'audio/wav' }),
+			execute: () => ({
+				type: 'audio',
+				data: 'UklGRg==',
+				mimeType: 'audio/wav',
+			}),
 		}),
 	)
 	tools.add(
@@ -237,7 +832,11 @@ export const CONFORMANCE_CONTENTS: Readonly<Record<string, readonly MCPResourceC
 			},
 		],
 		'test://static-binary': [
-			{ uri: 'test://static-binary', mimeType: 'image/png', blob: 'iVBORw0KGgo=' },
+			{
+				uri: 'test://static-binary',
+				mimeType: 'image/png',
+				blob: 'iVBORw0KGgo=',
+			},
 		],
 	})
 
@@ -271,7 +870,11 @@ export function readConformanceTemplate(uri: string): readonly MCPResourceConten
 		{
 			uri,
 			mimeType: 'application/json',
-			text: JSON.stringify({ id, templateTest: true, data: `Data for ID: ${id}` }),
+			text: JSON.stringify({
+				id,
+				templateTest: true,
+				data: `Data for ID: ${id}`,
+			}),
 		},
 	]
 }
@@ -288,14 +891,28 @@ export const CONFORMANCE_PROMPTS: readonly MCPPrompt[] = Object.freeze([
 		name: 'test_prompt_with_arguments',
 		description: 'The conformance suite parameterized-prompt fixture.',
 		arguments: [
-			{ name: 'arg1', description: 'First test argument.', required: true },
-			{ name: 'arg2', description: 'Second test argument.', required: true },
+			{
+				name: 'arg1',
+				description: 'First test argument.',
+				required: true,
+			},
+			{
+				name: 'arg2',
+				description: 'Second test argument.',
+				required: true,
+			},
 		],
 	},
 	{
 		name: 'test_prompt_with_embedded_resource',
 		description: 'The conformance suite embedded-resource prompt fixture.',
-		arguments: [{ name: 'resourceUri', description: 'The resource to embed.', required: true }],
+		arguments: [
+			{
+				name: 'resourceUri',
+				description: 'The resource to embed.',
+				required: true,
+			},
+		],
 	},
 	{
 		name: 'test_prompt_with_image',
@@ -321,7 +938,13 @@ export function buildConformanceMessages(
 ): readonly MCPPromptMessage[] | undefined {
 	if (name === 'test_simple_prompt') {
 		return [
-			{ role: 'user', content: { type: 'text', text: 'This is a simple prompt for testing.' } },
+			{
+				role: 'user',
+				content: {
+					type: 'text',
+					text: 'This is a simple prompt for testing.',
+				},
+			},
 		]
 	}
 	if (name === 'test_prompt_with_arguments') {
@@ -350,14 +973,30 @@ export function buildConformanceMessages(
 			},
 			{
 				role: 'user',
-				content: { type: 'text', text: 'Please process the embedded resource above.' },
+				content: {
+					type: 'text',
+					text: 'Please process the embedded resource above.',
+				},
 			},
 		]
 	}
 	if (name === 'test_prompt_with_image') {
 		return [
-			{ role: 'user', content: { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' } },
-			{ role: 'user', content: { type: 'text', text: 'Please analyze the image above.' } },
+			{
+				role: 'user',
+				content: {
+					type: 'image',
+					data: 'iVBORw0KGgo=',
+					mimeType: 'image/png',
+				},
+			},
+			{
+				role: 'user',
+				content: {
+					type: 'text',
+					text: 'Please analyze the image above.',
+				},
+			},
 		]
 	}
 	return undefined
