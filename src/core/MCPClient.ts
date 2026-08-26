@@ -388,7 +388,16 @@ export class MCPClient implements MCPClientInterface {
 	): Promise<MCPCallOutcome> {
 		const result = await this.#request(
 			'tools/call',
-			{ name, arguments: args },
+			{
+				name,
+				arguments: args,
+				...(options?.input === undefined
+					? {}
+					: {
+							requestState: options.input.state,
+							inputResponses: options.input.responses,
+						}),
+			},
 			this.#timeout,
 			undefined,
 			options,

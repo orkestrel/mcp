@@ -2288,11 +2288,10 @@ export interface MCPClientOptions {
 }
 
 /**
- * Per-call policy for one remote `tools/call` — the caller's cancellation and its
- * progress consumer.
+ * Configures per-call policy and continuation data for one remote `tools/call`.
  *
  * @remarks
- * Both leaves are the CALLER's, and both live for exactly one request:
+ * Each option lives for exactly one request:
  *
  * - `signal` cancels THAT request and nothing else. It never closes the connection, never
  *   reaches a durable task the call may have become, and never asks the peer to undo work
@@ -2302,16 +2301,25 @@ export interface MCPClientOptions {
  * - `progress` receives each `notifications/progress` frame the peer publishes for this
  *   request. Supplying it is what stamps the request's progress token, so a peer only
  *   reports where a caller is listening.
+ * - `input` carries one input-required retry. Its `state` and `responses` leaves are
+ *   required together. The retry must repeat the original `name` and byte-identical
+ *   `arguments`; the client maps the leaves to the top-level `requestState` and
+ *   `inputResponses` parameters.
  *
- * Neither leaf survives the call: when the request settles — answered, refused, timed out,
- * aborted, or drained by a `disconnect` — the signal listener is removed and the progress
- * handler is dropped in the same step.
+ * No option survives the call: the continuation data is placed only on that request, and when
+ * the request settles — answered, refused, timed out, aborted, or drained by a `disconnect` —
+ * the signal listener is removed and the progress handler is dropped in the same step.
  */
 export interface MCPCallOptions {
 	/** Cancels this one in-flight request; an already-aborted signal refuses it unsent. */
 	readonly signal?: AbortSignal
 	/** Receives this request's progress frames; supplying it stamps the progress token. */
 	readonly progress?: MCPProgressHandler
+	/** Carries the protected state and responses for one input-required retry. */
+	readonly input?: {
+		readonly state: string
+		readonly responses: Readonly<Record<string, unknown>>
+	}
 }
 
 /**

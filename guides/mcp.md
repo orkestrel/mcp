@@ -1174,6 +1174,38 @@ outside the state bound, because the client wrote neither and cannot act on bein
 was at fault. A carrier the port simply cannot recover, and an invalid resolved principal,
 elicitation, or carrier, remain `-32602`. Recovered state is bounded before parsing.
 
+Place the retry through the `input` group on `MCPCallOptions`. The `state` and `responses`
+leaves are required together. Pass the same tool name and byte-identical `arguments` that the
+first call used; changing the arguments invalidates the protected state. The following client-side
+exchange reuses the same `callArguments` value and maps the server-assigned request key to its
+elicitation response:
+
+```ts
+import type { MCPClientInterface } from '@orkestrel/mcp'
+
+declare const client: MCPClientInterface
+
+const callArguments = { value: 'unchanged' }
+const pending = await client.call('reply', callArguments)
+
+if (
+	pending.resultType !== 'input_required' ||
+	pending.requestState === undefined ||
+	pending.inputRequests === undefined
+) {
+	throw new Error('Expected input requests and protected state')
+}
+const key = Object.keys(pending.inputRequests)[0]
+if (key === undefined) throw new Error('Expected an input request key')
+
+await client.call('reply', callArguments, {
+	input: {
+		state: pending.requestState,
+		responses: { [key]: { action: 'accept', content: { approved: true } } },
+	},
+})
+```
+
 **What the protected state binds, and for how long.** The carrier is OPAQUE to the client:
 it carries an authenticated principal, an absolute expiry, the ORIGINAL first-round request
 id, the protocol revision, the method, the server-minted key, the tool name, a canonical

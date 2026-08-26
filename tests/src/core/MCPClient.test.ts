@@ -586,6 +586,34 @@ function serverWithTools(): MCPDispatcherInterface {
 	)
 }
 
+function serverWithInput(): MCPDispatcherInterface {
+	return createMCPServer({
+		identity: { name: 'input-loopback', version: '1.2.3' },
+		tools: toolRegistry(),
+		input: {
+			continuation: {
+				seal: (value) => Promise.resolve(value),
+				open: (value) => Promise.resolve(value),
+			},
+			ttl: 60_000,
+			principal: () => 'operator-1',
+			elicit: ({ response }) =>
+				response === undefined
+					? {
+							request: {
+								message: 'Approve this call?',
+								requestedSchema: {
+									type: 'object',
+									properties: { approved: { type: 'boolean' } },
+									required: ['approved'],
+								},
+							},
+						}
+					: undefined,
+		},
+	})
+}
+
 describe('MCPClient — connect (modern negotiation)', () => {
 	it('rejects an invalid runtime pin synchronously during construction', () => {
 		const peer = createFixturePeer({ reply: () => undefined })
@@ -1219,6 +1247,101 @@ describe('MCPClient — tools() (discovery + local-tool wrapping)', () => {
 })
 
 describe('MCPClient — call() (the content round-trip)', () => {
+	it('places input continuation state and responses as top-level tools/call params', async () => {
+		const peer = callPeer((request) =>
+			request.method === 'tools/call' && request.id !== undefined
+				? callResponse(request.id, {
+						resultType: 'complete',
+						content: [{ type: 'text', text: 'done' }],
+					})
+				: undefined,
+		)
+		const client = createMCPClient({ transport: peer })
+		await client.connect()
+		const args = { operation: 'release', nested: { approved: false } }
+		const responses = { confirmation: { action: 'accept', content: { approved: true } } }
+
+		await client.call('NAME', args, { input: { state: 'protected-state', responses } })
+		await client.call('NAME', args)
+
+		const calls = peer.requests.filter((request) => request.method === 'tools/call')
+		const continued = calls[0]
+		const plain = calls[1]
+		if (continued === undefined || plain === undefined) {
+			throw new Error('Expected the peer to receive the continued and plain calls')
+		}
+		expect(continued.params?.['arguments']).toBe(args)
+		expect(continued.params).toMatchObject({
+			name: 'NAME',
+			arguments: args,
+			requestState: 'protected-state',
+			inputResponses: responses,
+		})
+		expect(Object.hasOwn(plain.params ?? {}, 'requestState')).toBe(false)
+		expect(Object.hasOwn(plain.params ?? {}, 'inputResponses')).toBe(false)
+	})
+
+	it('continues an input-required call with protected state and responses', async () => {
+		const client = createMCPClient({
+			transport: createLoopback(serverWithInput()),
+			capabilities: { elicitation: {} },
+		})
+		await client.connect()
+		const args = { value: 'unchanged' }
+
+		const first = await client.call('echo', args)
+
+		expect(first.resultType).toBe('input_required')
+		if (
+			first.resultType !== 'input_required' ||
+			first.requestState === undefined ||
+			first.inputRequests === undefined
+		) {
+			throw new Error('Expected input requests and protected state')
+		}
+		const key = Object.keys(first.inputRequests)[0]
+		if (key === undefined) throw new Error('Expected an input request key')
+		const second = await client.call('echo', args, {
+			input: {
+				state: first.requestState,
+				responses: { [key]: { action: 'accept', content: { approved: true } } },
+			},
+		})
+
+		expect(second).toEqual({ resultType: 'complete', value: { echoed: 'unchanged' } })
+	})
+
+	it('keeps changed retry arguments under the server digest refusal', async () => {
+		const client = createMCPClient({
+			transport: createLoopback(serverWithInput()),
+			capabilities: { elicitation: {} },
+		})
+		await client.connect()
+		const first = await client.call('echo', { value: 'original' })
+		if (
+			first.resultType !== 'input_required' ||
+			first.requestState === undefined ||
+			first.inputRequests === undefined
+		) {
+			throw new Error('Expected input requests and protected state')
+		}
+		const key = Object.keys(first.inputRequests)[0]
+		if (key === undefined) throw new Error('Expected an input request key')
+
+		await expect(
+			client.call(
+				'echo',
+				{ value: 'altered' },
+				{
+					input: {
+						state: first.requestState,
+						responses: { [key]: { action: 'accept', content: { approved: true } } },
+					},
+				},
+			),
+		).rejects.toMatchObject({ code: JSONRPC_INVALID_PARAMS })
+	})
+
 	it('returns a structured value on the complete arm', async () => {
 		const client = createMCPClient({ transport: createLoopback(serverWithTools()) })
 		await client.connect()
