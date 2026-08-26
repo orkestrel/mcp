@@ -59,6 +59,7 @@ import {
 	isMCPInputResult,
 	isMCPLegacyVersion,
 	isMCPMetaObject,
+	isMCPTaskNotification,
 	isMCPTaskResult,
 } from './validators.js'
 
@@ -876,11 +877,13 @@ export function modernInvocationToLegacy(invocation: JSONRPCInvocation): JSONRPC
  *
  * @param requested - The notification families requested by the client
  * @param supported - The notification families the server can actually produce
+ * @param tasks - If `true`, includes requested task identifiers; if `false`, omits them
  * @returns The exact subset the server will honour
  */
 export function buildSubscriptionFilter(
 	requested: MCPSubscriptionFilter,
 	supported: MCPSubscriptionFilter,
+	tasks = false,
 ): MCPSubscriptionFilter {
 	const toolsListChanged =
 		requested.toolsListChanged === true && supported.toolsListChanged === true
@@ -892,6 +895,7 @@ export function buildSubscriptionFilter(
 	const resourceSubscriptions = requested.resourceSubscriptions?.filter((uri) =>
 		supportedResources.has(uri),
 	)
+	const taskIds = tasks ? requested.taskIds : undefined
 	return {
 		...(toolsListChanged ? { toolsListChanged: true } : {}),
 		...(promptsListChanged ? { promptsListChanged: true } : {}),
@@ -899,6 +903,7 @@ export function buildSubscriptionFilter(
 		...(resourceSubscriptions !== undefined && resourceSubscriptions.length > 0
 			? { resourceSubscriptions }
 			: {}),
+		...(taskIds !== undefined && taskIds.length > 0 ? { taskIds } : {}),
 	}
 }
 
@@ -922,9 +927,17 @@ export function matchesSubscriptionNotification(
 	if (notification.method === 'notifications/resources/list_changed') {
 		return filter.resourcesListChanged === true
 	}
-	if (notification.method !== 'notifications/resources/updated') return false
-	const uri = notification.params?.['uri']
-	return typeof uri === 'string' && filter.resourceSubscriptions?.includes(uri) === true
+	if (notification.method === 'notifications/resources/updated') {
+		const uri = notification.params?.['uri']
+		return typeof uri === 'string' && filter.resourceSubscriptions?.includes(uri) === true
+	}
+	if (notification.method === 'notifications/tasks') {
+		return (
+			isMCPTaskNotification(notification) &&
+			filter.taskIds?.includes(notification.params.taskId) === true
+		)
+	}
+	return false
 }
 
 /**

@@ -1329,8 +1329,21 @@ export class MCPServer implements MCPServerInterface {
 		if (options.signal.aborted) slot.abort()
 		else options.signal.addEventListener('abort', () => slot.abort(), { once: true })
 		try {
+			const task = this.#options.task
 			const configured = this.#options.subscription
-			const notifications = buildSubscriptionFilter(requested, configured?.notifications ?? {})
+			const tasks = task !== undefined && configured !== undefined
+			let notifications = buildSubscriptionFilter(requested, configured?.notifications ?? {}, tasks)
+			const requestedTaskIds = notifications.taskIds
+			if (requestedTaskIds !== undefined) {
+				const resolved: string[] = []
+				if (task !== undefined) {
+					for (const taskId of requestedTaskIds) {
+						if ((await task.tasks.task(taskId, options)) !== undefined) resolved.push(taskId)
+					}
+				}
+				const { taskIds: _dropped, ...rest } = notifications
+				notifications = resolved.length > 0 ? { ...rest, taskIds: resolved } : rest
+			}
 			yield buildSubscriptionAcknowledgement(notifications, id)
 			if (configured !== undefined) {
 				const source = await configured.listen(notifications, options)
