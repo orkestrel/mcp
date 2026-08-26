@@ -558,6 +558,8 @@ export const TASK_SCHEMA_NOTIFICATION_ROWS: readonly TaskSchemaRow[] = [
 				properties: {
 					'io.modelcontextprotocol/subscriptionId': {
 						$ref: '#/$defs/RequestId',
+						description:
+							'Identifies the subscription stream a notification was delivered on. The\nserver MUST include this key on every notification delivered via a\n{@link SubscriptionsListenRequestsubscriptions/listen} stream, so the\nclient can correlate the notification with the originating subscription.\nThe key is absent on notifications not delivered via a subscription\nstream (e.g. progress notifications for an in-flight request), which is\nwhy it is optional here.\n\nThe value is the JSON-RPC ID of the `subscriptions/listen` request that\nopened the stream.',
 					},
 				},
 			},
