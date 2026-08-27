@@ -12,6 +12,8 @@ import type {
 	MCPClientInterface,
 	MCPDiscoverResult,
 	MCPDispatchOptions,
+	MCPHeaderParameter,
+	MCPHeaderPrimitive,
 	MCPIdentity,
 	MCPInputRequestMap,
 	MCPJSONLimitOptions,
@@ -42,8 +44,13 @@ import {
 } from '@orkestrel/contract'
 import {
 	DEFAULT_MCP_CACHE_TTL,
+	DEFAULT_MCP_LIMITS,
 	JSONRPC_INVALID_PARAMS,
 	MCP_EXTENSION_TASKS,
+	MCP_HEADER_ANNOTATION,
+	MCP_PARAM_PREFIX,
+	MCP_SENTINEL_PREFIX,
+	MCP_SENTINEL_SUFFIX,
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
 	MCP_META_SERVER,
@@ -57,8 +64,10 @@ import { MCPError } from './errors.js'
 import { parseJSONRPCMessage } from './parsers.js'
 import {
 	isBoundedString,
+	isFieldToken,
 	isJSONRPCId,
 	isJSONRPCNotification,
+	isMCPHeaderPrimitive,
 	isMCPInputResult,
 	isMCPLegacyVersion,
 	isMCPMetaObject,
@@ -1190,7 +1199,9 @@ export function decodeBoundedMessage(
  * Reads the value one standard MCP request header carries, decoding the Base64 sentinel.
  *
  * @remarks
- * The sentinel format is `=?base64?{Base64OfUTF8}?=`, and its markers are LOWERCASE and exact.
+ * The sentinel format is `=?base64?{Base64OfUTF8}?=`, spelled once as
+ * {@link MCP_SENTINEL_PREFIX} and {@link MCP_SENTINEL_SUFFIX} and read from there by both
+ * directions of the codec.
  * The markers alone decide whether a value is a sentinel: a value carrying both is one, and
  * its payload is then held to {@link import('./validators.js').isStandardBase64} — the one
  * canonical-Base64 membership rule this package owns — and to well-formed UTF-8. A malformed
@@ -1218,9 +1229,12 @@ export function decodeBoundedMessage(
  */
 export function decodeSentinel(value: string): string | undefined {
 	const field = value.replace(/^[ \t]+|[ \t]+$/g, '')
-	const marked = /^=\?base64\?([\s\S]*)\?=$/.exec(field)
-	if (marked === null) return field
-	const payload = marked[1]
+	const marked =
+		field.length >= MCP_SENTINEL_PREFIX.length + MCP_SENTINEL_SUFFIX.length &&
+		field.startsWith(MCP_SENTINEL_PREFIX) &&
+		field.endsWith(MCP_SENTINEL_SUFFIX)
+	if (!marked) return field
+	const payload = field.slice(MCP_SENTINEL_PREFIX.length, field.length - MCP_SENTINEL_SUFFIX.length)
 	if (!isStandardBase64(payload)) return undefined
 	const decoded = attempt(() => {
 		const binary = atob(payload)
@@ -1239,7 +1253,8 @@ export function decodeSentinel(value: string): string | undefined {
  * inverse rather than as a second list that could drift: a value travels LITERALLY when it is
  * plain printable ASCII — every code point in `U+0020`–`U+007E`, the RFC 9110 field-value
  * range this package admits — and {@link decodeSentinel} gives it back unchanged. Every other
- * value travels as `=?base64?{Base64OfUTF8}?=`.
+ * value travels wrapped in {@link MCP_SENTINEL_PREFIX} and {@link MCP_SENTINEL_SUFFIX}, the
+ * same markers the decode recognizes a sentinel by.
  *
  * That one rule covers each row of the protocol's encoding table. A non-ASCII value and a
  * value carrying a control character fail the ASCII test. A value with leading or trailing
@@ -1260,7 +1275,246 @@ export function encodeSentinel(value: string): string {
 	if (/^[ -~]*$/.test(value) && decodeSentinel(value) === value) return value
 	let binary = ''
 	for (const byte of new TextEncoder().encode(value)) binary += String.fromCharCode(byte)
-	return `=?base64?${btoa(binary)}?=`
+	return `${MCP_SENTINEL_PREFIX}${btoa(binary)}${MCP_SENTINEL_SUFFIX}`
+}
+
+/**
+ * Counts every {@link MCP_HEADER_ANNOTATION} key one JSON value carries, at any position.
+ *
+ * @remarks
+ * The companion of {@link extractHeaderAnnotations}, which reads only the annotations a
+ * `properties` chain reaches. Comparing the two answers is how
+ * {@link buildHeaderParameters} decides reachability without a second walk that would have
+ * to re-state which JSON Schema keywords are traversable: an annotation the reachable walk
+ * did not read is one sitting under `items`, a composition or conditional keyword, a `$ref`
+ * target, or any other position, and the protocol makes the whole tool definition invalid for
+ * it.
+ *
+ * Iterative and ancestor-tracked, so a deeply nested or self-referential value terminates
+ * rather than exhausting the stack. Total — never throws, whatever the input.
+ *
+ * @param value - The value to scan, normally a tool's `inputSchema`
+ * @returns How many annotation keys the value carries
+ *
+ * @example
+ * ```ts
+ * countHeaderAnnotations({ properties: { region: { 'x-mcp-header': 'Region' } } }) // 1
+ * ```
+ */
+export function countHeaderAnnotations(value: unknown): number {
+	let total = 0
+	const seen = new Set<object>()
+	const pending: unknown[] = [value]
+	while (pending.length > 0) {
+		const node = pending.pop()
+		if (isArray(node)) {
+			if (seen.has(node)) continue
+			seen.add(node)
+			for (const item of node) pending.push(item)
+			continue
+		}
+		if (!isRecord(node) || seen.has(node)) continue
+		seen.add(node)
+		for (const [key, member] of Object.entries(node)) {
+			if (key === MCP_HEADER_ANNOTATION) total += 1
+			else pending.push(member)
+		}
+	}
+	return total
+}
+
+/**
+ * Reads every `x-mcp-header` annotation reachable from a schema node through `properties`.
+ *
+ * @remarks
+ * Reachability is the protocol's own rule: an annotation counts only where a chain of
+ * `properties` keys leads to it from the `inputSchema` root, so `path` is both the schema
+ * position and the position the call's `arguments` carry the value at. A property named
+ * `items` is reachable like any other, because the chain is read by key POSITION rather than
+ * by key name.
+ *
+ * `undefined` means the definition is invalid rather than empty: a reachable annotation whose
+ * value is not an {@link import('./validators.js').isFieldToken} token, one sitting on the
+ * schema ROOT (which is no property), one on a leaf whose declared type is not an
+ * {@link import('./validators.js').isMCPHeaderPrimitive} primitive, or a chain deeper than
+ * `DEFAULT_MCP_LIMITS.depth` — which is also what makes a self-referential schema terminate.
+ * A node that is not a record carries nothing and answers an empty list, because a leaf the
+ * walk cannot read is not a violation.
+ *
+ * @param schema - The schema node to read
+ * @param path - The `properties` keys already traversed; the root is called with `[]`
+ * @returns The annotations reachable from this node, or `undefined` when one is invalid
+ *
+ * @example
+ * ```ts
+ * extractHeaderAnnotations({ properties: { region: { type: 'string', 'x-mcp-header': 'Region' } } }, [])
+ * // → [{ name: 'Region', path: ['region'], primitive: 'string' }]
+ * ```
+ */
+export function extractHeaderAnnotations(
+	schema: unknown,
+	path: readonly string[],
+): readonly MCPHeaderParameter[] | undefined {
+	if (path.length > DEFAULT_MCP_LIMITS.depth) return undefined
+	if (!isRecord(schema)) return []
+	const found: MCPHeaderParameter[] = []
+	const annotation = schema[MCP_HEADER_ANNOTATION]
+	if (annotation !== undefined) {
+		if (path.length === 0 || !isFieldToken(annotation)) return undefined
+		const primitive = schema['type']
+		if (!isMCPHeaderPrimitive(primitive)) return undefined
+		found.push({ name: annotation, path, primitive })
+	}
+	const properties = schema['properties']
+	if (isRecord(properties)) {
+		for (const [key, leaf] of Object.entries(properties)) {
+			const nested = extractHeaderAnnotations(leaf, [...path, key])
+			if (nested === undefined) return undefined
+			found.push(...nested)
+		}
+	}
+	return found
+}
+
+/**
+ * Builds the `x-mcp-header` projections one tool's `inputSchema` declares.
+ *
+ * @remarks
+ * The single decision both sides of the protocol make about an annotated tool: an HTTP
+ * CLIENT excludes a definition this refuses from the `tools/list` result it delivers, and a
+ * SERVER recognizes exactly the `Mcp-Param-*` names this returns for its own definitions.
+ *
+ * `undefined` means the definition is invalid, and every rule the protocol states produces
+ * it: a value that is not an RFC 9110 token, a non-primitive or untyped annotated leaf, a
+ * name repeated case-insensitively within the schema, an annotation the `properties` chain
+ * does not reach, and a schema that is not a record at all. An empty list is the valid answer
+ * for a schema carrying no annotation.
+ *
+ * Total — never throws, and a cyclic or stack-hostile schema is refused rather than followed.
+ *
+ * @param schema - The tool's advertised `inputSchema`
+ * @returns The declared projections, or `undefined` when the definition is invalid
+ *
+ * @example
+ * ```ts
+ * buildHeaderParameters({
+ * 	type: 'object',
+ * 	properties: { region: { type: 'string', 'x-mcp-header': 'Region' } },
+ * }) // → [{ name: 'Region', path: ['region'], primitive: 'string' }]
+ * ```
+ */
+export function buildHeaderParameters(schema: unknown): readonly MCPHeaderParameter[] | undefined {
+	if (!isRecord(schema)) return undefined
+	const found = extractHeaderAnnotations(schema, [])
+	if (found === undefined || found.length !== countHeaderAnnotations(schema)) return undefined
+	const taken = new Set<string>()
+	for (const parameter of found) {
+		const key = parameter.name.toLowerCase()
+		if (taken.has(key)) return undefined
+		taken.add(key)
+	}
+	return found
+}
+
+/**
+ * Renders one projected argument as the text its `Mcp-Param-*` header carries.
+ *
+ * @remarks
+ * The protocol's conversion table, and the ONE place it is stated: a string travels as
+ * itself, an integer in decimal, and a boolean as lowercase `true` or `false`. The value's
+ * runtime shape must match the leaf's declared type, so a schema that declares `integer` and
+ * an argument that supplies a string, a fraction, or a magnitude outside the IEEE 754 safe
+ * range carries NOTHING — a header that cannot round-trip the body value is worse than an
+ * absent one, and the tool's own argument validation owns the disagreement.
+ *
+ * @param value - The argument value read at the parameter's path
+ * @param primitive - The leaf's declared type
+ * @returns The header text, or `undefined` when the value cannot travel as that type
+ *
+ * @example
+ * ```ts
+ * renderHeaderValue(42, 'integer') // '42'
+ * renderHeaderValue(false, 'boolean') // 'false'
+ * ```
+ */
+export function renderHeaderValue(
+	value: unknown,
+	primitive: MCPHeaderPrimitive,
+): string | undefined {
+	if (primitive === 'string') return isString(value) ? value : undefined
+	if (primitive === 'boolean') return isBoolean(value) ? (value ? 'true' : 'false') : undefined
+	return isNumber(value) && Number.isSafeInteger(value) ? String(value) : undefined
+}
+
+/**
+ * Builds the `Mcp-Param-*` request headers one `tools/call` carries.
+ *
+ * @remarks
+ * The projection SEP-2243 requires of an HTTP client, and the same derivation a server runs
+ * to know what the request should have carried. Each parameter's value is read at its exact
+ * property path in the call's own `arguments`; an absent or `null` value omits its header
+ * entirely, which is the protocol's distinction between "not supplied" and "supplied empty".
+ * The rendered text then travels through {@link encodeSentinel}, so a value carrying
+ * non-ASCII, control, or edge whitespace characters reaches the peer intact.
+ *
+ * @param parameters - The projections the tool's `inputSchema` declares
+ * @param values - The call's `arguments` record
+ * @returns The header field names and values, empty when nothing projects
+ *
+ * @example
+ * ```ts
+ * buildHeaderProjection(
+ * 	[{ name: 'Region', path: ['region'], primitive: 'string' }],
+ * 	{ region: 'us-west1' },
+ * ) // → { 'Mcp-Param-Region': 'us-west1' }
+ * ```
+ */
+export function buildHeaderProjection(
+	parameters: readonly MCPHeaderParameter[],
+	values: unknown,
+): Readonly<Record<string, string>> {
+	const headers: Record<string, string> = {}
+	for (const parameter of parameters) {
+		let carried: unknown = values
+		for (const key of parameter.path) carried = isRecord(carried) ? carried[key] : undefined
+		if (carried === undefined || carried === null) continue
+		const text = renderHeaderValue(carried, parameter.primitive)
+		if (text !== undefined) headers[`${MCP_PARAM_PREFIX}${parameter.name}`] = encodeSentinel(text)
+	}
+	return headers
+}
+
+/**
+ * Reads one named tool's advertised `inputSchema` out of a `tools/list` answer.
+ *
+ * @remarks
+ * The answer is read as foreign data end to end — a dispatched response, an error envelope,
+ * and a result whose `tools` member is absent or is not an array all read as "no schema"
+ * rather than as a fault. That is what lets the HTTP POST handler ask its own dispatcher
+ * which `Mcp-Param-*` names a `tools/call` may carry without narrowing anything first.
+ *
+ * @param response - The `tools/list` answer, normally a {@link JSONRPCResponse}
+ * @param name - The tool whose schema to read
+ * @returns The advertised `inputSchema`, or `undefined` when the answer carries none
+ *
+ * @example
+ * ```ts
+ * extractToolSchema(answer, 'search')?.['properties']
+ * ```
+ */
+export function extractToolSchema(
+	response: unknown,
+	name: string,
+): Readonly<Record<string, unknown>> | undefined {
+	const result = isRecord(response) ? response['result'] : undefined
+	const tools = isRecord(result) ? result['tools'] : undefined
+	if (!isArray(tools)) return undefined
+	for (const tool of tools) {
+		if (!isRecord(tool) || tool['name'] !== name) continue
+		const schema = tool['inputSchema']
+		return isRecord(schema) ? schema : undefined
+	}
+	return undefined
 }
 
 /**

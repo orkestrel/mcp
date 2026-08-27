@@ -562,3 +562,180 @@ describe('HTTPClientTransport — close is idempotent', () => {
 		expect(closed).toBe(1)
 	})
 })
+
+// SEP-2243's `x-mcp-header` contract on the Node face: what a `tools/list` reply delivers
+// after the transport has read it, and what a later `tools/call` carries because of it. The
+// peer is a boundary stub for `fetch` alone — it answers with a REAL `Response` carrying the
+// exact JSON a foreign 2026-07-28 server sends, and the transport under test is the real one.
+// The browser face pins the same rows in tests/src/browser/transports/HTTPClientTransport.test.ts.
+
+const ANNOTATED_TOOLS = {
+	jsonrpc: '2.0',
+	id: 1,
+	result: {
+		resultType: 'complete',
+		ttlMs: 0,
+		cacheScope: 'private',
+		tools: [
+			{
+				name: 'valid_tool',
+				inputSchema: {
+					type: 'object',
+					properties: {
+						region: { type: 'string', 'x-mcp-header': 'Region' },
+						priority: { type: 'integer', 'x-mcp-header': 'Priority' },
+						verbose: { type: 'boolean', 'x-mcp-header': 'Verbose' },
+						query: { type: 'string' },
+					},
+				},
+			},
+			{
+				name: 'invalid_space_in_name',
+				inputSchema: {
+					type: 'object',
+					properties: { value: { type: 'string', 'x-mcp-header': 'My Region' } },
+				},
+			},
+			{
+				name: 'plain_tool',
+				inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
+			},
+		],
+	},
+}
+
+const CALL_METADATA = { [MCP_META_VERSION]: '2026-07-28', [MCP_META_CAPABILITIES]: {} }
+
+describe('HTTPClientTransport — the x-mcp-header contract', () => {
+	it('excludes an invalidly annotated tool from the tools/list result it delivers', async () => {
+		const messages: JSONRPCMessage[] = []
+		const faults: unknown[] = []
+		const transport = createHTTPClientTransport({
+			url: 'http://localhost/mcp',
+			fetch: () => Promise.resolve(Response.json(ANNOTATED_TOOLS)),
+		})
+		transport.emitter.on('message', (message) => messages.push(message))
+		transport.emitter.on('error', (error) => faults.push(error))
+
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/list',
+			params: { _meta: CALL_METADATA },
+		})
+
+		const delivered = messages[0]
+		if (delivered === undefined || !('result' in delivered) || !isRecord(delivered.result)) {
+			throw new Error('the transport delivered no tools/list result')
+		}
+		const tools = delivered.result['tools']
+		if (!Array.isArray(tools)) throw new Error('the delivered result carries no tool array')
+		expect(tools.map((tool) => (isRecord(tool) ? tool['name'] : undefined))).toEqual([
+			'valid_tool',
+			'plain_tool',
+		])
+		// The rest of the result travels through untouched.
+		expect(delivered.result['resultType']).toBe('complete')
+		expect(delivered.result['cacheScope']).toBe('private')
+		expect(faults).toHaveLength(1)
+		expect(String(faults[0])).toContain('invalid_space_in_name')
+	})
+
+	it('projects the annotated arguments of a listed tool into Mcp-Param headers', async () => {
+		const headers: Headers[] = []
+		const transport = createHTTPClientTransport({
+			url: 'http://localhost/mcp',
+			fetch: (_input, init) => {
+				headers.push(new Headers(init?.headers))
+				return Promise.resolve(Response.json(ANNOTATED_TOOLS))
+			},
+		})
+
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/list',
+			params: { _meta: CALL_METADATA },
+		})
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 2,
+			method: 'tools/call',
+			params: {
+				name: 'valid_tool',
+				arguments: { region: 'us west 1', priority: 42, verbose: false, query: 'SELECT 1' },
+				_meta: CALL_METADATA,
+			},
+		})
+
+		const listed = headers[0]
+		const called = headers[1]
+		if (listed === undefined || called === undefined) {
+			throw new Error('the transport issued no request')
+		}
+		// `tools/list` itself projects nothing — the annotations describe a call's arguments.
+		expect(listed.get('mcp-param-region')).toBeNull()
+		expect(called.get('mcp-param-region')).toBe('us west 1')
+		expect(called.get('mcp-param-priority')).toBe('42')
+		expect(called.get('mcp-param-verbose')).toBe('false')
+		// `query` carries no annotation, so it travels in the body alone.
+		expect(called.get('mcp-param-query')).toBeNull()
+	})
+
+	it('omits the header of a null argument and encodes one a field cannot carry plainly', async () => {
+		const headers: Headers[] = []
+		const transport = createHTTPClientTransport({
+			url: 'http://localhost/mcp',
+			fetch: (_input, init) => {
+				headers.push(new Headers(init?.headers))
+				return Promise.resolve(Response.json(ANNOTATED_TOOLS))
+			},
+		})
+
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/list',
+			params: { _meta: CALL_METADATA },
+		})
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 2,
+			method: 'tools/call',
+			params: {
+				name: 'valid_tool',
+				arguments: { region: 'Hello, 世界', priority: 1, verbose: null },
+				_meta: CALL_METADATA,
+			},
+		})
+
+		const called = headers[1]
+		if (called === undefined) throw new Error('the transport issued no call')
+		expect(called.get('mcp-param-region')).toBe('=?base64?SGVsbG8sIOS4lueVjA==?=')
+		expect(called.get('mcp-param-priority')).toBe('1')
+		expect(called.get('mcp-param-verbose')).toBeNull()
+	})
+
+	it('projects nothing for a tool it never carried a listing for', async () => {
+		const headers: Headers[] = []
+		const transport = createHTTPClientTransport({
+			url: 'http://localhost/mcp',
+			fetch: (_input, init) => {
+				headers.push(new Headers(init?.headers))
+				return Promise.resolve(new Response(null, { status: 202 }))
+			},
+		})
+
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/call',
+			params: { name: 'valid_tool', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+		})
+
+		const called = headers[0]
+		if (called === undefined) throw new Error('the transport issued no call')
+		expect(called.get('mcp-name')).toBe('valid_tool')
+		expect(called.get('mcp-param-region')).toBeNull()
+	})
+})

@@ -1,5 +1,6 @@
 import type { JSONRPCMessage } from '@src/core'
 import { describe, expect, it } from 'vitest'
+import { isRecord } from '@orkestrel/contract'
 import { HTTPClientTransport } from '@src/browser'
 import { waitForDelay } from '@orkestrel/test'
 
@@ -140,5 +141,137 @@ describe('HTTPClientTransport — close is idempotent', () => {
 		await transport.close()
 
 		expect(closed).toBe(1)
+	})
+})
+
+// The browser half of SEP-2243's `x-mcp-header` contract. The Node face asserts the same rows
+// in tests/src/server/transports/HTTPClientTransport.test.ts, and the sentinel wire form is
+// written out literally rather than re-derived, so a row cannot agree with a broken encoder.
+
+const ANNOTATED_TOOLS = {
+	jsonrpc: '2.0',
+	id: 1,
+	result: {
+		resultType: 'complete',
+		ttlMs: 0,
+		cacheScope: 'private',
+		tools: [
+			{
+				name: 'valid_tool',
+				inputSchema: {
+					type: 'object',
+					properties: {
+						region: { type: 'string', 'x-mcp-header': 'Region' },
+						priority: { type: 'integer', 'x-mcp-header': 'Priority' },
+						verbose: { type: 'boolean', 'x-mcp-header': 'Verbose' },
+						query: { type: 'string' },
+					},
+				},
+			},
+			{
+				name: 'invalid_duplicate_diff_case',
+				inputSchema: {
+					type: 'object',
+					properties: {
+						field1: { type: 'string', 'x-mcp-header': 'MyField' },
+						field2: { type: 'string', 'x-mcp-header': 'myfield' },
+					},
+				},
+			},
+		],
+	},
+}
+
+const CALL_METADATA = {
+	'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+	'io.modelcontextprotocol/clientCapabilities': {},
+}
+
+describe('HTTPClientTransport — the x-mcp-header contract', () => {
+	it('excludes an invalidly annotated tool and reports the exclusion on error', async () => {
+		const messages: JSONRPCMessage[] = []
+		const faults: unknown[] = []
+		const transport = new HTTPClientTransport({
+			url: 'http://127.0.0.1:1/mcp',
+			fetch: () => Promise.resolve(Response.json(ANNOTATED_TOOLS)),
+		})
+		transport.emitter.on('message', (message) => messages.push(message))
+		transport.emitter.on('error', (error) => faults.push(error))
+
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/list',
+			params: { _meta: CALL_METADATA },
+		})
+
+		const delivered = messages[0]
+		if (delivered === undefined || !('result' in delivered) || !isRecord(delivered.result)) {
+			throw new Error('the transport delivered no tools/list result')
+		}
+		const tools = delivered.result['tools']
+		if (!Array.isArray(tools)) throw new Error('the delivered result carries no tool array')
+		expect(tools.map((tool) => (isRecord(tool) ? tool['name'] : undefined))).toEqual(['valid_tool'])
+		expect(delivered.result['resultType']).toBe('complete')
+		expect(faults).toHaveLength(1)
+		expect(String(faults[0])).toContain('invalid_duplicate_diff_case')
+	})
+
+	it('projects a listed tool arguments into encoded Mcp-Param headers, omitting a null', async () => {
+		const headers: Headers[] = []
+		const transport = new HTTPClientTransport({
+			url: 'http://127.0.0.1:1/mcp',
+			fetch: (_input, init) => {
+				headers.push(new Headers(init?.headers))
+				return Promise.resolve(Response.json(ANNOTATED_TOOLS))
+			},
+		})
+
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/list',
+			params: { _meta: CALL_METADATA },
+		})
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 2,
+			method: 'tools/call',
+			params: {
+				name: 'valid_tool',
+				arguments: { region: ' padded ', priority: 42, verbose: null, query: 'SELECT 1' },
+				_meta: CALL_METADATA,
+			},
+		})
+
+		const called = headers[1]
+		if (called === undefined) throw new Error('the transport issued no call')
+		expect(called.get('mcp-param-region')).toBe('=?base64?IHBhZGRlZCA=?=')
+		expect(called.get('mcp-param-priority')).toBe('42')
+		expect(called.get('mcp-param-verbose')).toBeNull()
+		expect(called.get('mcp-param-query')).toBeNull()
+	})
+
+	it('projects nothing for a tool it never carried a listing for', async () => {
+		const headers: Headers[] = []
+		const transport = new HTTPClientTransport({
+			url: 'http://127.0.0.1:1/mcp',
+			fetch: (_input, init) => {
+				headers.push(new Headers(init?.headers))
+				return Promise.resolve(new Response(null, { status: 202 }))
+			},
+		})
+
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/call',
+			params: { name: 'valid_tool', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+		})
+
+		const called = headers[0]
+		if (called === undefined) throw new Error('the transport issued no call')
+		expect(called.get('mcp-name')).toBe('valid_tool')
+		expect(called.get('mcp-param-region')).toBeNull()
 	})
 })

@@ -21,7 +21,7 @@ import {
 	MCP_FALLBACK_VERSION,
 	MCP_HANDSHAKE_VERSION,
 } from '@src/core'
-import { createToolManager } from '@orkestrel/tool'
+import { createTool, createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import { createTeardown } from '@orkestrel/test'
@@ -982,5 +982,180 @@ describe('createMCPPostHandler', () => {
 		expect(malformed.status).toBe(403)
 		expect(admitted.status).toBe(200)
 		expect(delegatedResponse.status).toBe(200)
+	})
+})
+
+// SEP-2243's `Mcp-Param-*` server half, proven AT THE WIRE through the shipped POST handler
+// over a real MCPServer and a real ToolManager. The annotated tool lives here rather than in
+// `tests/setup.ts` because no other suite drives an annotated definition.
+
+function createAnnotatedServer(): MCPServerInterface {
+	const tools = createToolManager()
+	tools.add(
+		createTool({
+			name: 'route',
+			description: 'Echo the routed arguments back to the caller.',
+			parameters: {
+				type: 'object',
+				properties: {
+					value: { type: 'string', 'x-mcp-header': 'value' },
+					count: { type: 'integer', 'x-mcp-header': 'Count' },
+					note: { type: 'string' },
+				},
+			},
+			execute: (values) => values,
+		}),
+	)
+	return createMCPServer({ identity: { name: 'router', version: '1.0.0' }, tools })
+}
+
+async function callAnnotated(
+	name: string,
+	headers: Readonly<Record<string, string>>,
+	args: Readonly<Record<string, unknown>>,
+): Promise<Response> {
+	const handler = createMCPPostHandler(createAnnotatedServer(), { streaming: false })
+	return await handler(
+		new Request('http://localhost/mcp', {
+			method: 'POST',
+			headers: {
+				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+				[MCP_METHOD_HEADER]: 'tools/call',
+				[MCP_NAME_HEADER]: name,
+				...headers,
+			},
+			body: JSON.stringify(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					params: {
+						name,
+						arguments: args,
+						_meta: {
+							[MCP_META_VERSION]: MCP_MODERN_VERSION,
+							[MCP_META_CAPABILITIES]: {},
+						},
+					},
+				}),
+			),
+		}),
+	)
+}
+
+describe('createMCPPostHandler — Mcp-Param headers validated against the request body', () => {
+	it.each([
+		{
+			branch: 'decodes a well-formed sentinel and matches the body',
+			headers: { 'Mcp-Param-value': '=?base64?SGVsbG8=?=' },
+			args: { value: 'Hello' },
+		},
+		{
+			branch: 'treats a value missing the opening marker as literal',
+			headers: { 'Mcp-Param-value': 'SGVsbG8=' },
+			args: { value: 'SGVsbG8=' },
+		},
+		{
+			branch: 'treats a value missing the closing marker as literal',
+			headers: { 'Mcp-Param-value': '=?base64?SGVsbG8=' },
+			args: { value: '=?base64?SGVsbG8=' },
+		},
+		{
+			branch: 'excludes optional whitespace around a literal field value',
+			headers: { 'Mcp-Param-value': '  Hello  ' },
+			args: { value: 'Hello' },
+		},
+		{
+			branch: 'compares an integer numerically rather than textually',
+			headers: { 'Mcp-Param-Count': '007' },
+			args: { count: 7 },
+		},
+		{
+			branch: 'ignores a Mcp-Param header no served definition annotates',
+			headers: { 'Mcp-Param-Unknown': 'anything' },
+			args: { note: 'free text' },
+		},
+		{
+			branch: 'requires no header for an argument the schema leaves unannotated',
+			headers: {},
+			args: { note: 'free text' },
+		},
+		{
+			branch: 'requires no header for an annotated argument the call omits',
+			headers: {},
+			args: {},
+		},
+	])('$branch', async (test) => {
+		const response = await callAnnotated('route', test.headers, test.args)
+		const body = await response.json()
+
+		expect(response.status).toBe(200)
+		expect(body.error).toBeUndefined()
+	})
+
+	it.each([
+		{
+			branch: 'refuses a sentinel whose payload has invalid padding',
+			headers: { 'Mcp-Param-value': '=?base64?SGVsbG8?=' },
+			args: { value: 'Hello' },
+			message: 'Mcp-Param-value header value is not a valid Base64 sentinel.',
+		},
+		{
+			branch: 'refuses a sentinel whose payload has non-alphabet characters',
+			headers: { 'Mcp-Param-value': '=?base64?SGVs!!!bG8=?=' },
+			args: { value: 'Hello' },
+			message: 'Mcp-Param-value header value is not a valid Base64 sentinel.',
+		},
+		{
+			branch: 'refuses a header the request omits while the body carries its value',
+			headers: {},
+			args: { value: 'test-value' },
+			message: "Required Mcp-Param-value header is missing; the request body carries 'value'.",
+		},
+		{
+			branch: 'refuses a decoded value that disagrees with the body',
+			headers: { 'Mcp-Param-value': 'client-supplied-value' },
+			args: { value: 'Hello' },
+			message: "Mcp-Param-value header does not match the request body value at 'value'.",
+		},
+		{
+			branch: 'refuses an integer header naming a different number',
+			headers: { 'Mcp-Param-Count': '8' },
+			args: { count: 7 },
+			message: "Mcp-Param-Count header does not match the request body value at 'count'.",
+		},
+		{
+			branch: 'refuses an integer header carrying no number at all',
+			headers: { 'Mcp-Param-Count': '  ' },
+			args: { count: 7 },
+			message: "Mcp-Param-Count header does not match the request body value at 'count'.",
+		},
+		{
+			branch: 'refuses a header carrying a value the body never supplied',
+			headers: { 'Mcp-Param-value': 'client-supplied-value' },
+			args: { note: 'free text' },
+			message: "Mcp-Param-value header carries a value the request body omits at 'value'.",
+		},
+	])('$branch with HTTP 400, -32020, and no echoed header value', async (test) => {
+		const response = await callAnnotated('route', test.headers, test.args)
+		const body = await response.json()
+
+		expect(response.status).toBe(400)
+		expect(body.error).toEqual({ code: -32020, message: test.message })
+		expect(body.error).not.toHaveProperty('data')
+		expect(test.message).not.toContain('client-supplied-value')
+	})
+
+	it('recognizes no parameter for a tool this server serves no definition for', async () => {
+		const response = await callAnnotated(
+			'absent',
+			{ 'Mcp-Param-value': 'anything' },
+			{
+				value: 'Hello',
+			},
+		)
+		const body = await response.json()
+
+		// Nothing is recognized, so nothing is validated: the refusal comes from the registry
+		// rather than from the header seam.
+		expect(body.error?.code).not.toBe(-32020)
 	})
 })

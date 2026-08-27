@@ -1154,6 +1154,34 @@ export interface MCPToolDescriptor {
 	readonly inputSchema: Readonly<Record<string, unknown>>
 }
 
+/**
+ * The JSON Schema types an `x-mcp-header` annotation may sit on.
+ *
+ * @remarks
+ * The protocol admits primitives alone, and it splits the JSON Schema number tower: `integer`
+ * carries a decimal rendering an HTTP field can hold exactly, while `number` has no
+ * interoperable text form and is refused. `object`, `array`, and `null` are refused for the
+ * same reason — a header field carries text, not structure.
+ */
+export type MCPHeaderPrimitive = 'boolean' | 'integer' | 'string'
+
+/**
+ * One `x-mcp-header` projection a tool's `inputSchema` declares.
+ *
+ * @remarks
+ * - `name` — the annotation's own value, appended verbatim to {@link MCP_PARAM_PREFIX} to
+ *   form the request field name.
+ * - `path` — the `properties` keys leading from the `inputSchema` root to the annotated
+ *   leaf, which is also the path the call's `arguments` carry the value at.
+ * - `primitive` — the leaf's declared type, which fixes the value's text rendering and, for
+ *   `integer`, makes the server's comparison numeric rather than textual.
+ */
+export interface MCPHeaderParameter {
+	readonly name: string
+	readonly path: readonly string[]
+	readonly primitive: MCPHeaderPrimitive
+}
+
 /** Shared cursor parameters for every paginated modern list method. */
 export interface MCPPaginationParams {
 	/** Opaque cursor returned by the preceding page. */

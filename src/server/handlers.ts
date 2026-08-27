@@ -1,4 +1,4 @@
-import type { MCPDispatcherInterface } from '@src/core'
+import type { MCPDispatcherInterface, MCPHeaderParameter } from '@src/core'
 import type { RouteContext } from '@orkestrel/router'
 import type { HTTPHandlerOptions } from './types.js'
 import {
@@ -8,13 +8,16 @@ import {
 	MCP_HEADER_MISMATCH,
 	MCP_UNSUPPORTED_VERSION,
 	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
+	buildHeaderParameters,
 	buildJSONRPCError,
+	extractToolSchema,
 	isMCPLegacyVersion,
 	isMCPModernVersion,
 	isModernRequest,
 	parseRequestContext,
 	parseJSONRPCMessage,
 } from '@src/core'
+import { isString } from '@orkestrel/contract'
 import { openStream } from '@orkestrel/server'
 import {
 	MCP_PROTOCOL_VERSION_HEADER,
@@ -22,7 +25,7 @@ import {
 	SSE_BUFFERING_HEADER,
 } from './constants.js'
 import { acceptsEventStream, allowsOrigin, sendEventStream } from './helpers.js'
-import { inferHeaderIssue, inferStatus } from './inferers.js'
+import { inferHeaderIssue, inferParameterRefusal, inferStatus } from './inferers.js'
 import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
 
 /**
@@ -122,6 +125,34 @@ export function createMCPPostHandler<TState = unknown>(
 			return Response.json(buildJSONRPCError(id, MCP_HEADER_MISMATCH, issue.message), {
 				status: 400,
 			})
+		}
+		// The custom-header half of the same seam. SEP-2243 scopes `Mcp-Param-*` validation to
+		// the names THIS server's own tool definitions annotate, and the served definitions are
+		// reachable through exactly one door the transport-agnostic dispatcher publishes: a
+		// `tools/list` dispatch. It is taken fresh on each modern `tools/call` rather than
+		// cached, because a table a client happened to fetch earlier is the table a header forger
+		// would rather the server used, and because a registry a consumer mutates would leave a
+		// cached table silently wrong. A held-open answer is released and read as no definition,
+		// so a consumer that replaced `tools/list` with a stream refuses nothing.
+		const called = invocation.params?.['name']
+		if (era === 'modern' && invocation.method === 'tools/call' && isString(called)) {
+			const answer = await mcp.dispatch({
+				jsonrpc: '2.0',
+				// The id never leaves this handler: nothing correlates against it, and the answer is
+				// read here and discarded.
+				id: 0,
+				method: 'tools/list',
+				params: { _meta: invocation.params?.['_meta'] },
+			})
+			let parameters: readonly MCPHeaderParameter[] = []
+			if (Symbol.asyncIterator in answer) answer.stop()
+			else parameters = buildHeaderParameters(extractToolSchema(answer, called)) ?? []
+			const refusal = inferParameterRefusal(request, parameters, invocation.params?.['arguments'])
+			if (refusal !== undefined) {
+				return Response.json(buildJSONRPCError(id, MCP_HEADER_MISMATCH, refusal), {
+					status: 400,
+				})
+			}
 		}
 		if (era === 'legacy') {
 			if (protocol !== null && !isMCPLegacyVersion(protocol)) {

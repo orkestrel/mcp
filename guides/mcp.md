@@ -195,6 +195,44 @@ call, so no request needing the other two targets can leave through it. A consum
 either method over its own transport stamps the header itself, through `encodeSentinel`.
 The server validates all three.
 
+**A tool parameter can name its own header.** A property schema inside a tool's
+`inputSchema` carries `x-mcp-header: 'Region'`, and a `tools/call` supplying that argument
+carries it again as the `Mcp-Param-Region` request header. The annotation lets a gateway
+route or authorize on the value without parsing the body, which is why the server must
+check that the two agree. `buildHeaderParameters` reads the annotations one `inputSchema`
+declares, `buildHeaderProjection` turns them plus a call's `arguments` into the headers,
+and both sides of the protocol run the same pair.
+
+The annotation is valid only under all of these:
+
+- its value is a non-empty RFC 9110 token — `isFieldToken` — so no space, colon, control
+  character, or non-ASCII code point;
+- its values are unique case-insensitively within the one `inputSchema`, because HTTP
+  field names are case-insensitive;
+- it sits on a `string`, `integer`, or `boolean` leaf. `number` is refused, because a JSON
+  number has no interoperable decimal text form to compare against;
+- that leaf is statically reachable from the `inputSchema` root through `properties` keys
+  alone — never through `items`, a composition or conditional keyword, or a `$ref` target.
+
+An annotation breaking any of them makes the whole TOOL DEFINITION invalid, and the two
+sides answer that differently. An HTTP **client** excludes the tool from the `tools/list`
+result it delivers and reports the exclusion on its transport `error` event naming the
+tool; a valid sibling in the same listing survives. A **server** recognizes no
+`Mcp-Param-*` name from an invalid definition, so it validates nothing for it.
+
+The value's text is fixed: a string travels as itself, an integer in decimal, a boolean as
+lowercase `true` or `false`, and the result then rides through the same `encodeSentinel`
+sentinel a standard header uses. An argument the call omits or supplies as `null` carries
+NO header at all — that is the protocol's distinction between "not supplied" and "supplied
+empty", and an empty string still travels as an empty header value.
+
+The server refuses HTTP `400` + `-32020` when a recognized `Mcp-Param-*` header is absent
+while the body supplies its value, when its payload is not a valid Base64 sentinel, when
+the decoded value disagrees with the body, or when it asserts a value the body omits. An
+`integer` parameter compares numerically, so a peer that padded its decimal still matches.
+A `Mcp-Param-*` name no served definition annotates is another party's header and travels
+through untouched.
+
 **A headerless legacy POST has exactly these cases.** The library infers no revision
 from an absent header. Defaulting one is licensed only for a server that still serves
 pre-`2025-06-18` clients, and this package does not:
@@ -2062,6 +2100,10 @@ Passing a legacy revision to
 | `MCP_META_SERVER`                    | const | `'io.modelcontextprotocol/serverInfo'` — reserved server-identity metadata key.                                      |
 | `MCP_META_SUBSCRIPTION`              | const | `'io.modelcontextprotocol/subscriptionId'` — reserved subscription-id metadata key.                                  |
 | `MCP_EXTENSION_TASKS`                | const | `'io.modelcontextprotocol/tasks'` — the stable Tasks extension id, dated 2026-07-28 and advertised by presence.      |
+| `MCP_SENTINEL_PREFIX`                | const | `'=?base64?'` — the sentinel's opening marker, and the one spelling both codec directions read.                      |
+| `MCP_SENTINEL_SUFFIX`                | const | `'?='` — the sentinel's closing marker.                                                                              |
+| `MCP_PARAM_PREFIX`                   | const | `'Mcp-Param-'` — the field-name prefix an `x-mcp-header` annotation projects a tool argument onto.                   |
+| `MCP_HEADER_ANNOTATION`              | const | `'x-mcp-header'` — the tool-schema key naming the header one parameter projects into.                                |
 | `MCP_HEADER_MISMATCH`                | const | `-32020` — required HTTP metadata does not match the request body.                                                   |
 | `MCP_MISSING_CAPABILITY`             | const | `-32021` — the GENERIC undeclared-client-capability code; `data.requiredCapabilities` names which one.               |
 | `MCP_UNSUPPORTED_VERSION`            | const | `-32022` — the request names an unsupported protocol revision.                                                       |
@@ -2199,6 +2241,14 @@ Passing a legacy revision to
 | `readCancelledId`                  | function | Read the request id an inbound `notifications/cancelled` names — the inverse of `buildCancelledNotification`; total.                                                                                                          |
 | `decodeSentinel`                   | function | Read the value a standard MCP request header carries, decoding `=?base64?{Base64OfUTF8}?=` and refusing an invalid payload rather than reading it as a literal; total.                                                        |
 | `encodeSentinel`                   | function | Build the wire form a standard MCP request header value must travel as — literal when plain printable ASCII survives the round trip, the Base64 sentinel otherwise.                                                           |
+| `isFieldToken`                     | function | Total guard for one RFC 9110 field token — the whole constraint an `x-mcp-header` annotation value must satisfy.                                                                                                              |
+| `isMCPHeaderPrimitive`             | function | Total guard for the schema types an `x-mcp-header` annotation may sit on: `string`, `integer`, `boolean`; `number` is refused.                                                                                                |
+| `countHeaderAnnotations`           | function | Count every `x-mcp-header` key a value carries at any position; iterative and ancestor-tracked, so a cyclic value terminates. Total.                                                                                          |
+| `extractHeaderAnnotations`         | function | Read the annotations a `properties` chain reaches from a schema node, or `undefined` when a reachable one violates its own constraints.                                                                                       |
+| `buildHeaderParameters`            | function | Build the `x-mcp-header` projections one tool `inputSchema` declares, or `undefined` when the definition is invalid — the one decision both sides of SEP-2243 make. Total.                                                    |
+| `renderHeaderValue`                | function | Render one projected argument as its header text: a string as itself, an integer in decimal, a boolean lowercase; `undefined` when the value contradicts the declared type.                                                   |
+| `buildHeaderProjection`            | function | Build the `Mcp-Param-*` headers one `tools/call` carries, reading each value at its own property path, omitting an absent or `null` one, and encoding through `encodeSentinel`.                                               |
+| `extractToolSchema`                | function | Read one named tool's advertised `inputSchema` out of a `tools/list` answer; an error envelope and a missing tool array both read as no schema. Total.                                                                        |
 | `sendStream`                       | function | Pump a controlled serialized exchange onto an `MCPTransportInterface` — every notification, the terminal last, and the exchange ENDED on every exit.                                                                          |
 | `bindServer`                       | function | Pipe an `MCPTransportInterface` into an `MCPDispatcherInterface` — inbound decoded within the server's own bound and `handle`d under a per-request signal, a defined reply `send`, a held-open one pumped; returns an unbind. |
 | `bindClient`                       | function | Pipe an `MCPTransportInterface` into an `MCPClientInterface` (built over `createDuplexClientTransport`) — completes the inbound wiring; returns an unbind.                                                                    |
@@ -2313,6 +2363,8 @@ Passing a legacy revision to
 | `MCPExecutionHandler`              | type      | Host-neutral handler returning `ToolResult \| MCPCallResult`, synchronously or asynchronously.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `MCPListResult`                    | type      | `{ tools; resultType: 'complete'; ttlMs; cacheScope; _meta? }` — the modern cacheable `tools/list` result; the unstamped legacy answer is an `MCPLegacyResult` instead, so no stamp here is optional.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `MCPToolDescriptor`                | interface | `{ name: string; description?: string; inputSchema: Record<string, unknown> }` — one `tools/list` entry.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `MCPHeaderPrimitive`               | type      | `'boolean' \| 'integer' \| 'string'` — the schema types an `x-mcp-header` annotation may sit on; `number` has no interoperable decimal text form and is refused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `MCPHeaderParameter`               | interface | `{ name: string; path: readonly string[]; primitive: MCPHeaderPrimitive }` — one `x-mcp-header` projection: the field name after `MCP_PARAM_PREFIX`, the `properties` keys leading to the annotated leaf, and the type fixing its rendering.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `MCPIdentity`                      | type      | Open metadata intersection with the dated `{ name; version; title?; description?; websiteUrl?; icons? }` identity fields.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `MCPRequestContext`                | interface | `{ version; capabilities: MCPClientCapabilities; identity? }` — validated modern request metadata.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `MCPDiscoverResult`                | type      | Required modern discovery fields with exact `MCPServerCapabilities`, complete/cache stamps, optional instructions, and exact metadata.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -2462,7 +2514,22 @@ and `prompts/list` carry no target. A sentinel-encoded value is read through
 rather than read as a literal. A refusal names the first missing or mismatched field and the expected
 value without echoing the supplied value; it is HTTP `400` + `-32020` with no `data`. A
 `MCP-Protocol-Version` naming a modern revision over a body with no parsable modern `_meta`
-is HTTP `400` + `-32602`. Headerless
+is HTTP `400` + `-32602`.
+
+A modern `tools/call` is additionally held to the `Mcp-Param-*` headers ITS OWN served
+definition annotates. The handler reads those annotations by dispatching `tools/list`
+through the same dispatcher and running `buildHeaderParameters` over the named tool's
+`inputSchema`, fresh on each call rather than from a cache, so a registry a consumer
+mutates cannot leave the validation reading a table that no longer holds. A recognized
+header that is absent while the body supplies its value, one whose payload is not a valid
+Base64 sentinel, one whose decoded value disagrees, and one asserting a value the body omits
+are each HTTP `400` + `-32020`. An `integer` parameter compares numerically. A
+`Mcp-Param-*` name no served definition annotates is forwarded untouched. The cost is one
+extra in-memory `tools/list` dispatch per `tools/call`; a consumer that replaced
+`tools/list` with an expensive or held-open handler pays for it there, and a held-open
+answer is released and read as no definition.
+
+Headerless
 legacy `initialize` is accepted; a headerless post-initialize legacy request is
 accepted only through a live session, whose pinned negotiated version the session
 middleware supplies; every other headerless request is HTTP `400` + `-32020`.
@@ -2549,6 +2616,7 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | `buildResponseError`     | function | Build the error for a non-success HTTP response that carried no JSON-RPC message, naming its status and body shape.                                                                                                    |
 | `inferHeaderIssue`       | function | Derive the first missing or mismatched modern, stateless-legacy, or active-session header issue, decoding a sentinel-encoded `Mcp-Name` before comparing it; `undefined` when the applicable fields agree.             |
 | `inferHeaderTarget`      | function | Read the target a modern request's `Mcp-Name` must carry — `params.name` for `tools/call` and `prompts/get`, `params.uri` for `resources/read`; `undefined` for every other method.                                    |
+| `inferParameterRefusal`  | function | Derive the refusal one `tools/call` earns for a `Mcp-Param-*` header the body contradicts — absent, invalidly encoded, mismatched, or asserting a value the body omits; `undefined` when the recognized fields agree.  |
 | `inferLegacyVersion`     | function | Pin a supported requested legacy revision, otherwise select the newest supported legacy revision.                                                                                                                      |
 | `inferStatus`            | function | Map a dispatch outcome to its era-aware HTTP status while preserving legacy in-band `200` errors.                                                                                                                      |
 | `readSessionHeader`      | function | Read the request's `mcp-session-id` header for the stateful transport, or `undefined`.                                                                                                                                 |
@@ -2859,7 +2927,11 @@ HTTP headers as the Node face: modern requests derive protocol and method
 headers from their body plus the name only for `tools/call` — through
 `encodeSentinel`, so a tool name that cannot ride as plain ASCII travels in the
 protocol's Base64 sentinel — while legacy
-requests echo only their captured negotiated protocol. It also honors the
+requests echo only their captured negotiated protocol. It runs the SAME SEP-2243
+`x-mcp-header` contract as the Node face: it caches each listed tool's annotations from the
+`tools/list` result it delivers, drops an invalidly annotated definition from that result
+and reports the exclusion on `error`, and projects a later `tools/call`'s own arguments onto
+`Mcp-Param-*` headers. It also honors the
 same `mcp-session-id` semantics, so a browser client interoperates with an
 `MCPSession`-based server unchanged. The browser transports share their exported NAMES
 with the Node face's transports — same API shape, a different host underneath
@@ -4033,20 +4105,20 @@ consumer can plan around it instead of discovering it.
 
 **Protocol surfaces this package does not implement.**
 
-| Not built                                                      | Why                                                                                                                                                                                                                                                                                                                                            |
-| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Roots, Sampling, Logging                                       | All are deprecated in 2026-07-28 and none has a registry or a consumer here. The local `emitter`s are observability, not an MCP logging capability. Resources and Prompts are NOT on this list any more — see [Project a host-owned resource, prompt, and completion registry](#project-a-host-owned-resource-prompt-and-completion-registry). |
-| A built-in resource or prompt STORE                            | The `resources` / `prompts` / `completion` capabilities ship as PORTS, exactly as tools and durable tasks do. What backs one — a workspace, a database, a template registry, a plain object — is the host's decision, and a default store here would be product policy wearing a framework's clothes.                                          |
-| Server-initiated `elicitation/create` requests                 | 2026-07-28 removes server-initiated requests entirely. Input requests survive only inside a modern `tools/call` `input_required` result — see [Ask the client for input during the call in hand](#ask-the-client-for-input-during-the-call-in-hand).                                                                                           |
-| Durable task or session STORAGE                                | Task state outlives the request that created it and this package owns no persistence. The store arrives injected as `MCPTaskOptions.tasks`, exactly as `ToolManagerInterface` does — the extension's protocol ships here, its durability does not.                                                                                             |
-| `outputSchema` on tool descriptors                             | `ToolResult.value` (`@orkestrel/tool`) is `unknown`; the contract that owns the value owns its schema. `structuredContent` is produced without one, which no clause gates.                                                                                                                                                                     |
-| Icons (2025-11-25)                                             | Installed `@orkestrel/tool` definitions carry no icon field, so an MCP-only wrapper would have no originating consumer.                                                                                                                                                                                                                        |
-| `x-mcp-header` server-side annotation and definition filtering | The MUST to keep invalidly annotated definitions out of `tools/list` binds a server that accepts the annotation. No installed definition carries one, so none can be invalid.                                                                                                                                                                  |
-| `_meta['io.modelcontextprotocol/logLevel']`                    | The deprecated canonical value is validated as request metadata, but no consumer opts a request into server log emission.                                                                                                                                                                                                                      |
-| W3C `traceparent` / `tracestate` / `baggage`                   | Tracing is application policy. The `request` event is the observation seam; a consumer stamps its own spans there.                                                                                                                                                                                                                             |
-| Reading `extensions` for anything but Tasks                    | Capabilities are an open record, so a consumer can already declare any extension id without a library change. This package reads exactly one key of that map — `io.modelcontextprotocol/tasks`, and only when `task` is configured — and advertises the same one; every other id travels through untouched.                                    |
-| JSON-RPC batching                                              | Removed by deletion: only individual messages are accepted, and the types enforce it.                                                                                                                                                                                                                                                          |
-| The optional 2025-11-25 SSE polling protocol                   | No consumer. Resumability exists only as the legacy session middleware's `GET` channel, and a modern request must not use it.                                                                                                                                                                                                                  |
+| Not built                                                               | Why                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Roots, Sampling, Logging                                                | All are deprecated in 2026-07-28 and none has a registry or a consumer here. The local `emitter`s are observability, not an MCP logging capability. Resources and Prompts are NOT on this list any more — see [Project a host-owned resource, prompt, and completion registry](#project-a-host-owned-resource-prompt-and-completion-registry).                                                                          |
+| A built-in resource or prompt STORE                                     | The `resources` / `prompts` / `completion` capabilities ship as PORTS, exactly as tools and durable tasks do. What backs one — a workspace, a database, a template registry, a plain object — is the host's decision, and a default store here would be product policy wearing a framework's clothes.                                                                                                                   |
+| Server-initiated `elicitation/create` requests                          | 2026-07-28 removes server-initiated requests entirely. Input requests survive only inside a modern `tools/call` `input_required` result — see [Ask the client for input during the call in hand](#ask-the-client-for-input-during-the-call-in-hand).                                                                                                                                                                    |
+| Durable task or session STORAGE                                         | Task state outlives the request that created it and this package owns no persistence. The store arrives injected as `MCPTaskOptions.tasks`, exactly as `ToolManagerInterface` does — the extension's protocol ships here, its durability does not.                                                                                                                                                                      |
+| `outputSchema` on tool descriptors                                      | `ToolResult.value` (`@orkestrel/tool`) is `unknown`; the contract that owns the value owns its schema. `structuredContent` is produced without one, which no clause gates.                                                                                                                                                                                                                                              |
+| Icons (2025-11-25)                                                      | Installed `@orkestrel/tool` definitions carry no icon field, so an MCP-only wrapper would have no originating consumer.                                                                                                                                                                                                                                                                                                 |
+| Withholding a consumer's own invalidly annotated tool from `tools/list` | The annotation is read and enforced on both sides; see [Protocol](#protocol) for the rules. The exclusion MUST binds an HTTP CLIENT, and this package's client transports honour it. A server that also dropped the definition would hide a consumer's tool from every peer over a mistake in one property, so this one serves it, recognizes no `Mcp-Param-*` name for it, and lets each conformant client exclude it. |
+| `_meta['io.modelcontextprotocol/logLevel']`                             | The deprecated canonical value is validated as request metadata, but no consumer opts a request into server log emission.                                                                                                                                                                                                                                                                                               |
+| W3C `traceparent` / `tracestate` / `baggage`                            | Tracing is application policy. The `request` event is the observation seam; a consumer stamps its own spans there.                                                                                                                                                                                                                                                                                                      |
+| Reading `extensions` for anything but Tasks                             | Capabilities are an open record, so a consumer can already declare any extension id without a library change. This package reads exactly one key of that map — `io.modelcontextprotocol/tasks`, and only when `task` is configured — and advertises the same one; every other id travels through untouched.                                                                                                             |
+| JSON-RPC batching                                                       | Removed by deletion: only individual messages are accepted, and the types enforce it.                                                                                                                                                                                                                                                                                                                                   |
+| The optional 2025-11-25 SSE polling protocol                            | No consumer. Resumability exists only as the legacy session middleware's `GET` channel, and a modern request must not use it.                                                                                                                                                                                                                                                                                           |
 
 **Revisions this package does not speak.** `2025-03-26` is dropped because its
 mandatory JSON-RPC batching is unimplemented here, and `2024-11-05` because it
@@ -4103,25 +4175,27 @@ A reproducible run is `npm run test:conformance`: it starts the real Streamable 
 server from this package's source and runs `@modelcontextprotocol/conformance` — the
 release `package.json` pins as a development dependency — against specification revision
 `2026-07-28`. That is a genuine foreign MCP client driving this surface end to end, and the
-recorded server-mode result is **104 passed / 6 failed**, the `dns-rebinding-protection`
+recorded server-mode result is **110 passed / 0 failed**, the `dns-rebinding-protection`
 security regression guard (2 passed) included. `tests/conformance.test.ts` records that
-result scenario by scenario, and names the failing scenario with its cause:
-`http-custom-header-server-validation` (3 passed / 6 failed), where SEP-2243 wants a 400
-response and a `-32020` `HeaderMismatch` error for a mismatched or invalid `Mcp-Param`
-header while the shipped route accepts both and answers 200. `server-stateless` is green at
-28 passed: its SEP-2575 checks omit the body's `_meta`, or its `protocolVersion`, and the
-modern protocol header now holds each request to the modern revision, so both answer
-`-32602` rather than falling through the legacy door's `-32022`.
+result scenario by scenario, so a scenario that stops running reddens instead of vanishing
+into a total. `http-custom-header-server-validation` is green at 9 passed: SEP-2243 wants a
+400 response and a `-32020` `HeaderMismatch` error for a mismatched or invalid `Mcp-Param`
+header, and the POST handler now validates every such header its own tool definitions
+annotate against the call's body. `server-stateless` is green at 28 passed: its SEP-2575
+checks omit the body's `_meta`, or its `protocolVersion`, and the modern protocol header
+holds each request to the modern revision, so both answer `-32602` rather than falling
+through the legacy door's `-32022`.
 
 The same runner has a CLIENT mode, and the same command drives this package's own
 `MCPClient` through every non-auth client scenario at that revision over
-`createHTTPClientTransport`, against its own per-scenario baseline in the same file. Its
-failing scenarios are `http-custom-headers` (3 passed / 15 failed) and
-`http-invalid-tool-headers` (1 passed / 10 failed), and one cause covers both: the client
-reads no `x-mcp-header` annotation from a tool's `inputSchema`, so it sends no `Mcp-Param-*`
-header and excludes no malformed tool. The `auth/*` family is outside the recorded set,
-because each of those scenarios drives an OAuth 2.1 client through discovery, dynamic
-registration, and a token grant, and this package publishes no OAuth client.
+`createHTTPClientTransport`, against its own per-scenario baseline in the same file. Every
+recorded client scenario is green, `http-custom-headers` at 18 passed and
+`http-invalid-tool-headers` at 11 passed: the HTTP client transports cache each listed
+tool's `x-mcp-header` annotations, project a call's own arguments onto `Mcp-Param-*`
+headers, and drop an invalidly annotated definition from the `tools/list` result they
+deliver. The `auth/*` family is outside the recorded set, because each of those scenarios
+drives an OAuth 2.1 client through discovery, dynamic registration, and a token grant, and
+this package publishes no OAuth client.
 
 The comparison starts no server and drives no client. It reads the stable Tasks
 extension's published schema from the vendored mirror
@@ -4235,37 +4309,53 @@ subscription stops delivering to its consumer while its request runs to completi
 `send` carrying that `signal`, which is why this entry and the one preceding it would return as
 ONE unit and never separately.
 
-**`-32020` refresh-and-retry-once — not implemented, and a retry could not fix it.** A
-client that receives `-32020` (a protocol-version header the peer refuses) might be expected
-to refresh its version and retry once. It is not implemented, and the reason is stronger than
-scheduling: the HTTP client transports DERIVE every header from the message being sent —
-the method header, the `tools/call` name header, and the protocol version read out of the
-message's own `_meta` through the one shared `inferRequestVersion` — so a retry of the same
-message re-derives byte-identical headers and earns byte-identical refusal. (That claim was
-only half true until the browser face stopped projecting its version through
-`parseRequestContext`; the browser and Node faces now share one derivation, which is what makes "the same
-message re-derives the same headers" a statement about both of them.)
-The code is also unreachable ahead of validation: every
+**`-32020` refresh-and-retry-once — not implemented, and a retry could not fix the version
+half of it.** A client that receives `-32020` for a protocol-version header the peer refuses
+might be expected to refresh its version and retry once. It is not implemented, and for that
+header the reason is stronger than scheduling: the HTTP client transports DERIVE every
+standard header from the message being sent — the method header, the `tools/call` name
+header, and the protocol version read out of the message's own `_meta` through the one
+shared `inferRequestVersion` — so a retry of the same message re-derives byte-identical
+headers and earns byte-identical refusal. (That claim was only half true until the browser
+face stopped projecting its version through `parseRequestContext`; the browser and Node faces
+now share one derivation, which is what makes "the same message re-derives the same headers"
+a statement about both of them.) The code is also unreachable ahead of validation: every
 malformed-context path answers `-32602` first. Only a header-rewriting intermediary between
-client and server produces a `-32020` this client did not cause, and a retry reproduces that
-intermediary exactly. **What it costs:** nothing against a peer this client talks to
+client and server produces such a `-32020` this client did not cause, and a retry reproduces
+that intermediary exactly. **What it costs:** nothing against a peer this client talks to
 directly. **Closer:** none needed unless a reachable path is exhibited where a refresh
-changes the derived headers; that would make the retry meaningful and this entry wrong.
+changes the derived headers; that would make the retry meaningful and this half wrong.
 
-**`Mcp-Param-*` / `x-mcp-header` client projection — not satisfied.** An HTTP client
-MUST project tool arguments annotated with `x-mcp-header` in a tool's `inputSchema`
-into `Mcp-Param-*` request headers. No HTTP client transport does: the projection
-needs the tool's schema — knowledge the client holds and the transport does not — inside
-the HTTP transport, which means widening the transport-agnostic `MCPClientTransportInterface.send`
-into an HTTP-shaped contract that every other transport would then carry. **What it
-costs:** against a foreign 2026-07-28 server whose tool schemas use the annotation,
-this client sends those parameters in the request body only. A server that also accepts
-body parameters is unaffected; a server that requires the header projection has tools
-this client cannot call. The exposure is bounded to foreign modern servers using an
-optional annotation, and to nothing this package's own server produces. **Closer:** one
-isolated unit, deliberately sequenced last so nothing depends on the widened contract; it
-is not scheduled, and it is the SAME per-request seam on `send` the entries above need,
-so they land together or not at all.
+**Re-listing and retrying once after a `Mcp-Param-*` `HeaderMismatch` — a declared SHOULD
+departure.** The `Mcp-Param-*` half is different, and this is the honest reason it is stated
+here rather than built. A `tools/call`'s projected headers come from the annotations the
+transport cached from the `tools/list` result it delivered, so a server that changed a tool's
+annotations after that listing can refuse a call whose headers a FRESH listing would have
+made correct. SEP-2243 says a client receiving `HeaderMismatch` SHOULD re-list and retry
+once. This package does not: retrying inside the transport would re-issue a `tools/call` the
+caller has already been told failed, under a table the caller never saw, and the transport
+is the wrong layer to decide that a second invocation of somebody's tool is safe. **What it
+costs:** against a server that changes tool annotations mid-connection, one call fails with
+`-32020` that a retry would have carried. **The consumer's obligation:** call `tools()` again
+and retry the call; the transport re-caches from that listing and the next call projects the
+current headers. **Closer:** a retry policy owned by `MCPClient` rather than by a transport,
+with the caller able to decline it — not scheduled, and it needs the per-request options seam
+the entries above name.
+
+**`Mcp-Param-*` / `x-mcp-header` client projection — satisfied, without widening the shared
+transport contract.** An HTTP client MUST project tool arguments annotated with
+`x-mcp-header` into `Mcp-Param-*` request headers, and MUST exclude a tool whose annotations
+violate the constraints. Both faces do, and this entry records how, because the earlier
+reading of it was wrong: the projection was thought to need the tool's schema passed INTO
+`send`, which would have meant widening the transport-agnostic
+`MCPClientTransportInterface.send` into an HTTP-shaped contract every other transport would
+then carry. It does not. The schema already travels through the transport, in the
+`tools/list` result the transport itself delivers, so each HTTP face caches the annotations
+from that result and projects a later `tools/call` from the cache plus the call's own
+arguments. `MCPClientTransportInterface` is unchanged, and stdio, WebSocket, and
+`MessagePort` are untouched — the annotations bind Streamable HTTP alone. A `tools/call` for
+a tool this transport never carried a listing for projects nothing, because inventing a
+lookup is how a client sends a header the peer never advertised.
 
 **Tool-invocation rate limiting — not satisfied, and no unit will close it.**
 2025-11-25's `server/tools` § Security Considerations binds a server to validate tool
@@ -4672,6 +4762,15 @@ in request`, no `as`) — is HTTP **400** with a JSON-RPC error BODY carrying no
     derived expectation, never its client-supplied value; the result is **400** +
     `-32020` with no `data`. A modern `MCP_PROTOCOL_VERSION_HEADER` over a body with no
     parsable modern `_meta` is **400** + `-32602` instead of the legacy `-32022`.
+    A modern `tools/call` is additionally held to the `MCP_PARAM_PREFIX` headers its OWN
+    served definition annotates: the handler dispatches `tools/list` through the same
+    dispatcher, reads the named tool's `inputSchema` with `extractToolSchema`, derives the
+    projections with `buildHeaderParameters`, and refuses through `inferParameterRefusal`
+    with the same **400** + `-32020` for a recognized header that is absent while the body
+    supplies its value, one whose payload is not a valid Base64 sentinel, one whose decoded
+    value disagrees, and one asserting a value the body omits. An `integer` parameter
+    compares numerically. A `MCP_PARAM_PREFIX` name no served definition annotates is
+    forwarded untouched, and a definition whose annotations are invalid recognizes none.
     Headerless `initialize` is accepted; a live-session legacy request uses its
     pinned negotiated revision; every other headerless request is **400** +
     `-32020`. A request without `Origin` is allowed; a canonical `localhost`, `[::1]`,
@@ -4825,8 +4924,14 @@ application/json` and an `Accept` of BOTH `application/json` and
     legacy requests never carry `Mcp-Method` or `Mcp-Name`. A modern request derives
     `MCP_PROTOCOL_VERSION_HEADER` and `MCP_METHOD_HEADER` directly from its `_meta`
     version and method, plus `MCP_NAME_HEADER` only for `tools/call`, whose value rides
-    through `encodeSentinel`; no transport
-    state or widened `send` contract is needed. The captured
+    through `encodeSentinel`; no widened `send` contract is needed. It also runs SEP-2243's
+    `x-mcp-header` contract from the traffic it already carries: a delivered `tools/list`
+    result has each tool's projections cached through `buildHeaderParameters` and every
+    invalidly annotated definition DROPPED before the caller sees it, with the exclusion
+    reported on `error` naming the tool; a later `tools/call` for a cached tool carries the
+    `MCP_PARAM_PREFIX` headers `buildHeaderProjection` derives from that table and the
+    call's own `arguments`, and a `tools/call` for a tool no listing carried projects
+    nothing. The captured
     headers are merged before `options.headers`, so a caller-supplied key wins.
 16. **The WebSocket transport is the full-duplex ingress over the spine
     upgrade seam (`src/server`).** `createWebSocketServer(mcp, options)`
@@ -5088,7 +5193,10 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     client, as the HTTP client transport clause states: modern requests carry `MCP_PROTOCOL_VERSION_HEADER`
     and `MCP_METHOD_HEADER` from the body, plus `MCP_NAME_HEADER` only for
     `tools/call` through `encodeSentinel`; legacy requests carry only the captured
-    negotiated protocol.
+    negotiated protocol. It runs the SAME SEP-2243 `x-mcp-header` contract the Node face's
+    clause states — cache the annotations a delivered `tools/list` result carries, drop each
+    invalidly annotated definition and report it on `error`, project a later `tools/call`'s
+    own `arguments` onto `MCP_PARAM_PREFIX` headers.
     An `application/json` reply is narrowed with `parseJSONRPCMessage`, a
     `text/event-stream` reply is decoded with the browser face's OWN
     `readEventStream` (`@orkestrel/sse`, the same decode shape as

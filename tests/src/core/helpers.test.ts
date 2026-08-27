@@ -8,11 +8,19 @@ import type {
 	MCPSubscriptionFilter,
 	MCPTransportInterface,
 } from '@src/core'
+import type { MCPHeaderParameter } from '@src/core'
 import type { MemoryTransportInterface } from '../../setup.js'
 import {
 	bindClient,
 	bindServer,
 	buildDiscoverResult,
+	buildHeaderParameters,
+	buildHeaderProjection,
+	countHeaderAnnotations,
+	extractHeaderAnnotations,
+	extractToolSchema,
+	renderHeaderValue,
+	DEFAULT_MCP_LIMITS,
 	buildInitializeResult,
 	buildCallOutcome,
 	buildCancelledNotification,
@@ -43,6 +51,8 @@ import {
 	MCP_META_SERVER,
 	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
+	MCP_SENTINEL_PREFIX,
+	MCP_SENTINEL_SUFFIX,
 	legacyInvocationToModern,
 	legacyResultToModern,
 	matchesResultType,
@@ -1767,6 +1777,21 @@ describe('decodeSentinel — the value a standard header carries', () => {
 		expect(decodeSentinel('=?BASE64?SGVsbG8=?=')).toBe('=?BASE64?SGVsbG8=?=')
 	})
 
+	it('treats a value too short to hold both markers as literal', () => {
+		// `=?base64?=` wears the opening marker and ends in the closing one, but the two would
+		// have to overlap for both to be present, so it carries no payload and is literal.
+		expect(decodeSentinel('=?base64?=')).toBe('=?base64?=')
+		expect(decodeSentinel('=?base64?')).toBe('=?base64?')
+		expect(decodeSentinel(`${MCP_SENTINEL_PREFIX}${MCP_SENTINEL_SUFFIX}`)).toBe('')
+	})
+
+	it('reads its markers from the one pair of exported constants', () => {
+		expect(MCP_SENTINEL_PREFIX).toBe('=?base64?')
+		expect(MCP_SENTINEL_SUFFIX).toBe('?=')
+		expect(encodeSentinel('café')).toBe(`${MCP_SENTINEL_PREFIX}Y2Fmw6k=${MCP_SENTINEL_SUFFIX}`)
+		expect(decodeSentinel(`${MCP_SENTINEL_PREFIX}Y2Fmw6k=${MCP_SENTINEL_SUFFIX}`)).toBe('café')
+	})
+
 	it.each([
 		'test_simple_text',
 		'test://static-text',
@@ -1779,5 +1804,308 @@ describe('decodeSentinel — the value a standard header carries', () => {
 		'SGVsbG8=',
 	])('round-trips %j through the sentinel', (value) => {
 		expect(decodeSentinel(encodeSentinel(value))).toBe(value)
+	})
+})
+
+describe('buildHeaderParameters — the x-mcp-header projections one inputSchema declares', () => {
+	it('reads every annotated primitive with its path and declared type', () => {
+		expect(
+			buildHeaderParameters({
+				type: 'object',
+				properties: {
+					region: { type: 'string', 'x-mcp-header': 'Region' },
+					priority: { type: 'integer', 'x-mcp-header': 'Priority' },
+					verbose: { type: 'boolean', 'x-mcp-header': 'Verbose' },
+					query: { type: 'string' },
+					float: { type: 'number' },
+				},
+				required: ['region', 'priority', 'query'],
+			}),
+		).toEqual([
+			{ name: 'Region', path: ['region'], primitive: 'string' },
+			{ name: 'Priority', path: ['priority'], primitive: 'integer' },
+			{ name: 'Verbose', path: ['verbose'], primitive: 'boolean' },
+		])
+	})
+
+	it('admits an annotation nested through a chain of properties keys', () => {
+		expect(
+			buildHeaderParameters({
+				type: 'object',
+				properties: {
+					routing: {
+						type: 'object',
+						properties: { region: { type: 'string', 'x-mcp-header': 'Region' } },
+					},
+				},
+			}),
+		).toEqual([{ name: 'Region', path: ['routing', 'region'], primitive: 'string' }])
+	})
+
+	it('admits a schema carrying no annotation at all', () => {
+		expect(
+			buildHeaderParameters({ type: 'object', properties: { query: { type: 'string' } } }),
+		).toEqual([])
+		expect(buildHeaderParameters({ type: 'object' })).toEqual([])
+	})
+
+	it.each([
+		['an empty annotation', { value: { type: 'string', 'x-mcp-header': '' } }],
+		['a space in the name', { value: { type: 'string', 'x-mcp-header': 'My Region' } }],
+		['a colon in the name', { value: { type: 'string', 'x-mcp-header': 'Region:Primary' } }],
+		['a non-ASCII name', { value: { type: 'string', 'x-mcp-header': 'Région' } }],
+		[
+			'a control character in the name',
+			{ value: { type: 'string', 'x-mcp-header': 'Region\tOne' } },
+		],
+		['a non-string annotation', { value: { type: 'string', 'x-mcp-header': 7 } }],
+		['an object-typed parameter', { data: { type: 'object', 'x-mcp-header': 'Data' } }],
+		[
+			'an array-typed parameter',
+			{ items: { type: 'array', items: { type: 'string' }, 'x-mcp-header': 'Items' } },
+		],
+		['a null-typed parameter', { nil: { type: 'null', 'x-mcp-header': 'Nil' } }],
+		['a number-typed parameter', { rate: { type: 'number', 'x-mcp-header': 'Rate' } }],
+		['an untyped parameter', { value: { 'x-mcp-header': 'Value' } }],
+		[
+			'a same-case duplicate name',
+			{
+				field1: { type: 'string', 'x-mcp-header': 'Region' },
+				field2: { type: 'string', 'x-mcp-header': 'Region' },
+			},
+		],
+		[
+			'a different-case duplicate name',
+			{
+				field1: { type: 'string', 'x-mcp-header': 'MyField' },
+				field2: { type: 'string', 'x-mcp-header': 'myfield' },
+			},
+		],
+	])('refuses the whole definition for %s', (_reason, properties) => {
+		expect(buildHeaderParameters({ type: 'object', properties })).toBeUndefined()
+	})
+
+	it.each([
+		[
+			'inside an array item schema',
+			{
+				type: 'object',
+				properties: {
+					tags: { type: 'array', items: { type: 'string', 'x-mcp-header': 'Tag' } },
+				},
+			},
+		],
+		[
+			'inside a composition keyword',
+			{
+				type: 'object',
+				properties: { value: { type: 'string' } },
+				oneOf: [{ properties: { value: { type: 'string', 'x-mcp-header': 'Value' } } }],
+			},
+		],
+		[
+			'inside a conditional keyword',
+			{
+				type: 'object',
+				if: { properties: { value: { type: 'string', 'x-mcp-header': 'Value' } } },
+			},
+		],
+		[
+			'inside a $defs reference target',
+			{
+				type: 'object',
+				$defs: { leaf: { type: 'string', 'x-mcp-header': 'Leaf' } },
+				properties: { value: { $ref: '#/$defs/leaf' } },
+			},
+		],
+		[
+			'inside additionalProperties',
+			{ type: 'object', additionalProperties: { type: 'string', 'x-mcp-header': 'Extra' } },
+		],
+		['on the schema root itself', { type: 'object', 'x-mcp-header': 'Root', properties: {} }],
+	])('refuses an annotation unreachable through properties — %s', (_reason, schema) => {
+		expect(buildHeaderParameters(schema)).toBeUndefined()
+	})
+
+	it('refuses a schema that is not a record', () => {
+		expect(buildHeaderParameters(undefined)).toBeUndefined()
+		expect(buildHeaderParameters('object')).toBeUndefined()
+		expect(buildHeaderParameters([])).toBeUndefined()
+	})
+
+	it('refuses a properties chain deeper than the package JSON depth bound', () => {
+		let schema: Record<string, unknown> = { type: 'string', 'x-mcp-header': 'Deep' }
+		for (let level = 0; level <= DEFAULT_MCP_LIMITS.depth; level += 1) {
+			schema = { type: 'object', properties: { down: schema } }
+		}
+
+		expect(buildHeaderParameters(schema)).toBeUndefined()
+	})
+
+	it('terminates on a schema whose properties chain cycles back on itself', () => {
+		const cyclic: Record<string, unknown> = { type: 'object' }
+		cyclic['properties'] = { down: cyclic }
+
+		expect(buildHeaderParameters(cyclic)).toBeUndefined()
+	})
+})
+
+describe('countHeaderAnnotations — how many x-mcp-header keys a value carries anywhere', () => {
+	it('counts every occurrence whatever its position', () => {
+		expect(
+			countHeaderAnnotations({
+				properties: { a: { 'x-mcp-header': 'A' } },
+				$defs: { b: { 'x-mcp-header': 'B' } },
+				oneOf: [{ 'x-mcp-header': 'C' }],
+			}),
+		).toBe(3)
+	})
+
+	it('counts nothing in a value carrying none', () => {
+		expect(countHeaderAnnotations({ type: 'object', properties: { a: { type: 'string' } } })).toBe(
+			0,
+		)
+		expect(countHeaderAnnotations('x-mcp-header')).toBe(0)
+		expect(countHeaderAnnotations(undefined)).toBe(0)
+	})
+
+	it('terminates on a cyclic value', () => {
+		const cyclic: Record<string, unknown> = { 'x-mcp-header': 'Loop' }
+		cyclic['self'] = cyclic
+
+		expect(countHeaderAnnotations(cyclic)).toBe(1)
+	})
+})
+
+describe('extractHeaderAnnotations — the reachable half of the annotation walk', () => {
+	it('reads only what a properties chain reaches, leaving the rest to the count', () => {
+		expect(
+			extractHeaderAnnotations(
+				{
+					type: 'object',
+					properties: { region: { type: 'string', 'x-mcp-header': 'Region' } },
+					$defs: { leaf: { type: 'string', 'x-mcp-header': 'Leaf' } },
+				},
+				[],
+			),
+		).toEqual([{ name: 'Region', path: ['region'], primitive: 'string' }])
+	})
+
+	it('reports a non-record schema as carrying nothing rather than as invalid', () => {
+		expect(extractHeaderAnnotations('leaf', ['value'])).toEqual([])
+	})
+})
+
+describe('renderHeaderValue — the text one projected argument travels as', () => {
+	it('carries a string as itself', () => {
+		expect(renderHeaderValue('us-west1', 'string')).toBe('us-west1')
+		expect(renderHeaderValue('', 'string')).toBe('')
+		expect(renderHeaderValue(' padded ', 'string')).toBe(' padded ')
+	})
+
+	it('renders an integer in decimal', () => {
+		expect(renderHeaderValue(42, 'integer')).toBe('42')
+		expect(renderHeaderValue(0, 'integer')).toBe('0')
+		expect(renderHeaderValue(-7, 'integer')).toBe('-7')
+	})
+
+	it('renders a boolean lowercase', () => {
+		expect(renderHeaderValue(true, 'boolean')).toBe('true')
+		expect(renderHeaderValue(false, 'boolean')).toBe('false')
+	})
+
+	it('carries nothing when the runtime value contradicts the declared type', () => {
+		expect(renderHeaderValue(42, 'string')).toBeUndefined()
+		expect(renderHeaderValue('42', 'integer')).toBeUndefined()
+		expect(renderHeaderValue(3.5, 'integer')).toBeUndefined()
+		expect(renderHeaderValue(Number.NaN, 'integer')).toBeUndefined()
+		expect(renderHeaderValue(Number.MAX_SAFE_INTEGER + 2, 'integer')).toBeUndefined()
+		expect(renderHeaderValue('true', 'boolean')).toBeUndefined()
+		expect(renderHeaderValue(null, 'string')).toBeUndefined()
+		expect(renderHeaderValue(undefined, 'string')).toBeUndefined()
+	})
+})
+
+describe('buildHeaderProjection — the Mcp-Param headers one call carries', () => {
+	const PARAMETERS = [
+		{ name: 'Region', path: ['region'], primitive: 'string' },
+		{ name: 'Priority', path: ['priority'], primitive: 'integer' },
+		{ name: 'Verbose', path: ['verbose'], primitive: 'boolean' },
+		{ name: 'NonAscii', path: ['non_ascii_val'], primitive: 'string' },
+		{ name: 'Whitespace', path: ['whitespace_val'], primitive: 'string' },
+		{ name: 'Nested', path: ['routing', 'zone'], primitive: 'string' },
+	] as const satisfies readonly MCPHeaderParameter[]
+
+	it('projects each annotated argument through the sentinel encoding', () => {
+		expect(
+			buildHeaderProjection(PARAMETERS, {
+				region: 'us-west1',
+				priority: 42,
+				verbose: false,
+				non_ascii_val: 'Hello, 世界',
+				whitespace_val: ' padded ',
+				routing: { zone: 'a' },
+				query: 'SELECT 1',
+			}),
+		).toEqual({
+			'Mcp-Param-Region': 'us-west1',
+			'Mcp-Param-Priority': '42',
+			'Mcp-Param-Verbose': 'false',
+			'Mcp-Param-NonAscii': '=?base64?SGVsbG8sIOS4lueVjA==?=',
+			'Mcp-Param-Whitespace': '=?base64?IHBhZGRlZCA=?=',
+			'Mcp-Param-Nested': 'a',
+		})
+	})
+
+	it('omits a header whose argument is absent or null', () => {
+		expect(
+			buildHeaderProjection(PARAMETERS, { region: 'us-east1', priority: 1, verbose: null }),
+		).toEqual({ 'Mcp-Param-Region': 'us-east1', 'Mcp-Param-Priority': '1' })
+	})
+
+	it('projects an empty string as an empty header value rather than omitting it', () => {
+		expect(
+			buildHeaderProjection([{ name: 'EmptyVal', path: ['empty_val'], primitive: 'string' }], {
+				empty_val: '',
+			}),
+		).toEqual({ 'Mcp-Param-EmptyVal': '' })
+	})
+
+	it('projects nothing for an empty parameter table or a non-record argument bag', () => {
+		expect(buildHeaderProjection([], { region: 'us-west1' })).toEqual({})
+		expect(buildHeaderProjection(PARAMETERS, undefined)).toEqual({})
+		expect(buildHeaderProjection(PARAMETERS, 'us-west1')).toEqual({})
+	})
+})
+
+describe('extractToolSchema — the named tool inputSchema inside a tools/list answer', () => {
+	const ANSWER = {
+		jsonrpc: '2.0',
+		id: 1,
+		result: {
+			resultType: 'complete',
+			ttlMs: 0,
+			cacheScope: 'private',
+			tools: [
+				{ name: 'first', inputSchema: { type: 'object', properties: { a: { type: 'string' } } } },
+				{ name: 'second', inputSchema: { type: 'object' } },
+			],
+		},
+	}
+
+	it('reads the named tool schema', () => {
+		expect(extractToolSchema(ANSWER, 'first')).toEqual({
+			type: 'object',
+			properties: { a: { type: 'string' } },
+		})
+		expect(extractToolSchema(ANSWER, 'second')).toEqual({ type: 'object' })
+	})
+
+	it('reads nothing for an unlisted tool or an answer carrying no tool array', () => {
+		expect(extractToolSchema(ANSWER, 'third')).toBeUndefined()
+		expect(
+			extractToolSchema({ jsonrpc: '2.0', id: 1, error: { code: -32601, message: 'x' } }, 'first'),
+		).toBeUndefined()
+		expect(extractToolSchema(undefined, 'first')).toBeUndefined()
 	})
 })

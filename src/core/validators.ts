@@ -25,6 +25,7 @@ import type {
 	MCPElicitSchema,
 	MCPElicitURL,
 	MCPElicitValue,
+	MCPHeaderPrimitive,
 	MCPIcon,
 	MCPIdentity,
 	MCPInputRequest,
@@ -174,6 +175,50 @@ export function isStandardBase64(value: unknown): value is string {
 		isString(value) &&
 		/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
 	)
+}
+
+/**
+ * Determines whether a value is one RFC 9110 field token.
+ *
+ * @remarks
+ * A token is one or more `tchar`: the ASCII letters, the digits, and
+ * ``!#$%&'*+-.^_`|~``. That set already excludes the empty string, whitespace, a colon, a
+ * control character, and every non-ASCII code point, so it is the whole constraint an
+ * `x-mcp-header` annotation's value must satisfy — the value is appended verbatim to
+ * {@link MCP_PARAM_PREFIX} and must survive as an HTTP field name.
+ *
+ * @param value - The unknown value to inspect
+ * @returns Whether the value is a non-empty RFC 9110 token
+ *
+ * @example
+ * ```ts
+ * isFieldToken('Region') // true
+ * isFieldToken('My Region') // false
+ * ```
+ */
+export function isFieldToken(value: unknown): value is string {
+	return isString(value) && /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(value)
+}
+
+/**
+ * Determines whether a value is a JSON Schema type an `x-mcp-header` annotation may sit on.
+ *
+ * @remarks
+ * `number` is refused deliberately: a JSON number has no interoperable decimal text form, so
+ * a header carrying one could not be compared with the body byte for byte. `integer` renders
+ * exactly, and the server compares it numerically.
+ *
+ * @param value - The unknown value to inspect
+ * @returns Whether the value is one of `'string'`, `'integer'`, or `'boolean'`
+ *
+ * @example
+ * ```ts
+ * isMCPHeaderPrimitive('integer') // true
+ * isMCPHeaderPrimitive('number') // false
+ * ```
+ */
+export function isMCPHeaderPrimitive(value: unknown): value is MCPHeaderPrimitive {
+	return value === 'string' || value === 'integer' || value === 'boolean'
 }
 
 /**

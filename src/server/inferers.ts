@@ -2,6 +2,7 @@ import type {
 	JSONRPCInvocation,
 	JSONRPCResponse,
 	MCPEra,
+	MCPHeaderParameter,
 	MCPLegacyVersion,
 	MCPVersion,
 } from '@src/core'
@@ -13,11 +14,13 @@ import {
 	MCP_META_VERSION,
 	MCP_MISSING_CAPABILITY,
 	MCP_HANDSHAKE_VERSION,
+	MCP_PARAM_PREFIX,
 	MCP_UNSUPPORTED_VERSION,
 	decodeSentinel,
 	isInitializeRequest,
 	isMCPLegacyVersion,
 	isModernRequest,
+	renderHeaderValue,
 } from '@src/core'
 import { isRecord, isString } from '@orkestrel/contract'
 import { MCP_METHOD_HEADER, MCP_NAME_HEADER, MCP_PROTOCOL_VERSION_HEADER } from './constants.js'
@@ -160,6 +163,70 @@ export function inferHeaderIssue(
 			reason: 'mismatched',
 			message: `Mcp-Name header does not match the request body target '${target}'.`,
 		}
+	}
+	return undefined
+}
+
+/**
+ * Infers the refusal one `tools/call` earns for a `Mcp-Param-*` header the body contradicts.
+ *
+ * @remarks
+ * The custom-header half of the standard-header seam {@link inferHeaderIssue} owns, and it
+ * takes the SERVED definition's projections rather than a header issue: SEP-2243 scopes the
+ * rule to the `Mcp-Param-*` names the server's OWN tool definitions annotate, so a name no
+ * parameter claims is another party's header and travels through untouched.
+ *
+ * For each recognized parameter the body's value at the parameter's own property path fixes
+ * the expectation. A value the call omits or supplies as `null` requires no header, and a
+ * header sent anyway is refused because it asserts something the body never said. A value the
+ * call does supply requires its header: an absent one, a Base64 sentinel whose payload is
+ * invalid, and a decoded value that disagrees are each refused. An `integer` parameter
+ * compares numerically, so a peer that padded its decimal still matches. A supplied value
+ * whose runtime shape contradicts the declared type is left alone — the tool's own argument
+ * validation owns that disagreement, and refusing it here would report an argument fault as a
+ * header fault.
+ *
+ * Messages name the field and the body path the expectation came from, and never echo the
+ * value the peer supplied.
+ *
+ * @param request - The HTTP request carrying the headers
+ * @param parameters - The projections the served tool definition declares
+ * @param values - The call's `arguments` record
+ * @returns The refusal message for the first disagreeing parameter, or `undefined`
+ *
+ * @example
+ * ```ts
+ * inferParameterRefusal(request, [{ name: 'Region', path: ['region'], primitive: 'string' }], {})
+ * // → undefined when the request carries no `Mcp-Param-Region` either
+ * ```
+ */
+export function inferParameterRefusal(
+	request: Request,
+	parameters: readonly MCPHeaderParameter[],
+	values: unknown,
+): string | undefined {
+	for (const parameter of parameters) {
+		let carried: unknown = values
+		for (const key of parameter.path) carried = isRecord(carried) ? carried[key] : undefined
+		const field = `${MCP_PARAM_PREFIX}${parameter.name}`
+		const path = parameter.path.join('.')
+		const header = request.headers.get(field)
+		if (carried === undefined || carried === null) {
+			if (header === null) continue
+			return `${field} header carries a value the request body omits at '${path}'.`
+		}
+		const expected = renderHeaderValue(carried, parameter.primitive)
+		if (expected === undefined) continue
+		if (header === null) {
+			return `Required ${field} header is missing; the request body carries '${path}'.`
+		}
+		const decoded = decodeSentinel(header)
+		if (decoded === undefined) return `${field} header value is not a valid Base64 sentinel.`
+		const agrees =
+			parameter.primitive === 'integer'
+				? decoded.trim() !== '' && Number(decoded) === Number(expected)
+				: decoded === expected
+		if (!agrees) return `${field} header does not match the request body value at '${path}'.`
 	}
 	return undefined
 }

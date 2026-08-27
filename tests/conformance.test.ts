@@ -80,9 +80,14 @@ const EXPECTED: readonly ConformanceScenario[] = [
 	{ name: 'dns-rebinding-protection', passed: 2, failed: 0 },
 	{ name: 'caching', passed: 7, failed: 0 },
 	{ name: 'http-header-validation', passed: 13, failed: 0 },
-	// Fails: SEP-2243 wants a 400 response and a -32020 `HeaderMismatch` JSON-RPC error for a
-	// mismatched or invalid `Mcp-Param` header; the shipped route accepts both and answers 200.
-	{ name: 'http-custom-header-server-validation', passed: 3, failed: 6 },
+	// Green since the POST handler began validating every `Mcp-Param-*` header its OWN tool
+	// definitions annotate against the call's body. The checks that moved are three refusals,
+	// each counted twice — once for the HTTP 400 and once for the -32020 error code: a Base64
+	// sentinel with invalid padding, one with a non-alphabet character, and an omitted header
+	// for a value the body supplies. The three that were already green are the accepts — a
+	// well-formed sentinel decoded and matched, and a value missing either marker read as a
+	// literal.
+	{ name: 'http-custom-header-server-validation', passed: 9, failed: 0 },
 	// The SEP-2322 rows below all drive `MCPServerOptions.input`, whose answer is the round the
 	// consumer composed: its own keys, and any mixture of the elicitation, sampling, and roots
 	// kinds the client declared. The prompt arm reaches the same wire the other way — the
@@ -141,15 +146,19 @@ const EXPECTED_CLIENT: readonly ConformanceOutcome[] = [
 	// `resultType` defaulting to complete.
 	{ name: 'sep-2322-client-request-state', passed: 5, failed: 0, warnings: 0 },
 	{ name: 'http-standard-headers', passed: 3, failed: 0, warnings: 0 },
-	// Fails every SEP-2243 `Mcp-Param` check: the client sends no `Mcp-Param-*` header at
-	// all, because it reads no `x-mcp-header` annotation from a tool's `inputSchema`. The
-	// three green checks are the negative ones — an unannotated parameter and a null-valued
-	// one both correctly produce no header.
-	{ name: 'http-custom-headers', passed: 3, failed: 15, warnings: 0 },
-	// Fails every SEP-2243 exclusion check for the same missing annotation reading: the
-	// client keeps every advertised tool, so the driver calls the malformed ones too. The
-	// green check is the complementary one — the valid tool survives.
-	{ name: 'http-invalid-tool-headers', passed: 1, failed: 10, warnings: 0 },
+	// Green since the HTTP client transports began caching each listed tool's `x-mcp-header`
+	// annotations and projecting a call's own arguments onto `Mcp-Param-*` headers. The checks
+	// that moved are the one asserting any header at all plus the per-parameter conversion and
+	// encoding rows: a plain string literal, a decimal integer, both booleans, an empty value,
+	// a name that must not collide with `Mcp-Method`, and the non-ASCII, whitespace-edged,
+	// control-character, CRLF, and tab values that travel as the Base64 sentinel.
+	{ name: 'http-custom-headers', passed: 18, failed: 0, warnings: 0 },
+	// Green since the same transports began dropping an invalidly annotated definition from
+	// the `tools/list` result they deliver: the driver calls exactly the tools the client
+	// listed, so a definition the transport excluded is one the driver cannot call. The checks
+	// that moved are the ten malformed definitions — an empty name, three non-primitive types,
+	// two duplicate names, and four names outside the RFC 9110 token set.
+	{ name: 'http-invalid-tool-headers', passed: 11, failed: 0, warnings: 0 },
 	{ name: 'json-schema-ref-no-deref', passed: 1, failed: 0, warnings: 0 },
 ]
 
@@ -281,7 +290,7 @@ describe('MCP server conformance', () => {
 	})
 
 	it('reports the recorded total', () => {
-		expect([result.passed, result.failed]).toEqual([104, 6])
+		expect([result.passed, result.failed]).toEqual([110, 0])
 	})
 })
 

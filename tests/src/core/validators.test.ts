@@ -33,6 +33,8 @@ import {
 	isBoundedJSON,
 	isBoundedString,
 	isElicitContent,
+	isFieldToken,
+	isMCPHeaderPrimitive,
 	isMCPElicitRequest,
 	isMCPElicitForm,
 	isMCPElicitURL,
@@ -2200,6 +2202,7 @@ const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = 
 	isBoundedJSON: (value) => isBoundedJSON(value, { bytes: 4_096, keys: 64, depth: 16 }),
 	isBoundedString: (value) => isBoundedString(value, 4_096),
 	isElicitContent: (value) => isElicitContent(value, TOTALITY_SCHEMA),
+	isFieldToken,
 	isFormElicitationSupported,
 	isInitializeRequest,
 	isJSONObject,
@@ -2228,6 +2231,7 @@ const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = 
 	isMCPElicitSchema,
 	isMCPElicitURL,
 	isMCPError,
+	isMCPHeaderPrimitive,
 	isMCPIcon,
 	isMCPIdentity,
 	isMCPInputRequest,
@@ -2539,5 +2543,50 @@ describe('MCP prompt guards', () => {
 				context: { arguments: { extension: 'txt' } },
 			}),
 		).toBe(true)
+	})
+})
+
+describe('isFieldToken — the RFC 9110 token an x-mcp-header annotation must be', () => {
+	it.each(['Region', 'Priority', 'NonAscii', 'value', 'X-Custom_Name.1', "!#$%&'*+-.^_`|~"])(
+		'admits %j',
+		(value) => {
+			expect(isFieldToken(value)).toBe(true)
+		},
+	)
+
+	it.each([
+		['an empty string', ''],
+		['a space', 'My Region'],
+		['a colon', 'Region:Primary'],
+		['a non-ASCII letter', 'Région'],
+		['a horizontal tab', 'Region\tOne'],
+		['a newline', 'Region\nOne'],
+		['a delete character', 'Region\u007FOne'],
+		['a double quote', 'Region"One'],
+		['a comma', 'Region,One'],
+		['a leading space', ' Region'],
+	])('refuses a name carrying %s', (_reason, value) => {
+		expect(isFieldToken(value)).toBe(false)
+	})
+
+	it.each([undefined, null, 42, true, {}, []])('refuses the non-string %j', (value) => {
+		expect(isFieldToken(value)).toBe(false)
+	})
+})
+
+describe('isMCPHeaderPrimitive — the schema types an annotation may sit on', () => {
+	it('admits exactly the three primitive types the protocol projects', () => {
+		expect(isMCPHeaderPrimitive('string')).toBe(true)
+		expect(isMCPHeaderPrimitive('integer')).toBe(true)
+		expect(isMCPHeaderPrimitive('boolean')).toBe(true)
+	})
+
+	it('refuses number, the structured types, and every non-type value', () => {
+		expect(isMCPHeaderPrimitive('number')).toBe(false)
+		expect(isMCPHeaderPrimitive('object')).toBe(false)
+		expect(isMCPHeaderPrimitive('array')).toBe(false)
+		expect(isMCPHeaderPrimitive('null')).toBe(false)
+		expect(isMCPHeaderPrimitive(['string'])).toBe(false)
+		expect(isMCPHeaderPrimitive(undefined)).toBe(false)
 	})
 })

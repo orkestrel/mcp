@@ -1,11 +1,14 @@
 import type {
 	MCPClientTransportEventMap,
 	MCPClientTransportInterface,
+	MCPHeaderParameter,
 	JSONRPCMessage,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { HTTPClientTransportOptions } from '../types.js'
 import {
+	buildHeaderParameters,
+	buildHeaderProjection,
 	encodeSentinel,
 	inferRequestVersion,
 	isJSONRPCResponse,
@@ -13,7 +16,7 @@ import {
 	isModernRequest,
 	parseJSONRPCMessage,
 } from '@src/core'
-import { isRecord, isString } from '@orkestrel/contract'
+import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import {
 	MCP_METHOD_HEADER,
@@ -86,6 +89,10 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 	// reach them: a `send` parked on a reply that never ends holds both the request and its
 	// response reader, and no other seam this transport exposes leads back to either.
 	readonly #pending = new Set<AbortController>()
+	// Each listed tool's `x-mcp-header` projections, read from the `tools/list` results this
+	// transport delivered. The annotations describe a call's own arguments, so the table a
+	// `tools/call` projects from is the one the caller was told about and nothing else.
+	readonly #parameters = new Map<string, readonly MCPHeaderParameter[]>()
 	#session: string | undefined = undefined
 	#protocol: string | undefined = undefined
 	#closed = false
@@ -162,7 +169,7 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 		// on subsequent requests; a missing header leaves `session` unchanged.
 		const session = response.headers.get(MCP_SESSION_HEADER)
 		if (session !== null) this.#session = session
-		await this.#deliver(response)
+		await this.#deliver(response, message)
 	}
 
 	// Abort every request still on the wire, then clear the captured protocol before emitting
@@ -193,7 +200,13 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 				...(version === undefined ? {} : { [MCP_PROTOCOL_VERSION_HEADER]: version }),
 				[MCP_METHOD_HEADER]: message.method,
 				...(message.method === 'tools/call' && isString(name)
-					? { [MCP_NAME_HEADER]: encodeSentinel(name) }
+					? {
+							[MCP_NAME_HEADER]: encodeSentinel(name),
+							...buildHeaderProjection(
+								this.#parameters.get(name) ?? [],
+								message.params?.['arguments'],
+							),
+						}
 					: {}),
 			}
 		}
@@ -205,7 +218,7 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 	// body is decoded with the core SSEParser (one or more `data:` events). A non-success reply
 	// with no valid envelope rejects with its status and body shape. A success decode failure
 	// surfaces on `error` rather than escaping.
-	async #deliver(response: Response): Promise<void> {
+	async #deliver(response: Response, sent: JSONRPCMessage): Promise<void> {
 		if (response.status === 202) return
 		const type = response.headers.get('content-type') ?? ''
 		let messages: readonly JSONRPCMessage[] = []
@@ -220,15 +233,17 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 		} catch (error) {
 			failure = { error }
 		}
-		for (const message of messages) this.#capture(message)
+		for (const message of messages) this.#capture(message, sent)
 		if (!response.ok && messages.length === 0) throw buildResponseError(response, type)
 		if (failure !== undefined) this.#emitter.emit('error', failure.error)
 	}
 
 	// Capture the negotiated SUPPORTED protocol from the initialize result before emitting
 	// the message, so the next request carries its required protocol-version header; any
-	// other value (missing or unsupported) is ignored and leaves `#protocol` unchanged.
-	#capture(message: JSONRPCMessage): void {
+	// other value (missing or unsupported) is ignored and leaves `#protocol` unchanged. A
+	// `tools/list` answer additionally passes through `#select`, which is where SEP-2243's
+	// client-side exclusion happens — before the caller ever sees the result.
+	#capture(message: JSONRPCMessage, sent: JSONRPCMessage): void {
 		if (
 			isJSONRPCResponse(message) &&
 			isRecord(message.result) &&
@@ -236,6 +251,41 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 		) {
 			this.#protocol = message.result['protocolVersion']
 		}
-		this.#emitter.emit('message', message)
+		this.#emitter.emit('message', this.#select(message, sent))
+	}
+
+	// SEP-2243's client half, derived from the traffic this transport already carries: cache
+	// each listed tool's projections, and DROP every definition whose annotations violate the
+	// constraints, so a tool this transport could not project headers for never reaches the
+	// caller's `tools/list` result. Each exclusion is reported on `error` naming the tool,
+	// which is this transport's observation channel for a contained fault a `send` swallows.
+	// Everything else in the result — the cache stamps, the metadata, the valid siblings —
+	// travels through unchanged.
+	#select(message: JSONRPCMessage, sent: JSONRPCMessage): JSONRPCMessage {
+		if (!isModernRequest(sent) || sent.method !== 'tools/list') return message
+		if (!isJSONRPCResponse(message) || message.error !== undefined) return message
+		const result = message.result
+		const listed = isRecord(result) ? result['tools'] : undefined
+		if (!isRecord(result) || !isArray(listed)) return message
+		const kept: unknown[] = []
+		for (const tool of listed) {
+			if (!isRecord(tool) || !isString(tool['name'])) {
+				kept.push(tool)
+				continue
+			}
+			const parameters = buildHeaderParameters(tool['inputSchema'])
+			if (parameters === undefined) {
+				this.#emitter.emit(
+					'error',
+					new Error(
+						`MCP tool '${tool['name']}' is excluded from tools/list: its inputSchema carries an invalid x-mcp-header annotation`,
+					),
+				)
+				continue
+			}
+			this.#parameters.set(tool['name'], parameters)
+			kept.push(tool)
+		}
+		return { ...message, result: { ...result, tools: kept } }
 	}
 }

@@ -71,6 +71,42 @@ export const MCP_META_SUBSCRIPTION = 'io.modelcontextprotocol/subscriptionId'
  */
 export const MCP_EXTENSION_TASKS = 'io.modelcontextprotocol/tasks'
 
+/**
+ * The opening marker of the Base64 sentinel a standard MCP header value travels in.
+ *
+ * @remarks
+ * The markers are LOWERCASE and exact, and this constant with {@link MCP_SENTINEL_SUFFIX} is
+ * their ONE spelling in this package: {@link import('@orkestrel/mcp').encodeSentinel} builds a
+ * sentinel from them and {@link import('@orkestrel/mcp').decodeSentinel} recognizes one by
+ * them, so the two directions cannot drift apart.
+ */
+export const MCP_SENTINEL_PREFIX = '=?base64?'
+
+/** The closing marker of the Base64 sentinel a standard MCP header value travels in. */
+export const MCP_SENTINEL_SUFFIX = '?='
+
+/**
+ * The request-header prefix an `x-mcp-header` annotation projects a tool argument onto.
+ *
+ * @remarks
+ * The full field name is this prefix followed by the annotation's own value verbatim, so
+ * `x-mcp-header: 'Region'` becomes `Mcp-Param-Region`. HTTP field names are case-insensitive,
+ * which is why {@link MCP_HEADER_ANNOTATION} values are unique case-insensitively within one
+ * `inputSchema`.
+ */
+export const MCP_PARAM_PREFIX = 'Mcp-Param-'
+
+/**
+ * The tool-schema annotation key naming the header one parameter projects into.
+ *
+ * @remarks
+ * It is valid ONLY on a primitive property schema statically reachable from the `inputSchema`
+ * root through `properties` keys alone. An occurrence anywhere else — under `items`, a
+ * composition or conditional keyword, or a `$ref` target — makes the whole tool definition
+ * invalid, which is what {@link import('@orkestrel/mcp').buildHeaderParameters} decides.
+ */
+export const MCP_HEADER_ANNOTATION = 'x-mcp-header'
+
 /** MCP reserved error: required HTTP metadata does not match the request body. */
 export const MCP_HEADER_MISMATCH = -32020
 
