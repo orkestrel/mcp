@@ -2599,6 +2599,19 @@ HTTP transports share ONE transport contract. Like the HTTP transport it is
 `server.upgrade(...)` handler BEFORE this one (it can decline + destroy an
 unauthenticated upgrade).
 
+**WebSocket is a custom transport, not a normative one.** The specification defines stdio and
+Streamable HTTP, and permits an implementation to add a transport of its own; this is that. A
+peer that speaks only the defined transports does not reach it.
+
+**A closed channel rejects, and the pump survives the rejection.** A socket write is
+unconfirmed, so `WebSocketServerTransport` answers a closed channel from its own state: a `send`
+after `close()`, after the peer's close, or on a socket that is not `OPEN` rejects
+`WebSocket transport is not connected` rather than dropping the frame and telling the pump it
+landed. `bindServer` owns the consequence at both ends. It aborts every in-flight request the
+moment this transport's `close` fires, so a peer that disconnects mid-request is answered by no
+write at all; and it catches a rejection that does reach it, routing that fault to
+`mcp.emitter`'s `error` event rather than letting it escape the async listener.
+
 **It follows the spine's lifecycle, which is why `emitter` is required.** Pass the
 spine's own `server.emitter`: on its `stop` event the handler closes every socket it
 still owns with the RFC 6455 close handshake, so each client reads a clean goodbye and
@@ -2880,6 +2893,16 @@ way too, and on purpose: the Node face offers **no `protocols` key at all** — 
 handshake headers, a caller needing a different subprotocol sets that header directly rather
 than being given a second way to say the same thing.
 
+**The browser face queues a pre-open `send` and rejects a closed one.** Those are different
+states and it answers them differently. A `send` issued before `'open'` fires — before
+`start()` is even called — is queued and flushed in order the moment the socket opens, so a
+caller need not await `start()`. A `send` after `close()`, or on a socket already reporting
+`CLOSING` or `CLOSED`, rejects `WebSocket transport is not connected`: a native socket write is
+unconfirmed, so this transport answers a closed channel from its own state rather than
+resolving on a frame nobody wrote and leaving the client's correlated request pending to its
+deadline. The Node face rejects the same condition with the same words. WebSocket is the custom
+transport this package adds; the specification defines stdio and Streamable HTTP.
+
 **`duplex` is a claim about the carrier, and it is proven by driving it.** The WebSocket,
 `MessagePort`, and scope carriers declare `true` and really do deliver a client-initiated
 `notifications/cancelled` to the peer; Streamable HTTP declares `false` and writes no such
@@ -2946,7 +2969,7 @@ entity, so they sit beside `createScopeMessageListener` in `helpers.ts`, not in 
 
 | API                        | Kind  | Summary                                                                                                                                                   |
 | -------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WebSocketClientTransport` | class | The browser-face `MCPClientTransportInterface` over the native `WebSocket` — queues sends until `open`, flushed in order.                                 |
+| `WebSocketClientTransport` | class | The browser-face `MCPClientTransportInterface` over the native `WebSocket` — queues sends until `open`, flushed in order; a closed-channel send rejects.  |
 | `HTTPClientTransport`      | class | The browser-face `MCPClientTransportInterface` over native `fetch` — POSTs each message, decodes JSON/SSE, echoes sessions, and stamps era-aware headers. |
 | `MessagePortTransport`     | class | The SYMMETRIC `MCPTransportInterface` over a native `MessagePort` — `start()`s at construction, string payloads only, `close()` idempotent.               |
 
@@ -4820,14 +4843,20 @@ socket, key, head, protocol })` (SERVER mode → writes the `101` handshake,
     PUMPS — each inbound `JSONRPCMessage` that `isJSONRPCRequest` runs
     through `mcp.dispatch`, a defined response written back as a frame (a
     notification → `dispatch` `undefined` → nothing sent); a non-request
-    message is ignored; a `dispatch` / `send` fault surfaces on the
-    transport's `error` event rather than escaping the async listener.
+    message is ignored; a `dispatch` / `send` fault surfaces on `mcp.emitter`'s
+    `error` event rather than escaping the async listener, and a peer that
+    disconnects mid-request is aborted by `bindServer` before any response is
+    written, so the disconnect costs no frame and raises no unhandled rejection.
     `WebSocketServerTransport` REUSES `MCPClientTransportInterface` (`session`
     `undefined`, `start` arms the socket subscriptions, `send` writes ONE
     text frame per message, `close` closes the socket): inbound text frames
     are `JSON.parse`d (guarded) + narrowed with `parseJSONRPCMessage` onto
     `message`, a malformed / non-message frame surfaces on `error` and is
-    DROPPED, and the socket's `close` bridges to the transport's `close`. It
+    DROPPED, and the socket's `close` bridges to the transport's `close`. A
+    socket write is unconfirmed, so a closed channel is answered from the
+    transport's own state and the socket's `readyState`: a `send` after
+    `close()`, after the peer's close, or on a socket that is not `OPEN`
+    REJECTS with `WebSocket transport is not connected`, writing nothing. It
     also OWNS what it claimed: the handler holds every live transport and, on
     `options.emitter`'s `stop` event (the spine's own emitter, REQUIRED),
     `close`s each one — the RFC 6455 close handshake, never a destroy. Node
@@ -5039,7 +5068,11 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     is the host's concern; a connection failure — the native `'error'` event
     while not yet `OPEN` — REJECTS `start()`); `send` writes each message as
     ONE text frame once `OPEN`, QUEUING (in order) any message sent before —
-    flushed the moment the socket opens; inbound text frames are `JSON.parse`d
+    flushed the moment the socket opens — while a `send` after `close()` or on a
+    socket already reporting `CLOSING` / `CLOSED` REJECTS with
+    `WebSocket transport is not connected`, because a native socket write is
+    unconfirmed and a silent resolve leaves the client's correlated request
+    pending to its deadline for a frame nobody wrote; inbound text frames are `JSON.parse`d
     (guarded) + narrowed with `parseJSONRPCMessage` onto `message` (a
     non-text / non-JSON / non-message frame surfaces on `error` and is
     DROPPED, never thrown); `close()` closes the socket and fires `close`

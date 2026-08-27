@@ -147,9 +147,10 @@ describe('createWebSocketClientTransport — the browser client against the Node
 		await client.disconnect()
 	})
 
-	it('A3: send() after close() silently drops the message — no throw, no delivery', async () => {
-		// Pin the post-close semantics: a message sent after close() is dropped, not queued.
-		// This test uses a live server so any wrongly-queued message would surface on reconnect.
+	it('A3: send() after close() rejects the message — no delivery, and no silent resolve', async () => {
+		// Pin the post-close semantics: a message sent after close() rejects, and is neither
+		// queued nor delivered. This test uses a live server so any wrongly-queued message
+		// would surface on reconnect.
 		const transport = createWebSocketClientTransport({
 			url: `${serverURL}/mcp`,
 		})
@@ -159,10 +160,10 @@ describe('createWebSocketClientTransport — the browser client against the Node
 		await transport.start()
 		await transport.close()
 
-		// Send after close — must not throw and the message must never arrive.
+		// Send after close — the caller learns the write failed rather than being told it landed.
 		await expect(
 			transport.send(createJSONRPCRequest({ method: 'ping', id: 99 })),
-		).resolves.toBeUndefined()
+		).rejects.toThrow('WebSocket transport is not connected')
 		await waitForDelay(50)
 
 		expect(received).toEqual([])

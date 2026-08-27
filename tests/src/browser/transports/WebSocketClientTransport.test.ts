@@ -1,8 +1,9 @@
 import type { JSONRPCMessage } from '@src/core'
 import { describe, expect, inject, it } from 'vitest'
+import { createMCPClient } from '@src/core'
 import { WebSocketClientTransport } from '@src/browser'
 import { waitForDelay } from '@orkestrel/test'
-import { MODERN_METADATA, waitForSettlement } from '../../../setup.js'
+import { createJSONRPCRequest, MODERN_METADATA, waitForSettlement } from '../../../setup.js'
 
 // src/browser/transports/WebSocketClientTransport.ts — what the browser face owes the socket
 // it borrowed. The round trip against the real Node-face WebSocket server is proven in
@@ -62,5 +63,69 @@ describe('WebSocketClientTransport — close releases the socket it bound', () =
 		await waitForDelay(60)
 
 		expect(closed).toBe(1)
+	})
+})
+
+// The `send` contract (`src/core/types.ts`) says a transport whose channel cannot confirm a
+// write answers a closed channel FROM ITS OWN STATE. Silently resolving is what leaves the
+// client's correlated request pending to its deadline for a frame that was never written; the
+// pre-open queue is a different state entirely and still flushes.
+describe('WebSocketClientTransport — a send the channel cannot carry rejects', () => {
+	it('rejects a send issued after close rather than reporting a write nobody made', async () => {
+		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
+		const received: JSONRPCMessage[] = []
+		transport.emitter.on('message', (message) => received.push(message))
+		await transport.start()
+		await transport.close()
+
+		await expect(transport.send(createJSONRPCRequest({ method: 'ping', id: 99 }))).rejects.toThrow(
+			'WebSocket transport is not connected',
+		)
+		await waitForDelay(60)
+		// The rejection is the honest answer: nothing was written, so nothing came back.
+		expect(received).toEqual([])
+	})
+
+	it('rejects a send issued after the server closed the socket', async () => {
+		const transport = new WebSocketClientTransport({ url: `${serverURL}/close`, protocols: [] })
+		let closed = 0
+		transport.emitter.on('close', () => (closed += 1))
+		await transport.start()
+		await waitForDelay(60)
+		expect(closed).toBe(1)
+
+		await expect(transport.send(createJSONRPCRequest({ method: 'ping', id: 1 }))).rejects.toThrow(
+			'WebSocket transport is not connected',
+		)
+	})
+
+	it('still queues a send issued before open and flushes it in order once the socket opens', async () => {
+		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
+		const received: JSONRPCMessage[] = []
+		transport.emitter.on('message', (message) => received.push(message))
+
+		// Neither send awaits `start()`: both are queued pre-open and flushed on `'open'`.
+		const starting = transport.start()
+		await transport.send(createJSONRPCRequest({ method: 'ping', id: 1 }))
+		await transport.send(createJSONRPCRequest({ method: 'ping', id: 2 }))
+		await starting
+		await waitForDelay(60)
+
+		expect(received.map((message) => message.id)).toEqual([1, 2])
+		await transport.close()
+	})
+
+	it('settles the caller pending call on the closed channel instead of leaving it to time out', async () => {
+		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
+		const client = createMCPClient({ transport, timeout: 200 })
+		await client.connect()
+		await transport.close()
+
+		// THE CALLER-VISIBLE SYMPTOM. A silent resolve registers the request, writes nothing, and
+		// leaves the caller waiting out `timeout` before reporting a deadline for a channel that
+		// had already gone. The rejection names the channel instead, at once.
+		await expect(client.call('add', { a: 1, b: 2 })).rejects.toThrow(
+			'WebSocket transport is not connected',
+		)
 	})
 })

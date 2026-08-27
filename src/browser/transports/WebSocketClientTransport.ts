@@ -26,6 +26,11 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   the socket is `OPEN`; a `send` issued before `'open'` fires (or before `start()`
  *   is even called) is QUEUED and flushed, IN ORDER, the moment the socket opens —
  *   so a caller need not await `start()` before calling `send`.
+ * - **A closed channel REJECTS.** The native socket confirms nothing about a write, so this
+ *   transport answers from its own state: a `send` after `close()`, or on a socket already
+ *   reporting `CLOSING` / `CLOSED`, REJECTS with `WebSocket transport is not connected` rather
+ *   than resolving on a frame nobody wrote. Only the closed state rejects — a pre-open `send`
+ *   still queues.
  * - **Inbound (`message`).** Each decoded text frame is `JSON.parse`d (guarded) and
  *   narrowed with `parseJSONRPCMessage` — a well-formed {@link JSONRPCMessage}
  *   re-emits on this transport's `message` event; a non-text (binary) frame or a
@@ -36,7 +41,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   SAME `close` exactly once total — `close()` first flips the guard, so the native event
  *   never double-emits, and the released socket reports its own close to nobody. Closing before
  *   the socket opens resolves the pending `start()` rather than leaving it pending, matching the
- *   Node face. A `send` issued after `close()` is silently dropped (not queued), so a closed
+ *   Node face. A `send` issued after `close()` REJECTS (it is never queued), so a closed
  *   transport delivers nothing until a `start()` opens a new connection.
  * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); every
  *   emit the emitter isolates a listener throw; `error` is a DOMAIN event (a
@@ -116,11 +121,23 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 	}
 
 	async send(message: JSONRPCMessage): Promise<void> {
-		// After close(), silently drop — never queue (a closed transport is not reusable;
-		// queued messages would resurrect on a later start() which is not a supported pattern).
-		if (this.#closed) return
-		const text = JSON.stringify(message)
 		const socket = this.#socket
+		// A closed transport, and a socket the host has already moved past OPEN, each name a
+		// channel that will never carry this frame. Resolving would tell the client the message
+		// was written and leave its correlated request pending to its own deadline. The socket's
+		// own state is a SECOND source rather than a copy of the first: the native `close` event
+		// lags the readyState transition, so a server-initiated close leaves this transport's flag
+		// clear while the socket already reports `CLOSING`.
+		if (
+			this.#closed ||
+			socket?.readyState === WebSocket.CLOSING ||
+			socket?.readyState === WebSocket.CLOSED
+		) {
+			throw new Error('WebSocket transport is not connected')
+		}
+		const text = JSON.stringify(message)
+		// No socket yet (`start()` has not run) or still `CONNECTING`: queue it, and `#flush`
+		// writes the whole queue in order the moment the socket opens.
 		if (socket !== undefined && socket.readyState === WebSocket.OPEN) socket.send(text)
 		else this.#queue.push(text)
 	}

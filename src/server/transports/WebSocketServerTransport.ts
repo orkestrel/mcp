@@ -7,6 +7,7 @@ import type { EmitterInterface } from '@orkestrel/emitter'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import { parseJSONRPCMessage } from '@src/core'
 import { Emitter } from '@orkestrel/emitter'
+import { WEBSOCKET_READY_OPEN } from '@orkestrel/websocket'
 
 /**
  * The per-connection JSON-RPC-over-WebSocket SERVER bridge — wraps a
@@ -29,8 +30,13 @@ import { Emitter } from '@orkestrel/emitter'
  *   a non-JSON or non-message frame is surfaced on `error` and DROPPED, never thrown. It
  *   also bridges the socket's `close` → this transport's `close`, and the socket's `error`.
  * - **Outbound (`send`).** `send(message)` writes one text frame
- *   (`nodeWs.send(JSON.stringify(message))`); the underlying wrapper no-ops a write on a
- *   non-open socket, so a closed connection drops silently rather than throwing.
+ *   (`nodeWs.send(JSON.stringify(message))`). The underlying wrapper no-ops a write on a
+ *   non-open socket and confirms nothing, so this bridge answers a closed channel from its own
+ *   state and the socket's `readyState`: a `send` after `close()`, after the peer's close, or on
+ *   a socket that is not `OPEN` REJECTS with `WebSocket transport is not connected` rather than
+ *   resolving on a frame nobody wrote. `bindServer` catches that rejection and routes it to the
+ *   dispatcher's `error` event, and it aborts every in-flight request the moment this transport's
+ *   `close` fires — so a peer that disconnects mid-request is answered by no write at all.
  * - **`close()`** removes the subscriptions `start()` installed on the socket, closes the
  *   underlying socket (the RFC 6455 close handshake), and fires the transport's `close` event
  *   (idempotent — a second `close`, or a socket-driven close, emits once). A frame that arrives
@@ -83,8 +89,14 @@ export class WebSocketServerTransport implements MCPClientTransportInterface {
 	}
 
 	async send(message: JSONRPCMessage): Promise<void> {
-		// The wrapper drops a write on a non-open socket, so a closed connection is a
-		// silent no-op rather than a throw.
+		// The wrapper DROPS a write on a non-open socket and reports nothing, so this bridge
+		// answers the closed channel from its own state and the socket's. Resolving would tell
+		// the pump a frame reached a peer that had already gone. The socket's `readyState` is a
+		// SECOND source rather than a copy of the first: a socket that ended before `start()`
+		// armed the close subscription leaves this transport's own flag clear.
+		if (this.#closed || this.#socket.readyState !== WEBSOCKET_READY_OPEN) {
+			throw new Error('WebSocket transport is not connected')
+		}
 		this.#socket.send(JSON.stringify(message))
 	}
 
