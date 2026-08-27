@@ -28,10 +28,17 @@ import {
 	startConformance,
 } from './setupConformance.js'
 
-// The recorded baseline, scenario by scenario. A bare total hides a scenario that stopped
-// running, and this number has been wrong before — each time because the FIXTURE, not the
-// library, could not answer. Every row below is a check the shipped server passes.
+// The recorded baseline, scenario by scenario, for the FULL 2026-07-28 server listing
+// (`--suite all`). A bare total hides a scenario that stopped running, and this number has
+// been wrong before — each time because the FIXTURE, not the library, could not answer. Every
+// row with `failed: 0` is a check the shipped server passes; a row with a nonzero `failed` is
+// a named red baseline this suite carries on purpose until a later change shrinks it. Read
+// `tmp/units/m0-report.md` for the runner's per-check message behind each nonzero row.
 const EXPECTED: readonly ConformanceScenario[] = [
+	// Fails: the fixture answers only 2025-06-18 and 2025-11-25 protocol versions, so every
+	// SEP-2575 `_meta.protocolVersion` check that targets 2026-07-28 sees -32022 instead of the
+	// -32602 the check expects.
+	{ name: 'server-stateless', passed: 24, failed: 4 },
 	{ name: 'completion-complete', passed: 1, failed: 0 },
 	{ name: 'tools-list', passed: 2, failed: 0 },
 	{ name: 'tools-call-simple-text', passed: 1, failed: 0 },
@@ -41,18 +48,52 @@ const EXPECTED: readonly ConformanceScenario[] = [
 	{ name: 'tools-call-mixed-content', passed: 1, failed: 0 },
 	{ name: 'tools-call-error', passed: 1, failed: 0 },
 	{ name: 'tools-call-with-progress', passed: 1, failed: 0 },
+	// Fails: the scenario calls a `json_schema_2020_12_tool` this fixture's tool registry does
+	// not declare.
+	{ name: 'json-schema-2020-12', passed: 0, failed: 1 },
 	{ name: 'server-sse-multiple-streams', passed: 2, failed: 0 },
 	{ name: 'resources-list', passed: 1, failed: 0 },
 	{ name: 'resources-read-text', passed: 1, failed: 0 },
 	{ name: 'resources-read-binary', passed: 1, failed: 0 },
 	{ name: 'resources-templates-read', passed: 1, failed: 0 },
+	{ name: 'sep-2164-resource-not-found', passed: 2, failed: 0 },
 	{ name: 'prompts-list', passed: 1, failed: 0 },
 	{ name: 'prompts-get-simple', passed: 1, failed: 0 },
 	{ name: 'prompts-get-with-args', passed: 1, failed: 0 },
 	{ name: 'prompts-get-embedded-resource', passed: 1, failed: 0 },
 	{ name: 'prompts-get-with-image', passed: 1, failed: 0 },
 	{ name: 'dns-rebinding-protection', passed: 2, failed: 0 },
+	{ name: 'caching', passed: 7, failed: 0 },
+	{ name: 'http-header-validation', passed: 13, failed: 0 },
+	// Fails: SEP-2243 wants a 400 response and a -32020 `HeaderMismatch` JSON-RPC error for a
+	// mismatched or invalid `Mcp-Param` header; the shipped route accepts both and answers 200.
+	{ name: 'http-custom-header-server-validation', passed: 3, failed: 6 },
+	// Fails: SEP-2322 MRTR scenarios need a tool that returns `resultType: 'input_required'`
+	// through a named `test_input_required_result_elicitation` tool (and a matching prompt for
+	// `input-required-result-non-tool-request`); this fixture declares neither.
+	{ name: 'input-required-result-basic-elicitation', passed: 0, failed: 1 },
+	{ name: 'input-required-result-basic-sampling', passed: 0, failed: 1 },
+	{ name: 'input-required-result-basic-list-roots', passed: 0, failed: 1 },
+	{ name: 'input-required-result-request-state', passed: 0, failed: 1 },
+	{ name: 'input-required-result-multiple-input-requests', passed: 0, failed: 1 },
+	{ name: 'input-required-result-multi-round', passed: 0, failed: 1 },
+	// Passes at 0/0: every check the scenario runs reports WARNING (not FAILURE) once its
+	// prerequisite tool call answers `tool not found`, so the runner tallies no pass and no
+	// fail.
+	{ name: 'input-required-result-missing-input-response', passed: 0, failed: 0 },
+	{ name: 'input-required-result-non-tool-request', passed: 0, failed: 1 },
+	{ name: 'input-required-result-result-type', passed: 0, failed: 1 },
+	{ name: 'input-required-result-unsupported-methods', passed: 1, failed: 0 },
+	{ name: 'input-required-result-tampered-state', passed: 0, failed: 1 },
+	{ name: 'input-required-result-capability-check', passed: 0, failed: 1 },
+	{ name: 'input-required-result-ignore-extra-params', passed: 1, failed: 0 },
+	{ name: 'input-required-result-validate-input', passed: 0, failed: 0 },
 ]
+
+/** Scenario names carrying a nonzero red baseline: the exact list a later change shrinks. */
+const EXPECTED_RED = EXPECTED.filter((scenario) => scenario.failed > 0).map(
+	(scenario) => scenario.name,
+)
 
 describe('Tasks schema authority pins', () => {
 	it("pins the vendored schema's raw-byte digest", () => {
@@ -159,8 +200,14 @@ describe('MCP server conformance', () => {
 		expect(version).toBe(readConformanceRelease())
 	})
 
-	it('runs every recorded scenario with no failure', () => {
+	it('runs every 2026-07-28 server scenario against the recorded baseline', () => {
 		expect(result.scenarios).toEqual(EXPECTED)
+	})
+
+	it('names the exact scenarios carrying the recorded red baseline', () => {
+		expect(result.scenarios.filter((scenario) => scenario.failed > 0).map((scenario) => scenario.name)).toEqual(
+			EXPECTED_RED,
+		)
 	})
 
 	it('protects against DNS rebinding', () => {
@@ -171,6 +218,6 @@ describe('MCP server conformance', () => {
 	})
 
 	it('reports the recorded total', () => {
-		expect([result.passed, result.failed]).toEqual([23, 0])
+		expect([result.passed, result.failed]).toEqual([74, 21])
 	})
 })

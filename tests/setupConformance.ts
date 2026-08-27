@@ -1242,14 +1242,30 @@ export function parseConformance(output: string): ConformanceResult | undefined 
 }
 
 /**
- * Drive the pinned runner's `server` suite against a live MCP endpoint.
+ * Drive the pinned runner's whole `server` scenario set at {@link CONFORMANCE_SPEC} against
+ * a live MCP endpoint.
+ *
+ * @remarks
+ * `--suite all` widens the run past the runner's own `active` default, which excludes its
+ * `draft` and `pending` scenarios. This project pins one spec version, so the widened run
+ * still names every scenario the runner's own `list --spec-version 2026-07-28` reports for
+ * it, and the recorded baseline in `tests/conformance.test.ts` covers scenarios this server
+ * does not answer yet.
  *
  * @param url - The fixture's absolute MCP endpoint
  * @returns The parsed run outcome
  * @throws When the runner produced no summary block, carrying everything it wrote
  */
 export async function executeConformance(url: string): Promise<ConformanceResult> {
-	const output = await executeRunner(['server', '--url', url, '--spec-version', CONFORMANCE_SPEC])
+	const output = await executeRunner([
+		'server',
+		'--url',
+		url,
+		'--spec-version',
+		CONFORMANCE_SPEC,
+		'--suite',
+		'all',
+	])
 	const result = parseConformance(output)
 	if (result === undefined) {
 		throw new Error(
