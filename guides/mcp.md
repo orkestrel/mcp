@@ -2764,10 +2764,10 @@ const tools = await client.tools()
 
 #### Factories
 
-| API                          | Kind     | Summary                                                                                                                                                                                                                                                                                 |
-| ---------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createStdioClientTransport` | function | Create a `StdioClientTransportInterface` that spawns a CHILD PROCESS MCP server, drives it over its piped stdio, and reports that child's bounded stderr tail as `evidence`.                                                                                                            |
-| `createStdioServer`          | function | Pipes an `MCPDispatcherInterface` (through `bindServer`) over newline-delimited JSON-RPC on `stdin`/`stdout` (or injected streams) — `{ start(); stop() }`; `stop()` unbinds the pump, drops every listener the transport put on `input`, and releases `input` so the process can exit. |
+| API                          | Kind     | Summary                                                                                                                                                                                                                                                                                             |
+| ---------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createStdioClientTransport` | function | Create a `StdioClientTransportInterface` that spawns a CHILD PROCESS MCP server, drives it over its piped stdio, and reports that child's bounded stderr tail as `evidence`.                                                                                                                        |
+| `createStdioServer`          | function | Pipes an `MCPDispatcherInterface` (through `bindServer`) over newline-delimited JSON-RPC on `stdin`/`stdout` (or injected streams), returning a `StdioServerInterface`; `stop()` unbinds the pump, drops every listener the transport put on `input`, and releases `input` so the process can exit. |
 
 #### Entities
 
@@ -2792,6 +2792,7 @@ _See `extractLines` / `dispatchLines` under [HTTP transport § Helpers](#helpers
 | ------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `StdioClientTransportInterface` | interface | `MCPClientTransportInterface & { readonly evidence: string \| undefined }` — what `createStdioClientTransport` returns. The `evidence` member reads the supervised child's bounded stderr tail: `undefined` before the first `start()`, that child's live tail while it runs, and the tail frozen at its end afterwards. It declares no method of its own; the methods it inherits from `MCPClientTransportInterface` are under [Methods](#methods). |
 | `StdioClientTransportOptions`   | interface | `{ command: string; args?: readonly string[]; env?: Record<string, string>; delivery?: number }` — the child process to spawn. `env` MERGES over `process.env`; it never replaces it, so the child inherits every unlisted key. `delivery` bounds one unconfirmed write to the child's `stdin`, in milliseconds: an omitted value selects `DEFAULT_MCP_DELIVERY`, and an explicit `0` removes the bound.                                             |
+| `StdioServerInterface`          | interface | `{ start(): void; stop(): void }` — the ingress handle `createStdioServer` returns. `start()` arms the pump ONCE, so a repeat attaches nothing further; `stop()` unbinds it and closes the transport, and ends that handle's lifetime permanently — a `start()` after it arms nothing, and serving again takes a fresh `createStdioServer`. Its methods are under [Methods](#methods).                                                               |
 | `StdioServerOptions`            | interface | `{ input?: NodeJS.ReadableStream; output?: NodeJS.WritableStream }` — the injectable stream pair (default `process.stdin`/`stdout`).                                                                                                                                                                                                                                                                                                                 |
 | `LineExtraction`                | interface | `{ lines: readonly string[]; remainder: string }` — the result of folding one more chunk into the newline-framed buffer (`extractLines`).                                                                                                                                                                                                                                                                                                            |
 
@@ -3460,6 +3461,34 @@ if (session !== undefined) {
 	session.attach(stream) // register an open GET-SSE stream for future pushes
 	session.detach(stream) // unregister it on disconnect
 }
+```
+
+#### `StdioServerInterface`
+
+The stdio ingress handle `createStdioServer` returns. No class implements it: the
+factory owns the `StdioServerTransport` and the `bindServer` unbind behind it, and
+publishes these two doors over that pair. The handle serves ONE lifetime — `stop()`
+ends it permanently, and serving again takes a fresh `createStdioServer` over a
+live stream pair.
+
+| Method  | Returns | Behavior                                                                                                                                                                                                                            |
+| ------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start` | `void`  | Arm the pump: subscribe to `input` and dispatch every complete line through the bound `MCPDispatcherInterface`, writing each defined response back to `output`. The pump arms ONCE, so a repeat attaches nothing further.           |
+| `stop`  | `void`  | Unbind the pump and close the transport: drop the listeners `start()` put on `input` / `output`, reject every pending `send`, and release `input` so the process can exit. A repeat does nothing, and neither does a later `start`. |
+
+```ts
+import { createMCPServer } from '@orkestrel/mcp'
+import { createStdioServer } from '@orkestrel/mcp/server'
+import { createToolManager } from '@orkestrel/tool'
+
+const mcp = createMCPServer({
+	identity: { name: 'docs', version: '1.0.0' },
+	tools: createToolManager(),
+})
+const stdio = createStdioServer(mcp) // over this process's own stdin/stdout
+stdio.start() // arm the pump
+stdio.start() // a repeat arms nothing further — one reply per request
+stdio.stop() // unbind, release stdin, and end this handle
 ```
 
 ## Patterns

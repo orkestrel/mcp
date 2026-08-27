@@ -481,6 +481,30 @@ export interface StdioServerOptions {
 }
 
 /**
+ * The stdio INGRESS handle {@link import('./factories.js').createStdioServer} returns — arms
+ * and tears down the newline-delimited JSON-RPC pump over the {@link StdioServerOptions}
+ * stream pair.
+ *
+ * @remarks
+ * - `start()` — arm the pump: subscribe to `input`, and dispatch every complete line through
+ *   the bound {@link import('@src/core').MCPDispatcherInterface}, writing each defined
+ *   response back to `output`. The subscriptions are attached by the time the call returns.
+ *   The pump arms ONCE, so a repeated `start()` attaches nothing further and an inbound
+ *   request still draws exactly one reply.
+ * - `stop()` — unbind the pump and close the transport: the listeners `start()` put on
+ *   `input` / `output` are removed, every pending `send` rejects, and `input` is released so
+ *   the process can exit. The release is complete by the time the call returns, and a
+ *   repeated `stop()` does nothing.
+ * - **One lifetime per handle.** `stop()` ends it permanently: a `start()` issued afterwards
+ *   arms nothing, and serving again takes a fresh
+ *   {@link import('./factories.js').createStdioServer} over a live stream pair.
+ */
+export interface StdioServerInterface {
+	start(): void
+	stop(): void
+}
+
+/**
  * The result of folding one more chunk of raw stdio bytes into a newline-framed
  * buffer — every COMPLETE line extracted (newline-terminated in the wire bytes) plus
  * the trailing partial line carried forward as the new `remainder`.

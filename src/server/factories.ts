@@ -10,6 +10,7 @@ import type {
 	HTTPTransportOptions,
 	StdioClientTransportInterface,
 	StdioClientTransportOptions,
+	StdioServerInterface,
 	StdioServerOptions,
 	WebSocketClientTransportOptions,
 	WebSocketServerOptions,
@@ -371,7 +372,8 @@ export function createStdioClientTransport(
  * @param mcp - The transport-agnostic {@link MCPDispatcherInterface} to expose over stdio
  * @param options - Optional injectable `input` / `output` streams; see
  *   {@link StdioServerOptions}
- * @returns A `{ start(): void; stop(): void }` handle to arm / tear down the pump
+ * @returns A {@link StdioServerInterface} handle to arm / tear down the pump; `stop()` ends
+ *   that handle's lifetime permanently
  *
  * @example
  * ```ts
@@ -387,7 +389,7 @@ export function createStdioClientTransport(
 export function createStdioServer(
 	mcp: MCPDispatcherInterface,
 	options?: StdioServerOptions,
-): { start(): void; stop(): void } {
+): StdioServerInterface {
 	const input = options?.input ?? process.stdin
 	const output = options?.output ?? process.stdout
 	const transport = new StdioServerTransport(input, output)
