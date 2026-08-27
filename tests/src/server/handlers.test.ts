@@ -321,10 +321,21 @@ describe('createMCPPostHandler', () => {
 		})
 	})
 
-	// The legacy door admits legacy revisions only, so the modern revision is unsupported THERE
-	// even though a bare server accepts it: a legacy-shaped body cannot stamp it. The retry data
-	// names the revisions this door does accept, which is what a refused client reconnects with.
-	it('rejects the modern protocol-version header on a legacy-shaped request', async () => {
+	// A header naming the MODERN revision is a client declaring the revision this server
+	// implements, so the request is held to that revision's own rule: SEP-2575 requires every
+	// modern request to carry a parsable `_meta`, and a body without one is `-32602`. The
+	// legacy `-32022` fallthrough would answer "this server does not implement 2026-07-28",
+	// which is false. An unsupported revision, modern or not, still answers `-32022`.
+	it.each([
+		{
+			branch: 'a legacy-shaped body with no _meta at all',
+			params: undefined,
+		},
+		{
+			branch: 'a body whose _meta omits the protocol version',
+			params: { _meta: { [MCP_META_CAPABILITIES]: {} } },
+		},
+	])('answers -32602 for a modern protocol header over $branch', async (test) => {
 		const mcp = createCalculatorServer()
 		let requests = 0
 		mcp.emitter.on('request', () => {
@@ -334,8 +345,17 @@ describe('createMCPPostHandler', () => {
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
-				headers: { [MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION },
-				body: JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 9 })),
+				headers: {
+					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+					[MCP_METHOD_HEADER]: 'server/discover',
+				},
+				body: JSON.stringify(
+					createJSONRPCRequest({
+						method: 'server/discover',
+						id: 9,
+						...(test.params === undefined ? {} : { params: test.params }),
+					}),
+				),
 			}),
 		)
 
@@ -345,11 +365,34 @@ describe('createMCPPostHandler', () => {
 			jsonrpc: '2.0',
 			id: 9,
 			error: {
+				code: -32602,
+				message: 'Invalid params: malformed modern request metadata',
+			},
+		})
+	})
+
+	it('keeps -32022 for a protocol header naming a revision this server does not implement', async () => {
+		const handler = createPostHandler(createMCPLegacy(createCalculatorServer()), {
+			streaming: false,
+		})
+		const response = await handler(
+			new Request('http://localhost/mcp', {
+				method: 'POST',
+				headers: { [MCP_PROTOCOL_VERSION_HEADER]: 'v999.0.0' },
+				body: JSON.stringify(createJSONRPCRequest({ method: 'ping', id: 9 })),
+			}),
+		)
+
+		expect(response.status).toBe(400)
+		expect(await response.json()).toEqual({
+			jsonrpc: '2.0',
+			id: 9,
+			error: {
 				code: -32022,
-				message: `Unsupported MCP protocol version '${MCP_MODERN_VERSION}'`,
+				message: "Unsupported MCP protocol version 'v999.0.0'",
 				data: {
 					supported: [MCP_HANDSHAKE_VERSION, MCP_FALLBACK_VERSION],
-					requested: MCP_MODERN_VERSION,
+					requested: 'v999.0.0',
 				},
 			},
 		})
@@ -766,7 +809,7 @@ describe('createMCPPostHandler', () => {
 				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
 				[MCP_METHOD_HEADER]: 'tools/call',
 			},
-			message: "Required Mcp-Name header is missing; the request body tool name is 'add'.",
+			message: "Required Mcp-Name header is missing; the request body target is 'add'.",
 		},
 		{
 			branch: 'names a mismatched modern tools/call name header',
@@ -777,7 +820,30 @@ describe('createMCPPostHandler', () => {
 				[MCP_METHOD_HEADER]: 'tools/call',
 				[MCP_NAME_HEADER]: 'client-supplied-name',
 			},
-			message: "Mcp-Name header does not match the request body tool name 'add'.",
+			message: "Mcp-Name header does not match the request body target 'add'.",
+			supplied: 'client-supplied-name',
+		},
+		{
+			branch: 'names a missing modern resources/read name header',
+			method: 'resources/read',
+			params: { uri: 'memory://resource/one' },
+			headers: {
+				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+				[MCP_METHOD_HEADER]: 'resources/read',
+			},
+			message:
+				"Required Mcp-Name header is missing; the request body target is 'memory://resource/one'.",
+		},
+		{
+			branch: 'names a mismatched modern prompts/get name header',
+			method: 'prompts/get',
+			params: { name: 'greet' },
+			headers: {
+				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+				[MCP_METHOD_HEADER]: 'prompts/get',
+				[MCP_NAME_HEADER]: 'client-supplied-name',
+			},
+			message: "Mcp-Name header does not match the request body target 'greet'.",
 			supplied: 'client-supplied-name',
 		},
 	])('$branch with HTTP 400, -32020, and no data member', async (test) => {

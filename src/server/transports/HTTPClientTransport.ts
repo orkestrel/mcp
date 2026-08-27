@@ -6,6 +6,7 @@ import type {
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { HTTPClientTransportOptions } from '../types.js'
 import {
+	encodeSentinel,
 	inferRequestVersion,
 	isJSONRPCResponse,
 	isMCPVersion,
@@ -50,7 +51,8 @@ import { buildResponseError, readEventStream } from '../helpers.js'
  *   initialize result's `protocolVersion` is likewise captured, but only
  *   when it is a SUPPORTED value, and echoed as `mcp-protocol-version` alone on
  *   subsequent legacy requests. Modern requests instead derive protocol and method
- *   headers from the message, plus the name header only for `tools/call`.
+ *   headers from the message, plus the name header only for `tools/call` — carried in the
+ *   protocol's Base64 sentinel form whenever the tool name cannot ride as plain ASCII.
  *   Before initialize returns, neither captured legacy header is sent.
  *   `close()` clears the captured protocol so a reconnect's `initialize`
  *   POST is headerless; the captured `session` persists across `close()`.
@@ -179,7 +181,10 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 	// Modern requests announce their own protocol version, so the header is projected from the
 	// message through the SHARED `inferRequestVersion` — the same read the server's own
 	// expectation performs, and the same read the browser face performs. Legacy requests carry
-	// the version captured from the `initialize` handshake instead.
+	// the version captured from the `initialize` handshake instead. `tools/call` is the one
+	// named method `MCPClientInterface` publishes, so it is the one that stamps `Mcp-Name`; the
+	// value rides through `encodeSentinel`, which leaves a plain tool name literal and
+	// carries anything else as the protocol's Base64 sentinel.
 	#buildHeaders(message: JSONRPCMessage): Readonly<Record<string, string>> {
 		if (isModernRequest(message)) {
 			const version = inferRequestVersion(message)
@@ -187,7 +192,9 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 			return {
 				...(version === undefined ? {} : { [MCP_PROTOCOL_VERSION_HEADER]: version }),
 				[MCP_METHOD_HEADER]: message.method,
-				...(message.method === 'tools/call' && isString(name) ? { [MCP_NAME_HEADER]: name } : {}),
+				...(message.method === 'tools/call' && isString(name)
+					? { [MCP_NAME_HEADER]: encodeSentinel(name) }
+					: {}),
 			}
 		}
 		return this.#protocol === undefined ? {} : { [MCP_PROTOCOL_VERSION_HEADER]: this.#protocol }

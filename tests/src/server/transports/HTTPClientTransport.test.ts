@@ -275,6 +275,46 @@ describe('HTTPClientTransport — lifecycle', () => {
 		])
 	})
 
+	// A tool name a header cannot carry as plain ASCII travels in the protocol's sentinel form.
+	// The wire form is written out literally rather than re-derived through `encodeSentinel`, so
+	// this row cannot agree with a broken encoder, and the server's own expectation reads the
+	// same headers back to prove the encoding is one the receiver accepts.
+	it('carries a tool name needing encoding as the sentinel the server decodes', async () => {
+		const headers: Headers[] = []
+		const transport = createHTTPClientTransport({
+			url: 'http://localhost/mcp',
+			fetch: (_input, init) => {
+				headers.push(new Headers(init?.headers))
+				return Promise.resolve(new Response(null, { status: 202 }))
+			},
+		})
+		const message: JSONRPCMessage = {
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/call',
+			params: {
+				name: 'café',
+				arguments: {},
+				_meta: {
+					[MCP_META_VERSION]: MCP_HANDSHAKE_VERSION,
+					[MCP_META_CAPABILITIES]: {},
+				},
+			},
+		}
+
+		await transport.send(message)
+		const sent = headers[0]
+		if (sent === undefined) throw new Error('the transport issued no request')
+
+		expect(sent.get(MCP_NAME_HEADER)).toBe('=?base64?Y2Fmw6k=?=')
+		expect(
+			inferHeaderIssue(
+				new Request('http://localhost/mcp', { method: 'POST', headers: sent }),
+				message,
+			),
+		).toBeUndefined()
+	})
+
 	// The Node half of the SHARED projection table. The browser face used to
 	// route the same read through `parseRequestContext` and withheld the header on every
 	// context that is modern-by-key-presence but not fully well formed; both faces now

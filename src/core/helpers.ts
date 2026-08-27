@@ -64,6 +64,7 @@ import {
 	isMCPMetaObject,
 	isMCPTaskNotification,
 	isMCPTaskResult,
+	isStandardBase64,
 } from './validators.js'
 
 /**
@@ -1183,6 +1184,83 @@ export function decodeBoundedMessage(
 	if (!isBoundedString(message, limits.bytes)) return undefined
 	const parsed = attempt<unknown>(() => JSON.parse(message))
 	return parsed.success ? parseJSONRPCMessage(parsed.value, limits) : undefined
+}
+
+/**
+ * Reads the value one standard MCP request header carries, decoding the Base64 sentinel.
+ *
+ * @remarks
+ * The sentinel format is `=?base64?{Base64OfUTF8}?=`, and its markers are LOWERCASE and exact.
+ * The markers alone decide whether a value is a sentinel: a value carrying both is one, and
+ * its payload is then held to {@link import('./validators.js').isStandardBase64} — the one
+ * canonical-Base64 membership rule this package owns — and to well-formed UTF-8. A malformed
+ * payload answers `undefined` rather than falling back to the literal, because the protocol
+ * requires a server to REJECT invalid characters, and a fallback would admit the very value
+ * the rule exists to refuse. A value missing either marker is a literal and comes back
+ * unchanged.
+ *
+ * Optional whitespace is excluded first, per RFC 9110 § 5.5: a recipient parses a field value
+ * with its surrounding spaces and horizontal tabs removed, so a peer that padded a plain value
+ * still matches the body. A value whose own leading or trailing whitespace is significant
+ * cannot survive that, which is what {@link encodeSentinel} encodes it for.
+ *
+ * Total — never throws, whatever the input.
+ *
+ * @param value - The raw header field value the peer sent
+ * @returns The carried value, or `undefined` when the sentinel's payload is invalid
+ *
+ * @example
+ * ```ts
+ * decodeSentinel('=?base64?Y2Fmw6k=?=') // 'café'
+ * decodeSentinel('  search  ') // 'search' — optional whitespace excluded
+ * decodeSentinel('=?base64?SGVsbG8?=') // undefined — invalid padding
+ * ```
+ */
+export function decodeSentinel(value: string): string | undefined {
+	const field = value.replace(/^[ \t]+|[ \t]+$/g, '')
+	const marked = /^=\?base64\?([\s\S]*)\?=$/.exec(field)
+	if (marked === null) return field
+	const payload = marked[1]
+	if (!isStandardBase64(payload)) return undefined
+	const decoded = attempt(() => {
+		const binary = atob(payload)
+		const bytes = new Uint8Array(binary.length)
+		for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+		return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+	})
+	return decoded.success ? decoded.value : undefined
+}
+
+/**
+ * Builds the wire form one standard MCP request header value must travel as.
+ *
+ * @remarks
+ * The exact inverse of {@link decodeSentinel}, and its membership rule is stated as that
+ * inverse rather than as a second list that could drift: a value travels LITERALLY when it is
+ * plain printable ASCII — every code point in `U+0020`–`U+007E`, the RFC 9110 field-value
+ * range this package admits — and {@link decodeSentinel} gives it back unchanged. Every other
+ * value travels as `=?base64?{Base64OfUTF8}?=`.
+ *
+ * That one rule covers each row of the protocol's encoding table. A non-ASCII value and a
+ * value carrying a control character fail the ASCII test. A value with leading or trailing
+ * whitespace comes back trimmed, so it fails the round trip. A value already wearing the
+ * sentinel markers decodes to something else, or to nothing, so it fails the round trip too
+ * and is encoded rather than read back as a sentinel it never was.
+ *
+ * @param value - The value the header must carry
+ * @returns The literal value, or its Base64 sentinel form
+ *
+ * @example
+ * ```ts
+ * encodeSentinel('search') // 'search'
+ * encodeSentinel('café') // '=?base64?Y2Fmw6k=?='
+ * ```
+ */
+export function encodeSentinel(value: string): string {
+	if (/^[ -~]*$/.test(value) && decodeSentinel(value) === value) return value
+	let binary = ''
+	for (const byte of new TextEncoder().encode(value)) binary += String.fromCharCode(byte)
+	return `=?base64?${btoa(binary)}?=`
 }
 
 /**

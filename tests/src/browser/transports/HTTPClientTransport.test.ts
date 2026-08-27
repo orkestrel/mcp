@@ -92,6 +92,43 @@ describe('HTTPClientTransport — close releases the request it has in flight', 
 	})
 })
 
+// The browser half of the client's `Mcp-Name` stamping. The Node half asserts the same two
+// rows in tests/src/server/transports/HTTPClientTransport.test.ts, and the wire form is
+// written out literally rather than re-derived through `encodeSentinel`, so a row cannot
+// agree with a broken encoder.
+
+describe('HTTPClientTransport — Mcp-Name travels in the protocol sentinel form', () => {
+	it('stamps a plain tool name literally and a name needing encoding as the sentinel', async () => {
+		const names: Array<string | null> = []
+		const transport = new HTTPClientTransport({
+			url: 'http://127.0.0.1:1/mcp',
+			fetch: (_input, init) => {
+				names.push(new Headers(init?.headers).get('mcp-name'))
+				return Promise.resolve(new Response(null, { status: 202 }))
+			},
+		})
+		const metadata = {
+			'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+			'io.modelcontextprotocol/clientCapabilities': {},
+		}
+
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/call',
+			params: { name: 'add', arguments: {}, _meta: metadata },
+		})
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 2,
+			method: 'tools/call',
+			params: { name: 'café', arguments: {}, _meta: metadata },
+		})
+
+		expect(names).toEqual(['add', '=?base64?Y2Fmw6k=?='])
+	})
+})
+
 describe('HTTPClientTransport — close is idempotent', () => {
 	it('emits close once however many times it is called', async () => {
 		const transport = new HTTPClientTransport({ url: 'http://127.0.0.1:1/mcp' })

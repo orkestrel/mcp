@@ -8,6 +8,7 @@ import {
 	MCP_MODERN_VERSION,
 	MCP_HANDSHAKE_VERSION,
 	buildJSONRPCError,
+	encodeSentinel,
 	MCPStreamController,
 	parseJSONRPCMessage,
 } from '@src/core'
@@ -412,7 +413,7 @@ describe('inferHeaderIssue — one diagnosis across modern and legacy headers', 
 		).toEqual({
 			header: 'Mcp-Name',
 			reason: 'missing',
-			message: "Required Mcp-Name header is missing; the request body tool name is 'add'.",
+			message: "Required Mcp-Name header is missing; the request body target is 'add'.",
 		})
 	})
 
@@ -439,9 +440,116 @@ describe('inferHeaderIssue — one diagnosis across modern and legacy headers', 
 		expect(issue).toEqual({
 			header: 'Mcp-Name',
 			reason: 'mismatched',
-			message: "Mcp-Name header does not match the request body tool name 'add'.",
+			message: "Mcp-Name header does not match the request body target 'add'.",
 		})
 		expect(issue?.message).not.toContain('client-supplied-name')
+	})
+
+	// SEP-2243 § Standard Headers scopes `Mcp-Name` to the three methods that carry a
+	// name-shaped body field, and each row below drives the real method with the real body
+	// member the protocol names for it.
+	it.each([
+		{ method: 'tools/call', params: { name: 'add' }, target: 'add' },
+		{
+			method: 'resources/read',
+			params: { uri: 'memory://resource/one' },
+			target: 'memory://resource/one',
+		},
+		{ method: 'prompts/get', params: { name: 'greet' }, target: 'greet' },
+	])('requires Mcp-Name on a modern $method', (row) => {
+		const message = createJSONRPCRequest({
+			method: row.method,
+			params: {
+				...row.params,
+				_meta: { [MCP_META_VERSION]: MCP_MODERN_VERSION, [MCP_META_CAPABILITIES]: {} },
+			},
+		})
+		const headers = {
+			[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+			[MCP_METHOD_HEADER]: row.method,
+		}
+
+		expect(inferHeaderIssue(requestWithHeaders(headers), message)).toEqual({
+			header: 'Mcp-Name',
+			reason: 'missing',
+			message: `Required Mcp-Name header is missing; the request body target is '${row.target}'.`,
+		})
+		expect(
+			inferHeaderIssue(requestWithHeaders({ ...headers, [MCP_NAME_HEADER]: row.target }), message),
+		).toBeUndefined()
+		expect(
+			inferHeaderIssue(
+				requestWithHeaders({ ...headers, [MCP_NAME_HEADER]: 'a-different-target' }),
+				message,
+			),
+		).toEqual({
+			header: 'Mcp-Name',
+			reason: 'mismatched',
+			message: `Mcp-Name header does not match the request body target '${row.target}'.`,
+		})
+	})
+
+	it('decodes a sentinel-encoded name header before comparing it to the body', () => {
+		const message = createJSONRPCRequest({
+			method: 'tools/call',
+			params: {
+				name: 'café',
+				_meta: { [MCP_META_VERSION]: MCP_MODERN_VERSION, [MCP_META_CAPABILITIES]: {} },
+			},
+		})
+
+		expect(
+			inferHeaderIssue(
+				requestWithHeaders({
+					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+					[MCP_METHOD_HEADER]: 'tools/call',
+					[MCP_NAME_HEADER]: encodeSentinel('café'),
+				}),
+				message,
+			),
+		).toBeUndefined()
+	})
+
+	it('refuses a name header whose sentinel payload carries invalid characters', () => {
+		const message = createJSONRPCRequest({
+			method: 'tools/call',
+			params: {
+				name: 'Hello',
+				_meta: { [MCP_META_VERSION]: MCP_MODERN_VERSION, [MCP_META_CAPABILITIES]: {} },
+			},
+		})
+
+		expect(
+			inferHeaderIssue(
+				requestWithHeaders({
+					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+					[MCP_METHOD_HEADER]: 'tools/call',
+					[MCP_NAME_HEADER]: '=?base64?SGVs!!!bG8=?=',
+				}),
+				message,
+			),
+		).toEqual({
+			header: 'Mcp-Name',
+			reason: 'mismatched',
+			message: "Mcp-Name header does not match the request body target 'Hello'.",
+		})
+	})
+
+	it('requires no name header for a modern method carrying no named target', () => {
+		const message = createJSONRPCRequest({
+			method: 'server/discover',
+			params: { _meta: { [MCP_META_VERSION]: MCP_MODERN_VERSION, [MCP_META_CAPABILITIES]: {} } },
+		})
+
+		expect(
+			inferHeaderIssue(
+				requestWithHeaders({
+					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+					[MCP_METHOD_HEADER]: 'server/discover',
+				}),
+				message,
+			),
+		).toBeUndefined()
 	})
 
 	it('diagnoses a mismatched legacy session protocol header', () => {

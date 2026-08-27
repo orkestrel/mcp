@@ -48,12 +48,14 @@ import {
 // A row at `0 passed, 0 failed` is neither: its checks are SHOULD-level, so the runner reports
 // WARNING and tallies nothing either way.
 const EXPECTED: readonly ConformanceScenario[] = [
-	// Fails two SEP-2575 `_meta` checks, both for the protocol revision: a request that omits
-	// `_meta` or omits its `protocolVersion` is answered -32022 where the scenario expects
-	// -32602. The undeclared-capability pair is green: the fixture declares a
-	// `test_missing_capability` tool whose round asks for `sampling/createMessage`, and the
-	// server refuses that round -32021 over HTTP 400 because the call declared no capabilities.
-	{ name: 'server-stateless', passed: 26, failed: 2 },
+	// Green since a protocol header naming a MODERN revision began holding the request to that
+	// revision's own rule: a body with no parsable modern `_meta` answers -32602 rather than
+	// falling through the legacy door's -32022. The two SEP-2575 checks that moved are the
+	// omitted `_meta` and the `_meta` omitting `protocolVersion`. The undeclared-capability pair
+	// was already green: the fixture declares a `test_missing_capability` tool whose round asks
+	// for `sampling/createMessage`, and the server refuses that round -32021 over HTTP 400
+	// because the call declared no capabilities.
+	{ name: 'server-stateless', passed: 28, failed: 0 },
 	{ name: 'completion-complete', passed: 1, failed: 0 },
 	{ name: 'tools-list', passed: 2, failed: 0 },
 	{ name: 'tools-call-simple-text', passed: 1, failed: 0 },
@@ -279,7 +281,7 @@ describe('MCP server conformance', () => {
 	})
 
 	it('reports the recorded total', () => {
-		expect([result.passed, result.failed]).toEqual([102, 8])
+		expect([result.passed, result.failed]).toEqual([104, 6])
 	})
 })
 

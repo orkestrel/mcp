@@ -14,6 +14,7 @@ import {
 	MCP_MISSING_CAPABILITY,
 	MCP_HANDSHAKE_VERSION,
 	MCP_UNSUPPORTED_VERSION,
+	decodeSentinel,
 	isInitializeRequest,
 	isMCPLegacyVersion,
 	isModernRequest,
@@ -22,13 +23,53 @@ import { isRecord, isString } from '@orkestrel/contract'
 import { MCP_METHOD_HEADER, MCP_NAME_HEADER, MCP_PROTOCOL_VERSION_HEADER } from './constants.js'
 
 /**
+ * Infers the target one modern request's `Mcp-Name` header must carry.
+ *
+ * @remarks
+ * The protocol scopes the header to the methods whose body carries a name-shaped field, and
+ * names the field per method: `tools/call` and `prompts/get` carry `params.name`, and
+ * `resources/read` carries `params.uri`. Every other method — `server/discover`, `tools/list`,
+ * `resources/list`, `prompts/list` — has nothing to derive a target from, so the header is not
+ * required there and a peer that sent one anyway is not held to it.
+ *
+ * A method within the scope whose named member is absent or is not a string reads as no
+ * target. There is nothing for a header to match, and refusing the request over a body member
+ * the header rule does not own would report a parameter fault as a header fault. Total.
+ *
+ * @param request - The parsed modern invocation to read the target from
+ * @returns The target the header must carry, or `undefined` when the method carries none
+ *
+ * @example
+ * ```ts
+ * inferHeaderTarget({ jsonrpc: '2.0', id: 1, method: 'resources/read', params: { uri: 'file:///a' } })
+ * // → 'file:///a'
+ * ```
+ */
+export function inferHeaderTarget(request: JSONRPCInvocation): string | undefined {
+	if (request.method === 'tools/call' || request.method === 'prompts/get') {
+		const name = request.params?.['name']
+		return isString(name) ? name : undefined
+	}
+	if (request.method === 'resources/read') {
+		const uri = request.params?.['uri']
+		return isString(uri) ? uri : undefined
+	}
+	return undefined
+}
+
+/**
  * Infers the first required MCP HTTP header that is missing or mismatched.
  *
  * @remarks
- * A modern request derives its protocol, method, and tools/call-only name expectations from
- * the JSON-RPC body. A legacy request body requires a protocol header after initialization,
- * while a supplied legacy session version additionally diagnoses a header that disagrees with
- * the active session. Messages name the expected value but never echo the client-supplied one.
+ * A modern request derives its protocol, method, and name expectations from the JSON-RPC body,
+ * the name expectation scoped to the methods {@link inferHeaderTarget} reads a target for. A
+ * name header carrying the Base64 sentinel is decoded through
+ * {@link import('@orkestrel/mcp').decodeSentinel} before the comparison, so a peer that had
+ * to encode its value still matches; a sentinel whose payload is invalid decodes to nothing
+ * and therefore mismatches, which is how an invalid header value is refused. A legacy request
+ * body requires a protocol header after initialization, while a supplied legacy session
+ * version additionally diagnoses a header that disagrees with the active session. Messages
+ * name the expected value but never echo the client-supplied one.
  *
  * @param request - The HTTP request carrying the headers
  * @param reference - The parsed invocation body, or the active legacy session version
@@ -103,22 +144,21 @@ export function inferHeaderIssue(
 			message: `Mcp-Method header does not match the request body method '${message.method}'.`,
 		}
 	}
-	if (message.method !== 'tools/call') return undefined
-	const name = message.params?.['name']
-	if (!isString(name)) return undefined
+	const target = inferHeaderTarget(message)
+	if (target === undefined) return undefined
 	const header = request.headers.get(MCP_NAME_HEADER)
 	if (header === null) {
 		return {
 			header: 'Mcp-Name',
 			reason: 'missing',
-			message: `Required Mcp-Name header is missing; the request body tool name is '${name}'.`,
+			message: `Required Mcp-Name header is missing; the request body target is '${target}'.`,
 		}
 	}
-	if (header !== name) {
+	if (decodeSentinel(header) !== target) {
 		return {
 			header: 'Mcp-Name',
 			reason: 'mismatched',
-			message: `Mcp-Name header does not match the request body tool name '${name}'.`,
+			message: `Mcp-Name header does not match the request body target '${target}'.`,
 		}
 	}
 	return undefined

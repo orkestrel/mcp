@@ -8,8 +8,39 @@ import {
 	buildJSONRPCResult,
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { inferLegacyVersion, inferStatus } from '@src/server'
+import { inferHeaderTarget, inferLegacyVersion, inferStatus } from '@src/server'
 import { createJSONRPCRequest } from '../../setup.js'
+
+describe('inferHeaderTarget', () => {
+	it.each([
+		{ method: 'tools/call', params: { name: 'add' }, target: 'add' },
+		{ method: 'prompts/get', params: { name: 'greet' }, target: 'greet' },
+		{ method: 'resources/read', params: { uri: 'memory://one' }, target: 'memory://one' },
+	])('reads the $method target the standard header names', (row) => {
+		expect(
+			inferHeaderTarget(createJSONRPCRequest({ method: row.method, params: row.params })),
+		).toBe(row.target)
+	})
+
+	it.each(['server/discover', 'tools/list', 'resources/list', 'prompts/list'])(
+		'reads no target for %s',
+		(method) => {
+			expect(
+				inferHeaderTarget(createJSONRPCRequest({ method, params: { name: 'add', uri: 'x://y' } })),
+			).toBeUndefined()
+		},
+	)
+
+	it('reads no target when the named member is absent or not a string', () => {
+		expect(inferHeaderTarget(createJSONRPCRequest({ method: 'tools/call' }))).toBeUndefined()
+		expect(
+			inferHeaderTarget(createJSONRPCRequest({ method: 'tools/call', params: { name: 7 } })),
+		).toBeUndefined()
+		expect(
+			inferHeaderTarget(createJSONRPCRequest({ method: 'resources/read', params: { uri: null } })),
+		).toBeUndefined()
+	})
+})
 
 describe('inferLegacyVersion', () => {
 	it('pins a requested supported legacy revision', () => {

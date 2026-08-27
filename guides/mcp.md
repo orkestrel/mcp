@@ -124,11 +124,23 @@ argued field by field.
 
 **HTTP headers are scoped by method.** A modern POST carries `MCP-Protocol-Version`
 equal to its `_meta` version and `Mcp-Method` equal to its body method. `Mcp-Name` is
-required on `tools/call` alone, where it must equal `params.name`, and MUST NOT be
-required on `server/discover` or `tools/list` — neither carries anything to derive a
-name from. The first missing or mismatched field is named in the refusal, together with
-the server-derived expected value; the client-supplied header value is never echoed. The
-result remains HTTP `400` + `-32020`, with no `data`.
+required on each method whose body carries a named target — `tools/call` and
+`prompts/get` against `params.name`, and `resources/read` against `params.uri` — and MUST
+NOT be required on `server/discover`, `tools/list`, `resources/list`, or `prompts/list`,
+none of which carries anything to derive a target from. The first missing or mismatched
+field is named in the refusal, together with the server-derived expected value; the
+client-supplied header value is never echoed. The result remains HTTP `400` + `-32020`,
+with no `data`.
+
+**A value a header cannot carry travels in the Base64 sentinel.** A target that is not
+plain printable ASCII, that carries leading or trailing whitespace, or that already wears
+the sentinel markers cannot survive as a literal field value, so it travels as
+`=?base64?{Base64OfUTF8}?=` — markers lowercase and exact. `encodeSentinel` builds that
+form and leaves every other value literal; `decodeSentinel` reads it back, excluding
+optional whitespace first per RFC 9110 § 5.5. The server decodes before comparing, so an
+encoded header still matches its body. A value wearing the markers whose payload is not
+canonical Base64 over well-formed UTF-8 is refused rather than read as a literal, and the
+refusal is the same HTTP `400` + `-32020`.
 
 Use the client and HTTP transport together and none of that wire anatomy reaches the
 call site — the transport derives all reserved metadata and headers:
@@ -173,9 +185,15 @@ await fetch('https://mcp.example/rpc', {
 })
 ```
 
-`Mcp-Name` applies only to `tools/call`; omit it for `server/discover` and
-`tools/list`. The reserved client capability and identity metadata remain in `_meta` and
-have no separate standard headers.
+`Mcp-Name` applies to `tools/call`, `prompts/get`, and `resources/read`; omit it for
+`server/discover`, `tools/list`, `resources/list`, and `prompts/list`. The reserved client
+capability and identity metadata remain in `_meta` and have no separate standard headers.
+
+**The client stamps `Mcp-Name` for `tools/call` alone**, because that is the one named
+method `MCPClientInterface` publishes: it exposes no `prompts/get` and no `resources/read`
+call, so no request needing the other two targets can leave through it. A consumer issuing
+either method over its own transport stamps the header itself, through `encodeSentinel`.
+The server validates all three.
 
 **A headerless legacy POST has exactly these cases.** The library infers no revision
 from an absent header. Defaulting one is licensed only for a server that still serves
@@ -189,6 +207,14 @@ pre-`2025-06-18` clients, and this package does not:
 
 A header naming an unsupported revision is a separate failure: HTTP `400` + `-32022`,
 carrying `{ supported, requested }`.
+
+**A modern protocol header holds the request to the modern revision.** A POST whose
+`MCP-Protocol-Version` names a revision in `SUPPORTED_MODERN_PROTOCOL_VERSIONS` is a client
+declaring the revision this server implements, so its body owes that revision's reserved
+`_meta`. A body with no parsable modern `_meta` — none at all, or one omitting
+`io.modelcontextprotocol/protocolVersion` or `io.modelcontextprotocol/clientCapabilities` —
+is HTTP `400` + `-32602`, not the legacy door's `-32022`. Answering `-32022` there would
+claim this server does not implement the revision it does implement.
 
 **Status is per era.** A legacy dispatch result keeps a uniform HTTP `200` and reports
 its errors in band, byte-identically to what a `2025-06-18` client already expects. A
@@ -2171,6 +2197,8 @@ Passing a legacy revision to
 | `buildInitializeResult`            | function | Build the `initialize` result — the negotiated `protocolVersion`, `capabilities`, and `serverInfo`.                                                                                                                           |
 | `decodeBoundedMessage`             | function | Decode one raw inbound message within an explicit bound, measuring the string BEFORE parsing it; total.                                                                                                                       |
 | `readCancelledId`                  | function | Read the request id an inbound `notifications/cancelled` names — the inverse of `buildCancelledNotification`; total.                                                                                                          |
+| `decodeSentinel`                   | function | Read the value a standard MCP request header carries, decoding `=?base64?{Base64OfUTF8}?=` and refusing an invalid payload rather than reading it as a literal; total.                                                        |
+| `encodeSentinel`                   | function | Build the wire form a standard MCP request header value must travel as — literal when plain printable ASCII survives the round trip, the Base64 sentinel otherwise.                                                           |
 | `sendStream`                       | function | Pump a controlled serialized exchange onto an `MCPTransportInterface` — every notification, the terminal last, and the exchange ENDED on every exit.                                                                          |
 | `bindServer`                       | function | Pipe an `MCPTransportInterface` into an `MCPDispatcherInterface` — inbound decoded within the server's own bound and `handle`d under a per-request signal, a defined reply `send`, a held-open one pumped; returns an unbind. |
 | `bindClient`                       | function | Pipe an `MCPTransportInterface` into an `MCPClientInterface` (built over `createDuplexClientTransport`) — completes the inbound wiring; returns an unbind.                                                                    |
@@ -2426,10 +2454,15 @@ unary response has no such moment — see
 [Declared conformance gaps](#declared-conformance-gaps).
 
 A modern POST requires `MCP-Protocol-Version` equal to its reserved `_meta`
-version and `Mcp-Method` equal to its body method. `Mcp-Name` is required only
-for `tools/call`, equal to `params.name`; `server/discover` and `tools/list`
-carry no name. A refusal names the first missing or mismatched field and the expected
-value without echoing the supplied value; it is HTTP `400` + `-32020` with no `data`. Headerless
+version and `Mcp-Method` equal to its body method. `Mcp-Name` is required on every
+method carrying a named target — `tools/call` and `prompts/get` equal to `params.name`,
+`resources/read` equal to `params.uri`; `server/discover`, `tools/list`, `resources/list`,
+and `prompts/list` carry no target. A sentinel-encoded value is read through
+`decodeSentinel` before the comparison, and a sentinel whose payload is invalid is refused
+rather than read as a literal. A refusal names the first missing or mismatched field and the expected
+value without echoing the supplied value; it is HTTP `400` + `-32020` with no `data`. A
+`MCP-Protocol-Version` naming a modern revision over a body with no parsable modern `_meta`
+is HTTP `400` + `-32602`. Headerless
 legacy `initialize` is accepted; a headerless post-initialize legacy request is
 accepted only through a live session, whose pinned negotiated version the session
 middleware supplies; every other headerless request is HTTP `400` + `-32020`.
@@ -2497,7 +2530,7 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | `MCP_SESSION_HEADER`             | const | `'mcp-session-id'` — the session header `createMCPSession` sets on `initialize` + reads thereafter.                                 |
 | `MCP_PROTOCOL_VERSION_HEADER`    | const | `'mcp-protocol-version'` — required by 2025-06-18 on post-initialize requests; the clients send it and the POST route validates it. |
 | `MCP_METHOD_HEADER`              | const | `'mcp-method'` — the modern request method, required to equal the JSON-RPC body method.                                             |
-| `MCP_NAME_HEADER`                | const | `'mcp-name'` — the modern named target, required only for `tools/call`.                                                             |
+| `MCP_NAME_HEADER`                | const | `'mcp-name'` — the modern named target, required for `tools/call`, `prompts/get`, and `resources/read`.                             |
 | `SSE_BUFFERING_HEADER`           | const | `'x-accel-buffering'` — the reverse-proxy buffering response header used by SSE responses.                                          |
 | `SSE_BUFFERING_DISABLED`         | const | `'no'` — the value disabling reverse-proxy buffering for SSE responses.                                                             |
 | `DEFAULT_MCP_PATH`               | const | `'/mcp'` — the default path `createMCPRoutes` mounts the `POST` at (and `createMCPSession` owns for `GET` / `DELETE`).              |
@@ -2514,7 +2547,8 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | `createReadableStream`   | function | Build a `ReadableStream` from its `pull` and `cancel` behaviours, supplied as arguments rather than an inline source object.                                                                                           |
 | `allowsOrigin`           | function | Allow an absent or canonical loopback-literal Origin; require every other present serialized Origin in the explicit list unless validation is delegated upstream.                                                      |
 | `buildResponseError`     | function | Build the error for a non-success HTTP response that carried no JSON-RPC message, naming its status and body shape.                                                                                                    |
-| `inferHeaderIssue`       | function | Derive the first missing or mismatched modern, stateless-legacy, or active-session header issue; `undefined` when the applicable fields agree.                                                                         |
+| `inferHeaderIssue`       | function | Derive the first missing or mismatched modern, stateless-legacy, or active-session header issue, decoding a sentinel-encoded `Mcp-Name` before comparing it; `undefined` when the applicable fields agree.             |
+| `inferHeaderTarget`      | function | Read the target a modern request's `Mcp-Name` must carry — `params.name` for `tools/call` and `prompts/get`, `params.uri` for `resources/read`; `undefined` for every other method.                                    |
 | `inferLegacyVersion`     | function | Pin a supported requested legacy revision, otherwise select the newest supported legacy revision.                                                                                                                      |
 | `inferStatus`            | function | Map a dispatch outcome to its era-aware HTTP status while preserving legacy in-band `200` errors.                                                                                                                      |
 | `readSessionHeader`      | function | Read the request's `mcp-session-id` header for the stateful transport, or `undefined`.                                                                                                                                 |
@@ -2809,7 +2843,9 @@ Node client's `node:crypto` / `node:http(s)` machinery);
 `createHTTPClientTransport` drives the native `fetch` + `ReadableStream`,
 decoding the SSE leg with `@orkestrel/sse` and honoring the SAME era-aware
 HTTP headers as the Node face: modern requests derive protocol and method
-headers from their body plus the name only for `tools/call`, while legacy
+headers from their body plus the name only for `tools/call` — through
+`encodeSentinel`, so a tool name that cannot ride as plain ASCII travels in the
+protocol's Base64 sentinel — while legacy
 requests echo only their captured negotiated protocol. It also honors the
 same `mcp-session-id` semantics, so a browser client interoperates with an
 `MCPSession`-based server unchanged. The browser transports share their exported NAMES
@@ -2921,7 +2957,7 @@ entity, so they sit beside `createScopeMessageListener` in `helpers.ts`, not in 
 | `MCP_SESSION_HEADER`          | const | `'mcp-session-id'` — the SAME header name as the Node face's `MCP_SESSION_HEADER`, echoed identically.                                                                                                                                                                                                 |
 | `MCP_PROTOCOL_VERSION_HEADER` | const | `'mcp-protocol-version'` — the SAME header name as the Node face; derived per modern request or echoed from legacy negotiation.                                                                                                                                                                        |
 | `MCP_METHOD_HEADER`           | const | `'mcp-method'` — the SAME browser-local literal as the Node face; carries every modern request's body method.                                                                                                                                                                                          |
-| `MCP_NAME_HEADER`             | const | `'mcp-name'` — the SAME browser-local literal as the Node face; carries `params.name` only for modern `tools/call`.                                                                                                                                                                                    |
+| `MCP_NAME_HEADER`             | const | `'mcp-name'` — the SAME browser-local literal as the Node face; carries `params.name` only for modern `tools/call`, through `encodeSentinel`.                                                                                                                                                          |
 | `MCP_WEBSOCKET_SUBPROTOCOL`   | const | `'mcp'` — the WebSocket subprotocol `createWebSocketClientTransport` requests by default and `createWebSocketServer` selects only when offered. Per RFC 6455 §4.1 a client must fail the connection if the server returns a subprotocol it did not request; Node ≥ 22 (undici) enforces this strictly. |
 | `DEFAULT_MCP_SERVER_NAME`     | const | `'taverna'` — `serveMCPScope`'s default `serverInfo.name` when `options.name` is omitted.                                                                                                                                                                                                              |
 | `DEFAULT_MCP_SERVER_VERSION`  | const | `'1.0.0'` — `serveMCPScope`'s default `serverInfo.version` when `options.version` is omitted.                                                                                                                                                                                                          |
@@ -4007,6 +4043,12 @@ handshake may not be.
   unsubscribed channel — the session stream's `notifications/message`. Nothing
   degrades into polling either way, because a call's own result stays authoritative
   and notifications are hints.
+- The HTTP client transports stamp `Mcp-Name` for **`tools/call` alone**, because
+  `MCPClientInterface` publishes no `prompts/get` and no `resources/read` call: the other
+  two targets the header is scoped to have no reachable path out of this client. The
+  server validates all three, so the asymmetry is the client's method surface rather than
+  a split reading of the header rule. A consumer issuing either method over its own
+  transport stamps the header itself, through `encodeSentinel`.
 
 **Policy this package will not decide.** Framework code supplies mechanism and stops
 before the deployment's decisions. Auth, tool-invocation rate limiting (see
@@ -4038,15 +4080,15 @@ A reproducible run is `npm run test:conformance`: it starts the real Streamable 
 server from this package's source and runs `@modelcontextprotocol/conformance` — the
 release `package.json` pins as a development dependency — against specification revision
 `2026-07-28`. That is a genuine foreign MCP client driving this surface end to end, and the
-recorded server-mode result is **102 passed / 8 failed**, the `dns-rebinding-protection`
+recorded server-mode result is **104 passed / 6 failed**, the `dns-rebinding-protection`
 security regression guard (2 passed) included. `tests/conformance.test.ts` records that
-result scenario by scenario, and names each failing scenario with its cause:
-`server-stateless` (26 passed / 2 failed), whose SEP-2575 checks omit the body's `_meta` — or
-its `protocolVersion` — and expect `-32602`, while the shipped route reads the header through
-its legacy inference and answers `-32022`; and
+result scenario by scenario, and names the failing scenario with its cause:
 `http-custom-header-server-validation` (3 passed / 6 failed), where SEP-2243 wants a 400
 response and a `-32020` `HeaderMismatch` error for a mismatched or invalid `Mcp-Param`
-header while the shipped route accepts both and answers 200.
+header while the shipped route accepts both and answers 200. `server-stateless` is green at
+28 passed: its SEP-2575 checks omit the body's `_meta`, or its `protocolVersion`, and the
+modern protocol header now holds each request to the modern revision, so both answer
+`-32602` rather than falling through the legacy door's `-32022`.
 
 The same runner has a CLIENT mode, and the same command drives this package's own
 `MCPClient` through every non-auth client scenario at that revision over
@@ -4601,9 +4643,12 @@ in request`, no `as`) — is HTTP **400** with a JSON-RPC error BODY carrying no
     / `-32602`, **404** for `-32601`, and **200** otherwise; every notification
     is **202** with no body. Modern `MCP_PROTOCOL_VERSION_HEADER` and
     `MCP_METHOD_HEADER` values must equal the body; `MCP_NAME_HEADER` is required
-    only for `tools/call`. The first missing or mismatched field is named with its
+    for `tools/call` and `prompts/get` against `params.name` and for `resources/read`
+    against `params.uri`, decoded through `decodeSentinel` before the comparison. The
+    first missing or mismatched field is named with its
     derived expectation, never its client-supplied value; the result is **400** +
-    `-32020` with no `data`.
+    `-32020` with no `data`. A modern `MCP_PROTOCOL_VERSION_HEADER` over a body with no
+    parsable modern `_meta` is **400** + `-32602` instead of the legacy `-32022`.
     Headerless `initialize` is accepted; a live-session legacy request uses its
     pinned negotiated revision; every other headerless request is **400** +
     `-32020`. A request without `Origin` is allowed; a canonical `localhost`, `[::1]`,
@@ -4756,7 +4801,8 @@ application/json` and an `Accept` of BOTH `application/json` and
     legacy request. The initialize POST itself carries no protocol header, and
     legacy requests never carry `Mcp-Method` or `Mcp-Name`. A modern request derives
     `MCP_PROTOCOL_VERSION_HEADER` and `MCP_METHOD_HEADER` directly from its `_meta`
-    version and method, plus `MCP_NAME_HEADER` only for `tools/call`; no transport
+    version and method, plus `MCP_NAME_HEADER` only for `tools/call`, whose value rides
+    through `encodeSentinel`; no transport
     state or widened `send` contract is needed. The captured
     headers are merged before `options.headers`, so a caller-supplied key wins.
 16. **The WebSocket transport is the full-duplex ingress over the spine
@@ -5008,7 +5054,8 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     `Accept` / session and era-aware header contract as the Node face's HTTP
     client, as the HTTP client transport clause states: modern requests carry `MCP_PROTOCOL_VERSION_HEADER`
     and `MCP_METHOD_HEADER` from the body, plus `MCP_NAME_HEADER` only for
-    `tools/call`; legacy requests carry only the captured negotiated protocol.
+    `tools/call` through `encodeSentinel`; legacy requests carry only the captured
+    negotiated protocol.
     An `application/json` reply is narrowed with `parseJSONRPCMessage`, a
     `text/event-stream` reply is decoded with the browser face's OWN
     `readEventStream` (`@orkestrel/sse`, the same decode shape as

@@ -32,8 +32,10 @@ import {
 	createMCPLegacyClientTransport,
 	createMCPServer,
 	decodeBoundedMessage,
+	decodeSentinel,
 	DEFAULT_MCP_CACHE_TTL,
 	digestJSON,
+	encodeSentinel,
 	JSONRPC_PARSE_ERROR,
 	extractContentText,
 	MCP_EXTENSION_TASKS,
@@ -1688,5 +1690,94 @@ describe('the subscription filter contract', () => {
 		)
 
 		expect(Object.keys(honoured).sort()).toEqual(['resourceSubscriptions', 'toolsListChanged'])
+	})
+})
+
+// The SEP-2243 standard-header sentinel, both directions. The encoding table below is the
+// spec's own: a value that cannot ride as plain ASCII travels as `=?base64?{Base64OfUTF8}?=`,
+// and a value that can travels literally. Every row asserts the literal wire form rather than
+// re-deriving it through the codec, so a row cannot agree with a broken encoder.
+
+describe('encodeSentinel — the wire form a standard header value must travel as', () => {
+	it('leaves a plain printable ASCII value literal', () => {
+		expect(encodeSentinel('test_simple_text')).toBe('test_simple_text')
+		expect(encodeSentinel('test://static-text')).toBe('test://static-text')
+		expect(encodeSentinel('my-hyphenated-tool')).toBe('my-hyphenated-tool')
+	})
+
+	it('encodes a non-ASCII value', () => {
+		expect(encodeSentinel('café')).toBe('=?base64?Y2Fmw6k=?=')
+	})
+
+	it('encodes a value carrying leading or trailing whitespace', () => {
+		expect(encodeSentinel('  padded  ')).toBe('=?base64?ICBwYWRkZWQgIA==?=')
+	})
+
+	it('encodes a value carrying an embedded newline', () => {
+		expect(encodeSentinel('two\nlines')).toBe('=?base64?dHdvCmxpbmVz?=')
+	})
+
+	it('encodes a value wearing the sentinel markers, well formed or not', () => {
+		expect(encodeSentinel('=?base64?SGVsbG8=?=')).toBe('=?base64?PT9iYXNlNjQ/U0dWc2JHOD0/PQ==?=')
+		expect(encodeSentinel('=?base64?SGVsbG8?=')).toBe('=?base64?PT9iYXNlNjQ/U0dWc2JHOD89?=')
+		expect(encodeSentinel('=?base64?AAAA?=BBBB?=')).toBe('=?base64?PT9iYXNlNjQ/QUFBQT89QkJCQj89?=')
+	})
+
+	it('leaves a value missing either marker literal', () => {
+		expect(encodeSentinel('SGVsbG8=')).toBe('SGVsbG8=')
+		expect(encodeSentinel('=?base64?SGVsbG8=')).toBe('=?base64?SGVsbG8=')
+		expect(encodeSentinel('=?BASE64?SGVsbG8=?=')).toBe('=?BASE64?SGVsbG8=?=')
+	})
+})
+
+describe('decodeSentinel — the value a standard header carries', () => {
+	it('returns a non-sentinel value unchanged', () => {
+		expect(decodeSentinel('test_simple_text')).toBe('test_simple_text')
+		expect(decodeSentinel('test://static-text')).toBe('test://static-text')
+	})
+
+	it('excludes optional whitespace around a field value per RFC 9110', () => {
+		expect(decodeSentinel('  test_simple_text  ')).toBe('test_simple_text')
+		expect(decodeSentinel('\ttest_simple_text\t')).toBe('test_simple_text')
+	})
+
+	it('decodes a well-formed sentinel back to its UTF-8 value', () => {
+		expect(decodeSentinel('=?base64?Y2Fmw6k=?=')).toBe('café')
+		expect(decodeSentinel('=?base64?ICBwYWRkZWQgIA==?=')).toBe('  padded  ')
+		expect(decodeSentinel('=?base64?dHdvCmxpbmVz?=')).toBe('two\nlines')
+		expect(decodeSentinel('=?base64?SGVsbG8=?=')).toBe('Hello')
+	})
+
+	it('refuses a sentinel whose payload has invalid padding', () => {
+		expect(decodeSentinel('=?base64?SGVsbG8?=')).toBeUndefined()
+	})
+
+	it('refuses a sentinel whose payload has non-alphabet characters', () => {
+		expect(decodeSentinel('=?base64?SGVs!!!bG8=?=')).toBeUndefined()
+		expect(decodeSentinel('=?base64?AAAA?=BBBB?=')).toBeUndefined()
+	})
+
+	it('refuses a sentinel whose payload is not UTF-8', () => {
+		expect(decodeSentinel('=?base64?/w==?=')).toBeUndefined()
+	})
+
+	it('treats a value missing either marker as literal', () => {
+		expect(decodeSentinel('SGVsbG8=')).toBe('SGVsbG8=')
+		expect(decodeSentinel('=?base64?SGVsbG8=')).toBe('=?base64?SGVsbG8=')
+		expect(decodeSentinel('=?BASE64?SGVsbG8=?=')).toBe('=?BASE64?SGVsbG8=?=')
+	})
+
+	it.each([
+		'test_simple_text',
+		'test://static-text',
+		'café',
+		'  padded  ',
+		'two\nlines',
+		'=?base64?SGVsbG8=?=',
+		'=?base64?SGVsbG8?=',
+		'=?base64?AAAA?=BBBB?=',
+		'SGVsbG8=',
+	])('round-trips %j through the sentinel', (value) => {
+		expect(decodeSentinel(encodeSentinel(value))).toBe(value)
 	})
 })

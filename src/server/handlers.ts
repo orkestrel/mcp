@@ -10,6 +10,7 @@ import {
 	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
 	buildJSONRPCError,
 	isMCPLegacyVersion,
+	isMCPModernVersion,
 	isModernRequest,
 	parseRequestContext,
 	parseJSONRPCMessage,
@@ -28,12 +29,17 @@ import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
  * Creates the Streamable-HTTP POST handler used by `createMCPRoutes`.
  *
  * @remarks
- * Modern requests require matching protocol/method headers and a matching name header only
- * for `tools/call`; mismatch returns HTTP `400` + `-32020`. Headerless `initialize` is
- * accepted, while every other headerless request needs a live legacy session to supply its
- * pinned version. A legacy-shaped request carrying a protocol header is admitted only for a
- * legacy revision; any other value, the modern revision included, returns HTTP `400` + `-32022`
- * whose `supported` names the legacy revisions this door accepts. A present origin must occur in `origin.origins` unless validation is
+ * Modern requests require matching protocol/method headers and a matching name header on each
+ * method carrying a named target — `tools/call` and `prompts/get` against `params.name`,
+ * `resources/read` against `params.uri` — with a Base64-sentinel value decoded before the
+ * comparison; a missing, mismatched, or invalidly encoded value returns HTTP `400` + `-32020`.
+ * A protocol header naming a MODERN revision holds the request to that revision whatever shape
+ * its body arrived in, so a body with no parsable modern `_meta` returns HTTP `400` + `-32602`.
+ * Headerless `initialize` is accepted, while every other headerless request needs a live legacy
+ * session to supply its pinned version. A legacy-shaped request carrying a protocol header is
+ * otherwise admitted only for a legacy revision; a revision this server does not implement
+ * returns HTTP `400` + `-32022` whose `supported` names the legacy revisions this door accepts.
+ * A present origin must occur in `origin.origins` unless validation is
  * explicitly delegated upstream. Modern dispatch errors use their protocol status map; legacy
  * errors remain in-band at HTTP `200`. A streamed response composes the fetch-standard request
  * signal with response-body cancellation and supplies the result to every dispatched modern
@@ -94,7 +100,12 @@ export function createMCPPostHandler<TState = unknown>(
 		const era = isModernRequest(invocation) ? 'modern' : 'legacy'
 		const id = invocation.id
 		const protocol = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
-		if (era === 'modern') {
+		// A protocol header naming a MODERN revision is the client declaring the revision this
+		// server implements, so the request is held to that revision's own rule whatever shape
+		// its body arrived in: SEP-2575 requires a parsable `_meta`, and a body without one is
+		// `-32602`. Routing such a body through the legacy door instead would answer `-32022`,
+		// which claims this server does not implement the revision it just answered `_meta` for.
+		if (era === 'modern' || isMCPModernVersion(protocol)) {
 			if (parseRequestContext(invocation) === undefined) {
 				return Response.json(
 					buildJSONRPCError(
