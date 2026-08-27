@@ -31,13 +31,20 @@ import {
 // The recorded baseline, scenario by scenario, for the FULL 2026-07-28 server listing
 // (`--suite all`). A bare total hides a scenario that stopped running, and this number has
 // been wrong before — each time because the FIXTURE, not the library, could not answer. Every
-// row with `failed: 0` is a check the shipped server passes; a row with a nonzero `failed` is
-// a named red baseline this suite carries on purpose until a later change shrinks it. Read
-// `tmp/units/m0-report.md` for the runner's per-check message behind each nonzero row.
+// row with `failed: 0` is a check the shipped server passes; a row with a nonzero `failed` is a
+// named LIBRARY gap this suite carries on purpose until a later change closes it, and the
+// comment above each such row is the gap. Every row a fixture could answer has been answered,
+// so a new nonzero row is a regression rather than an unfinished host.
+//
+// A row at `0 passed, 0 failed` is neither: its checks are SHOULD-level, so the runner reports
+// WARNING and tallies nothing either way.
 const EXPECTED: readonly ConformanceScenario[] = [
-	// Fails: the fixture answers only 2025-06-18 and 2025-11-25 protocol versions, so every
-	// SEP-2575 `_meta.protocolVersion` check that targets 2026-07-28 sees -32022 instead of the
-	// -32602 the check expects.
+	// Fails four SEP-2575 checks with two distinct causes. Two are the protocol revision: the
+	// server negotiates 2025-06-18 and 2025-11-25, so a `_meta.protocolVersion` check aimed at
+	// 2026-07-28 sees -32022 where it expects -32602. Two are the undeclared-capability gate:
+	// the scenario calls a `test_missing_capability` tool it expects the server to refuse with
+	// -32021 because the client declared no `sampling` capability, and the server has no seam
+	// that gates a tool on a declared client capability.
 	{ name: 'server-stateless', passed: 24, failed: 4 },
 	{ name: 'completion-complete', passed: 1, failed: 0 },
 	{ name: 'tools-list', passed: 2, failed: 0 },
@@ -48,9 +55,7 @@ const EXPECTED: readonly ConformanceScenario[] = [
 	{ name: 'tools-call-mixed-content', passed: 1, failed: 0 },
 	{ name: 'tools-call-error', passed: 1, failed: 0 },
 	{ name: 'tools-call-with-progress', passed: 1, failed: 0 },
-	// Fails: the scenario calls a `json_schema_2020_12_tool` this fixture's tool registry does
-	// not declare.
-	{ name: 'json-schema-2020-12', passed: 0, failed: 1 },
+	{ name: 'json-schema-2020-12', passed: 7, failed: 0 },
 	{ name: 'server-sse-multiple-streams', passed: 2, failed: 0 },
 	{ name: 'resources-list', passed: 1, failed: 0 },
 	{ name: 'resources-read-text', passed: 1, failed: 0 },
@@ -68,26 +73,41 @@ const EXPECTED: readonly ConformanceScenario[] = [
 	// Fails: SEP-2243 wants a 400 response and a -32020 `HeaderMismatch` JSON-RPC error for a
 	// mismatched or invalid `Mcp-Param` header; the shipped route accepts both and answers 200.
 	{ name: 'http-custom-header-server-validation', passed: 3, failed: 6 },
-	// Fails: SEP-2322 MRTR scenarios need a tool that returns `resultType: 'input_required'`
-	// through a named `test_input_required_result_elicitation` tool (and a matching prompt for
-	// `input-required-result-non-tool-request`); this fixture declares neither.
+	// The SEP-2322 rows below all drive `MCPServerOptions.input`, whose whole answer is ONE
+	// `elicitation/create` request under a key the server mints. The three that fail here name
+	// the three things that mechanism cannot express, and each one is a library seam rather
+	// than a fixture gap: the consumer cannot choose the request key, cannot ask for a
+	// `sampling/createMessage` or `roots/list` request, and cannot ask more than one question
+	// at a time. The prompt arm has no such limit — the prompt port returns its own
+	// `MCPInputResult` — which is why `-non-tool-request` is green beside them.
+	//
+	// Fails: the scenario requires the key `user_name`; `MCPServer` mints a random UUID.
 	{ name: 'input-required-result-basic-elicitation', passed: 0, failed: 1 },
+	// Fails: the scenario requires a `sampling/createMessage` request; the mechanism produces
+	// only `elicitation/create`.
 	{ name: 'input-required-result-basic-sampling', passed: 0, failed: 1 },
+	// Fails: the scenario requires a `roots/list` request, for the same reason.
 	{ name: 'input-required-result-basic-list-roots', passed: 0, failed: 1 },
-	{ name: 'input-required-result-request-state', passed: 0, failed: 1 },
+	{ name: 'input-required-result-request-state', passed: 2, failed: 0 },
+	// Fails: the scenario requires three simultaneous requests of three different methods; the
+	// mechanism issues exactly one.
 	{ name: 'input-required-result-multiple-input-requests', passed: 0, failed: 1 },
-	{ name: 'input-required-result-multi-round', passed: 0, failed: 1 },
-	// Passes at 0/0: every check the scenario runs reports WARNING (not FAILURE) once its
-	// prerequisite tool call answers `tool not found`, so the runner tallies no pass and no
-	// fail.
+	{ name: 'input-required-result-multi-round', passed: 3, failed: 0 },
+	// Passes at 0/0: the scenario's one check is a SHOULD, so a retry carrying `inputResponses`
+	// without a `requestState` — which this server refuses with -32602 — reports WARNING and
+	// the runner tallies neither a pass nor a fail.
 	{ name: 'input-required-result-missing-input-response', passed: 0, failed: 0 },
-	{ name: 'input-required-result-non-tool-request', passed: 0, failed: 1 },
-	{ name: 'input-required-result-result-type', passed: 0, failed: 1 },
+	{ name: 'input-required-result-non-tool-request', passed: 2, failed: 0 },
+	{ name: 'input-required-result-result-type', passed: 1, failed: 0 },
 	{ name: 'input-required-result-unsupported-methods', passed: 1, failed: 0 },
-	{ name: 'input-required-result-tampered-state', passed: 0, failed: 1 },
+	{ name: 'input-required-result-tampered-state', passed: 1, failed: 0 },
+	// Fails: the scenario declares `sampling` and no `elicitation`, then requires
+	// sampling-only requests. The mechanism can ask only for elicitation, so the server
+	// correctly refuses with -32002 and the scenario reads that refusal as the failure.
 	{ name: 'input-required-result-capability-check', passed: 0, failed: 1 },
-	{ name: 'input-required-result-ignore-extra-params', passed: 1, failed: 0 },
-	{ name: 'input-required-result-validate-input', passed: 0, failed: 0 },
+	// Passes at 0/0 for the same SHOULD reason as `-missing-input-response`.
+	{ name: 'input-required-result-ignore-extra-params', passed: 0, failed: 0 },
+	{ name: 'input-required-result-validate-input', passed: 2, failed: 0 },
 ]
 
 /** Scenario names carrying a nonzero red baseline: the exact list a later change shrinks. */
@@ -205,9 +225,9 @@ describe('MCP server conformance', () => {
 	})
 
 	it('names the exact scenarios carrying the recorded red baseline', () => {
-		expect(result.scenarios.filter((scenario) => scenario.failed > 0).map((scenario) => scenario.name)).toEqual(
-			EXPECTED_RED,
-		)
+		expect(
+			result.scenarios.filter((scenario) => scenario.failed > 0).map((scenario) => scenario.name),
+		).toEqual(EXPECTED_RED)
 	})
 
 	it('protects against DNS rebinding', () => {
@@ -218,6 +238,6 @@ describe('MCP server conformance', () => {
 	})
 
 	it('reports the recorded total', () => {
-		expect([result.passed, result.failed]).toEqual([74, 21])
+		expect([result.passed, result.failed]).toEqual([91, 15])
 	})
 })

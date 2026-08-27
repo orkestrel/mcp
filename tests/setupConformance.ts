@@ -16,7 +16,14 @@ import type {
 	MCPCompletion,
 	MCPCompletionManagerInterface,
 	MCPContent,
+	MCPContinuationInterface,
+	MCPElicitForm,
+	MCPElicitation,
+	MCPInputContext,
+	MCPInputRequestMap,
+	MCPInputResult,
 	MCPPrompt,
+	MCPPromptGetParams,
 	MCPPromptManagerInterface,
 	MCPPromptMessage,
 	MCPResource,
@@ -31,12 +38,12 @@ import { once } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { isRecord } from '@orkestrel/contract'
+import { isFiniteNumber, isRecord, isString } from '@orkestrel/contract'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createMCPServer } from '@src/core'
-import { createMCPRoutes } from '@src/server'
+import { createMCPContinuation, createMCPRoutes } from '@src/server'
 import { startServer } from './setupServer.js'
 
 // ── The pinned runner ────────────────────────────────────────────────────────
@@ -708,6 +715,68 @@ export const CONFORMANCE_CONTENT: Readonly<Record<string, readonly MCPContent[]>
 })
 
 /**
+ * The JSON Schema 2020-12 document `json-schema-2020-12` reads back out of `tools/list`.
+ *
+ * @remarks
+ * The scenario checks PRESERVATION, so this is the schema verbatim as the runner declares it:
+ * `$schema`, `$defs`, and `additionalProperties` for SEP-1613, and the `$anchor`, composition
+ * (`allOf`/`anyOf`), and conditional (`if`/`then`/`else`) keywords for SEP-2106. A tool's
+ * `parameters` becomes the advertised `inputSchema` unchanged, so anything the listing drops is
+ * the library dropping it.
+ */
+export const CONFORMANCE_SCHEMA: Readonly<Record<string, unknown>> = Object.freeze({
+	$schema: 'https://json-schema.org/draft/2020-12/schema',
+	type: 'object',
+	$defs: {
+		address: {
+			$anchor: 'addressDef',
+			type: 'object',
+			properties: {
+				street: { type: 'string' },
+				city: { type: 'string' },
+			},
+		},
+	},
+	properties: {
+		name: { type: 'string' },
+		address: { $ref: '#/$defs/address' },
+		contactMethod: { type: 'string', enum: ['phone', 'email'] },
+		phone: { type: 'string' },
+		email: { type: 'string' },
+	},
+	allOf: [{ anyOf: [{ required: ['phone'] }, { required: ['email'] }] }],
+	if: {
+		properties: { contactMethod: { const: 'phone' } },
+		required: ['contactMethod'],
+	},
+	then: { required: ['phone'] },
+	else: { required: ['email'] },
+	additionalProperties: false,
+})
+
+/**
+ * The text each SEP-2322 tool answers with once its rounds are answered.
+ *
+ * @remarks
+ * The keys are also the REGISTRATION list for the multi-round tool family, so a scenario's
+ * tool name exists in exactly one place. The text is static on purpose: the built-in input
+ * mechanism verifies an elicitation response and then continues into the registry, and
+ * `ToolManagerInterface.execute` takes a call and nothing else, so a tool never receives the
+ * answer its own round asked for. A fixture that re-read the raw request to interpolate one
+ * would be reporting on itself rather than on the library.
+ */
+export const CONFORMANCE_ANSWERS: Readonly<Record<string, string>> = Object.freeze({
+	test_input_required_result_elicitation: 'Elicitation answered; the call is complete.',
+	test_input_required_result_sampling: 'Sampling answered; the call is complete.',
+	test_input_required_result_list_roots: 'Roots answered; the call is complete.',
+	test_input_required_result_request_state: 'state-ok: the echoed request state verified.',
+	test_input_required_result_multiple_inputs: 'Every input answered; the call is complete.',
+	test_input_required_result_multi_round: 'Both rounds answered; the call is complete.',
+	test_input_required_result_tampered_state: 'Request state verified; the call is complete.',
+	test_input_required_result_capabilities: 'Declared-capability input answered.',
+})
+
+/**
  * Build the live tool registry the conformance scenarios call.
  *
  * @returns A fresh `ToolManagerInterface` holding every `test_*` tool
@@ -794,7 +863,195 @@ export function buildConformanceTools(): ToolManagerInterface {
 			execute: (values) => values,
 		}),
 	)
+	tools.add(
+		createTool({
+			name: 'json_schema_2020_12_tool',
+			description: 'Tool with JSON Schema 2020-12 features',
+			parameters: CONFORMANCE_SCHEMA,
+			execute: (values) => values,
+		}),
+	)
+	for (const [name, answer] of Object.entries(CONFORMANCE_ANSWERS)) {
+		tools.add(
+			createTool({
+				name,
+				description: `Exercise the SEP-2322 multi-round trip the ${name} scenario drives.`,
+				execute: () => answer,
+			}),
+		)
+	}
 	return tools
+}
+
+// ── The multi-round-trip fixture ─────────────────────────────────────────────
+//
+// SEP-2322 is a SERVER mechanism, and `MCPServerOptions.input` is where the library owns it:
+// the consumer decides WHEN a call needs input and supplies principal, continuation, and TTL
+// policy, while MCP mints the request key, seals the state, and verifies every retry. So this
+// half is policy only. Nothing here produces an `input_required` result, because a fixture that
+// produced one would be answering the conformance run on the library's behalf.
+//
+// The continuation port is the shipped `createMCPContinuation`, whose `seal` / `open` are
+// `@orkestrel/server`'s HMAC token primitives. That is what makes `input-required-result-
+// tampered-state` a real proof: the rejection comes from a signature that does not verify.
+
+/** The signing secret the fixture's continuation port protects its request state with. */
+export const CONFORMANCE_SECRET = 'orkestrel-conformance-continuation-secret'
+
+/** The principal the fixture binds into protected state; this host authenticates nobody. */
+export const CONFORMANCE_PRINCIPAL = 'conformance-client'
+
+/** How long one protected continuation round stays valid, in milliseconds. */
+export const CONFORMANCE_TTL = 60_000
+
+/** The integrity-protected continuation port both the tool and prompt rounds seal state with. */
+export const CONFORMANCE_CONTINUATION: MCPContinuationInterface =
+	createMCPContinuation(CONFORMANCE_SECRET)
+
+/**
+ * The form rounds each SEP-2322 tool asks for, in the order the scenario drives them.
+ *
+ * @remarks
+ * A tool absent from this table needs no input, so its call runs straight into the registry.
+ * `test_input_required_result_multi_round` is the only two-round entry, and the round the
+ * selector is on is carried in the continuation's consumer state rather than stored here.
+ */
+export const CONFORMANCE_FORMS: Readonly<Record<string, readonly MCPElicitForm[]>> = Object.freeze({
+	test_input_required_result_elicitation: [
+		{
+			message: 'What is your name?',
+			requestedSchema: {
+				type: 'object',
+				properties: { name: { type: 'string' } },
+				required: ['name'],
+			},
+		},
+	],
+	test_input_required_result_sampling: [
+		{
+			message: 'What is the capital of France?',
+			requestedSchema: {
+				type: 'object',
+				properties: { answer: { type: 'string' } },
+				required: ['answer'],
+			},
+		},
+	],
+	test_input_required_result_list_roots: [
+		{
+			message: 'Which root may this call read?',
+			requestedSchema: {
+				type: 'object',
+				properties: { root: { type: 'string' } },
+				required: ['root'],
+			},
+		},
+	],
+	test_input_required_result_request_state: [
+		{
+			message: 'Please confirm',
+			requestedSchema: {
+				type: 'object',
+				properties: { ok: { type: 'boolean' } },
+				required: ['ok'],
+			},
+		},
+	],
+	test_input_required_result_multiple_inputs: [
+		{
+			message: 'What is your name?',
+			requestedSchema: {
+				type: 'object',
+				properties: { name: { type: 'string' } },
+				required: ['name'],
+			},
+		},
+	],
+	test_input_required_result_multi_round: [
+		{
+			message: 'Step 1: What is your name?',
+			requestedSchema: {
+				type: 'object',
+				properties: { name: { type: 'string' } },
+				required: ['name'],
+			},
+		},
+		{
+			message: 'Step 2: What is your favorite color?',
+			requestedSchema: {
+				type: 'object',
+				properties: { color: { type: 'string' } },
+				required: ['color'],
+			},
+		},
+	],
+	test_input_required_result_tampered_state: [
+		{
+			message: 'Please confirm',
+			requestedSchema: {
+				type: 'object',
+				properties: { ok: { type: 'boolean' } },
+				required: ['ok'],
+			},
+		},
+	],
+	test_input_required_result_capabilities: [
+		{
+			message: 'What is your name?',
+			requestedSchema: {
+				type: 'object',
+				properties: { name: { type: 'string' } },
+				required: ['name'],
+			},
+		},
+	],
+})
+
+/**
+ * Decide whether the call in hand still owes this host an answer.
+ *
+ * @remarks
+ * The selector is the WHOLE of the consumer's half of a round trip. It sees the verified
+ * response on a retry and the state it carried into the round, and it answers with the next
+ * form or with `undefined` — MCP owns the key, the seal, the expiry, and the verification.
+ * The round index rides in the continuation's consumer state, so nothing here is stored
+ * between requests and two concurrent exchanges cannot collide.
+ *
+ * @param context - The call in hand, plus the verified response and state on a retry
+ * @returns The next form round, or `undefined` when the tool may run
+ */
+export function buildConformanceElicitation(context: MCPInputContext): MCPElicitation | undefined {
+	const rounds = CONFORMANCE_FORMS[context.name]
+	if (rounds === undefined) return undefined
+	const round = isFiniteNumber(context.state) ? context.state + 1 : 0
+	const request = rounds[round]
+	return request === undefined ? undefined : { request, state: round }
+}
+
+/**
+ * Project the accepted string answers a verified retry carried.
+ *
+ * @remarks
+ * The server has already verified the response against the schema it issued by the time this
+ * reads it, so this is a projection rather than a second validation. A declined or cancelled
+ * round contributes nothing.
+ *
+ * @param responses - The retry's `inputResponses` map, keyed by the server-minted request key
+ * @returns Every accepted string field, flattened across the map's rounds
+ */
+export function readConformanceAnswers(
+	responses: Readonly<Record<string, unknown>> | undefined,
+): Readonly<Record<string, string>> {
+	const answers: Record<string, string> = {}
+	for (const response of Object.values(responses ?? {})) {
+		if (!isRecord(response) || response['action'] !== 'accept') continue
+		const content = response['content']
+		if (!isRecord(content)) continue
+		for (const [field, value] of Object.entries(content)) {
+			if (isString(value)) answers[field] = value
+		}
+	}
+	return answers
 }
 
 // ── The resource fixture ─────────────────────────────────────────────────────
@@ -917,7 +1174,63 @@ export const CONFORMANCE_PROMPTS: readonly MCPPrompt[] = Object.freeze([
 		name: 'test_prompt_with_image',
 		description: 'The conformance suite image-prompt fixture.',
 	},
+	{
+		name: 'test_input_required_result_prompt',
+		description: 'The conformance suite multi-round-trip prompt fixture.',
+	},
 ])
+
+/**
+ * The input request the multi-round prompt asks for before it can be filled.
+ *
+ * @remarks
+ * `prompts/get` is the arm of SEP-2322 the library places on the HOST: the prompt port may
+ * answer an {@link MCPInputResult} of its own, so the key, the request, and the round are this
+ * fixture's to choose. That is the opposite division from `tools/call`, where the library owns
+ * the round and the consumer supplies only policy.
+ */
+export const CONFORMANCE_REQUESTS: MCPInputRequestMap = Object.freeze({
+	user_context: {
+		method: 'elicitation/create',
+		params: {
+			mode: 'form',
+			message: 'What context should the prompt use?',
+			requestedSchema: {
+				type: 'object',
+				properties: { context: { type: 'string' } },
+				required: ['context'],
+			},
+		},
+	},
+})
+
+/** The canonical state the multi-round prompt seals into its opaque `requestState`. */
+export const CONFORMANCE_STATE = 'test_input_required_result_prompt/user_context'
+
+/**
+ * Issue the multi-round prompt's round, or let a verified retry through.
+ *
+ * @remarks
+ * The carrier is protected by the same shipped continuation port the tool rounds use, so a
+ * `requestState` this host did not seal opens to `undefined` and the round is re-issued rather
+ * than honoured.
+ *
+ * @param params - The `prompts/get` parameters, including the retry carrier
+ * @returns The round to answer, or `undefined` when this prompt may be filled
+ */
+export async function buildConformanceRound(
+	params: MCPPromptGetParams,
+): Promise<MCPInputResult | undefined> {
+	if (params.name !== 'test_input_required_result_prompt') return undefined
+	const carrier = params.requestState
+	const opened = carrier === undefined ? undefined : await CONFORMANCE_CONTINUATION.open(carrier)
+	if (opened === CONFORMANCE_STATE) return undefined
+	return {
+		resultType: 'input_required',
+		inputRequests: CONFORMANCE_REQUESTS,
+		requestState: await CONFORMANCE_CONTINUATION.seal(CONFORMANCE_STATE),
+	}
+}
 
 /**
  * Fill one named prompt with the caller's arguments.
@@ -998,6 +1311,17 @@ export function buildConformanceMessages(
 			},
 		]
 	}
+	if (name === 'test_input_required_result_prompt') {
+		return [
+			{
+				role: 'user',
+				content: {
+					type: 'text',
+					text: `Prompt with elicited context: '${values.context ?? ''}'`,
+				},
+			},
+		]
+	}
 	return undefined
 }
 
@@ -1066,8 +1390,16 @@ export function buildConformanceOptions(): MCPServerOptions {
 	}
 	const prompts: MCPPromptManagerInterface = {
 		prompts: () => ({ prompts: CONFORMANCE_PROMPTS }),
-		prompt: (params) => {
-			const messages = buildConformanceMessages(params.name, params.arguments ?? {})
+		prompt: async (params) => {
+			const round = await buildConformanceRound(params)
+			if (round !== undefined) return round
+			// Declared arguments and elicited answers fill the same substitution, because the
+			// host that owns a prompt's variables owns them whichever round supplied one.
+			const values = {
+				...(params.arguments ?? {}),
+				...readConformanceAnswers(params.inputResponses),
+			}
+			const messages = buildConformanceMessages(params.name, values)
 			if (messages === undefined) return undefined
 			const prompt = CONFORMANCE_PROMPTS.find((entry) => entry.name === params.name)
 			if (prompt === undefined) return undefined
@@ -1098,6 +1430,12 @@ export function buildConformanceOptions(): MCPServerOptions {
 		resources,
 		prompts,
 		completion,
+		input: {
+			continuation: CONFORMANCE_CONTINUATION,
+			ttl: CONFORMANCE_TTL,
+			principal: () => CONFORMANCE_PRINCIPAL,
+			elicit: buildConformanceElicitation,
+		},
 		execution: async (context) => {
 			// The request-scoped reporter exists only when the caller sent a `progressToken`, and
 			// reporting is the executor's job rather than the server's — the port hands the reporter

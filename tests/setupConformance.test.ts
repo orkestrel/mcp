@@ -60,8 +60,10 @@ describe('the pinned runner', () => {
 		const result = await executeConformance('http://127.0.0.1:1/mcp')
 
 		expect(result.scenarios.length).toBeGreaterThan(0)
-		expect(result.passed).toBe(0)
-		expect(result.failed).toBeGreaterThan(0)
+		// Almost nothing passes without a server, but not nothing: `sep-2164-resource-not-found`
+		// reads a refused connection as a resource that is not there. So the claim is the
+		// relationship a live fixture reverses, not a zero the runner's scenario set can move.
+		expect(result.failed).toBeGreaterThan(result.passed)
 		// The totals line and the scenario lines are separate parses of separate text, so their
 		// agreement is a property of the parse rather than of one pattern.
 		expect(result.scenarios.reduce((total, scenario) => total + scenario.failed, 0)).toBe(
@@ -120,6 +122,15 @@ describe('the fixture registries', () => {
 			'test_error_handling',
 			'test_tool_with_progress',
 			'test_header_parameter',
+			'json_schema_2020_12_tool',
+			'test_input_required_result_elicitation',
+			'test_input_required_result_sampling',
+			'test_input_required_result_list_roots',
+			'test_input_required_result_request_state',
+			'test_input_required_result_multiple_inputs',
+			'test_input_required_result_multi_round',
+			'test_input_required_result_tampered_state',
+			'test_input_required_result_capabilities',
 		])
 		// Every name the verbatim content table keys is a registered tool, so no row of that
 		// table describes a tool the runner can never reach.
