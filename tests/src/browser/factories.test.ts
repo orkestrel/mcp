@@ -147,26 +147,39 @@ describe('createWebSocketClientTransport — the browser client against the Node
 		await client.disconnect()
 	})
 
-	it('A3: send() after close() rejects the message — no delivery, and no silent resolve', async () => {
-		// Pin the post-close semantics: a message sent after close() rejects, and is neither
-		// queued nor delivered. This test uses a live server so any wrongly-queued message
-		// would surface on reconnect.
+	it('A3: send() after close() rejects the message — no delivery, no resolve, and no queue', async () => {
+		// Pin the post-close semantics: a message sent after close() rejects, is never delivered,
+		// and is not HELD for a later connection. The reconnect is what separates the last two. A
+		// `send` that pushed the text onto the pre-open queue and only then threw looks identical
+		// on a closed socket — `close()` leaves the queue standing and `#flush` splices whatever
+		// is in it the moment a socket opens — so this row reopens the transport and reads the
+		// live server's own replies for the message it refused.
 		const transport = createWebSocketClientTransport({
 			url: `${serverURL}/mcp`,
 		})
-		const received: unknown[] = []
+		const received: JSONRPCMessage[] = []
 		transport.emitter.on('message', (message) => received.push(message))
 
 		await transport.start()
 		await transport.close()
 
 		// Send after close — the caller learns the write failed rather than being told it landed.
-		await expect(
-			transport.send(createJSONRPCRequest({ method: 'ping', id: 99 })),
-		).rejects.toThrow('WebSocket transport is not connected')
+		await expect(transport.send(createJSONRPCRequest({ method: 'ping', id: 99 }))).rejects.toThrow(
+			'WebSocket transport is not connected',
+		)
 		await waitForDelay(50)
 
 		expect(received).toEqual([])
+
+		// Reconnect, so anything the refused send left behind is flushed onto a live socket. The
+		// control rides that same socket: id 98 is really sent and its reply must come back, so an
+		// absent 99 is a fact about the queue rather than about a channel carrying nothing.
+		await transport.start()
+		await transport.send(createJSONRPCRequest({ method: 'ping', id: 98 }))
+		await waitForDelay(50)
+
+		expect(received.map((message) => message.id)).toEqual([98])
+		await transport.close()
 	})
 })
 

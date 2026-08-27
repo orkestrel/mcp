@@ -17,6 +17,7 @@ import { Emitter } from '@orkestrel/emitter'
 import {
 	computeWebSocketAccept,
 	createNodeWebSocket,
+	WEBSOCKET_READY_OPEN,
 	WEBSOCKET_VERSION,
 } from '@orkestrel/websocket'
 import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
@@ -49,10 +50,12 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   non-JSON / non-message frame surfaces on `error` and is dropped. The socket's `close`
  *   / `error` bridge to this transport's events.
  * - **Outbound (`send`).** `send(message)` writes one masked text frame. A socket write is not
- *   confirmed, so this transport answers a closed channel from its OWN state: a `send` with no
- *   bound socket — before `start()`, after `close()`, or after the peer ended the socket —
- *   REJECTS with `WebSocket transport is not connected`. It neither drops the message (the
- *   browser face's posture) nor queues it for a connection this transport is not holding.
+ *   confirmed, so this transport answers a closed channel from its own state AND the socket's
+ *   `readyState`: a `send` with no bound socket — before `start()`, after `close()`, or after the
+ *   peer ended the socket — and a `send` on a bound socket that is not `OPEN` both REJECT with
+ *   `WebSocket transport is not connected`. It neither drops the message nor queues it for a
+ *   connection this transport is not holding — the browser face queues a pre-open send, and this
+ *   one, holding no connection to flush it onto, rejects that too.
  * - **`close()`** unsubscribes from the socket, closes it, and fires `close` (idempotent). An
  *   upgrade still on the wire is DESTROYED, so a `close()` during the handshake ends the
  *   transport at once instead of waiting for a peer that may never answer — the suspended
@@ -121,8 +124,18 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 	}
 
 	async send(message: JSONRPCMessage): Promise<void> {
+		// The wrapper DROPS a write on a non-open socket and reports nothing, so this transport
+		// answers the closed channel from its own state and the socket's. Resolving would tell the
+		// client a frame reached a peer that had already gone, and leave its correlated request
+		// pending to its own deadline. The socket's `readyState` is a SECOND source rather than a
+		// copy of the first: a peer close decoded inside `createNodeWebSocket` — from the bytes
+		// that rode in with the handshake — fires before this transport binds a single listener,
+		// so the socket is installed already past OPEN while this transport's own state says
+		// nothing happened.
 		const socket = this.#socket
-		if (socket === undefined) throw new Error('WebSocket transport is not connected')
+		if (socket === undefined || socket.readyState !== WEBSOCKET_READY_OPEN) {
+			throw new Error('WebSocket transport is not connected')
+		}
 		socket.send(JSON.stringify(message))
 	}
 

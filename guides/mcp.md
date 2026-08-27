@@ -2676,9 +2676,14 @@ unconfirmed, so `WebSocketServerTransport` answers a closed channel from its own
 after `close()`, after the peer's close, or on a socket that is not `OPEN` rejects
 `WebSocket transport is not connected` rather than dropping the frame and telling the pump it
 landed. `bindServer` owns the consequence at both ends. It aborts every in-flight request the
-moment this transport's `close` fires, so a peer that disconnects mid-request is answered by no
-write at all; and it catches a rejection that does reach it, routing that fault to
-`mcp.emitter`'s `error` event rather than letting it escape the async listener.
+moment this transport's `close` fires, so a peer whose disconnect reaches that event — a close
+frame, a socket the host ends, or a socket fault — is answered by no write at all; and it
+catches a rejection that does reach it, routing that fault to `mcp.emitter`'s `error` event
+rather than letting it escape the async listener. That bound is the host's report, not the
+peer's departure: a peer that vanishes without a close frame or a socket fault leaves
+`readyState` at `OPEN`, so `send` frames the response, writes it to nobody, and resolves.
+Detecting that departure needs an RFC 6455 ping/pong liveness deadline, which this transport
+does not run.
 
 **It follows the spine's lifecycle, which is why `emitter` is required.** Pass the
 spine's own `server.emitter`: on its `stop` event the handler closes every socket it
@@ -2972,8 +2977,10 @@ caller need not await `start()`. A `send` after `close()`, or on a socket alread
 `CLOSING` or `CLOSED`, rejects `WebSocket transport is not connected`: a native socket write is
 unconfirmed, so this transport answers a closed channel from its own state rather than
 resolving on a frame nobody wrote and leaving the client's correlated request pending to its
-deadline. The Node face rejects the same condition with the same words. WebSocket is the custom
-transport this package adds; the specification defines stdio and Streamable HTTP.
+deadline. The Node face rejects that same condition with the same words, reading the wrapper's
+`readyState` beside its own state the way this face reads the native socket's; it also rejects
+the pre-open send this face queues, because it holds no connection to flush one onto. WebSocket
+is the custom transport this package adds; the specification defines stdio and Streamable HTTP.
 
 **`duplex` is a claim about the carrier, and it is proven by driving it.** The WebSocket,
 `MessagePort`, and scope carriers declare `true` and really do deliver a client-initiated
@@ -4949,9 +4956,12 @@ socket, key, head, protocol })` (SERVER mode → writes the `101` handshake,
     through `mcp.dispatch`, a defined response written back as a frame (a
     notification → `dispatch` `undefined` → nothing sent); a non-request
     message is ignored; a `dispatch` / `send` fault surfaces on `mcp.emitter`'s
-    `error` event rather than escaping the async listener, and a peer that
-    disconnects mid-request is aborted by `bindServer` before any response is
-    written, so the disconnect costs no frame and raises no unhandled rejection.
+    `error` event rather than escaping the async listener, and a peer whose
+    disconnect fires this transport's `close` is aborted by `bindServer` before
+    any response is written, so that disconnect costs no frame and raises no
+    unhandled rejection (a peer that vanishes without a close frame or a socket
+    fault leaves `readyState` at `OPEN` and is not detected — that needs an
+    RFC 6455 ping/pong liveness deadline this transport does not run).
     `WebSocketServerTransport` REUSES `MCPClientTransportInterface` (`session`
     `undefined`, `start` arms the socket subscriptions, `send` writes ONE
     text frame per message, `close` closes the socket): inbound text frames
@@ -4990,10 +5000,15 @@ socket, key, head, protocol })` (SERVER mode → writes the `101` handshake,
     MASKED) and bridges its frames as the client's `message` channel (decoded +
     narrowed with `parseJSONRPCMessage`). `send` writes ONE masked text frame
     per message, and a socket write is unconfirmed, so a closed channel is
-    answered from the transport's own state: a `send` with no bound socket —
-    before `start()`, after `close()`, or after the peer ended the socket —
-    REJECTS with `WebSocket transport is not connected`, dropping nothing and
-    queueing nothing. `close()` destroys an upgrade request still on the wire,
+    answered from the transport's own state AND the wrapper's `readyState`: a
+    `send` with no bound socket — before `start()`, after `close()`, or after
+    the peer ended the socket — and a `send` on a BOUND socket that is not
+    `OPEN` both REJECT with `WebSocket transport is not connected`, dropping
+    nothing and queueing nothing. The second arm is the one the transport's own
+    flag cannot reach: a peer close riding in with the handshake is decoded
+    inside `createNodeWebSocket`, before this transport binds a listener, so the
+    socket it installs is already past `OPEN` while its own state says nothing
+    happened. `close()` destroys an upgrade request still on the wire,
     unsubscribes from the socket, closes it, and fires `close` (idempotent —
     a second call on the same closed lifetime releases nothing and emits
     nothing). `url` accepts `ws://` / `wss://` OR `http://` / `https://` (a

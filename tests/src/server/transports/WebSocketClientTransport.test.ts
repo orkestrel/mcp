@@ -16,6 +16,7 @@ import { createWebSocketClientTransport, createWebSocketServer } from '@src/serv
 import {
 	computeWebSocketAccept,
 	encodeWebSocketFrame,
+	WEBSOCKET_OPCODE_CLOSE,
 	WEBSOCKET_OPCODE_TEXT,
 } from '@orkestrel/websocket'
 import { createTeardown, waitForDelay } from '@orkestrel/test'
@@ -381,6 +382,52 @@ async function startHoldingPeer(): Promise<HoldingPeerInterface> {
 	}
 }
 
+// A raw peer that answers the upgrade with a real `101` and an unmasked close frame in ONE
+// write, so the close arrives in the handshake `head` the client hands `createNodeWebSocket`.
+// The wrapper decodes that head inside its own constructor — before the transport has bound a
+// single listener — so the socket the transport installs is already past OPEN and its `close`
+// has already fired at nobody. That is the state where the transport's own flag knows nothing
+// and the socket's `readyState` is the only source that does.
+async function startClosingPeer(): Promise<string> {
+	const sockets: Duplex[] = []
+	const server = createHTTPServer()
+	teardown.add(
+		() =>
+			new Promise<void>((resolve) => {
+				for (const socket of sockets) socket.destroy()
+				if (!server.listening) resolve()
+				else server.close(() => resolve())
+			}),
+	)
+	server.on('upgrade', (request, socket) => {
+		const key = request.headers['sec-websocket-key']
+		if (typeof key !== 'string') {
+			socket.destroy()
+			return
+		}
+		sockets.push(socket)
+		// The client half-closes when it processes the close frame, so this end reads an end /
+		// reset that is the expected outcome of the path under test, never an uncaught 'error'.
+		socket.on('error', () => {})
+		socket.resume()
+		socket.write(
+			Buffer.concat([
+				Buffer.from(
+					'HTTP/1.1 101 Switching Protocols\r\n' +
+						'Upgrade: websocket\r\n' +
+						'Connection: Upgrade\r\n' +
+						`Sec-WebSocket-Accept: ${computeWebSocketAccept(key)}\r\n\r\n`,
+				),
+				encodeWebSocketFrame(WEBSOCKET_OPCODE_CLOSE, Buffer.alloc(0)),
+			]),
+		)
+	})
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+	const address: unknown = server.address()
+	const port = isRecord(address) && typeof address.port === 'number' ? address.port : 0
+	return `http://127.0.0.1:${port}`
+}
+
 describe('WebSocketClientTransport — close releases what the connect acquired', () => {
 	it('close() during a pending upgrade cancels the request instead of waiting for the peer', async () => {
 		// The peer holds the handshake for 400ms, so an upgrade this transport cannot cancel
@@ -424,6 +471,58 @@ describe('WebSocketClientTransport — close releases what the connect acquired'
 		await expect(transport.send({ jsonrpc: '2.0', id: 2, method: 'ping' })).rejects.toThrow(
 			'WebSocket transport is not connected',
 		)
+	})
+
+	it('rejects a send on a bound socket the peer already closed, and writes no frame', async () => {
+		// `#socket === undefined` cannot answer this state: the socket IS bound. The peer's close
+		// was decoded inside `createNodeWebSocket`, so this transport's `close` never fired and its
+		// own flag is clear — the wrapper's `readyState` is the SECOND source that knows the
+		// channel is gone, the same reading the server-side carrier makes. Without it the wrapper
+		// drops the write, reports nothing, and this `send` resolves on a frame nobody wrote.
+		const base = await startClosingPeer()
+		const transport = createWebSocketClientTransport({ url: `${base}/mcp` })
+		let closed = 0
+		transport.emitter.on('close', () => (closed += 1))
+
+		await transport.start()
+
+		expect(closed).toBe(0) // the transport learned nothing — the state is the socket's alone
+		await expect(transport.send({ jsonrpc: '2.0', id: 1, method: 'ping' })).rejects.toThrow(
+			'WebSocket transport is not connected',
+		)
+		// The control from the state this row is NOT about — a bound, OPEN socket resolving the
+		// same call — is the first assertion of the preceding row, against the real shipped server.
+	})
+
+	it('rejects a send issued before start(), where the browser face queues one', async () => {
+		// The faces diverge here, and the guide says so: the browser face holds a pre-open send
+		// and flushes it when its socket opens, while this one holds no connection to flush a
+		// message onto and refuses rather than promising a write it cannot schedule.
+		const handle = await startWs()
+		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
+
+		await expect(transport.send({ jsonrpc: '2.0', id: 1, method: 'ping' })).rejects.toThrow(
+			'WebSocket transport is not connected',
+		)
+
+		// The control: the same call on the same transport resolves once `start()` has bound a
+		// socket, so the refusal reports the missing connection rather than a `send` that never
+		// works, and nothing the refusal held is flushed onto the socket that follows.
+		const messages: JSONRPCMessage[] = []
+		transport.emitter.on('message', (message) => messages.push(message))
+		await transport.start()
+		await expect(
+			transport.send({
+				jsonrpc: '2.0',
+				method: 'server/discover',
+				id: 2,
+				params: { _meta: MODERN_METADATA },
+			}),
+		).resolves.toBeUndefined()
+		await waitForDelay(60)
+
+		expect(messages.map((message) => message.id)).toEqual([2])
+		await transport.close()
 	})
 
 	it('close() releases the socket subscriptions — a later frame emits nothing', async () => {
