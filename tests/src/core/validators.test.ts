@@ -26,6 +26,7 @@ import type {
 import * as core from '@src/core'
 import {
 	buildJSONRPCResult,
+	computeMissingCapabilities,
 	isMCPError,
 	isMCPInputRequest,
 	isAbsoluteURI,
@@ -41,6 +42,7 @@ import {
 	isFormElicitationSupported,
 	isInitializeRequest,
 	isMCPInputRequestMap,
+	isMCPInputResponse,
 	isMCPInputResult,
 	isJSONObject,
 	isJSONRPCErrorResponse,
@@ -82,6 +84,9 @@ import {
 	isMCPResourceTemplatePage,
 	isMCPResult,
 	isMCPResultMetaObject,
+	isMCPRoot,
+	isMCPRootResult,
+	isMCPSampleResult,
 	isMCPServerCapabilities,
 	isMCPStringArguments,
 	isJSONRPCError,
@@ -761,6 +766,55 @@ describe('multi-round-trip validators', () => {
 		expect(isFormElicitationSupported({})).toBe(false)
 	})
 
+	it('names each capability a round needs and the client did not declare', () => {
+		const form: MCPInputRequest = {
+			method: 'elicitation/create',
+			params: { message: 'Approve?', requestedSchema: { type: 'object', properties: {} } },
+		}
+		const url: MCPInputRequest = {
+			method: 'elicitation/create',
+			params: { mode: 'url', message: 'Authenticate', url: 'https://example.test' },
+		}
+		const mixed: MCPInputRequestMap = {
+			approval: form,
+			greeting: { method: 'sampling/createMessage', params: {} },
+			workspace: { method: 'roots/list' },
+		}
+
+		expect(computeMissingCapabilities(mixed, {})).toEqual({
+			elicitation: {},
+			sampling: {},
+			roots: {},
+		})
+		expect(
+			computeMissingCapabilities(mixed, { elicitation: {}, sampling: {}, roots: {} }),
+		).toBeUndefined()
+		// Each kind reads its OWN declaration, so a client can be short of exactly one.
+		expect(computeMissingCapabilities(mixed, { elicitation: {}, sampling: {} })).toEqual({
+			roots: {},
+		})
+		expect(computeMissingCapabilities(mixed, { elicitation: {}, roots: {} })).toEqual({
+			sampling: {},
+		})
+		// URL-only support authorizes a URL round and refuses a form one, and the reverse.
+		expect(
+			computeMissingCapabilities({ approval: url }, { elicitation: { url: {} } }),
+		).toBeUndefined()
+		expect(computeMissingCapabilities({ approval: form }, { elicitation: { url: {} } })).toEqual({
+			elicitation: {},
+		})
+		expect(computeMissingCapabilities({ approval: url }, { elicitation: {} })).toEqual({
+			elicitation: {},
+		})
+		// Total over hostile capability records, which read as declaring nothing.
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+
+		expect(computeMissingCapabilities({ workspace: { method: 'roots/list' } }, proxy)).toEqual({
+			roots: {},
+		})
+	})
+
 	it('validates every restricted primitive elicitation schema family', () => {
 		for (const schema of [
 			{ type: 'boolean', default: true },
@@ -905,6 +959,91 @@ describe('multi-round-trip validators', () => {
 		expect(
 			isMCPInputResult({ resultType: 'input_required', inputRequests: [requests.confirm] }),
 		).toBe(false)
+	})
+
+	it('validates a roots listing and a sampling completion against their dated shapes', () => {
+		expect(isMCPRoot({ uri: 'file:///workspace' })).toBe(true)
+		expect(isMCPRoot({ uri: 'file:///workspace', name: 'workspace', _meta: {} })).toBe(true)
+		expect(isMCPRoot({ uri: 'file:///workspace', name: 7 })).toBe(false)
+		expect(isMCPRoot({ name: 'workspace' })).toBe(false)
+		expect(isMCPRootResult({ roots: [] })).toBe(true)
+		expect(isMCPRootResult({ roots: [{ uri: 'file:///a' }, { uri: 'file:///b' }] })).toBe(true)
+		expect(isMCPRootResult({ roots: [{ uri: 'file:///a' }, { name: 'b' }] })).toBe(false)
+		expect(isMCPRootResult({ roots: {} })).toBe(false)
+		expect(isMCPRootResult({})).toBe(false)
+
+		const sample = {
+			role: 'assistant',
+			content: { type: 'text', text: 'Paris' },
+			model: 'test-model',
+			stopReason: 'endTurn',
+		}
+
+		expect(isMCPSampleResult(sample)).toBe(true)
+		expect(
+			isMCPSampleResult({
+				role: 'assistant',
+				content: { type: 'text', text: 'Paris' },
+				model: 'test-model',
+			}),
+		).toBe(true)
+		// The schema names three stop reasons and permits any other a provider reports.
+		expect(isMCPSampleResult({ ...sample, stopReason: 'providerSpecific' })).toBe(true)
+		expect(isMCPSampleResult({ ...sample, role: 'system' })).toBe(false)
+		expect(isMCPSampleResult({ ...sample, model: 7 })).toBe(false)
+		expect(isMCPSampleResult({ ...sample, content: [{ type: 'text', text: 'Paris' }] })).toBe(false)
+		// A resource block is legal MCP content and is NOT a legal sampling completion.
+		expect(
+			isMCPSampleResult({
+				...sample,
+				content: { type: 'resource_link', name: 'doc', uri: 'https://example.test/doc' },
+			}),
+		).toBe(false)
+	})
+
+	it('answers each input response against the exact request that was issued', () => {
+		const form = {
+			method: 'elicitation/create',
+			params: {
+				message: 'What is your name?',
+				requestedSchema: {
+					type: 'object',
+					properties: { name: { type: 'string' } },
+					required: ['name'],
+				},
+			},
+		}
+		const sampling = { method: 'sampling/createMessage', params: {} }
+		const roots = { method: 'roots/list' }
+		const accepted = { action: 'accept', content: { name: 'Ada' } }
+		const completion = {
+			role: 'assistant',
+			content: { type: 'text', text: 'Ada' },
+			model: 'test-model',
+		}
+		const listing = { roots: [{ uri: 'file:///workspace' }] }
+
+		expect(isMCPInputResponse(accepted, form)).toBe(true)
+		expect(isMCPInputResponse(completion, sampling)).toBe(true)
+		expect(isMCPInputResponse(listing, roots)).toBe(true)
+		// The kinds do not answer for one another, whatever their own shapes say.
+		expect(isMCPInputResponse(accepted, sampling)).toBe(false)
+		expect(isMCPInputResponse(listing, form)).toBe(false)
+		expect(isMCPInputResponse(completion, roots)).toBe(false)
+		// A form response is checked against the schema its own round issued.
+		expect(isMCPInputResponse({ action: 'accept', content: { name: 7 } }, form)).toBe(false)
+		expect(isMCPInputResponse({ action: 'accept', content: {} }, form)).toBe(false)
+		expect(isMCPInputResponse({ action: 'decline' }, form)).toBe(true)
+		// A URL-mode round issues no schema, so only the response shape is checked.
+		const url = {
+			method: 'elicitation/create',
+			params: { mode: 'url', message: 'Authenticate', url: 'https://example.test' },
+		}
+
+		expect(isMCPInputResponse({ action: 'accept', content: { anything: 'kept' } }, url)).toBe(true)
+		// An unrecognized question has no correct answer.
+		expect(isMCPInputResponse(accepted, { method: 'tools/call' })).toBe(false)
+		expect(isMCPInputResponse(accepted, undefined)).toBe(false)
 	})
 
 	it('validates elicitation result values and remains total over hostile input', () => {
@@ -1942,6 +2081,12 @@ const TOTALITY_SCHEMA: MCPElicitSchema = Object.freeze({
 	properties: Object.freeze({}),
 })
 
+// The issued request `isMCPInputResponse` is measured against, for the same reason.
+const TOTALITY_REQUEST: MCPInputRequest = Object.freeze({
+	method: 'elicitation/create',
+	params: Object.freeze({ message: 'Approve?', requestedSchema: TOTALITY_SCHEMA }),
+})
+
 // Every published guard as a unary call. The guards taking a second argument are given a
 // real one, because a guard starved of its bound would be answering a different question.
 const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = Object.freeze({
@@ -1981,6 +2126,7 @@ const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = 
 	isMCPIdentity,
 	isMCPInputRequest,
 	isMCPInputRequestMap,
+	isMCPInputResponse: (value) => isMCPInputResponse(value, TOTALITY_REQUEST),
 	isMCPInputResult,
 	isMCPLegacyVersion,
 	isMCPLegacyResult,
@@ -2002,6 +2148,9 @@ const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = 
 	isMCPResourceTemplatePage,
 	isMCPResult,
 	isMCPResultMetaObject,
+	isMCPRoot,
+	isMCPRootResult,
+	isMCPSampleResult,
 	isMCPServerCapabilities,
 	isMCPStringArguments,
 	isMCPSubscriptionFilter,

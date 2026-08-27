@@ -17,11 +17,10 @@ import type {
 	MCPCompletionManagerInterface,
 	MCPContent,
 	MCPContinuationInterface,
-	MCPElicitForm,
-	MCPElicitation,
 	MCPInputContext,
 	MCPInputRequestMap,
 	MCPInputResult,
+	MCPInputRound,
 	MCPPrompt,
 	MCPPromptGetParams,
 	MCPPromptManagerInterface,
@@ -755,15 +754,19 @@ export const CONFORMANCE_SCHEMA: Readonly<Record<string, unknown>> = Object.free
 })
 
 /**
- * The text each SEP-2322 tool answers with once its rounds are answered.
+ * The text each input-driven tool answers with once its rounds are answered.
  *
  * @remarks
- * The keys are also the REGISTRATION list for the multi-round tool family, so a scenario's
- * tool name exists in exactly one place. The text is static on purpose: the built-in input
- * mechanism verifies an elicitation response and then continues into the registry, and
+ * The keys are also the REGISTRATION list for that tool family, so a scenario's tool name
+ * exists in exactly one place. The text is static on purpose: the built-in input mechanism
+ * verifies each response and then continues into the registry, and
  * `ToolManagerInterface.execute` takes a call and nothing else, so a tool never receives the
  * answer its own round asked for. A fixture that re-read the raw request to interpolate one
  * would be reporting on itself rather than on the library.
+ *
+ * `test_missing_capability` is the exception that proves the gate: SEP-2575 requires the
+ * server to REFUSE it, so its text is a sentence no passing run ever sees. A gate that failed
+ * open would put that sentence in the runner's own failure detail.
  */
 export const CONFORMANCE_ANSWERS: Readonly<Record<string, string>> = Object.freeze({
 	test_input_required_result_elicitation: 'Elicitation answered; the call is complete.',
@@ -774,6 +777,7 @@ export const CONFORMANCE_ANSWERS: Readonly<Record<string, string>> = Object.free
 	test_input_required_result_multi_round: 'Both rounds answered; the call is complete.',
 	test_input_required_result_tampered_state: 'Request state verified; the call is complete.',
 	test_input_required_result_capabilities: 'Declared-capability input answered.',
+	test_missing_capability: 'This tool ran without the sampling capability the round needs.',
 })
 
 /**
@@ -875,7 +879,7 @@ export function buildConformanceTools(): ToolManagerInterface {
 		tools.add(
 			createTool({
 				name,
-				description: `Exercise the SEP-2322 multi-round trip the ${name} scenario drives.`,
+				description: `Exercise the input-required round the ${name} scenario drives.`,
 				execute: () => answer,
 			}),
 		)
@@ -886,10 +890,11 @@ export function buildConformanceTools(): ToolManagerInterface {
 // ── The multi-round-trip fixture ─────────────────────────────────────────────
 //
 // SEP-2322 is a SERVER mechanism, and `MCPServerOptions.input` is where the library owns it:
-// the consumer decides WHEN a call needs input and supplies principal, continuation, and TTL
-// policy, while MCP mints the request key, seals the state, and verifies every retry. So this
-// half is policy only. Nothing here produces an `input_required` result, because a fixture that
-// produced one would be answering the conformance run on the library's behalf.
+// the consumer composes each round and supplies principal, continuation, and TTL policy, while
+// MCP gates the round against the client's declared capabilities, seals the state, and checks
+// every answer against the question it answers. So this half is policy only. Nothing here
+// produces an `input_required` result, because a fixture that produced one would be answering
+// the conformance run on the library's behalf.
 //
 // The continuation port is the shipped `createMCPContinuation`, whose `seal` / `open` are
 // `@orkestrel/server`'s HMAC token primitives. That is what makes `input-required-result-
@@ -909,123 +914,176 @@ export const CONFORMANCE_CONTINUATION: MCPContinuationInterface =
 	createMCPContinuation(CONFORMANCE_SECRET)
 
 /**
- * The form rounds each SEP-2322 tool asks for, in the order the scenario drives them.
+ * The rounds each input-driven tool asks for, in the order the scenario drives them.
  *
  * @remarks
  * A tool absent from this table needs no input, so its call runs straight into the registry.
- * `test_input_required_result_multi_round` is the only two-round entry, and the round the
- * selector is on is carried in the continuation's consumer state rather than stored here.
+ * The KEYS are the consumer's, and the scenarios read them: `-basic-elicitation` demands the
+ * literal `user_name`, and `-multiple-input-requests` demands three keys of three different
+ * kinds in one round. `test_input_required_result_multi_round` is the only two-round entry, and
+ * the round the selector is on is carried in the continuation's consumer state rather than
+ * stored here.
+ *
+ * `test_input_required_result_capabilities` and `test_missing_capability` ask for sampling
+ * ALONE. That is the whole difference between them: the first call declares `sampling`, so the
+ * round is issued; the second declares no capabilities at all, so the library refuses it with
+ * -32021 before the tool runs.
  */
-export const CONFORMANCE_FORMS: Readonly<Record<string, readonly MCPElicitForm[]>> = Object.freeze({
-	test_input_required_result_elicitation: [
-		{
-			message: 'What is your name?',
-			requestedSchema: {
-				type: 'object',
-				properties: { name: { type: 'string' } },
-				required: ['name'],
+export const CONFORMANCE_ROUNDS: Readonly<Record<string, readonly MCPInputRequestMap[]>> =
+	Object.freeze({
+		test_input_required_result_elicitation: [
+			{
+				user_name: {
+					method: 'elicitation/create',
+					params: {
+						message: 'What is your name?',
+						requestedSchema: {
+							type: 'object',
+							properties: { name: { type: 'string' } },
+							required: ['name'],
+						},
+					},
+				},
 			},
-		},
-	],
-	test_input_required_result_sampling: [
-		{
-			message: 'What is the capital of France?',
-			requestedSchema: {
-				type: 'object',
-				properties: { answer: { type: 'string' } },
-				required: ['answer'],
+		],
+		test_input_required_result_sampling: [
+			{
+				capital_question: {
+					method: 'sampling/createMessage',
+					params: {
+						messages: [
+							{ role: 'user', content: { type: 'text', text: 'What is the capital of France?' } },
+						],
+						maxTokens: 100,
+					},
+				},
 			},
-		},
-	],
-	test_input_required_result_list_roots: [
-		{
-			message: 'Which root may this call read?',
-			requestedSchema: {
-				type: 'object',
-				properties: { root: { type: 'string' } },
-				required: ['root'],
+		],
+		test_input_required_result_list_roots: [{ client_roots: { method: 'roots/list', params: {} } }],
+		test_input_required_result_request_state: [
+			{
+				confirmation: {
+					method: 'elicitation/create',
+					params: {
+						message: 'Please confirm',
+						requestedSchema: {
+							type: 'object',
+							properties: { ok: { type: 'boolean' } },
+							required: ['ok'],
+						},
+					},
+				},
 			},
-		},
-	],
-	test_input_required_result_request_state: [
-		{
-			message: 'Please confirm',
-			requestedSchema: {
-				type: 'object',
-				properties: { ok: { type: 'boolean' } },
-				required: ['ok'],
+		],
+		test_input_required_result_multiple_inputs: [
+			{
+				user_name: {
+					method: 'elicitation/create',
+					params: {
+						message: 'What is your name?',
+						requestedSchema: {
+							type: 'object',
+							properties: { name: { type: 'string' } },
+							required: ['name'],
+						},
+					},
+				},
+				greeting: {
+					method: 'sampling/createMessage',
+					params: {
+						messages: [{ role: 'user', content: { type: 'text', text: 'Generate a greeting' } }],
+						maxTokens: 50,
+					},
+				},
+				client_roots: { method: 'roots/list', params: {} },
 			},
-		},
-	],
-	test_input_required_result_multiple_inputs: [
-		{
-			message: 'What is your name?',
-			requestedSchema: {
-				type: 'object',
-				properties: { name: { type: 'string' } },
-				required: ['name'],
+		],
+		test_input_required_result_multi_round: [
+			{
+				step1: {
+					method: 'elicitation/create',
+					params: {
+						message: 'Step 1: What is your name?',
+						requestedSchema: {
+							type: 'object',
+							properties: { name: { type: 'string' } },
+							required: ['name'],
+						},
+					},
+				},
 			},
-		},
-	],
-	test_input_required_result_multi_round: [
-		{
-			message: 'Step 1: What is your name?',
-			requestedSchema: {
-				type: 'object',
-				properties: { name: { type: 'string' } },
-				required: ['name'],
+			{
+				step2: {
+					method: 'elicitation/create',
+					params: {
+						message: 'Step 2: What is your favorite color?',
+						requestedSchema: {
+							type: 'object',
+							properties: { color: { type: 'string' } },
+							required: ['color'],
+						},
+					},
+				},
 			},
-		},
-		{
-			message: 'Step 2: What is your favorite color?',
-			requestedSchema: {
-				type: 'object',
-				properties: { color: { type: 'string' } },
-				required: ['color'],
+		],
+		test_input_required_result_tampered_state: [
+			{
+				confirmation: {
+					method: 'elicitation/create',
+					params: {
+						message: 'Please confirm',
+						requestedSchema: {
+							type: 'object',
+							properties: { ok: { type: 'boolean' } },
+							required: ['ok'],
+						},
+					},
+				},
 			},
-		},
-	],
-	test_input_required_result_tampered_state: [
-		{
-			message: 'Please confirm',
-			requestedSchema: {
-				type: 'object',
-				properties: { ok: { type: 'boolean' } },
-				required: ['ok'],
+		],
+		test_input_required_result_capabilities: [
+			{
+				capability_probe: {
+					method: 'sampling/createMessage',
+					params: {
+						messages: [{ role: 'user', content: { type: 'text', text: 'What is your name?' } }],
+						maxTokens: 50,
+					},
+				},
 			},
-		},
-	],
-	test_input_required_result_capabilities: [
-		{
-			message: 'What is your name?',
-			requestedSchema: {
-				type: 'object',
-				properties: { name: { type: 'string' } },
-				required: ['name'],
+		],
+		test_missing_capability: [
+			{
+				capability_probe: {
+					method: 'sampling/createMessage',
+					params: {
+						messages: [{ role: 'user', content: { type: 'text', text: 'Sample something' } }],
+						maxTokens: 50,
+					},
+				},
 			},
-		},
-	],
-})
+		],
+	})
 
 /**
  * Decide whether the call in hand still owes this host an answer.
  *
  * @remarks
- * The selector is the WHOLE of the consumer's half of a round trip. It sees the verified
- * response on a retry and the state it carried into the round, and it answers with the next
- * form or with `undefined` — MCP owns the key, the seal, the expiry, and the verification.
- * The round index rides in the continuation's consumer state, so nothing here is stored
- * between requests and two concurrent exchanges cannot collide.
+ * The selector is the WHOLE of the consumer's half of a round trip. It sees every verified
+ * answer on a retry and the state it carried into the round, and it answers with the next
+ * round or with `undefined` — MCP owns the capability gate, the seal, the expiry, and the
+ * per-answer check. The round index rides in the continuation's consumer state, so nothing
+ * here is stored between requests and two concurrent exchanges cannot collide.
  *
- * @param context - The call in hand, plus the verified response and state on a retry
- * @returns The next form round, or `undefined` when the tool may run
+ * @param context - The call in hand, plus every verified answer and the state on a retry
+ * @returns The next round, or `undefined` when the tool may run
  */
-export function buildConformanceElicitation(context: MCPInputContext): MCPElicitation | undefined {
-	const rounds = CONFORMANCE_FORMS[context.name]
+export function buildConformanceInput(context: MCPInputContext): MCPInputRound | undefined {
+	const rounds = CONFORMANCE_ROUNDS[context.name]
 	if (rounds === undefined) return undefined
 	const round = isFiniteNumber(context.state) ? context.state + 1 : 0
-	const request = rounds[round]
-	return request === undefined ? undefined : { request, state: round }
+	const requests = rounds[round]
+	return requests === undefined ? undefined : { requests, state: round }
 }
 
 /**
@@ -1434,7 +1492,7 @@ export function buildConformanceOptions(): MCPServerOptions {
 			continuation: CONFORMANCE_CONTINUATION,
 			ttl: CONFORMANCE_TTL,
 			principal: () => CONFORMANCE_PRINCIPAL,
-			elicit: buildConformanceElicitation,
+			round: buildConformanceInput,
 		},
 		execution: async (context) => {
 			// The request-scoped reporter exists only when the caller sent a `progressToken`, and

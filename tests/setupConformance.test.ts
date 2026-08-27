@@ -7,6 +7,7 @@
 // running fixture is `tests/conformance.test.ts`; what this file owns is what the fixture and
 // the harness promise before that pass starts.
 
+import type { MCPInputContext } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { createMCPServer, MCP_META_SERVER, MCP_MODERN_VERSION } from '@src/core'
 import { MCP_METHOD_HEADER, MCP_PROTOCOL_VERSION_HEADER } from '@src/server'
@@ -20,8 +21,10 @@ import {
 } from './setup.js'
 import {
 	buildConformanceCompletion,
+	buildConformanceInput,
 	buildConformanceMessages,
 	buildConformanceOptions,
+	buildConformanceRound,
 	buildConformanceTools,
 	CONFORMANCE_CANDIDATES,
 	CONFORMANCE_CONTENT,
@@ -32,11 +35,14 @@ import {
 	CONFORMANCE_IDENTITY,
 	CONFORMANCE_PACKAGE,
 	CONFORMANCE_PROMPTS,
+	CONFORMANCE_REQUESTS,
 	CONFORMANCE_RESOURCES,
+	CONFORMANCE_ROUNDS,
 	CONFORMANCE_TEMPLATE,
 	executeConformance,
 	executeRunner,
 	parseConformance,
+	readConformanceAnswers,
 	readConformanceTemplate,
 	readConformanceRelease,
 	resolveConformanceRunner,
@@ -131,7 +137,11 @@ describe('the fixture registries', () => {
 			'test_input_required_result_multi_round',
 			'test_input_required_result_tampered_state',
 			'test_input_required_result_capabilities',
+			'test_missing_capability',
 		])
+		// SEP-2575 validates the -32021 refusal only against a tool the server LISTS, so this one
+		// is listed and never runs: its round asks for a capability the probing call never declares.
+		expect(tools.tool('test_missing_capability')).toBeDefined()
 		// Every name the verbatim content table keys is a registered tool, so no row of that
 		// table describes a tool the runner can never reach.
 		for (const name of Object.keys(CONFORMANCE_CONTENT)) expect(tools.tool(name)).toBeDefined()
@@ -232,6 +242,84 @@ describe('the fixture registries', () => {
 		expect(CONFORMANCE_CANDIDATES['test_prompt_with_embedded_resource']?.['resourceUri']).toEqual(
 			CONFORMANCE_RESOURCES.map((resource) => resource.uri),
 		)
+	})
+
+	it('walks each tool’s rounds by the state the previous round carried', () => {
+		const call = createJSONRPCRequest({ method: 'tools/call', params: { name: 'ignored' } })
+		const context = (name: string, state?: number): MCPInputContext => ({
+			request: call,
+			name,
+			arguments: {},
+			...(state === undefined ? {} : { state }),
+		})
+		const walked = buildConformanceInput(context('test_input_required_result_multi_round'))
+		const next = buildConformanceInput(context('test_input_required_result_multi_round', 0))
+
+		expect(walked).toEqual({
+			requests: CONFORMANCE_ROUNDS['test_input_required_result_multi_round']?.[0],
+			state: 0,
+		})
+		expect(next).toEqual({
+			requests: CONFORMANCE_ROUNDS['test_input_required_result_multi_round']?.[1],
+			state: 1,
+		})
+		// The rounds run out rather than repeating, which is how the tool finally executes.
+		expect(
+			buildConformanceInput(context('test_input_required_result_multi_round', 1)),
+		).toBeUndefined()
+		// A tool absent from the table owes this host nothing at any state.
+		expect(buildConformanceInput(context('test_simple_text'))).toBeUndefined()
+		expect(buildConformanceInput(context('test_simple_text', 0))).toBeUndefined()
+	})
+
+	it('asks only for sampling wherever the scenario declares only sampling', () => {
+		const gated = ['test_input_required_result_capabilities', 'test_missing_capability']
+		const methods = gated.map((name) =>
+			(CONFORMANCE_ROUNDS[name] ?? []).flatMap((round) =>
+				Object.values(round).map((request) => request.method),
+			),
+		)
+
+		expect(methods).toEqual([['sampling/createMessage'], ['sampling/createMessage']])
+		// Every round the table declares is answerable: an empty one would seal state no retry
+		// could satisfy, and the library refuses it.
+		for (const rounds of Object.values(CONFORMANCE_ROUNDS)) {
+			for (const round of rounds) expect(Object.keys(round).length).toBeGreaterThan(0)
+		}
+	})
+
+	it('projects only the accepted string answers a verified retry carried', () => {
+		expect(
+			readConformanceAnswers({
+				user_name: { action: 'accept', content: { context: 'alpha', count: 2 } },
+				declined: { action: 'decline' },
+				sampled: { role: 'assistant', content: { type: 'text', text: 'ignored' } },
+			}),
+		).toEqual({ context: 'alpha' })
+		expect(readConformanceAnswers(undefined)).toEqual({})
+		expect(readConformanceAnswers({})).toEqual({})
+	})
+
+	it('re-issues the prompt round until its own sealed carrier comes back', async () => {
+		const issued = await buildConformanceRound({ name: 'test_input_required_result_prompt' })
+		const carrier = issued?.requestState
+		if (carrier === undefined) throw new Error('expected a sealed prompt carrier')
+
+		expect(issued?.inputRequests).toEqual(CONFORMANCE_REQUESTS)
+		expect(
+			await buildConformanceRound({
+				name: 'test_input_required_result_prompt',
+				requestState: carrier,
+			}),
+		).toBeUndefined()
+		// A carrier this host never sealed is re-issued rather than honoured.
+		expect(
+			await buildConformanceRound({
+				name: 'test_input_required_result_prompt',
+				requestState: 'forged',
+			}),
+		).toBeDefined()
+		expect(await buildConformanceRound({ name: 'test_simple_prompt' })).toBeUndefined()
 	})
 })
 

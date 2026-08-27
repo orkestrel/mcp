@@ -8,12 +8,15 @@ import type {
 	JSONRPCRequest,
 	JSONRPCResultResponse,
 	MCPCallOutcome,
+	MCPClientCapabilities,
 	MCPClientInterface,
 	MCPDiscoverResult,
 	MCPDispatchOptions,
 	MCPIdentity,
+	MCPInputRequestMap,
 	MCPJSONLimitOptions,
 	MCPLegacyResult,
+	MCPMetaObject,
 	MCPMethodOptions,
 	MCPProgress,
 	MCPResult,
@@ -91,6 +94,58 @@ export function isFormElicitationSupported(value: unknown): boolean {
 	} catch {
 		return false
 	}
+}
+
+/**
+ * Computes the capabilities one round of input requests needs and the client did not declare.
+ *
+ * @remarks
+ * The protocol's rule is about SENDING: a server never issues a request kind the client's
+ * declared capabilities exclude. So this reads the round rather than the method, and it
+ * answers with the refusal's own payload — the `requiredCapabilities` record a
+ * `MissingRequiredClientCapability` error carries, keyed by each missing capability, in the
+ * `ClientCapabilities` shape the schema defines rather than as a list of names.
+ *
+ * Each kind maps to one declaration: `sampling/createMessage` to `sampling`, `roots/list` to
+ * `roots`, a form elicitation to what {@link isFormElicitationSupported} accepts, and a
+ * URL-mode elicitation to a record-valued `elicitation.url`. A request this package cannot
+ * recognize needs nothing, because {@link import('./validators.js').isMCPInputRequestMap}
+ * has already refused the round it would have travelled in. Total over hostile input.
+ *
+ * @param requests - The round the server is about to issue
+ * @param capabilities - The client capability record the request declared
+ * @returns The missing capabilities, or `undefined` when the client declared every one
+ *
+ * @example
+ * ```ts
+ * computeMissingCapabilities({ answer: { method: 'roots/list' } }, {}) // { roots: {} }
+ * computeMissingCapabilities({ answer: { method: 'roots/list' } }, { roots: {} }) // undefined
+ * ```
+ */
+export function computeMissingCapabilities(
+	requests: MCPInputRequestMap,
+	capabilities: unknown,
+): MCPClientCapabilities | undefined {
+	const owned = attempt(() => cloneJSONRecord(capabilities))
+	const declared: Readonly<Record<string, unknown>> = owned.success ? owned.value : {}
+	const missing: Record<string, MCPMetaObject> = {}
+	for (const request of Object.values(requests)) {
+		if (request.method === 'sampling/createMessage') {
+			if (!isRecord(declared['sampling'])) missing['sampling'] = {}
+			continue
+		}
+		if (request.method === 'roots/list') {
+			if (!isRecord(declared['roots'])) missing['roots'] = {}
+			continue
+		}
+		const elicitation = declared['elicitation']
+		if (request.params.mode === 'url') {
+			if (!isRecord(elicitation) || !isRecord(elicitation['url'])) missing['elicitation'] = {}
+			continue
+		}
+		if (!isFormElicitationSupported(declared)) missing['elicitation'] = {}
+	}
+	return Object.keys(missing).length === 0 ? undefined : Object.freeze(missing)
 }
 
 /**

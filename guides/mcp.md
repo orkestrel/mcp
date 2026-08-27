@@ -1213,28 +1213,34 @@ engine, so validation and serialization cannot disagree. `parseJSONRPCMessage` b
 bounded owned graph from that canonical text before routing, settlement, or notification delivery;
 `parseRequestContext` projects frozen capabilities and identity from the owned request.
 
-### Produce a form elicitation for the call in hand
+### Ask the client for input during the call in hand
 
-Configure `input` only when a `tools/call` may need operator input. The
-consumer owns the decision, authenticated principal, host-neutral continuation
-port, and TTL; MCP owns the protocol mechanism. It assigns an unpredictable map key,
-returns one form-mode `MCPElicitRequest`, seals the opaque `requestState`, and on
-retry opens and verifies that state before giving the matching top-level
-`inputResponses` value back to the hook. Returning `undefined` from the hook
-continues into the ordinary live tool registry.
+Configure `input` only when a `tools/call` may need something from the client before it can
+finish. The consumer composes each round — its own keys, and any mixture of the
+`elicitation/create`, `sampling/createMessage`, and `roots/list` kinds — and supplies the
+authenticated principal, the host-neutral continuation port, and the TTL. MCP owns the
+protective half: it refuses a round the client's declared capabilities exclude, seals the
+opaque `requestState`, and on retry opens and verifies that state and checks every answer
+against the question filed under its own key before handing the round's answers back to the
+hook. Returning `undefined` from the hook continues into the ordinary live tool registry.
+
+The keys are yours because they are how your own policy correlates each answer. A round asking
+nothing is refused, because it would seal state no retry could ever satisfy.
 
 The order the server runs those steps in is itself a contract, because each step is a
-provider call somebody pays for. On a FIRST round: the selector runs, its elicitation and
-schema are owned and frozen immediately, the client's form capability is checked, and only
-then is the principal resolved and the state sealed — so a client that never declared
-elicitation costs no principal lookup and no audit record. On a RETRY: the capability is
-checked before the continuation port is opened or the principal is resolved, and every
-structural binding — changed id, expiry, version, method, tool name, argument digest, the
-issued key, and the accepted content against the issued schema — is verified before the
-principal resolver runs at all.
+provider call somebody pays for. On a FIRST round: the selector runs, its round is owned and
+frozen immediately, the round is measured against the client's declared capabilities, and only
+then is the principal resolved and the state sealed — so a client whose round this server may
+not send costs no principal lookup and no audit record. On a RETRY: every structural binding —
+changed id, expiry, version, method, tool name, argument digest, every issued key, and each
+answer against the request that asked for it — is verified before the principal resolver runs
+at all. The capability gate does not stand at the retry's ingress, because a retry answers a
+round this server already gated; what it measures there is the NEXT round, so it runs after the
+selector answers and before that round is sealed.
 
 ```ts
 import {
+	computeMissingCapabilities,
 	createMCPServer,
 	isElicitContent,
 	isFormElicitationSupported,
@@ -1246,7 +1252,11 @@ import {
 	isMCPElicitURL,
 	isMCPInputRequest,
 	isMCPInputRequestMap,
+	isMCPInputResponse,
 	isMCPInputResult,
+	isMCPRoot,
+	isMCPRootResult,
+	isMCPSampleResult,
 } from '@orkestrel/mcp'
 import { createMCPContinuation } from '@orkestrel/mcp/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -1261,16 +1271,22 @@ const server = createMCPServer({
 		continuation: createMCPContinuation(['current-secret', 'older-secret']),
 		ttl: 60_000,
 		principal: () => 'authenticated-user-42',
-		elicit: ({ response }) =>
-			response === undefined
+		round: ({ responses }) =>
+			responses === undefined
 				? {
-						request: {
-							message: 'Approve this reply?',
-							requestedSchema: {
-								type: 'object',
-								properties: { approved: { type: 'boolean' } },
-								required: ['approved'],
+						requests: {
+							approval: {
+								method: 'elicitation/create',
+								params: {
+									message: 'Approve this reply?',
+									requestedSchema: {
+										type: 'object',
+										properties: { approved: { type: 'boolean' } },
+										required: ['approved'],
+									},
+								},
 							},
+							workspace: { method: 'roots/list', params: {} },
 						},
 						state: { operation: 'run-42' },
 					}
@@ -1280,6 +1296,8 @@ const server = createMCPServer({
 
 isFormElicitationSupported({ elicitation: {} }) // true: empty means form-only
 isFormElicitationSupported({ elicitation: { url: {} } }) // false
+computeMissingCapabilities({ workspace: { method: 'roots/list' } }, {}) // { roots: {} }
+computeMissingCapabilities({ workspace: { method: 'roots/list' } }, { roots: {} }) // undefined
 isMCPElicitFieldSchema({ type: 'string', format: 'email' }) // true: one field's schema
 isMCPElicitSchema({ type: 'object', properties: { approved: { type: 'boolean' } } }) // true
 isMCPElicitForm({
@@ -1291,9 +1309,18 @@ isMCPElicitRequest({
 	method: 'elicitation/create',
 	params: { message: 'Approve?', requestedSchema: { type: 'object', properties: {} } },
 }) // true
-isMCPInputRequest({ method: 'roots/list' }) // true: legal, deprecated, never produced here
+isMCPInputRequest({ method: 'roots/list' }) // true: legal, deprecated, and composable here
 isMCPInputRequestMap({ confirm: { method: 'roots/list' } }) // true: a keyed map, not an array
 isMCPElicitResult({ action: 'accept', content: { approved: true } }) // true
+isMCPRoot({ uri: 'file:///workspace', name: 'workspace' }) // true
+isMCPRootResult({ roots: [{ uri: 'file:///workspace' }] }) // true
+isMCPSampleResult({
+	role: 'assistant',
+	content: { type: 'text', text: 'Paris' },
+	model: 'a-model',
+}) // true
+isMCPInputResponse({ roots: [] }, { method: 'roots/list' }) // true
+isMCPInputResponse({ action: 'accept' }, { method: 'roots/list' }) // false: wrong kind
 isElicitContent(
 	{ approved: true },
 	{ type: 'object', properties: { approved: { type: 'boolean' } } },
@@ -1322,24 +1349,24 @@ RFC 3986 URI guard.
 
 The retry uses a new JSON-RPC id and preserves the original `name` /
 `arguments`; `inputResponses` and the byte-exact `requestState` are top-level
-`params` siblings. Extra `inputResponses` keys are IGNORED — the server assigned exactly one
-key and reads exactly that one — while omitting the issued key is still a refusal. A missing
-or URL-only elicitation declaration receives
-`-32021` with `{ requiredCapabilities: { elicitation: {} } }`. A malformed,
-mutated, expired, same-id, cross-principal, cross-version, cross-method,
-cross-tool, changed-argument, wrong-key, or schema-violating state receives `-32602` before
+`params` siblings. Extra `inputResponses` keys are IGNORED — the server reads exactly the keys
+it issued — while omitting any issued key is still a refusal. A round asking for a kind the
+client did not declare receives `-32021` with a `requiredCapabilities` record naming each
+missing capability: `sampling` for `sampling/createMessage`, `roots` for `roots/list`, and
+`elicitation` for a form request the declaration does not authorize, URL-only included. A
+malformed, mutated, expired, same-id, cross-principal, cross-version, cross-method,
+cross-tool, changed-argument, unanswered-key, or kind-violating state receives `-32602` before
 tool execution. A continuation or policy provider rejection is infrastructure failure and
 receives detail-free `-32603`, with the caught value on the server's `error` event — as does
 a port that opens SUCCESSFULLY onto a payload this server never authored, or onto one
 outside the state bound, because the client wrote neither and cannot act on being told it
-was at fault. A carrier the port cannot recover, and an invalid resolved principal,
-elicitation, or carrier, remain `-32602`. Recovered state is bounded before parsing.
+was at fault. A carrier the port cannot recover, and an invalid resolved principal, round, or
+carrier, remain `-32602`. Recovered state is bounded before parsing.
 
 Place the retry through the `input` group on `MCPCallOptions`. The `state` and `responses`
 leaves are required together. Pass the same tool name and byte-identical `arguments` that the
 first call used; changing the arguments invalidates the protected state. The following client-side
-exchange reuses the same `callArguments` value and maps the server-assigned request key to its
-elicitation response:
+exchange reuses the same `callArguments` value and answers every key the round published:
 
 ```ts
 import type { MCPClientInterface } from '@orkestrel/mcp'
@@ -1356,13 +1383,14 @@ if (
 ) {
 	throw new Error('Expected input requests and protected state')
 }
-const key = Object.keys(pending.inputRequests)[0]
-if (key === undefined) throw new Error('Expected an input request key')
-
+// The server publishes its own keys, so answer each one by the kind its request names.
 await client.call('reply', callArguments, {
 	input: {
 		state: pending.requestState,
-		responses: { [key]: { action: 'accept', content: { approved: true } } },
+		responses: {
+			approval: { action: 'accept', content: { approved: true } },
+			workspace: { roots: [{ uri: 'file:///workspace', name: 'workspace' }] },
+		},
 	},
 })
 ```
@@ -1374,16 +1402,16 @@ travels as another `tools/call`.
 
 **What the protected state binds, and for how long.** The carrier is OPAQUE to the client:
 it carries an authenticated principal, an absolute expiry, the ORIGINAL first-round request
-id, the protocol revision, the method, the server-minted key, the tool name, a canonical
-SHA-256 argument digest, the EXACT schema that was issued with that round, and any
-application state the selector attached. Expiry is a short absolute deadline set from the
-consumer's `ttl`, and it is rechecked around every provider await rather than admitted once:
-after the selector answers, and around the seal that a further round performs. The issued
-schema is not merely carried — `isElicitContent` enforces the accepted response against it,
-so a client answering a question other than the one it was asked is refused before the tool
-runs. Across rounds, `principal`, the original id, version, method, tool name, and digest
-stay bound while key, expiry, and schema are re-minted; the original id stays bound however
-many rounds follow, so a three-round exchange is still one correlated call.
+id, the protocol revision, the method, the EXACT round that was issued, the tool name, a
+canonical SHA-256 argument digest, and any application state the selector attached. Expiry is
+a short absolute deadline set from the consumer's `ttl`, and it is rechecked around every
+provider await rather than admitted once: after the selector answers, and around the seal that
+a further round performs. The issued round is not merely carried — `isMCPInputResponse`
+enforces each answer against the request filed under its own key, and a form request's schema
+through `isElicitContent`, so a client answering a question other than the one it was asked is
+refused before the tool runs. Across rounds, `principal`, the original id, version, method,
+tool name, and digest stay bound while the round and its expiry are re-minted; the original id
+stays bound however many rounds follow, so a three-round exchange is still one correlated call.
 
 **What it deliberately does not do.** There is no consume-once rule, no session binding, no
 timer, and no replay store: the same protected state answers again under a fresh id, and it
@@ -2043,9 +2071,14 @@ Passing a legacy revision to
 | `isMCPElicitRequest`               | function | Total guard for an embedded `elicitation/create` request.                                                                                                                                                                     |
 | `isMCPInputRequest`                | function | Total guard for one legal elicitation, deprecated sampling, or deprecated roots input request.                                                                                                                                |
 | `isMCPInputRequestMap`             | function | Total guard for the server-keyed input-request map.                                                                                                                                                                           |
+| `isMCPRoot`                        | function | Total guard for one filesystem root a client exposes.                                                                                                                                                                         |
+| `isMCPRootResult`                  | function | Total guard for the client answer to an embedded `roots/list` request.                                                                                                                                                        |
+| `isMCPSampleResult`                | function | Total guard for the client answer to an embedded `sampling/createMessage` request — one message block plus its model, never a resource arm.                                                                                   |
 | `isMCPElicitResult`                | function | Total guard for an elicitation action and its optional primitive form content.                                                                                                                                                |
 | `isElicitContent`                  | function | Total guard checking accepted content against the EXACT issued schema; undeclared properties stay valid, an unenforceable schema admits nothing.                                                                              |
+| `isMCPInputResponse`               | function | Total guard checking one client answer against the EXACT request that was issued under its key; an unrecognized request admits nothing.                                                                                       |
 | `isMCPInputResult`                 | function | Total guard for `input_required`, including the runtime at-least-one-of rule.                                                                                                                                                 |
+| `computeMissingCapabilities`       | function | Compute the `requiredCapabilities` record naming what a round needs and the client did not declare, or `undefined` when it declared every kind.                                                                               |
 | `isTaskSupported`                  | function | Determines whether client capabilities declare the stable Tasks extension; the extension id under `extensions` must carry the schema's exactly-empty object.                                                                  |
 | `isMCPTaskStatus`                  | function | Total guard for the extension's task lifecycle states.                                                                                                                                                                        |
 | `isMCPTaskResult`                  | function | Total guard for the flat `resultType: 'task'` creation answer, `ttlMs: null` included.                                                                                                                                        |
@@ -2058,7 +2091,7 @@ Passing a legacy revision to
 | `isMCPError`                       | function | Total guard — `true` only for a real `MCPError`.                                                                                                                                                                              |
 | `parseJSONRPCMessage`              | function | Return a bounded frozen owned `JSONRPCMessage`, or `undefined`; optional limits override the content-byte/default-depth boundary.                                                                                             |
 | `parseRequestContext`              | function | Return a frozen owned modern request projection, or `undefined` for malformed required metadata.                                                                                                                              |
-| `parseMCPInputState`               | function | Parse opened request state into its principal/expiry/original-id/version/method/tool/digest/key/schema/application bindings.                                                                                                  |
+| `parseMCPInputState`               | function | Parse opened request state into its principal/expiry/original-id/version/method/tool/digest/requests/application bindings.                                                                                                    |
 | `inferEra`                         | function | Map a supported revision to `modern` or `legacy`; unsupported revisions return `undefined`.                                                                                                                                   |
 | `inferVersion`                     | function | Select the supported modern revision present in a peer's discovery or retry offer; a legacy-only offer returns `undefined`.                                                                                                   |
 | `inferRequestVersion`              | function | Project the protocol version a modern request announces itself with — the ONE derivation the HTTP client transports stamp `mcp-protocol-version` from, and the same read the server's own header expectation performs.        |
@@ -2170,16 +2203,21 @@ Passing a legacy revision to
 | `MCPElicitParams`                  | type      | `MCPElicitForm \| MCPElicitURL` — the mode-discriminated parameters of an `elicitation/create` request.                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `MCPElicitRequest`                 | interface | `{ method: 'elicitation/create'; params: MCPElicitParams }` — one embedded elicitation request.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `MCPElicitResult`                  | interface | `{ action: 'accept' \| 'decline' \| 'cancel'; content? }` — the client response to elicitation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `MCPInputRequest`                  | type      | Legal embedded request union; MCP produces only `MCPElicitRequest`, while deprecated sampling/roots shapes remain legal.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `MCPInputRequest`                  | type      | Legal embedded request union — one `MCPElicitRequest`, or a deprecated sampling or roots request whose parameters stay open.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `MCPInputRequestMap`               | type      | Readonly server-keyed map of `MCPInputRequest` values.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `MCPRoot`                          | interface | `{ uri; name?; _meta? }` — one filesystem root a client exposes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `MCPRootResult`                    | interface | `{ roots; _meta? }` — the client answer to an embedded `roots/list` request.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `MCPSampleResult`                  | interface | `{ role; content; model; stopReason?; _meta? }` — the client answer to an embedded sampling request; `content` is one text, image, or audio block.                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `MCPInputResponse`                 | type      | `MCPElicitResult                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | MCPSampleResult | MCPRootResult` — one client answer, discriminated by its own required members. |
+| `MCPInputResponseMap`              | type      | Readonly server-keyed map of `MCPInputResponse` values.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `MCPInputResult`                   | type      | `input_required` union enforcing at least one of `inputRequests` / `requestState`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `MCPInputState`                    | interface | Protected principal, absolute `expiry`, original request `id`, version, method, tool, argument digest, response key, the exact issued `schema`, and optional JSON application state.                                                                                                                                                                                                                                                                                                                                                                           |
-| `MCPInputContext`                  | interface | Call-in-hand context given to the input hook, including a verified elicitation response/state on retry.                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `MCPElicitation`                   | interface | Consumer-requested form params plus optional opaque consumer state, before MCP assigns a key and signs it.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `MCPInputHandler`                  | type      | `(context, options) => MCPElicitation \| undefined` (or a promise) — request operator input or continue to tool execution.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `MCPInputState`                    | interface | Protected principal, absolute `expiry`, original request `id`, version, method, tool, argument digest, the exact issued `requests`, and optional JSON application state.                                                                                                                                                                                                                                                                                                                                                                                       |
+| `MCPInputContext`                  | interface | Call-in-hand context given to the input hook, including every verified response and the state on a retry.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `MCPInputRound`                    | interface | `{ requests; state? }` — the consumer-keyed round plus optional opaque consumer state, before MCP gates and seals it.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `MCPInputHandler`                  | type      | `(context, options) => MCPInputRound \| undefined` (or a promise) — ask the client for input or continue to tool execution.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `MCPPrincipalHandler`              | type      | `(request, options: MCPDispatchOptions) => string` (or a promise) — derives the authenticated principal bound into protected state.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `MCPContinuationInterface`         | interface | Host-neutral `seal` / `open` integrity or durable-handle port for canonical continuation state.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `MCPInputOptions`                  | interface | `{ continuation; ttl; principal; elicit }` — consumer policy for MRTR production and verification.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `MCPInputOptions`                  | interface | `{ continuation; ttl; principal; round }` — consumer policy for MRTR production and verification.                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `MCPTaskStatus`                    | type      | `'working' \| 'input_required' \| 'completed' \| 'failed' \| 'cancelled'` — one durable task's lifecycle state; `completed`, `failed`, and `cancelled` are terminal. Its `input_required` is a DIFFERENT mechanism from `MCPInputResult`'s identically spelled `resultType`.                                                                                                                                                                                                                                                                                   |
 | `MCPTask`                          | type      | `{ taskId; status; statusMessage?; createdAt; lastUpdatedAt; ttlMs: number \| null; pollIntervalMs? }` — one task's wire snapshot; every field name is a verbatim spelling from the dated snapshot and `ttlMs: null` means no expiry.                                                                                                                                                                                                                                                                                                                          |
 | `MCPTaskDetail`                    | type      | `MCPTask` narrowed by `status`: `input_required` adds `inputRequests`, `completed` adds an OPEN `result` record, `failed` adds `error`, `working` / `cancelled` add nothing — what a consumer manager answers with, unstamped.                                                                                                                                                                                                                                                                                                                                 |
@@ -3860,8 +3898,7 @@ consumer can plan around it instead of discovering it.
 | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Roots, Sampling, Logging                                       | All are deprecated in 2026-07-28 and none has a registry or a consumer here. The local `emitter`s are observability, not an MCP logging capability. Resources and Prompts are NOT on this list any more — see [Project a host-owned resource, prompt, and completion registry](#project-a-host-owned-resource-prompt-and-completion-registry). |
 | A built-in resource or prompt STORE                            | The `resources` / `prompts` / `completion` capabilities ship as PORTS, exactly as tools and durable tasks do. What backs one — a workspace, a database, a template registry, a plain object — is the host's decision, and a default store here would be product policy wearing a framework's clothes.                                          |
-| Server-initiated `elicitation/create` requests                 | 2026-07-28 removes server-initiated requests entirely. Form elicitation survives only inside a modern `tools/call` `input_required` result — see [Produce a form elicitation for the call in hand](#produce-a-form-elicitation-for-the-call-in-hand).                                                                                          |
-| Sampling and roots as input-request carriers                   | Both remain legal members of `MCPInputRequest` and both are deprecated; this server produces `MCPElicitRequest` and nothing else.                                                                                                                                                                                                              |
+| Server-initiated `elicitation/create` requests                 | 2026-07-28 removes server-initiated requests entirely. Input requests survive only inside a modern `tools/call` `input_required` result — see [Ask the client for input during the call in hand](#ask-the-client-for-input-during-the-call-in-hand).                                                                                          |
 | Durable task or session STORAGE                                | Task state outlives the request that created it and this package owns no persistence. The store arrives injected as `MCPTaskOptions.tasks`, exactly as `ToolManagerInterface` does — the extension's protocol ships here, its durability does not.                                                                                             |
 | `outputSchema` on tool descriptors                             | `ToolResult.value` (`@orkestrel/tool`) is `unknown`; the contract that owns the value owns its schema. `structuredContent` is produced without one, which no clause gates.                                                                                                                                                                     |
 | Icons (2025-11-25)                                             | Installed `@orkestrel/tool` definitions carry no icon field, so an MCP-only wrapper would have no originating consumer.                                                                                                                                                                                                                        |

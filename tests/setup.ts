@@ -402,15 +402,20 @@ export function createInputServer(tools: ToolManagerInterface): MCPServerInterfa
 			},
 			ttl: 60_000,
 			principal: () => 'operator-1',
-			elicit: ({ response }) =>
-				response === undefined
+			round: ({ responses }) =>
+				responses === undefined
 					? {
-							request: {
-								message: 'Approve this call?',
-								requestedSchema: {
-									type: 'object',
-									properties: { approved: { type: 'boolean' } },
-									required: ['approved'],
+							requests: {
+								approval: {
+									method: 'elicitation/create',
+									params: {
+										message: 'Approve this call?',
+										requestedSchema: {
+											type: 'object',
+											properties: { approved: { type: 'boolean' } },
+											required: ['approved'],
+										},
+									},
 								},
 							},
 						}

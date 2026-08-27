@@ -32,10 +32,17 @@ function protectedPayload(overrides: Readonly<Record<string, unknown>> = {}): st
 		id: 7,
 		version: '2026-07-28',
 		method: 'tools/call',
-		key: 'confirm',
 		name: 'reply',
 		digest: 'abc',
-		schema: { type: 'object', properties: { approved: { type: 'boolean' } } },
+		requests: {
+			confirm: {
+				method: 'elicitation/create',
+				params: {
+					message: 'Approve?',
+					requestedSchema: { type: 'object', properties: { approved: { type: 'boolean' } } },
+				},
+			},
+		},
 		...overrides,
 	})
 }
@@ -424,25 +431,32 @@ describe('parseRequestContext', () => {
 })
 
 describe('parseMCPInputState', () => {
-	it('parses every replay-binding field, the issued schema, and optional consumer state', () => {
+	it('parses every replay-binding field, the issued round, and optional consumer state', () => {
 		expect(parseMCPInputState(protectedPayload({ state: { operation: 'run-42' } }))).toEqual({
 			principal: 'operator-1',
 			expiry: 1_000,
 			id: 7,
 			version: '2026-07-28',
 			method: 'tools/call',
-			key: 'confirm',
 			name: 'reply',
 			digest: 'abc',
-			schema: { type: 'object', properties: { approved: { type: 'boolean' } } },
+			requests: {
+				confirm: {
+					method: 'elicitation/create',
+					params: {
+						message: 'Approve?',
+						requestedSchema: { type: 'object', properties: { approved: { type: 'boolean' } } },
+					},
+				},
+			},
 			state: { operation: 'run-42' },
 		})
 	})
 
 	// Every row is a COMPLETE payload with exactly one binding removed or mistyped, so each
 	// isolates the binding it names. A row that simply omitted several would pass for want of
-	// a member nobody was testing, and the schema row below is exactly where that would bite:
-	// a payload with no schema has nothing to enforce an accepted response against.
+	// a member nobody was testing, and the requests rows below are exactly where that would bite:
+	// a payload with no round has nothing to enforce an accepted response against.
 	it('rejects malformed JSON and every missing or mistyped binding', () => {
 		const invalid: readonly unknown[] = [
 			'not-json',
@@ -453,13 +467,20 @@ describe('parseMCPInputState', () => {
 			protectedPayload({ id: null }),
 			protectedPayload({ version: 2 }),
 			protectedPayload({ method: 2 }),
-			protectedPayload({ key: 2 }),
 			protectedPayload({ name: 2 }),
 			protectedPayload({ digest: 2 }),
-			protectedPayload({ schema: undefined }),
-			protectedPayload({ schema: 'object' }),
-			protectedPayload({ schema: { type: 'object' } }),
-			protectedPayload({ schema: { type: 'object', properties: { bad: { type: 'object' } } } }),
+			protectedPayload({ requests: undefined }),
+			protectedPayload({ requests: 'confirm' }),
+			protectedPayload({ requests: {} }),
+			protectedPayload({ requests: { confirm: { method: 'tools/call' } } }),
+			protectedPayload({
+				requests: {
+					confirm: {
+						method: 'elicitation/create',
+						params: { message: 'Approve?', requestedSchema: { type: 'object' } },
+					},
+				},
+			}),
 		]
 
 		expect(invalid.map((value) => parseMCPInputState(value))).toEqual(invalid.map(() => undefined))
@@ -468,7 +489,7 @@ describe('parseMCPInputState', () => {
 	// The positive control for the rows above: the same builder with nothing removed parses,
 	// so a row's `undefined` reports on the binding it mistyped rather than on the builder.
 	it('parses the complete payload the rejection rows are built from', () => {
-		expect(parseMCPInputState(protectedPayload())).toMatchObject({ key: 'confirm' })
+		expect(parseMCPInputState(protectedPayload())).toMatchObject({ requests: expect.any(Object) })
 	})
 
 	// The recorded revision is the binding a retry is verified against, and a stamped request

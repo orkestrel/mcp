@@ -29,6 +29,7 @@ import type {
 	MCPIdentity,
 	MCPInputRequest,
 	MCPInputRequestMap,
+	MCPInputResponse,
 	MCPInputResult,
 	MCPJSONLimitOptions,
 	MCPLegacyResult,
@@ -49,6 +50,9 @@ import type {
 	MCPResourceTemplatePage,
 	MCPResult,
 	MCPResultMetaObject,
+	MCPRoot,
+	MCPRootResult,
+	MCPSampleResult,
 	MCPServerCapabilities,
 	MCPSubscriptionFilter,
 	MCPSubscriptionResult,
@@ -1834,6 +1838,139 @@ export function isElicitContent(
 			}
 		}
 		return true
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Determines whether a value is one filesystem root a client exposes.
+ *
+ * @param value - The unknown value to inspect
+ * @returns `true` when `value` carries a string `uri` and an optional string `name`
+ *
+ * @example
+ * ```ts
+ * isMCPRoot({ uri: 'file:///workspace', name: 'workspace' }) // true
+ * ```
+ */
+export function isMCPRoot(value: unknown): value is MCPRoot {
+	const owned = attempt(() => cloneJSONRecord(value))
+	if (!owned.success) return false
+	try {
+		const root = owned.value
+		const name = root['name']
+		const metadata = root['_meta']
+		if (!isString(root['uri'])) return false
+		if (!isUndefined(name) && !isString(name)) return false
+		return isUndefined(metadata) || isMCPMetaObject(metadata)
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Determines whether a value is one client answer to an embedded `roots/list` request.
+ *
+ * @remarks
+ * The dated schema requires the `roots` array and constrains a root's `uri` no further than
+ * a string, so neither does this. Total over hostile input.
+ *
+ * @param value - The unknown value to inspect
+ * @returns `true` when `value` carries an array of valid roots
+ *
+ * @example
+ * ```ts
+ * isMCPRootResult({ roots: [{ uri: 'file:///workspace' }] }) // true
+ * isMCPRootResult({ roots: {} }) // false — the schema requires an array
+ * ```
+ */
+export function isMCPRootResult(value: unknown): value is MCPRootResult {
+	const owned = attempt(() => cloneJSONRecord(value))
+	if (!owned.success) return false
+	try {
+		const result = owned.value
+		const roots = result['roots']
+		const metadata = result['_meta']
+		if (!Array.isArray(roots) || !roots.every((root) => isMCPRoot(root))) return false
+		return isUndefined(metadata) || isMCPMetaObject(metadata)
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Determines whether a value is one client answer to an embedded sampling request.
+ *
+ * @remarks
+ * The schema's `CreateMessageResult` is one sampling message plus the model that produced
+ * it, so `content` is a SINGLE block and carries neither of the resource arms
+ * {@link isMCPContent} also admits. `stopReason` stays an open string because the schema
+ * names three values and permits any other a provider reports. Total over hostile input.
+ *
+ * @param value - The unknown value to inspect
+ * @returns `true` when `value` has the sampling-completion shape
+ *
+ * @example
+ * ```ts
+ * isMCPSampleResult({
+ * 	role: 'assistant',
+ * 	content: { type: 'text', text: 'Paris' },
+ * 	model: 'test-model',
+ * }) // true
+ * ```
+ */
+export function isMCPSampleResult(value: unknown): value is MCPSampleResult {
+	const owned = attempt(() => cloneJSONRecord(value))
+	if (!owned.success) return false
+	try {
+		const result = owned.value
+		const role = result['role']
+		const content = result['content']
+		const reason = result['stopReason']
+		const metadata = result['_meta']
+		if (role !== 'user' && role !== 'assistant') return false
+		if (!isString(result['model']) || !isMCPContent(content)) return false
+		if (content.type !== 'text' && content.type !== 'image' && content.type !== 'audio') {
+			return false
+		}
+		if (!isUndefined(reason) && !isString(reason)) return false
+		return isUndefined(metadata) || isMCPMetaObject(metadata)
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Determines whether a response answers the exact embedded request that was issued.
+ *
+ * @remarks
+ * A response carries no `method` of its own, so the ISSUED request selects which arm applies
+ * — the same way {@link isElicitContent} takes the issued schema rather than trusting the
+ * content to describe itself. A form elicitation is checked twice: once for the response
+ * shape and once, on `accept`, for the content against the schema that round issued. A
+ * URL-mode elicitation issues no schema, so only the shape is checked. A request this
+ * package cannot recognize admits NOTHING, because an unrecognized question has no correct
+ * answer. Total over hostile responses and hostile requests alike.
+ *
+ * @param value - The client's answer to check
+ * @param request - The exact {@link MCPInputRequest} that was issued under the same key
+ * @returns `true` when the answer is legal for that request
+ *
+ * @example
+ * ```ts
+ * isMCPInputResponse({ roots: [] }, { method: 'roots/list' }) // true
+ * isMCPInputResponse({ roots: [] }, { method: 'sampling/createMessage', params: {} }) // false
+ * ```
+ */
+export function isMCPInputResponse(value: unknown, request: unknown): value is MCPInputResponse {
+	if (!isMCPInputRequest(request)) return false
+	try {
+		if (request.method === 'roots/list') return isMCPRootResult(value)
+		if (request.method === 'sampling/createMessage') return isMCPSampleResult(value)
+		if (!isMCPElicitResult(value)) return false
+		if (value.action !== 'accept' || !isMCPElicitForm(request.params)) return true
+		return isElicitContent(value.content ?? {}, request.params.requestedSchema)
 	} catch {
 		return false
 	}

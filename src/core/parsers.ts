@@ -23,8 +23,8 @@ import {
 	isJSONRPCId,
 	isJSONRPCMessage,
 	isMCPClientCapabilities,
-	isMCPElicitSchema,
 	isMCPIdentity,
+	isMCPInputRequestMap,
 	isMCPLoggingLevel,
 	isMCPMetaObject,
 	isModernRequest,
@@ -143,17 +143,18 @@ export function parseRequestContext(
  * This parser does not open the opaque continuation carrier; the configured
  * continuation port performs that boundary first. The protected
  * payload binds the authenticated principal, absolute expiry, ORIGINAL request id, version,
- * method, server-assigned key, tool name, argument digest, the exact issued elicitation
- * schema, and optional application state. Every member is required except application state:
- * a payload missing its schema cannot have its accepted response enforced, so it is refused
- * rather than admitted unenforced. Total over malformed or hostile input.
+ * method, the exact round that was issued, tool name, argument digest, and optional
+ * application state. Every member is required except application state: a payload missing its
+ * round cannot have the client's answers enforced, so it is refused rather than admitted
+ * unenforced. An EMPTY round is refused for the same reason — a retry against it would answer
+ * no question at all. Total over malformed or hostile input.
  *
  * @param value - The opened canonical continuation value to parse
  * @returns The protected input state, or `undefined` when malformed
  *
  * @example
  * ```ts
- * parseMCPInputState('{"principal":"user-1","expiry":2000,"id":1,"version":"2026-07-28","method":"tools/call","key":"k","name":"reply","digest":"abc","schema":{"type":"object","properties":{}}}')
+ * parseMCPInputState('{"principal":"user-1","expiry":2000,"id":1,"version":"2026-07-28","method":"tools/call","requests":{"k":{"method":"roots/list"}},"name":"reply","digest":"abc"}')
  * ```
  */
 export function parseMCPInputState(value: unknown): MCPInputState | undefined {
@@ -166,10 +167,9 @@ export function parseMCPInputState(value: unknown): MCPInputState | undefined {
 		const id = parsed['id']
 		const version = parsed['version']
 		const method = parsed['method']
-		const key = parsed['key']
+		const requests = parsed['requests']
 		const name = parsed['name']
 		const digest = parsed['digest']
-		const schema = parsed['schema']
 		const state = parsed['state']
 		if (
 			!isString(principal) ||
@@ -180,21 +180,18 @@ export function parseMCPInputState(value: unknown): MCPInputState | undefined {
 			return undefined
 		}
 		if (!isJSONRPCId(id)) return undefined
-		if (!isString(version) || !isString(method) || !isString(key) || !isString(name)) {
-			return undefined
-		}
+		if (!isString(version) || !isString(method) || !isString(name)) return undefined
 		if (!isString(digest) || (!isUndefined(state) && !isJSONValue(state))) return undefined
-		if (!isMCPElicitSchema(schema)) return undefined
+		if (!isMCPInputRequestMap(requests) || Object.keys(requests).length === 0) return undefined
 		return {
 			principal,
 			expiry,
 			id,
 			version,
 			method,
-			key,
+			requests,
 			name,
 			digest,
-			schema,
 			...(isUndefined(state) ? {} : { state }),
 		}
 	} catch {

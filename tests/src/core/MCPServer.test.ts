@@ -11,10 +11,13 @@ import type {
 	MCPContinuationInterface,
 	MCPDispatcherInterface,
 	MCPMethodOptions,
-	MCPElicitation,
+	MCPElicitForm,
 	MCPElicitSchema,
 	MCPInputContext,
+	MCPInputRequestMap,
+	MCPInputResponseMap,
 	MCPInputResult,
+	MCPInputRound,
 	MCPInputState,
 	MCPPaginationParams,
 	MCPPromptGetParams,
@@ -37,6 +40,7 @@ import type {
 	MCPTaskOptions,
 	MCPTextStream,
 } from '@src/core'
+import type { JSONValue } from '@orkestrel/contract'
 import type { EmitterErrorHandler } from '@orkestrel/emitter'
 import type { ToolManagerInterface, ToolSuccess } from '@orkestrel/tool'
 import {
@@ -223,11 +227,64 @@ class MemoryCompletionManager implements MCPCompletionManagerInterface {
 	}
 }
 
-function createElicitation(): MCPElicitation {
+// The question every proof that does not care WHAT was asked asks.
+const APPROVAL_FORM: MCPElicitForm = {
+	message: 'Approve?',
+	requestedSchema: { type: 'object', properties: {} },
+}
+
+// One round carrying a single form elicitation under `approval`. The key belongs to the
+// CONSUMER now, so it is fixed here and read back by name rather than discovered from a round.
+function createRound(request: MCPElicitForm = APPROVAL_FORM, state?: JSONValue): MCPInputRound {
+	const requests: MCPInputRequestMap = {
+		approval: { method: 'elicitation/create', params: request },
+	}
+	return state === undefined ? { requests } : { requests, state }
+}
+
+// One round of all three kinds at once — the shape the protocol permits and the mechanism
+// could not express while it minted one key and issued one form.
+const MIXED_ROUND: MCPInputRequestMap = Object.freeze({
+	user_name: {
+		method: 'elicitation/create',
+		params: {
+			message: 'What is your name?',
+			requestedSchema: {
+				type: 'object',
+				properties: { name: { type: 'string' } },
+				required: ['name'],
+			},
+		},
+	},
+	greeting: {
+		method: 'sampling/createMessage',
+		params: {
+			messages: [{ role: 'user', content: { type: 'text', text: 'Generate a greeting' } }],
+			maxTokens: 50,
+		},
+	},
+	client_roots: { method: 'roots/list', params: {} },
+})
+
+// The client's answers to that round, one legal shape per kind.
+const MIXED_ANSWERS: MCPInputResponseMap = Object.freeze({
+	user_name: { action: 'accept', content: { name: 'Ada' } },
+	greeting: {
+		role: 'assistant',
+		content: { type: 'text', text: 'Hello, Ada.' },
+		model: 'test-model',
+		stopReason: 'endTurn',
+	},
+	client_roots: { roots: [{ uri: 'file:///workspace', name: 'workspace' }] },
+})
+
+// A `tools/call` from a client that declared every kind `MIXED_ROUND` asks for.
+function mixedCall(): Readonly<Record<string, unknown>> {
 	return {
-		request: {
-			message: 'Approve?',
-			requestedSchema: { type: 'object', properties: {} },
+		name: 'echo',
+		_meta: {
+			[MCP_META_VERSION]: '2026-07-28',
+			[MCP_META_CAPABILITIES]: { elicitation: {}, sampling: {}, roots: {} },
 		},
 	}
 }
@@ -459,7 +516,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 				continuation: new MemoryContinuation(),
 				ttl: 60_000,
 				principal: () => 'user-1',
-				elicit: () => undefined,
+				round: () => undefined,
 			},
 		})
 		const absentResponse = responseOf(
@@ -480,7 +537,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 				continuation: new MemoryContinuation(),
 				ttl: 60_000,
 				principal: () => 'user-1',
-				elicit: () => undefined,
+				round: () => undefined,
 			},
 		})
 		const incomingPeer = createHostilePeer(incoming)
@@ -508,13 +565,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 				continuation: new MemoryContinuation(),
 				ttl: 60_000,
 				principal: () => 'user-1',
-				elicit: () => ({
-					request: {
-						message: 'Approve?',
-						requestedSchema: { type: 'object', properties: {} },
-					},
-					state: 'x'.repeat(512),
-				}),
+				round: () => createRound(APPROVAL_FORM, 'x'.repeat(512)),
 			},
 		})
 		const outgoingPeer = createHostilePeer(outgoing)
@@ -544,12 +595,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 				continuation: new MemoryContinuation(),
 				ttl: 60_000,
 				principal: () => 'user-1',
-				elicit: () => ({
-					request: {
-						message: 'Approve?',
-						requestedSchema: { type: 'object', properties: {} },
-					},
-				}),
+				round: () => createRound(),
 			},
 		})
 		const signedPeer = createHostilePeer(signed)
@@ -972,7 +1018,7 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 
 describe('MCPServer — W01 modern execution and progress', () => {
 	it('rejects every present non-record modern arguments value before policy or execution', async () => {
-		let elicitations = 0
+		let selections = 0
 		let executions = 0
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
@@ -985,8 +1031,8 @@ describe('MCPServer — W01 modern execution and progress', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				elicit: () => {
-					elicitations += 1
+				round: () => {
+					selections += 1
 					return undefined
 				},
 			},
@@ -1007,7 +1053,7 @@ describe('MCPServer — W01 modern execution and progress', () => {
 			)
 			expect(answer?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
 		}
-		expect(elicitations).toBe(0)
+		expect(selections).toBe(0)
 		expect(executions).toBe(0)
 	})
 
@@ -1577,12 +1623,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 					seen.push(options)
 					return 'operator-1'
 				},
-				elicit: () => ({
-					request: {
-						message: 'Approve?',
-						requestedSchema: { type: 'object', properties: {} },
-					},
-				}),
+				round: () => createRound(),
 			},
 		})
 
@@ -1632,15 +1673,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 				continuation,
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				elicit: (context) =>
-					context.response === undefined
-						? {
-								request: {
-									message: 'Approve?',
-									requestedSchema: { type: 'object', properties: {} },
-								},
-							}
-						: undefined,
+				round: (context) => (context.responses === undefined ? createRound() : undefined),
 			},
 		})
 		const params = {
@@ -1658,7 +1691,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 		expect(sealed).not.toContain('"expires"')
 		expect(sealed).not.toContain('"origin"')
 		const key = Object.keys(first.result.inputRequests ?? {})[0]
-		if (key === undefined) throw new Error('expected elicitation key')
+		if (key === undefined) throw new Error('expected an input request key')
 		const retry = {
 			...params,
 			requestState: 'carrier',
@@ -1692,7 +1725,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 						continuation: new MemoryContinuation(),
 						ttl: 1_000,
 						principal: () => 'operator-1',
-						elicit: async () => {
+						round: async () => {
 							throw new Error('elicit provider detail')
 						},
 					},
@@ -1708,7 +1741,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 						principal: async () => {
 							throw new Error('principal provider detail')
 						},
-						elicit: createElicitation,
+						round: () => createRound(),
 					},
 				}),
 				code: JSONRPC_INTERNAL_ERROR,
@@ -1727,7 +1760,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 						},
 						ttl: 1_000,
 						principal: () => 'operator-1',
-						elicit: createElicitation,
+						round: () => createRound(),
 					},
 				}),
 				code: JSONRPC_INTERNAL_ERROR,
@@ -1739,7 +1772,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 						continuation: new MemoryContinuation(),
 						ttl: 1_000,
 						principal: () => 'operator-1',
-						elicit: new Proxy(createElicitation, { apply: () => 7 }),
+						round: new Proxy(() => createRound(), { apply: () => 7 }),
 					},
 				}),
 				code: JSONRPC_INVALID_PARAMS,
@@ -1751,7 +1784,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 						continuation: new MemoryContinuation(),
 						ttl: 1_000,
 						principal: new Proxy(() => 'operator-1', { apply: () => 7 }),
-						elicit: createElicitation,
+						round: () => createRound(),
 					},
 				}),
 				code: JSONRPC_INVALID_PARAMS,
@@ -1770,7 +1803,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 						},
 						ttl: 1_000,
 						principal: () => 'operator-1',
-						elicit: createElicitation,
+						round: () => createRound(),
 					},
 				}),
 				code: JSONRPC_INVALID_PARAMS,
@@ -1795,7 +1828,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 		}
 	})
 
-	it('returns one keyed MCPElicitRequest and resumes under a new id from top-level echo fields', async () => {
+	it('returns the consumer’s keyed round and resumes under a new id from top-level echo fields', async () => {
 		const seen: MCPInputContext[] = []
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
@@ -1804,11 +1837,11 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				elicit: (context) => {
+				round: (context) => {
 					seen.push(context)
-					return context.response === undefined
-						? {
-								request: {
+					return context.responses === undefined
+						? createRound(
+								{
 									message: 'Approve the reply?',
 									requestedSchema: {
 										type: 'object',
@@ -1816,8 +1849,8 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 										required: ['approved'],
 									},
 								},
-								state: 'run-42',
-							}
+								'run-42',
+							)
 						: undefined
 				},
 			},
@@ -1845,15 +1878,16 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 		const key = keys[0]
 		const requestState = first.result.requestState
 		if (key === undefined || requestState === undefined) {
-			throw new Error('expected a server-assigned key and protected request state')
+			throw new Error('expected the consumer’s key and protected request state')
 		}
 
-		expect(keys).toHaveLength(1)
+		// The key travels verbatim from the round the selector composed, and the request travels
+		// with it unstamped: the consumer decides the wire, including whether `mode` appears.
+		expect(keys).toEqual(['approval'])
 		expect(Array.isArray(first.result.inputRequests)).toBe(false)
 		expect(first.result.inputRequests?.[key]).toEqual({
 			method: 'elicitation/create',
 			params: {
-				mode: 'form',
 				message: 'Approve the reply?',
 				requestedSchema: {
 					type: 'object',
@@ -1890,12 +1924,15 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 		expect(retryParams).toHaveProperty('inputResponses')
 		expect(retryParams.arguments).toEqual({ value: 7 })
 		expect(seen).toHaveLength(2)
-		expect(seen[1]?.response).toEqual({ action: 'accept', content: { approved: true } })
+		expect(seen[1]?.responses).toEqual({
+			approval: { action: 'accept', content: { approved: true } },
+		})
 		expect(seen[1]?.state).toBe('run-42')
 		expect(seen[1]?.arguments).toEqual({ value: 7 })
 	})
 
-	it('assigns a unique map key to every produced round', async () => {
+	it('issues one round of several kinds under the consumer’s own keys', async () => {
+		const seen: MCPInputContext[] = []
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
 			tools: tools(),
@@ -1903,85 +1940,89 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				elicit: () => ({
-					request: {
-						message: 'Approve?',
-						requestedSchema: { type: 'object', properties: {} },
-					},
-				}),
+				round: (context) => {
+					seen.push(context)
+					return context.responses === undefined ? { requests: MIXED_ROUND } : undefined
+				},
 			},
 		})
-		const responses = await Promise.all(
-			[1, 2].map((id) =>
-				mcp.dispatch(
-					createJSONRPCRequest({
-						id,
-						method: 'tools/call',
-						params: {
-							name: 'echo',
-							_meta: {
-								[MCP_META_VERSION]: '2026-07-28',
-								[MCP_META_CAPABILITIES]: { elicitation: {} },
-							},
-						},
-					}),
-				),
+		const first = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({ id: 'mixed-1', method: 'tools/call', params: mixedCall() }),
 			),
 		)
-		const keys = responses.flatMap((answer) => {
-			const response = responseOf(answer)
-			return isMCPInputResult(response?.result)
-				? Object.keys(response.result.inputRequests ?? {})
-				: []
-		})
+		if (!isMCPInputResult(first?.result)) throw new Error('expected an input-required result')
+		const requestState = first.result.requestState
+		if (requestState === undefined) throw new Error('expected protected request state')
 
-		expect(keys).toHaveLength(2)
-		expect(new Set(keys).size).toBe(2)
+		expect(first.result.inputRequests).toEqual(MIXED_ROUND)
+
+		const retry = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					id: 'mixed-2',
+					method: 'tools/call',
+					params: { ...mixedCall(), requestState, inputResponses: MIXED_ANSWERS },
+				}),
+			),
+		)
+
+		expect(resultOf(retry)['resultType']).toBe('complete')
+		expect(seen[1]?.responses).toEqual(MIXED_ANSWERS)
 	})
 
 	it.each([
-		['absent', {}],
-		['URL-only', { elicitation: { url: {} } }],
-	])(
-		'returns -32021 with exact required capability data when form support is %s',
-		async (_, capabilities) => {
-			const mcp = createMCPServer({
-				identity: { name: 'test-server', version: '1.2.3' },
-				tools: tools(),
-				input: {
-					continuation: new MemoryContinuation(),
-					ttl: 1_000,
-					principal: () => 'operator-1',
-					elicit: () => ({
-						request: {
-							message: 'Approve?',
-							requestedSchema: { type: 'object', properties: {} },
-						},
-					}),
+		['no declaration at all', {}, { elicitation: {}, roots: {}, sampling: {} }],
+		[
+			'URL-only elicitation',
+			{ elicitation: { url: {} }, sampling: {}, roots: {} },
+			{ elicitation: {} },
+		],
+		['every kind but roots', { elicitation: {}, sampling: {} }, { roots: {} }],
+	])('refuses a round the client cannot answer with %s', async (_, capabilities, required) => {
+		let executions = 0
+		const manager = createToolManager()
+		manager.add(
+			createTool({
+				name: 'echo',
+				execute: () => {
+					executions += 1
+					return 'ran'
 				},
-			})
-			const response = responseOf(
-				await mcp.dispatch(
-					createJSONRPCRequest({
-						method: 'tools/call',
-						params: {
-							name: 'echo',
-							_meta: {
-								[MCP_META_VERSION]: '2026-07-28',
-								[MCP_META_CAPABILITIES]: capabilities,
-							},
+			}),
+		)
+		const mcp = createMCPServer({
+			identity: { name: 'test-server', version: '1.2.3' },
+			tools: manager,
+			input: {
+				continuation: new MemoryContinuation(),
+				ttl: 1_000,
+				principal: () => 'operator-1',
+				round: () => ({ requests: MIXED_ROUND }),
+			},
+		})
+		const response = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					params: {
+						name: 'echo',
+						_meta: {
+							[MCP_META_VERSION]: '2026-07-28',
+							[MCP_META_CAPABILITIES]: capabilities,
 						},
-					}),
-				),
-			)
+					},
+				}),
+			),
+		)
 
-			expect(response?.error).toEqual({
-				code: MCP_MISSING_CAPABILITY,
-				message: 'Server requires the elicitation capability for this request',
-				data: { requiredCapabilities: { elicitation: {} } },
-			})
-		},
-	)
+		expect(response?.error).toEqual({
+			code: MCP_MISSING_CAPABILITY,
+			message: 'Server requires a client capability this request did not declare',
+			data: { requiredCapabilities: required },
+		})
+		expect(executions).toBe(0)
+	})
 
 	it('rejects mutated state, a reused id, and an omitted response without running the tool', async () => {
 		let executions = 0
@@ -2002,15 +2043,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				elicit: (context) =>
-					context.response === undefined
-						? {
-								request: {
-									message: 'Approve?',
-									requestedSchema: { type: 'object', properties: {} },
-								},
-							}
-						: undefined,
+				round: (context) => (context.responses === undefined ? createRound() : undefined),
 			},
 		})
 		const params = {
@@ -2150,15 +2183,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 15,
 				principal: () => principal,
-				elicit: (context) =>
-					context.response === undefined
-						? {
-								request: {
-									message: 'Approve?',
-									requestedSchema: { type: 'object', properties: {} },
-								},
-							}
-						: undefined,
+				round: (context) => (context.responses === undefined ? createRound() : undefined),
 			},
 		})
 		const params = {
@@ -2204,7 +2229,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 	})
 
 	it('reaches modern input policy and refuses its result at the legacy revision boundary', async () => {
-		let elicitations = 0
+		let selections = 0
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
 			tools: tools(),
@@ -2212,14 +2237,9 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				elicit: () => {
-					elicitations += 1
-					return {
-						request: {
-							message: 'Approve?',
-							requestedSchema: { type: 'object', properties: {} },
-						},
-					}
+				round: () => {
+					selections += 1
+					return createRound()
 				},
 			},
 		})
@@ -2241,7 +2261,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 		).toBe(
 			'{"jsonrpc":"2.0","id":4,"error":{"code":-32000,"message":"Legacy protocol 2025-11-25 cannot represent an input-required result"}}',
 		)
-		expect(elicitations).toBe(1)
+		expect(selections).toBe(1)
 	})
 })
 
@@ -3279,7 +3299,7 @@ function modernFaults(): readonly FaultScenario[] {
 					},
 					ttl: 1_000,
 					principal: () => 'operator-1',
-					elicit: createElicitation,
+					round: () => createRound(),
 				},
 			}),
 			request: createJSONRPCRequest({
@@ -3314,7 +3334,7 @@ function modernFaults(): readonly FaultScenario[] {
 					},
 					ttl: 1_000,
 					principal: () => 'operator-1',
-					elicit: createElicitation,
+					round: () => createRound(),
 				},
 			}),
 			request: createJSONRPCRequest({
@@ -3344,7 +3364,7 @@ function modernFaults(): readonly FaultScenario[] {
 					},
 					ttl: 1_000,
 					principal: () => 'operator-1',
-					elicit: createElicitation,
+					round: () => createRound(),
 				},
 			}),
 			request: createJSONRPCRequest({
@@ -3369,7 +3389,7 @@ function modernFaults(): readonly FaultScenario[] {
 					principal: () => {
 						throw new Error('principal detail must not escape')
 					},
-					elicit: createElicitation,
+					round: () => createRound(),
 				},
 			}),
 			request: createJSONRPCRequest({
@@ -3954,18 +3974,15 @@ function inputProbe(
 				principals.push(resolved)
 				return 'operator-1'
 			},
-			elicit: async (context) => {
+			round: async (context) => {
 				selections.push(context)
 				if (options.stall !== undefined) await waitForDelay(options.stall)
 				return selections.length > rounds
 					? undefined
-					: {
-							request: {
-								message: `Approve round ${selections.length}?`,
-								requestedSchema: schema,
-							},
-							state: { round: selections.length },
-						}
+					: createRound(
+							{ message: `Approve round ${selections.length}?`, requestedSchema: schema },
+							{ round: selections.length },
+						)
 			},
 		},
 	})
@@ -3991,7 +4008,7 @@ function roundOf(response: JSONRPCResponse | undefined): {
 	const key = Object.keys(response.result.inputRequests ?? {})[0]
 	const requestState = response.result.requestState
 	if (key === undefined || requestState === undefined) {
-		throw new Error('expected a server-assigned key and protected request state')
+		throw new Error('expected the consumer’s key and protected request state')
 	}
 	return { key, requestState, issued: response.result.inputRequests?.[key] }
 }
@@ -4067,7 +4084,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				elicit: (context) => {
+				round: (context) => {
 					calls.push(context.arguments)
 					return undefined
 				},
@@ -4105,7 +4122,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				elicit: async () => {
+				round: async () => {
 					// Mutating the caller's own object mid-flight, at a real await point.
 					params['arguments'] = { value: 'mutated' }
 					await waitForDelay()
@@ -4236,16 +4253,18 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// The selector's output is owned and frozen the moment it is produced, so a
 	// provider that mutates what it returned changes neither what the client is asked nor
 	// what the sealed state binds.
-	it('owns the selector’s elicitation and schema immediately', async () => {
+	it('owns the selector’s round and schema immediately', async () => {
 		const continuation = new MemoryContinuation()
 		const schema: MCPElicitSchema = {
 			type: 'object',
 			properties: { approved: { type: 'boolean' } },
 		}
-		const elicitation: MCPElicitation = {
-			request: { message: 'Approve?', requestedSchema: schema },
-			state: { round: 1 },
-		}
+		const selected: MCPInputRound = createRound(
+			{ message: 'Approve?', requestedSchema: schema },
+			{
+				round: 1,
+			},
+		)
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
 			tools: tools(),
@@ -4253,7 +4272,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 				continuation,
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				elicit: () => elicitation,
+				round: () => selected,
 			},
 		})
 
@@ -4261,21 +4280,25 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		// Deferred mutation of the very objects the selector handed back — a provider is free
 		// to keep and rewrite what it returned, and nothing the server issued may follow.
 		Reflect.set(schema, 'properties', { approved: { type: 'string' } })
-		Reflect.set(elicitation, 'state', { round: 99 })
+		Reflect.set(selected, 'state', { round: 99 })
 		const round = roundOf(first)
 		const state = parseMCPInputState(continuation.sealed[0])
 
 		expect(round.issued).toEqual({
 			method: 'elicitation/create',
 			params: {
-				mode: 'form',
 				message: 'Approve?',
 				requestedSchema: { type: 'object', properties: { approved: { type: 'boolean' } } },
 			},
 		})
-		expect(state?.schema).toEqual({
-			type: 'object',
-			properties: { approved: { type: 'boolean' } },
+		expect(state?.requests).toEqual({
+			approval: {
+				method: 'elicitation/create',
+				params: {
+					message: 'Approve?',
+					requestedSchema: { type: 'object', properties: { approved: { type: 'boolean' } } },
+				},
+			},
 		})
 		expect(state?.state).toEqual({ round: 1 })
 	})
@@ -4319,7 +4342,10 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 			),
 		)
 
-		expect(state.schema).toEqual(APPROVAL_SCHEMA)
+		expect(state.requests[round.key]).toEqual({
+			method: 'elicitation/create',
+			params: { message: 'Approve round 1?', requestedSchema: APPROVAL_SCHEMA },
+		})
 		expect(answers.map((answer) => answer?.error?.code)).toEqual([
 			JSONRPC_INVALID_PARAMS,
 			JSONRPC_INVALID_PARAMS,
@@ -4330,16 +4356,40 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(probe.executions).toHaveLength(1)
 	})
 
-	// On a RETRY the capability gate stands ahead of BOTH providers, so a client that
-	// never declared form elicitation costs neither a continuation open nor a principal call.
-	it('checks the form capability before the continuation port and the principal resolver', async () => {
+	// The capability gate is about what the server SENDS, so it measures the round and stands
+	// ahead of the seal wherever a round is issued — and on a FIRST round ahead of the principal
+	// resolver too, so a client whose round this server may not send costs no principal lookup.
+	it('checks the capability before the principal resolver and the seal on a first round', async () => {
+		const probe = inputProbe()
+
+		const refused = responseOf(
+			await probe.server.dispatch(
+				createJSONRPCRequest({
+					id: 'first-cap-1',
+					method: 'tools/call',
+					params: {
+						name: 'echo',
+						_meta: { [MCP_META_VERSION]: '2026-07-28', [MCP_META_CAPABILITIES]: {} },
+					},
+				}),
+			),
+		)
+
+		expect(refused?.error?.code).toBe(MCP_MISSING_CAPABILITY)
+		expect(probe.principals).toHaveLength(0)
+		expect(probe.continuation.sealed).toHaveLength(0)
+		expect(probe.executions).toHaveLength(0)
+	})
+
+	// The other half of the same rule: a RETRY answers a round this server already gated, so
+	// what the gate measures there is the NEXT round. A retry the selector answers with
+	// `undefined` sends nothing, so it runs the tool however the client's declaration narrowed.
+	it('gates the next round rather than the answered one on a retry', async () => {
 		const probe = inputProbe()
 		const first = responseOf(await probe.server.dispatch(formCall('retry-cap-1')))
 		const round = roundOf(first)
-		const opens = probe.continuation.opened.length
-		const principals = probe.principals.length
 
-		const refused = responseOf(
+		const answered = responseOf(
 			await probe.server.dispatch(
 				createJSONRPCRequest({
 					id: 'retry-cap-2',
@@ -4354,9 +4404,8 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 			),
 		)
 
-		expect(refused?.error?.code).toBe(MCP_MISSING_CAPABILITY)
-		expect(probe.continuation.opened).toHaveLength(opens)
-		expect(probe.principals).toHaveLength(principals)
+		expect(answered?.result).toMatchObject({ resultType: 'complete' })
+		expect(probe.executions).toHaveLength(1)
 	})
 
 	// Distinct failures at the continuation port, distinct answers: a
@@ -4432,11 +4481,11 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(probe.executions).toHaveLength(0)
 	})
 
-	// Over three rounds. The ORIGINAL id stays bound while key, expiry, and
-	// schema are re-minted each round — two rounds cannot tell these apart, because round 2
+	// Over three rounds. The ORIGINAL id stays bound while the round and its expiry are
+	// re-minted each time — two rounds cannot tell these apart, because round 2
 	// binds round 1's id under either rule. Round 3 is where sealing the CURRENT id starts
 	// binding round 2's id instead of round 1's.
-	it('binds the original id across three rounds while re-minting key, expiry, and schema', async () => {
+	it('binds the original id across three rounds while re-minting the round and its expiry', async () => {
 		const probe = inputProbe({ rounds: 2, schema: APPROVAL_SCHEMA })
 
 		const first = responseOf(await probe.server.dispatch(formCall('origin-1')))
@@ -4464,14 +4513,17 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(probe.continuation.sealed).toHaveLength(2)
 		expect(one.id).toBe('origin-1')
 		expect(two.id).toBe('origin-1')
-		expect(two.key).not.toBe(one.key)
+		expect(two.requests).not.toEqual(one.requests)
+		expect(two.requests[round2.key]).toEqual({
+			method: 'elicitation/create',
+			params: { message: 'Approve round 2?', requestedSchema: APPROVAL_SCHEMA },
+		})
 		expect(two.expiry).toBeGreaterThanOrEqual(one.expiry)
 		expect(two.principal).toBe(one.principal)
 		expect(two.version).toBe(one.version)
 		expect(two.method).toBe(one.method)
 		expect(two.name).toBe(one.name)
 		expect(two.digest).toBe(one.digest)
-		expect(two.schema).toEqual(APPROVAL_SCHEMA)
 		expect(two.state).toEqual({ round: 2 })
 		expect(third?.result).toMatchObject({ resultType: 'complete' })
 		expect(probe.executions).toHaveLength(1)
@@ -4638,9 +4690,9 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 						if (failing === 'principal') throw new Error(`${failing} provider detail`)
 						return 'operator-1'
 					},
-					elicit: () => {
+					round: () => {
 						if (failing === 'elicit') throw new Error(`${failing} provider detail`)
-						return createElicitation()
+						return createRound()
 					},
 				},
 			})
@@ -4985,7 +5037,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 					continuation: new MemoryContinuation(),
 					ttl: 1_000,
 					principal: () => 'operator-1',
-					elicit: () => createElicitation(),
+					round: () => createRound(),
 				},
 			},
 		)
@@ -5973,7 +6025,7 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				elicit: () => createElicitation(),
+				round: () => createRound(),
 			},
 		})
 		const deferred = taskServer({ tasks: new TestTaskManager(), defer: () => undefined })

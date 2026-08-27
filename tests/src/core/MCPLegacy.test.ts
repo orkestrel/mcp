@@ -379,10 +379,15 @@ describe('MCPLegacy collapse boundaries', () => {
 					},
 					ttl: 1000,
 					principal: () => 'operator',
-					elicit: () => ({
-						request: {
-							message: 'Approve?',
-							requestedSchema: { type: 'object', properties: {} },
+					round: () => ({
+						requests: {
+							approval: {
+								method: 'elicitation/create',
+								params: {
+									message: 'Approve?',
+									requestedSchema: { type: 'object', properties: {} },
+								},
+							},
 						},
 					}),
 				},

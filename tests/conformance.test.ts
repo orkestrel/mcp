@@ -39,13 +39,12 @@ import {
 // A row at `0 passed, 0 failed` is neither: its checks are SHOULD-level, so the runner reports
 // WARNING and tallies nothing either way.
 const EXPECTED: readonly ConformanceScenario[] = [
-	// Fails four SEP-2575 checks with two distinct causes. Two are the protocol revision: the
-	// server negotiates 2025-06-18 and 2025-11-25, so a `_meta.protocolVersion` check aimed at
-	// 2026-07-28 sees -32022 where it expects -32602. Two are the undeclared-capability gate:
-	// the scenario calls a `test_missing_capability` tool it expects the server to refuse with
-	// -32021 because the client declared no `sampling` capability, and the server has no seam
-	// that gates a tool on a declared client capability.
-	{ name: 'server-stateless', passed: 24, failed: 4 },
+	// Fails two SEP-2575 `_meta` checks, both for the protocol revision: a request that omits
+	// `_meta` or omits its `protocolVersion` is answered -32022 where the scenario expects
+	// -32602. The undeclared-capability pair is green: the fixture declares a
+	// `test_missing_capability` tool whose round asks for `sampling/createMessage`, and the
+	// server refuses that round -32021 over HTTP 400 because the call declared no capabilities.
+	{ name: 'server-stateless', passed: 26, failed: 2 },
 	{ name: 'completion-complete', passed: 1, failed: 0 },
 	{ name: 'tools-list', passed: 2, failed: 0 },
 	{ name: 'tools-call-simple-text', passed: 1, failed: 0 },
@@ -73,25 +72,15 @@ const EXPECTED: readonly ConformanceScenario[] = [
 	// Fails: SEP-2243 wants a 400 response and a -32020 `HeaderMismatch` JSON-RPC error for a
 	// mismatched or invalid `Mcp-Param` header; the shipped route accepts both and answers 200.
 	{ name: 'http-custom-header-server-validation', passed: 3, failed: 6 },
-	// The SEP-2322 rows below all drive `MCPServerOptions.input`, whose whole answer is ONE
-	// `elicitation/create` request under a key the server mints. The three that fail here name
-	// the three things that mechanism cannot express, and each one is a library seam rather
-	// than a fixture gap: the consumer cannot choose the request key, cannot ask for a
-	// `sampling/createMessage` or `roots/list` request, and cannot ask more than one question
-	// at a time. The prompt arm has no such limit — the prompt port returns its own
-	// `MCPInputResult` — which is why `-non-tool-request` is green beside them.
-	//
-	// Fails: the scenario requires the key `user_name`; `MCPServer` mints a random UUID.
-	{ name: 'input-required-result-basic-elicitation', passed: 0, failed: 1 },
-	// Fails: the scenario requires a `sampling/createMessage` request; the mechanism produces
-	// only `elicitation/create`.
-	{ name: 'input-required-result-basic-sampling', passed: 0, failed: 1 },
-	// Fails: the scenario requires a `roots/list` request, for the same reason.
-	{ name: 'input-required-result-basic-list-roots', passed: 0, failed: 1 },
+	// The SEP-2322 rows below all drive `MCPServerOptions.input`, whose answer is the round the
+	// consumer composed: its own keys, and any mixture of the elicitation, sampling, and roots
+	// kinds the client declared. The prompt arm reaches the same wire the other way — the
+	// prompt port returns its own `MCPInputResult` — which is what `-non-tool-request` proves.
+	{ name: 'input-required-result-basic-elicitation', passed: 2, failed: 0 },
+	{ name: 'input-required-result-basic-sampling', passed: 2, failed: 0 },
+	{ name: 'input-required-result-basic-list-roots', passed: 2, failed: 0 },
 	{ name: 'input-required-result-request-state', passed: 2, failed: 0 },
-	// Fails: the scenario requires three simultaneous requests of three different methods; the
-	// mechanism issues exactly one.
-	{ name: 'input-required-result-multiple-input-requests', passed: 0, failed: 1 },
+	{ name: 'input-required-result-multiple-input-requests', passed: 2, failed: 0 },
 	{ name: 'input-required-result-multi-round', passed: 3, failed: 0 },
 	// Passes at 0/0: the scenario's one check is a SHOULD, so a retry carrying `inputResponses`
 	// without a `requestState` — which this server refuses with -32602 — reports WARNING and
@@ -101,10 +90,7 @@ const EXPECTED: readonly ConformanceScenario[] = [
 	{ name: 'input-required-result-result-type', passed: 1, failed: 0 },
 	{ name: 'input-required-result-unsupported-methods', passed: 1, failed: 0 },
 	{ name: 'input-required-result-tampered-state', passed: 1, failed: 0 },
-	// Fails: the scenario declares `sampling` and no `elicitation`, then requires
-	// sampling-only requests. The mechanism can ask only for elicitation, so the server
-	// correctly refuses with -32002 and the scenario reads that refusal as the failure.
-	{ name: 'input-required-result-capability-check', passed: 0, failed: 1 },
+	{ name: 'input-required-result-capability-check', passed: 1, failed: 0 },
 	// Passes at 0/0 for the same SHOULD reason as `-missing-input-response`.
 	{ name: 'input-required-result-ignore-extra-params', passed: 0, failed: 0 },
 	{ name: 'input-required-result-validate-input', passed: 2, failed: 0 },
@@ -238,6 +224,6 @@ describe('MCP server conformance', () => {
 	})
 
 	it('reports the recorded total', () => {
-		expect([result.passed, result.failed]).toEqual([91, 15])
+		expect([result.passed, result.failed]).toEqual([102, 8])
 	})
 })

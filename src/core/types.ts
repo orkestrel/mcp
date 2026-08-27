@@ -556,9 +556,11 @@ export interface MCPElicitResult {
  * One embedded multi-round-trip request.
  *
  * @remarks
- * This package produces only {@link MCPElicitRequest}. The deprecated sampling and roots
- * requests remain legal protocol union members and therefore retain their open parameter
- * records here without gaining package-owned producers.
+ * A consumer composes any of the three arms into an {@link MCPInputRound}. The elicitation
+ * arm is fully typed because this package issues its schema and enforces the answer against
+ * it. The deprecated sampling and roots arms keep OPEN parameter records: the dated schema
+ * leaves their request bodies to the caller, and narrowing them here would refuse parameters
+ * the protocol permits.
  */
 export type MCPInputRequest =
 	| MCPElicitRequest
@@ -573,6 +575,51 @@ export type MCPInputRequest =
 
 /** A server-keyed map of embedded requests the client must fulfil. */
 export type MCPInputRequestMap = Readonly<Record<string, MCPInputRequest>>
+
+/** One filesystem root a client exposes to a server. */
+export interface MCPRoot {
+	readonly uri: string
+	readonly name?: string
+	readonly _meta?: MCPMetaObject
+}
+
+/** The client's answer to one embedded `roots/list` request. */
+export interface MCPRootResult {
+	readonly roots: readonly MCPRoot[]
+	readonly _meta?: MCPMetaObject
+}
+
+/**
+ * The client's answer to one embedded `sampling/createMessage` request.
+ *
+ * @remarks
+ * The dated schema types this as one sampling message plus the model that produced it, so
+ * `content` is a single block rather than an array and carries no resource arms. `stopReason`
+ * is an open string because the schema names `endTurn`, `stopSequence`, and `maxTokens` while
+ * permitting any other value a provider reports.
+ */
+export interface MCPSampleResult {
+	readonly role: 'user' | 'assistant'
+	readonly content: MCPTextContent | MCPImageContent | MCPAudioContent
+	readonly model: string
+	readonly stopReason?: string
+	readonly _meta?: MCPMetaObject
+}
+
+/**
+ * One client answer to one embedded input request.
+ *
+ * @remarks
+ * The arms are discriminated by their own required members — `action` for an elicitation,
+ * `roots` for a roots listing, and `model` beside `role` for a sampling completion — because
+ * the protocol gives a response no `method` of its own. The server knows which arm applies
+ * from the request it ISSUED under that key, so {@link MCPInputHandler} receives every answer
+ * already checked against the question it answers.
+ */
+export type MCPInputResponse = MCPElicitResult | MCPSampleResult | MCPRootResult
+
+/** A server-keyed map of the client's answers to one issued round. */
+export type MCPInputResponseMap = Readonly<Record<string, MCPInputResponse>>
 
 /**
  * An incomplete modern result carrying input requests, protected request state, or both.
@@ -601,10 +648,10 @@ export type MCPInputResult =
  * @remarks
  * `id` is the FIRST round's request id and stays bound across every later round, so a
  * multi-round exchange remains one correlated call rather than a chain whose origin is lost
- * after the second hop. `schema` is the EXACT schema that was issued with the round it
- * protects: a schema that is bound but never enforced buys nothing, so an accepted response
- * is checked against this member by {@link isElicitContent} before the tool runs. `key`,
- * `expiry`, and `schema` are re-minted every round; `principal`, `id`, `version`, `method`,
+ * after the second hop. `requests` is the EXACT round that was issued: it carries the keys the
+ * retry must answer and, for a form elicitation, the schema {@link isElicitContent} enforces
+ * an accepted answer against — a round that is bound but never enforced buys nothing.
+ * `requests` and `expiry` are re-minted every round; `principal`, `id`, `version`, `method`,
  * `name`, and `digest` are the bindings that must not move.
  */
 export interface MCPInputState {
@@ -613,11 +660,10 @@ export interface MCPInputState {
 	readonly id: JSONRPCId
 	readonly version: string
 	readonly method: string
-	readonly key: string
+	/** The exact round issued under this state, enforced answer by answer on the retry. */
+	readonly requests: MCPInputRequestMap
 	readonly name: string
 	readonly digest: string
-	/** The exact schema issued with this round, enforced on the accepted response. */
-	readonly schema: MCPElicitSchema
 	readonly state?: JSONValue
 }
 
@@ -626,13 +672,22 @@ export interface MCPInputContext {
 	readonly request: JSONRPCRequest
 	readonly name: string
 	readonly arguments: Readonly<Record<string, unknown>>
-	readonly response?: MCPElicitResult
+	/** Every verified answer to the previous round, under the keys that round assigned. */
+	readonly responses?: MCPInputResponseMap
 	readonly state?: JSONValue
 }
 
-/** One consumer-requested form elicitation, before MCP assigns its map key and signs state. */
-export interface MCPElicitation {
-	readonly request: MCPElicitForm
+/**
+ * One consumer-composed round of embedded requests, before MCP seals its continuation state.
+ *
+ * @remarks
+ * The consumer owns the keys and the request kinds, because the keys are how it correlates
+ * each answer and the kinds are what its own policy needs. MCP owns everything protective
+ * around the round: the capability gate, the seal, the expiry, and the per-answer check on
+ * the retry.
+ */
+export interface MCPInputRound {
+	readonly requests: MCPInputRequestMap
 	readonly state?: JSONValue
 }
 
@@ -645,16 +700,16 @@ export interface MCPContinuationInterface {
 }
 
 /**
- * Decides whether the current `tools/call` needs operator input.
+ * Decides whether the current `tools/call` still needs input from the client.
  *
- * @param context - The original call plus a verified response/state on a retry
+ * @param context - The original call plus every verified answer and state on a retry
  * @param options - The resolved per-request method options
- * @returns A form elicitation to send, or `undefined` to continue into the tool registry
+ * @returns The next round to send, or `undefined` to continue into the tool registry
  */
 export type MCPInputHandler = (
 	context: MCPInputContext,
 	options: MCPMethodOptions,
-) => MCPElicitation | undefined | Promise<MCPElicitation | undefined>
+) => MCPInputRound | undefined | Promise<MCPInputRound | undefined>
 
 /**
  * Derives the deployment-authenticated principal bound into signed request state.
@@ -676,8 +731,8 @@ export interface MCPInputOptions {
 	readonly ttl: number
 	/** Resolves the authenticated principal for the call in hand. */
 	readonly principal: MCPPrincipalHandler
-	/** Decides whether the call needs a form elicitation, including on verified retries. */
-	readonly elicit: MCPInputHandler
+	/** Composes the next round of input requests, including on verified retries. */
+	readonly round: MCPInputHandler
 }
 
 /** One official request-scoped progress payload. */
@@ -973,7 +1028,7 @@ export interface MCPTaskManagerInterface {
 	 * VERBATIM — it holds none of the task's keys, so the ignoring is this method's to do.
 	 *
 	 * This is the SECOND multi-round-trip mechanism in the package, and it is the weaker one.
-	 * The elicitation path binds each round with a sealed `requestState`, an argument digest,
+	 * The built-in input path binds each round with a sealed `requestState`, an argument digest,
 	 * an absolute expiry, and the resolved principal; this path has none of them, because MCP
 	 * neither issued the question nor owns the channel it is answered on. Anything equivalent
 	 * has to live here: bind each published key to the principal that may answer it, expire
@@ -1476,7 +1531,7 @@ export interface MCPDispatchOptions {
  * The mirror of {@link MCPDispatchOptions} on the far side of dispatch: a CALLER may
  * have no signal to offer, but a dispatched method always has one to observe, so
  * `signal` is REQUIRED here. Dispatch resolves it once, at the single ingress, and
- * supplies the same value to every handler, elicitation, principal, and subscription
+ * supplies the same value to every handler, input, principal, and subscription
  * producer the request reaches — none of them may reinvent a cancellation source or
  * treat absence as a case.
  *

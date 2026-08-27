@@ -11,11 +11,15 @@ import type {
 	MCPCallResult,
 	MCPCompletion,
 	MCPCompletionManagerInterface,
+	MCPClientCapabilities,
 	MCPCompletionParams,
 	MCPDispatchOptions,
-	MCPElicitation,
 	MCPIdentity,
+	MCPInputRequestMap,
+	MCPInputResponse,
+	MCPInputResponseMap,
 	MCPInputResult,
+	MCPInputRound,
 	MCPLimitOptions,
 	MCPListResult,
 	MCPMethodManagerInterface,
@@ -70,8 +74,8 @@ import {
 	buildSubscriptionResult,
 	buildToolCall,
 	buildToolDescriptors,
+	computeMissingCapabilities,
 	digestJSON,
-	isFormElicitationSupported,
 	isTaskSupported,
 	matchesSubscriptionNotification,
 	serializeJSON,
@@ -84,15 +88,14 @@ import { MCPTextStreamController } from './MCPTextStreamController.js'
 import { parseJSONRPCMessage, parseMCPInputState, parseRequestContext } from './parsers.js'
 import {
 	isAbsoluteURI,
-	isElicitContent,
-	isMCPElicitForm,
-	isMCPElicitResult,
 	isBoundedJSON,
 	isBoundedString,
 	isJSONRPCNotification,
 	isMCPCallResult,
 	isMCPCompletion,
 	isMCPCompletionParams,
+	isMCPInputRequestMap,
+	isMCPInputResponse,
 	isMCPInputResult,
 	isMCPModernVersion,
 	isModernRequest,
@@ -212,7 +215,7 @@ export class MCPServer implements MCPServerInterface {
 	}
 
 	// The ONE ingress. It resolves the caller's options into the options every method,
-	// elicitation, principal, and subscription producer downstream observes, so the
+	// input, principal, and subscription producer downstream observes, so the
 	// request's cancellation signal is decided here and nowhere else — and it is the ONE
 	// wrapping seam too: whatever a built-in or a consumer's own method produces, the stream
 	// that leaves here is controlled, so cancellation is arbitrated in one place rather than
@@ -969,8 +972,9 @@ export class MCPServer implements MCPServerInterface {
 	//
 	// Order is the whole security property here, and it is: selector, own, capability,
 	// principal, seal. The selector runs before the capability is known to be needed, because
-	// only a selector that ASKS for input makes the client's form capability relevant at all;
-	// everything after it runs only once the answer is yes.
+	// only a selector that ASKS for something makes the client's declaration relevant at all,
+	// and WHICH declaration matters is not knowable until the round exists; everything after
+	// it runs only once the answer is yes.
 	async #input(
 		request: JSONRPCRequest,
 		args: Readonly<Record<string, unknown>>,
@@ -997,36 +1001,54 @@ export class MCPServer implements MCPServerInterface {
 		if (params?.['requestState'] !== undefined || params?.['inputResponses'] !== undefined) {
 			return this.#retry(request, name, digest, args, options)
 		}
-		const elicitation = await configured.elicit({ request, name, arguments: args }, options)
-		if (elicitation === undefined) return undefined
-		const form = this.#form(elicitation)
+		const selected = await configured.round({ request, name, arguments: args }, options)
+		if (selected === undefined) return undefined
+		const round = this.#round(selected)
 		const context = parseRequestContext(request, {
 			bytes: this.#limits.message,
 			depth: this.#limits.depth,
 		})
-		if (form === undefined) {
+		if (round === undefined) {
 			return buildJSONRPCError(
 				id,
 				JSONRPC_INVALID_PARAMS,
-				'Invalid params: elicitation policy returned an invalid form or continuation context',
+				'Invalid params: input policy returned an invalid round or continuation context',
 			)
 		}
-		if (context === undefined || !isFormElicitationSupported(context.capabilities)) {
-			return buildJSONRPCError(
-				id,
-				MCP_MISSING_CAPABILITY,
-				'Server requires the elicitation capability for this request',
-				{ requiredCapabilities: { elicitation: {} } },
-			)
-		}
+		const refusal = this.#gate(round, context?.capabilities, id)
+		if (refusal !== undefined) return refusal
 		const principal = await configured.principal(request, options)
-		return this.#required(request, name, digest, form, principal, id, undefined)
+		return this.#required(request, name, digest, round, principal, id, undefined)
 	}
 
-	// The retry ingress and its verification. Capability stands ahead of BOTH providers, and
-	// every structural binding is verified before the principal resolver runs: a retry this
-	// server was always going to refuse must not cost a continuation open, a principal
-	// lookup, or whatever audit record either of those writes.
+	// The capability rule, which is about SENDING: a server never issues a request kind the
+	// client's declared capabilities exclude. So it is checked against the ROUND rather than
+	// against the method, at each of the two places a round is issued — and at both of them it
+	// stands ahead of the seal, so a round this server may not send costs no continuation write.
+	//
+	// An unparsed context refuses too, and with the same payload: a request whose modern
+	// metadata did not survive parsing declared nothing, and nothing is exactly what the gate
+	// measures against.
+	#gate(
+		round: MCPInputRound,
+		capabilities: MCPClientCapabilities | undefined,
+		id: JSONRPCId,
+	): JSONRPCErrorResponse | undefined {
+		const missing = computeMissingCapabilities(round.requests, capabilities ?? {})
+		if (missing === undefined) return undefined
+		return buildJSONRPCError(
+			id,
+			MCP_MISSING_CAPABILITY,
+			'Server requires a client capability this request did not declare',
+			{ requiredCapabilities: missing },
+		)
+	}
+
+	// The retry ingress and its verification. Every structural binding is verified before the
+	// principal resolver runs: a retry this server was always going to refuse must not cost a
+	// principal lookup or whatever audit record that writes. The capability gate does NOT stand
+	// here, because a retry answers a round this server already issued and already gated; what
+	// the gate measures is the NEXT round, and that does not exist until the selector answers.
 	//
 	// The failure taxonomy is deliberate. A carrier the port cannot recover is the CLIENT's
 	// invalid state; a port that throws, or that opens successfully onto a payload this server
@@ -1055,12 +1077,11 @@ export class MCPServer implements MCPServerInterface {
 			bytes: this.#limits.message,
 			depth: this.#limits.depth,
 		})
-		if (context === undefined || !isFormElicitationSupported(context.capabilities)) {
+		if (context === undefined) {
 			return buildJSONRPCError(
 				id,
-				MCP_MISSING_CAPABILITY,
-				'Server requires the elicitation capability for this request',
-				{ requiredCapabilities: { elicitation: {} } },
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: request state could not be verified for this retry',
 			)
 		}
 		const verified = await configured.continuation.open(requestState)
@@ -1081,17 +1102,13 @@ export class MCPServer implements MCPServerInterface {
 		if (state === undefined) {
 			return this.#contain(new Error('Continuation port opened a malformed protected payload'), id)
 		}
-		// Extra response keys are IGNORED: the server assigned exactly one key and cares about
-		// exactly that one, so a client batching unrelated answers is not refused for it.
-		const response = inputResponses[state.key]
 		if (
 			state.expiry <= Date.now() ||
 			state.id === id ||
 			state.version !== context.version ||
 			state.method !== request.method ||
 			state.name !== name ||
-			state.digest !== digest ||
-			!Object.hasOwn(inputResponses, state.key)
+			state.digest !== digest
 		) {
 			return buildJSONRPCError(
 				id,
@@ -1099,16 +1116,16 @@ export class MCPServer implements MCPServerInterface {
 				'Invalid params: request state could not be verified for this retry',
 			)
 		}
-		// The issued schema is enforced, not merely carried: an accepted response answers the
-		// question that was actually asked, or it is not accepted.
-		if (
-			!isMCPElicitResult(response) ||
-			(response.action === 'accept' && !isElicitContent(response.content ?? {}, state.schema))
-		) {
+		// The issued ROUND is enforced, not merely carried: every key it assigned is answered,
+		// and each answer answers the question that was actually asked under that key. Extra
+		// response keys are IGNORED — the server reads exactly the keys it assigned — so a
+		// client batching unrelated answers is not refused for it.
+		const responses = this.#answers(state.requests, inputResponses)
+		if (responses === undefined) {
 			return buildJSONRPCError(
 				id,
 				JSONRPC_INVALID_PARAMS,
-				'Invalid params: the elicitation response is missing or malformed',
+				'Invalid params: an input response is missing or malformed',
 			)
 		}
 		const principal = await configured.principal(request, options)
@@ -1119,12 +1136,12 @@ export class MCPServer implements MCPServerInterface {
 				'Invalid params: request state could not be verified for this retry',
 			)
 		}
-		const elicitation = await configured.elicit(
+		const selected = await configured.round(
 			{
 				request,
 				name,
 				arguments: args,
-				response,
+				responses,
 				...(state.state !== undefined ? { state: state.state } : {}),
 			},
 			options,
@@ -1139,47 +1156,70 @@ export class MCPServer implements MCPServerInterface {
 				'Invalid params: request state could not be verified for this retry',
 			)
 		}
-		if (elicitation === undefined) return undefined
-		const form = this.#form(elicitation)
-		if (form === undefined) {
+		if (selected === undefined) return undefined
+		const round = this.#round(selected)
+		if (round === undefined) {
 			return buildJSONRPCError(
 				id,
 				JSONRPC_INVALID_PARAMS,
-				'Invalid params: elicitation policy returned an invalid form or continuation context',
+				'Invalid params: input policy returned an invalid round or continuation context',
 			)
 		}
+		const refusal = this.#gate(round, context.capabilities, id)
+		if (refusal !== undefined) return refusal
 		// The ORIGINAL id and the prior window travel into the next round: the id because a
 		// multi-round exchange is one correlated call, the window because a further round
 		// EXTENDS a continuation rather than resurrecting one.
-		return this.#required(request, name, digest, form, principal, state.id, state.expiry)
+		return this.#required(request, name, digest, round, principal, state.id, state.expiry)
 	}
 
-	// Own the selector's output the moment it is produced. The issued form and its schema are
-	// snapshotted and frozen HERE, before capability, principal, or seal, so a provider that
-	// mutates what it returned changes neither the question the client is asked nor the schema
-	// the sealed state binds — the two would otherwise be free to disagree.
-	#form(elicitation: unknown): MCPElicitation | undefined {
-		const owned = snapshotJSON(elicitation, {
+	// Check one client's answers against the exact round that asked for them, and own the
+	// result. Every issued key must be answered — an unanswered round is a refusal here rather
+	// than a re-issue, so a tool never runs on a question the client left open — and each
+	// answer is checked against the request filed under its own key, so an elicitation answer
+	// cannot settle a sampling request by arriving in its place.
+	#answers(
+		requests: MCPInputRequestMap,
+		responses: Readonly<Record<string, unknown>>,
+	): MCPInputResponseMap | undefined {
+		const answered: Record<string, MCPInputResponse> = {}
+		for (const [key, issued] of Object.entries(requests)) {
+			const response = responses[key]
+			if (!Object.hasOwn(responses, key) || !isMCPInputResponse(response, issued)) return undefined
+			answered[key] = response
+		}
+		return Object.freeze(answered)
+	}
+
+	// Own the selector's output the moment it is produced. The issued round is snapshotted and
+	// frozen HERE, before capability, principal, or seal, so a provider that mutates what it
+	// returned changes neither the questions the client is asked nor the round the sealed state
+	// binds — the two would otherwise be free to disagree. An EMPTY round is refused: a round
+	// asking nothing would seal state no retry could ever satisfy.
+	#round(round: unknown): MCPInputRound | undefined {
+		const owned = snapshotJSON(round, {
 			bytes: this.#limits.content,
 			keys: this.#limits.keys,
 			depth: this.#limits.depth,
 		})
 		if (owned === undefined || !isRecord(owned[0])) return undefined
-		const form = owned[0]['request']
+		const requests = owned[0]['requests']
 		const state = owned[0]['state']
-		if (!isMCPElicitForm(form) || (!isUndefined(state) && !isJSONValue(state))) return undefined
-		return isUndefined(state) ? { request: form } : { request: form, state }
+		if (!isMCPInputRequestMap(requests) || Object.keys(requests).length === 0) return undefined
+		if (!isUndefined(state) && !isJSONValue(state)) return undefined
+		return isUndefined(state) ? { requests } : { requests, state }
 	}
 
-	// Build one form-mode round and seal the call-in-hand state. The random map key is
-	// minted here, never accepted from the consumer, and is carried inside protected state.
+	// Issue one round and seal the call-in-hand state. The round's keys are the CONSUMER's,
+	// because they are how it correlates each answer, and they travel inside protected state so
+	// a retry is checked against the exact questions this server asked.
 	// `origin` is the FIRST round's id, which stays bound however many rounds follow;
 	// `previous` is the window a further round is extending, rechecked around the seal await.
 	async #required(
 		request: JSONRPCRequest,
 		name: string,
 		digest: string,
-		form: MCPElicitation,
+		round: MCPInputRound,
 		principal: unknown,
 		origin: JSONRPCId,
 		previous: number | undefined,
@@ -1201,7 +1241,7 @@ export class MCPServer implements MCPServerInterface {
 			return buildJSONRPCError(
 				id,
 				JSONRPC_INVALID_PARAMS,
-				'Invalid params: elicitation policy returned an invalid form or continuation context',
+				'Invalid params: input policy returned an invalid round or continuation context',
 			)
 		}
 		if (previous !== undefined && previous <= Date.now()) {
@@ -1211,7 +1251,6 @@ export class MCPServer implements MCPServerInterface {
 				'Invalid params: request state could not be verified for this retry',
 			)
 		}
-		const key = crypto.randomUUID()
 		const expiry = Date.now() + configured.ttl
 		const protectedState = {
 			principal,
@@ -1219,11 +1258,10 @@ export class MCPServer implements MCPServerInterface {
 			id: origin,
 			version: context.version,
 			method: request.method,
-			key,
+			requests: round.requests,
 			name,
 			digest,
-			schema: form.request.requestedSchema,
-			...(form.state !== undefined ? { state: form.state } : {}),
+			...(round.state !== undefined ? { state: round.state } : {}),
 		}
 		if (
 			!isBoundedJSON(protectedState, {
@@ -1272,12 +1310,7 @@ export class MCPServer implements MCPServerInterface {
 		}
 		return buildJSONRPCResult(id, {
 			resultType: 'input_required',
-			inputRequests: {
-				[key]: {
-					method: 'elicitation/create',
-					params: { ...form.request, mode: 'form' },
-				},
-			},
+			inputRequests: round.requests,
 			requestState,
 			_meta: { [MCP_META_SERVER]: this.#options.identity },
 		})
@@ -1394,8 +1427,8 @@ export class MCPServer implements MCPServerInterface {
 	// The capability is checked FIRST and unconditionally, because the extension binds it to the
 	// METHOD rather than to one call's parameters: a client that never declared the extension is
 	// refused before its parameters are read at all. The code is the GENERIC
-	// missing-required-client-capability code, the same one the elicitation path answers — the
-	// tasks and elicitation refusals are told apart by `data.requiredCapabilities` alone, because
+	// missing-required-client-capability code, the same one the input path answers — the
+	// tasks and input refusals are told apart by `data.requiredCapabilities` alone, because
 	// they are instances of the same condition rather than distinct conditions. (The extension's
 	// own prose examples show `-32003`; the dated core schema fixes `-32021`, and a peer
 	// implements the dated schema.)
@@ -1483,7 +1516,7 @@ export class MCPServer implements MCPServerInterface {
 	// single parse at ingress.
 	//
 	// Note what this is NOT. It is a second multi-round-trip mechanism, and it carries none of
-	// the protections the elicitation one does — no `requestState`, no argument digest, no
+	// the protections the built-in one does — no `requestState`, no argument digest, no
 	// expiry, no principal binding — because MCP does not own the task's input channel. The
 	// manager does, and every one of those bindings would have to be the manager's.
 	//
