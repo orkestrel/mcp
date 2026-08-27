@@ -21,7 +21,9 @@
 > nothing, validates no arguments against a tool's schema, authorizes no call, and ships no
 > concrete tools. Optional caller context is consumer-asserted and forwarded without
 > verification. Each trust decision belongs to the invoking consumer, to a policy layer, or to
-> the tool itself.
+> the tool itself. Progress reporting belongs there too: it is a property of the invoking
+> consumer's execution context, one layer up — the @orkestrel/mcp package's execution context
+> carries a progress reporter — never of the tool contract itself.
 
 Two nouns carry the runtime. A `Tool` is inert — a definition plus a handler, with no lifecycle
 and no failure handling of its own. A `ToolManager` is the live surface a caller holds: it hands
