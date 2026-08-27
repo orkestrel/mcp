@@ -1109,6 +1109,20 @@ a `ToolResult` uses the normal text/structured normalization; returning a valida
 `MCPCallResult` preserves exact text, image, audio, resource-link, and embedded-resource
 content without guessing from an ordinary domain value.
 
+**A returned `MCPCallResult` reaches the wire unstamped, and that is a declared departure.**
+The normalization path builds its answer through `buildModernResult`, which stamps the
+`io.modelcontextprotocol/serverInfo` identity into `_meta`. A handler that returns a complete
+`MCPCallResult` instead is taken at its word: the server bounds it, re-proves its shape, and
+sends what the handler composed, so nothing adds the identity the other path adds. The dated
+revision says a server SHOULD carry its identity in a result's `_meta`, and this is the one
+result shape that does not. **What it costs:** a peer reading `serverInfo` off a `tools/call`
+result finds it on every normalized result and on no custom-execution one, so a consumer using
+`execution` for rich content stamps the key itself — through `buildModernResult`, which is
+exported for exactly this — wherever that peer matters. **Why it is not fixed here:** stamping
+the key onto a handler's own result would edit a result the handler declared complete, and the
+`_meta` it composed is the handler's. **Closer:** a consumer's own
+`buildModernResult(result, identity)` call inside the handler.
+
 Modern `tools/call` treats an omitted `arguments` field as the shared frozen
 `EMPTY_MCP_ARGUMENTS` record. A present value must be an object; `null`, arrays, primitives,
 and a direct-call own `undefined` receive `-32602` before input policy, continuation access,
@@ -1292,6 +1306,19 @@ hook. Returning `undefined` from the hook continues into the ordinary live tool 
 
 The keys are yours because they are how your own policy correlates each answer. A round asking
 nothing is refused, because it would seal state no retry could ever satisfy.
+
+**`createMCPContinuation` is what protects the `requestState` echo, and it is required.**
+`MCPInputOptions.continuation` has no default: the carrier travels through a client that may
+have rewritten it, so the integrity of every binding inside it — principal, expiry, original id,
+revision, method, tool name, argument digest, and the issued round — rests entirely on that
+port. `createMCPContinuation(secret)` is the shipped implementation, adapting `@orkestrel/server`'s
+`signToken` / `verifyToken` to the port: `seal` signs the canonical state string and `open`
+verifies it, returning `undefined` for anything it cannot verify, which is what turns a tampered
+carrier into `-32602`. Pass `[current, ...older]` to rotate a secret without invalidating state
+already in flight — a carrier sealed under a listed older secret still opens, while a new one
+seals under the current. Core supplies no signer of its own, and a consumer substituting its own
+port takes that integrity property with it: a port whose `open` returns whatever it was given
+makes every binding a client-supplied claim.
 
 The order the server runs those steps in is itself a contract, because each step is a
 provider call somebody pays for. On a FIRST round: the selector runs, its round is owned and
@@ -1758,9 +1785,14 @@ under-specified extension point, recorded under
 ### Bound hostile input and live resources
 
 Every server uses the frozen `DEFAULT_MCP_LIMITS`: one MiB for a raw message,
-16 KiB and 64 total object keys for `_meta`, 16 KiB for `requestState`, four MiB
+16 KiB for `_meta`, 64 total object keys, 16 KiB for `requestState`, four MiB
 for produced tool content, 128 live built-in subscriptions, and depth 32 for
-bounded JSON. Those defaults are sized respectively for substantial ordinary
+bounded JSON. `keys` is the breadth bound for BOTH bounded values, not a `_meta`
+leaf: `metadata` and `content` cap the bytes of their own value, while `keys` and
+`depth` cap the shape of each. A result whose breadth exceeds `keys` is refused
+the way oversized content is, an `_meta` value exceeding it the way invalid
+metadata is, and raising the key budget for extension-rich metadata raises it for
+tool output too. Those defaults are sized respectively for substantial ordinary
 JSON-RPC arguments, extension-rich request context, a signed state carrying a
 short deployment value, substantial JSON tool output, a busy
 long-lived host, and ordinary documents well beyond typical application nesting.
@@ -1890,6 +1922,18 @@ and have the answer projected back into the unstamped legacy shape. Every arm an
 message bound the wrapped dispatcher advertises: an invocation outside it earns that
 dispatcher's own id-less `-32600`, locally answered and forwarded alike. Every other method is
 refused with `-32601` at the door.
+
+**That fixed set is the whole legacy era, so the modern-only surfaces do not exist for a legacy
+client.** `server/discover` and `subscriptions/listen` are 2026-07-28 methods with no legacy
+spelling, so a legacy-era client naming either gets `-32601` at the decorator's door — the same
+refusal every other unlisted method earns there. The multi-round input mechanism is refused one step further
+in — a legacy `tools/call` carrying `requestState` or `inputResponses` gets `-32602`, because
+those parameters belong to a round the dated protocol could not have produced — and a modern
+result the dated revision has no shape for is projected as `-32000`. So a legacy client
+discovers the server through `initialize`, lists and calls tools, and has no path to modern
+discovery, subscriptions, or an input round at all. The way to reach one is to speak modern:
+the decorator passes a modern-shaped invocation through untouched, so composing the layer costs
+a modern client nothing.
 
 **Composition is the consumer's, and it is one call:**
 
@@ -2385,7 +2429,7 @@ Passing a legacy revision to
 | `MCPMethodHandler`                 | type      | `(request, options) => Promise<JSONRPCResponse \| MCPStream>` — one modern method. It receives the REQUEST arm alone, because dispatch short-circuits every notification before the registry is read, and answering is not optional: dispatch contains an absent answer as `-32603` plus one `error` event.                                                                                                                                                                                                                                                                                                                                                                                              |
 | `MCPMethodManagerInterface`        | interface | The modern method registry — the `add` / `method` methods, carrying both the built-in methods and any method a consumer adds.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `MCPServerEventMap`                | type      | `{ request: [method: string, id: JSONRPCId \| undefined, era: MCPEra]; error: [unknown] }` — the observation surface; `id` is `undefined` for a notification, `era` is selected structurally per request, and `error` carries the caught value of every fault the server contained, exactly once, plus bound-transport faults.                                                                                                                                                                                                                                                                                                                                                                           |
-| `MCPLimitOptions`                  | interface | `{ message?; metadata?; keys?; state?; content?; subscriptions?; depth? }` — configurable server bounds; malformed/absent leaves use secure defaults.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `MCPLimitOptions`                  | interface | `{ message?; metadata?; keys?; state?; content?; subscriptions?; depth? }` — configurable server bounds; malformed/absent leaves use secure defaults. `keys` and `depth` bound the SHAPE of every bounded value — one `_meta` and one produced result alike — while `metadata` and `content` bound their own value's bytes.                                                                                                                                                                                                                                                                                                                                                                              |
 | `MCPJSONLimitOptions`              | interface | `{ bytes; keys?; depth }` — byte/key/depth bounds consumed by `isBoundedJSON`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `MCPServerOptions`                 | interface | `{ on?; error?; identity; tools; resources?; prompts?; completion?; execution?; instructions?; cache?; input?; subscription?; task?; limit? }` — options for `createMCPServer`; each of `resources` / `prompts` / `completion` registers its own method family, and `task` opts into the stable Tasks extension.                                                                                                                                                                                                                                                                                                                                                                                         |
 | `MCPDispatcherInterface`           | interface | `emitter` / `limit` data members + the `dispatch` / `handle` methods — the MINIMAL surface a transport needs, and the one `MCPServerInterface` extends. Every door takes THIS — `createMCPRoutes`, `createMCPPostHandler`, `createWebSocketServer`, `createStdioServer`, and `bindServer` — which is what lets `MCPLegacy` sit between any of them and the server without either knowing.                                                                                                                                                                                                                                                                                                                |
@@ -2856,7 +2900,10 @@ undeliverable write from the later deadline for a peer that did not answer.
 
 Closing the client runs the supervisor's bounded process teardown, which reaches the child's
 terminal moment: the supervisor freezes `evidence`, ends `lines`, and settles the child's exit
-together there. The transport's line pump therefore needs no release of its own — the stream ends
+together there. That ladder is signal-first — the supervisor terminates the child, then destroys
+its `stdin` — rather than the stdin-close-and-wait the specification asks a stdio client for.
+The posture and its cost are stated under
+[Declared conformance gaps](#declared-conformance-gaps). The transport's line pump therefore needs no release of its own — the stream ends
 under it. The wait for the child's streams is bounded by the supervisor's `drain` window, so a
 descendant that inherited the child's stdout pipe cannot keep the transport's `close` call pending
 past it. Inbound delivery ends at the call rather than at the stream's end: a line the supervisor
@@ -2998,6 +3045,13 @@ deadline. The Node face rejects that same condition with the same words, reading
 the pre-open send this face queues, because it holds no connection to flush one onto. WebSocket
 is the custom transport this package adds; the specification defines stdio and Streamable HTTP.
 
+**A queue rides one connection.** `close()` discards whatever is still queued, and so does the
+native `close` event, so a frame the caller handed a connection that then ended is dropped
+rather than written onto the socket a later `start()` opens. A caller that closes a transport
+with a pre-open `send` outstanding therefore delivers nothing at all: the `send` already
+resolved, because queuing is what it resolved on, and the message it queued goes with the
+connection it was queued for. Re-send anything that must survive a reconnect.
+
 **`duplex` is a claim about the carrier, and it is proven by driving it.** The WebSocket,
 `MessagePort`, and scope carriers declare `true` and really do deliver a client-initiated
 `notifications/cancelled` to the peer; Streamable HTTP declares `false` and writes no such
@@ -3062,11 +3116,11 @@ entity, so they sit beside `createScopeMessageListener` in `helpers.ts`, not in 
 
 #### Entities
 
-| API                        | Kind  | Summary                                                                                                                                                   |
-| -------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WebSocketClientTransport` | class | The browser-face `MCPClientTransportInterface` over the native `WebSocket` — queues sends until `open`, flushed in order; a closed-channel send rejects.  |
-| `HTTPClientTransport`      | class | The browser-face `MCPClientTransportInterface` over native `fetch` — POSTs each message, decodes JSON/SSE, echoes sessions, and stamps era-aware headers. |
-| `MessagePortTransport`     | class | The SYMMETRIC `MCPTransportInterface` over a native `MessagePort` — `start()`s at construction, string payloads only, `close()` idempotent.               |
+| API                        | Kind  | Summary                                                                                                                                                                         |
+| -------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WebSocketClientTransport` | class | The browser-face `MCPClientTransportInterface` over the native `WebSocket` — queues sends until `open`, flushed in order and discarded at close; a closed-channel send rejects. |
+| `HTTPClientTransport`      | class | The browser-face `MCPClientTransportInterface` over native `fetch` — POSTs each message, decodes JSON/SSE, echoes sessions, and stamps era-aware headers.                       |
+| `MessagePortTransport`     | class | The SYMMETRIC `MCPTransportInterface` over a native `MessagePort` — `start()`s at construction, string payloads only, `close()` idempotent.                                     |
 
 #### Constants
 
@@ -3508,9 +3562,11 @@ that connection and emits once for it.
 this package actually gives up. The `HTTPClientTransport`s abort every
 in-flight `fetch` and response reader they still hold, clear that set, and drop
 the negotiated protocol version. The `WebSocketClientTransport`s unsubscribe
-from the socket before closing it, and the Node one also destroys an upgrade
-request still on the wire. `WebSocketServerTransport` unsubscribes before it
-runs the close handshake, so a frame already in flight cannot re-emit on a
+from the socket before closing it; the browser one also discards its pre-open
+queue, so nothing queued against the ended connection rides the next one, and
+the Node one also destroys an upgrade request still on the wire.
+`WebSocketServerTransport` unsubscribes before it runs the close handshake, so a
+frame already in flight cannot re-emit on a
 transport that has closed. `StdioClientTransport` stops its own line
 dispatch at the call, terminates its child through the supervisor's bounded group
 kill, and tears the supervisor down within the `drain` bound that caps a
@@ -4128,20 +4184,21 @@ consumer can plan around it instead of discovering it.
 
 **Protocol surfaces this package does not implement.**
 
-| Not built                                                               | Why                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Roots, Sampling, Logging                                                | All are deprecated in 2026-07-28 and none has a registry or a consumer here. The local `emitter`s are observability, not an MCP logging capability. Resources and Prompts are NOT on this list any more — see [Project a host-owned resource, prompt, and completion registry](#project-a-host-owned-resource-prompt-and-completion-registry).                                                                          |
-| A built-in resource or prompt STORE                                     | The `resources` / `prompts` / `completion` capabilities ship as PORTS, exactly as tools and durable tasks do. What backs one — a workspace, a database, a template registry, a plain object — is the host's decision, and a default store here would be product policy wearing a framework's clothes.                                                                                                                   |
-| Server-initiated `elicitation/create` requests                          | 2026-07-28 removes server-initiated requests entirely. Input requests survive only inside a modern `tools/call` `input_required` result — see [Ask the client for input during the call in hand](#ask-the-client-for-input-during-the-call-in-hand).                                                                                                                                                                    |
-| Durable task or session STORAGE                                         | Task state outlives the request that created it and this package owns no persistence. The store arrives injected as `MCPTaskOptions.tasks`, exactly as `ToolManagerInterface` does — the extension's protocol ships here, its durability does not.                                                                                                                                                                      |
-| `outputSchema` on tool descriptors                                      | `ToolResult.value` (`@orkestrel/tool`) is `unknown`; the contract that owns the value owns its schema. `structuredContent` is produced without one, which no clause gates.                                                                                                                                                                                                                                              |
-| Icons (2025-11-25)                                                      | Installed `@orkestrel/tool` definitions carry no icon field, so an MCP-only wrapper would have no originating consumer.                                                                                                                                                                                                                                                                                                 |
-| Withholding a consumer's own invalidly annotated tool from `tools/list` | The annotation is read and enforced on both sides; see [Protocol](#protocol) for the rules. The exclusion MUST binds an HTTP CLIENT, and this package's client transports honour it. A server that also dropped the definition would hide a consumer's tool from every peer over a mistake in one property, so this one serves it, recognizes no `Mcp-Param-*` name for it, and lets each conformant client exclude it. |
-| `_meta['io.modelcontextprotocol/logLevel']`                             | The deprecated canonical value is validated as request metadata, but no consumer opts a request into server log emission.                                                                                                                                                                                                                                                                                               |
-| W3C `traceparent` / `tracestate` / `baggage`                            | Tracing is application policy. The `request` event is the observation seam; a consumer stamps its own spans there.                                                                                                                                                                                                                                                                                                      |
-| Reading `extensions` for anything but Tasks                             | Capabilities are an open record, so a consumer can already declare any extension id without a library change. This package reads exactly one key of that map — `io.modelcontextprotocol/tasks`, and only when `task` is configured — and advertises the same one; every other id travels through untouched.                                                                                                             |
-| JSON-RPC batching                                                       | Removed by deletion: only individual messages are accepted, and the types enforce it.                                                                                                                                                                                                                                                                                                                                   |
-| The optional 2025-11-25 SSE polling protocol                            | No consumer. Resumability exists only as the legacy session middleware's `GET` channel, and a modern request must not use it.                                                                                                                                                                                                                                                                                           |
+| Not built                                                               | Why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Roots, Sampling, Logging                                                | All are deprecated in 2026-07-28 and none has a registry or a consumer here. The local `emitter`s are observability, not an MCP logging capability. Resources and Prompts are NOT on this list any more — see [Project a host-owned resource, prompt, and completion registry](#project-a-host-owned-resource-prompt-and-completion-registry).                                                                                                                                     |
+| A built-in resource or prompt STORE                                     | The `resources` / `prompts` / `completion` capabilities ship as PORTS, exactly as tools and durable tasks do. What backs one — a workspace, a database, a template registry, a plain object — is the host's decision, and a default store here would be product policy wearing a framework's clothes.                                                                                                                                                                              |
+| Server-initiated `elicitation/create` requests                          | 2026-07-28 removes server-initiated requests entirely. Input requests survive only inside a modern `tools/call` `input_required` result — see [Ask the client for input during the call in hand](#ask-the-client-for-input-during-the-call-in-hand).                                                                                                                                                                                                                               |
+| Durable task or session STORAGE                                         | Task state outlives the request that created it and this package owns no persistence. The store arrives injected as `MCPTaskOptions.tasks`, exactly as `ToolManagerInterface` does — the extension's protocol ships here, its durability does not.                                                                                                                                                                                                                                 |
+| `outputSchema` on tool descriptors                                      | `ToolResult.value` (`@orkestrel/tool`) is `unknown`; the contract that owns the value owns its schema. `structuredContent` is produced without one, which no clause gates.                                                                                                                                                                                                                                                                                                         |
+| Icons (2025-11-25)                                                      | Installed `@orkestrel/tool` definitions carry no icon field, so an MCP-only wrapper would have no originating consumer.                                                                                                                                                                                                                                                                                                                                                            |
+| Withholding a consumer's own invalidly annotated tool from `tools/list` | The annotation is read and enforced on both sides; see [Protocol](#protocol) for the rules. The exclusion MUST binds an HTTP CLIENT, and this package's client transports honour it. A server that also dropped the definition would hide a consumer's tool from every peer over a mistake in one property, so this one serves it, recognizes no `Mcp-Param-*` name for it, and lets each conformant client exclude it.                                                            |
+| `_meta['io.modelcontextprotocol/logLevel']`                             | The deprecated canonical value is validated as request metadata, but no consumer opts a request into server log emission.                                                                                                                                                                                                                                                                                                                                                          |
+| W3C `traceparent` / `tracestate` / `baggage`                            | Tracing is application policy. The `request` event is the observation seam; a consumer stamps its own spans there.                                                                                                                                                                                                                                                                                                                                                                 |
+| Reading `extensions` for anything but Tasks                             | Capabilities are an open record, so a consumer can already declare any extension id without a library change. This package reads exactly one key of that map — `io.modelcontextprotocol/tasks`, and only when `task` is configured — and advertises the same one; every other id travels through untouched.                                                                                                                                                                        |
+| An OAuth 2.1 authorization client                                       | The flow that mints a bearer — discovery, dynamic registration, a token grant — is a client this package does not publish. Every HTTP client transport takes a `headers` record, so a consumer supplies its own bearer, and server-side authorization composes IN FRONT as ordinary `@orkestrel/server` middleware. The conformance runner's `auth/*` client scenarios are outside the recorded set for this reason — see [Declared conformance gaps](#declared-conformance-gaps). |
+| JSON-RPC batching                                                       | Removed by deletion: only individual messages are accepted, and the types enforce it.                                                                                                                                                                                                                                                                                                                                                                                              |
+| The optional 2025-11-25 SSE polling protocol                            | No consumer. Resumability exists only as the legacy session middleware's `GET` channel, and a modern request must not use it.                                                                                                                                                                                                                                                                                                                                                      |
 
 **Revisions this package does not speak.** `2025-03-26` is dropped because its
 mandatory JSON-RPC batching is unimplemented here, and `2024-11-05` because it
@@ -4366,6 +4423,23 @@ and projects nothing for one it no longer advertises. **Closer:** a retry policy
 `MCPClient` rather than by a transport, with the caller able to decline it — not scheduled,
 and it needs the per-request options seam the entries above name.
 
+**A retry the server cannot verify is refused, not re-requested — a declared SHOULD departure.**
+The MRTR page says a server that finds requested information missing on a retry SHOULD answer a
+NEW `input_required` round re-requesting it rather than an error. This server answers `-32602`
+to every verification failure, an omitted issued key and an absent `requestState` included. It
+fails closed on purpose: the round the server would re-issue is the one sealed inside the
+carrier it just declined to trust, and minting a fresh round from an unverifiable retry hands a
+client that failed verification a new sealed state to try again with. The other half of that
+clause is satisfied — unrecognized extra `inputResponses` keys are ignored, because the server
+reads exactly the keys it issued. **What it costs:** a client that drops the carrier or omits an
+issued key starts the call again from its first round instead of receiving the missing question
+a second time. The conformance runner records the cost exactly: its
+`input-required-result-missing-input-response` and `input-required-result-ignore-extra-params`
+scenarios check a SHOULD, so a refusal reports WARNING and both scenarios are recorded at
+0 passed / 0 failed rather than green. **Closer:** one unit separating the omitted-key case from
+the unverifiable-carrier case and re-issuing the round for the first alone; it is not scheduled,
+and it needs a reading of how a re-issued round binds to state the client already returned.
+
 **`Mcp-Param-*` / `x-mcp-header` client projection — satisfied, without widening the shared
 transport contract.** An HTTP client MUST project tool arguments annotated with
 `x-mcp-header` into `Mcp-Param-*` request headers, and MUST exclude a tool whose annotations
@@ -4385,6 +4459,19 @@ whether a delivered page joins that table or replaces it: a `tools/list` carryin
 continuation carrying the cursor the previous page handed back accumulates onto it. So a
 tool a fresh listing omits stops projecting, and a tool on an earlier page of one paged
 listing keeps projecting.
+
+**The stdio client shuts a child down signal-first, not stdin-first — a declared SHOULD
+departure owned by another package.** The stdio page says a client SHOULD close the child's
+`stdin`, wait for it to exit, and terminate it only if it does not. `StdioClientTransport.close`
+runs `@orkestrel/process`'s bounded teardown, whose ladder is the other way round: the
+supervisor signals the child (`SIGTERM`, then `SIGKILL` after the grace window; on Windows a
+`taskkill /F /T` over the tree), and destroys `stdin` after that. **What it costs:** a child
+that would have exited cleanly on EOF is signalled instead, so its own shutdown work runs
+against a deadline and, on Windows, does not run at all — a `SIGTERM` handler never fires there,
+and the diagnostics it would have written never exist. **Closer:** `@orkestrel/process`. The
+ladder belongs to the supervisor that owns the child, not to a transport reaching around it, so
+this package adopts a cooperative stop as soon as `Process` offers one; the improvement is
+recorded against that package.
 
 **Tool-invocation rate limiting — not satisfied, and no unit will close it.**
 2025-11-25's `server/tools` § Security Considerations binds a server to validate tool
@@ -4518,10 +4605,14 @@ surfaces.
 naming decision rather than a protocol gap. The existing public name remains the documented
 contract until a later unit owns the rename and updates every consumer.
 
-**The remaining corrected guide fences are prose-checked, not executed.** The earlier
-`tools/list` metadata fence has an in-process transcription in `tests/guides.test.ts`; the
-other corrected fences have named-import, symbol, and link parity checks but no executed
-transcription.
+**Not every guide fence is executed.** `tests/guides.test.ts` transcribes and drives the
+flagship ones: the `tools/list` metadata pair, the stdio child's merged environment, its piped
+stderr and the retained evidence tail, the composed stdio server's legacy handshake, the
+consumer-visible client's modern version, and the subscription stream's delivery order and
+capacity refusal. Every other fence carries named-import, symbol, and link parity alone. **What
+it costs:** a fence whose comment claims a value nothing asserts is checked for its names and
+not for its answer, so a behaviour that drifts under one of those fences reddens no gate.
+**Closer:** a transcription per fence, added with the claim it pins.
 
 ## Declared packaging limits
 
@@ -4530,7 +4621,7 @@ omission, and a consumer meets each of them at install time rather than in a bui
 
 **IDE integration is not claimed.** A real foreign protocol client drives the Streamable
 HTTP surface end to end — `@modelcontextprotocol/conformance` against revision
-`2026-07-28`, recorded at 23 passed / 0 failed — and that is a claim about the
+`2026-07-28`, recorded at 110 passed / 0 failed — and that is a claim about the
 wire. No IDE, editor, or agent host has driven this server. The rule is this repository's
 own: a claim about an external client stays unproven until one representative real client
 of that class drives it end to end, and no client of the IDE class has. **What it costs:**
@@ -5218,7 +5309,10 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     socket already reporting `CLOSING` / `CLOSED` REJECTS with
     `WebSocket transport is not connected`, because a native socket write is
     unconfirmed and a silent resolve leaves the client's correlated request
-    pending to its deadline for a frame nobody wrote; inbound text frames are `JSON.parse`d
+    pending to its deadline for a frame nobody wrote; a queue rides ONE
+    connection, so `close()` and the native `close` event each DISCARD what is
+    still in it rather than flushing it onto the socket a later `start()` opens;
+    inbound text frames are `JSON.parse`d
     (guarded) + narrowed with `parseJSONRPCMessage` onto `message` (a
     non-text / non-JSON / non-message frame surfaces on `error` and is
     DROPPED, never thrown); `close()` closes the socket and fires `close`

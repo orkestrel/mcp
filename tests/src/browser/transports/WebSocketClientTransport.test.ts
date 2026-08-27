@@ -115,6 +115,25 @@ describe('WebSocketClientTransport — a send the channel cannot carry rejects',
 		await transport.close()
 	})
 
+	it('drops a queued send at close so it never rides the next connection', async () => {
+		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
+		const received: JSONRPCMessage[] = []
+		transport.emitter.on('message', (message) => received.push(message))
+
+		// Queued against a connection that never opens: `start()` is not called, so this frame
+		// belongs to the channel the next line abandons.
+		await transport.send(createJSONRPCRequest({ method: 'ping', id: 77 }))
+		await transport.close()
+		await transport.start()
+		// The control. It travels the reconnected socket and comes back, so the delivery path is
+		// alive and the abandoned frame's absence is a fact about the queue.
+		await transport.send(createJSONRPCRequest({ method: 'ping', id: 78 }))
+		await waitForDelay(60)
+
+		expect(received.map((message) => message.id)).toEqual([78])
+		await transport.close()
+	})
+
 	it('settles the caller pending call on the closed channel instead of leaving it to time out', async () => {
 		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
 		const client = createMCPClient({ transport, timeout: 200 })

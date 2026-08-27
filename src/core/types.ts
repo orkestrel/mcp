@@ -1960,7 +1960,10 @@ export interface MCPLimitOptions {
 	readonly message?: number
 	/** Maximum serialized UTF-8 bytes accepted in one `_meta` value. */
 	readonly metadata?: number
-	/** Maximum total enumerable keys accepted across one `_meta` value. */
+	/**
+	 * Maximum total enumerable keys accepted in one bounded value: one `_meta` value under
+	 * `metadata`, and one produced tool-call result under `content`.
+	 */
 	readonly keys?: number
 	/** Maximum UTF-8 bytes accepted in one protected `requestState`. */
 	readonly state?: number
@@ -2033,6 +2036,11 @@ export interface MCPServerOptions {
 	 * completion even after the request that asked for it has ended, and abandons the result.
 	 * An {@link MCPExecutionHandler} receives `signal` on its {@link MCPExecutionContext} and
 	 * can stop the work itself.
+	 *
+	 * A handler returning a complete {@link MCPCallResult} is taken at its word: the server
+	 * bounds it and re-proves its shape, then sends what the handler composed. Nothing stamps
+	 * the `_meta` server identity `buildModernResult` puts on a normalized result, so a handler
+	 * whose peer reads that key composes it through `buildModernResult` itself.
 	 */
 	readonly execution?: MCPExecutionHandler
 	/** Optional human guidance exposed by `server/discover`. */

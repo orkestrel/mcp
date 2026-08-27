@@ -1016,4 +1016,70 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 		expect(chunks).toEqual([])
 		handle.stop()
 	})
+
+	// The `StdioServerInterface` lifetime the guide's Methods table states: `start()` arms the
+	// pump once, `stop()` ends that handle permanently, and each takes effect on `input` at
+	// once. A repeated `stop()` is pinned by the release row earlier in this block.
+	it('arms the pump once however many times start() is called', async () => {
+		const { input, output } = stdio()
+		const handle = createStdioServer(createCalculatorServer(), { input, output })
+		handle.start()
+		handle.start()
+		handle.start()
+
+		const chunks: string[] = []
+		output.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
+		input.write(
+			`${JSON.stringify(
+				createJSONRPCRequest({
+					method: 'server/discover',
+					id: 1,
+					params: { _meta: MODERN_METADATA },
+				}),
+			)}\n`,
+		)
+		await waitForDelay(20)
+
+		// A second arm would parse the same line again and answer it again.
+		expect(chunks.join('').split('\n').filter(Boolean)).toHaveLength(1)
+		handle.stop()
+	})
+
+	it('arms nothing on a start() after stop(), so serving again takes a fresh handle', async () => {
+		const { input, output } = stdio()
+		const handle = createStdioServer(createCalculatorServer(), { input, output })
+		handle.start()
+		handle.stop()
+		handle.start()
+
+		const chunks: string[] = []
+		output.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
+		input.write(
+			`${JSON.stringify(
+				createJSONRPCRequest({
+					method: 'server/discover',
+					id: 1,
+					params: { _meta: MODERN_METADATA },
+				}),
+			)}\n`,
+		)
+		await waitForDelay(20)
+
+		expect(chunks).toEqual([])
+	})
+
+	it('subscribes to input on start() and releases it on stop(), each synchronously', () => {
+		const { input, output } = stdio()
+		const handle = createStdioServer(createCalculatorServer(), { input, output })
+		const counts = [input.listenerCount('data')]
+
+		handle.start()
+		counts.push(input.listenerCount('data'))
+		handle.stop()
+		counts.push(input.listenerCount('data'))
+
+		// Read on the line after each call, so a subscription deferred to a later tick reads 0
+		// where this expects 1.
+		expect(counts).toEqual([0, 1, 0])
+	})
 })

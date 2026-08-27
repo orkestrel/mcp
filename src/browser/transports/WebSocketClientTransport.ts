@@ -25,7 +25,8 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  * - **Queued sends.** `send` writes each message as one text frame immediately once
  *   the socket is `OPEN`; a `send` issued before `'open'` fires (or before `start()`
  *   is even called) is QUEUED and flushed, IN ORDER, the moment the socket opens —
- *   so a caller need not await `start()` before calling `send`.
+ *   so a caller need not await `start()` before calling `send`. A queue rides ONE
+ *   connection: a close DISCARDS whatever is still in it.
  * - **A closed channel REJECTS.** The native socket confirms nothing about a write, so this
  *   transport answers from its own state: a `send` after `close()`, or on a socket already
  *   reporting `CLOSING` / `CLOSED`, REJECTS with `WebSocket transport is not connected` rather
@@ -41,8 +42,10 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   SAME `close` exactly once total — `close()` first flips the guard, so the native event
  *   never double-emits, and the released socket reports its own close to nobody. Closing before
  *   the socket opens resolves the pending `start()` rather than leaving it pending, matching the
- *   Node face. A `send` issued after `close()` REJECTS (it is never queued), so a closed
- *   transport delivers nothing until a `start()` opens a new connection.
+ *   Node face. A `send` issued after `close()` REJECTS (it is never queued), and the
+ *   pre-open queue is DISCARDED — by `close()` and by the native `close` event alike — so a
+ *   closed transport delivers nothing until a `start()` opens a new connection, and nothing
+ *   the caller handed the abandoned connection rides that one.
  * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); every
  *   emit the emitter isolates a listener throw; `error` is a DOMAIN event (a
  *   transport-level fault).
@@ -145,6 +148,10 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 	async close(): Promise<void> {
 		if (this.#closed) return
 		this.#closed = true
+		// The queue belongs to the connection the caller handed those frames to. Keeping it
+		// would write them onto whatever socket a later `start()` opens, delivering a message
+		// against a connection the caller had already abandoned.
+		this.#queue = []
 		const socket = this.#socket
 		const resolve = this.#resolve
 		this.#releaseHandshake()
@@ -238,6 +245,8 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 	#onClose(): void {
 		if (this.#closed) return
 		this.#closed = true
+		// Same rule as `close()`: the ended connection takes its queue with it.
+		this.#queue = []
 		this.#release()
 		this.#socket = undefined
 		this.#emitter.emit('close')
