@@ -159,9 +159,9 @@ function reportFault(label: string, error: unknown): void {
  *
  * @remarks
  * The retry maps the peer's round onto `MCPCallOptions.input`, whose `state` leaf is
- * REQUIRED. A round the peer sent with NO `requestState` cannot be answered through this
- * client's public surface at all, so the call stops there and the runner records the gap
- * rather than this driver reaching around the client to hide it.
+ * OPTIONAL: SEP-2322 lets a peer issue a round with no `requestState`, and the retry answering
+ * that round omits the parameter rather than inventing a carrier. A result carrying a carrier
+ * and no requests asks nothing, so there is nothing to answer.
  *
  * @param client - The client under test
  * @param call - The call to drive
@@ -175,15 +175,13 @@ async function driveCall(
 	if (outcome.resultType !== 'input_required') return outcome
 	const state = outcome.requestState
 	const requests = outcome.inputRequests
-	if (state === undefined || requests === undefined) {
-		reportFault(
-			`retry ${call.name}`,
-			'the round carries no requestState, and MCPCallOptions.input requires one',
-		)
+	if (requests === undefined) {
+		reportFault(`retry ${call.name}`, 'the round carries no inputRequests to answer')
 		return outcome
 	}
+	const responses = buildInputResponses(requests)
 	return await client.call(call.name, call.arguments, {
-		input: { state, responses: buildInputResponses(requests) },
+		input: state === undefined ? { responses } : { state, responses },
 	})
 }
 

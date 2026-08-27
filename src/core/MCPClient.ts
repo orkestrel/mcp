@@ -421,10 +421,14 @@ export class MCPClient implements MCPClientInterface {
 			{
 				name,
 				arguments: args,
+				// `requestState` rides only when the caller has one. A peer may issue a round
+				// with no state to return, and SEP-2322 requires the retry to answer that round
+				// while omitting the parameter — sending an empty or invented carrier instead
+				// would be this client authoring state the peer never sealed.
 				...(input === undefined
 					? {}
 					: {
-							requestState: input.state,
+							...(input.state === undefined ? {} : { requestState: input.state }),
 							inputResponses: input.responses,
 						}),
 			},

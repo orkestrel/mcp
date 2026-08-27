@@ -379,17 +379,11 @@ describe('MCPLegacy collapse boundaries', () => {
 					},
 					ttl: 1000,
 					principal: () => 'operator',
-					round: () => ({
-						requests: {
-							approval: {
-								method: 'elicitation/create',
-								params: {
-									message: 'Approve?',
-									requestedSchema: { type: 'object', properties: {} },
-								},
-							},
-						},
-					}),
+					// The round is never ISSUED on this path. `legacyInvocationToModern` stamps an
+					// empty capability declaration, the modern gate refuses every kind against it,
+					// and the legacy layer projects that refusal. So the round only has to be a
+					// legal one — nothing here is sent, sealed, or answered.
+					selector: () => ({ requests: { approval: { method: 'roots/list' } } }),
 				},
 			}),
 		)

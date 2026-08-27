@@ -112,6 +112,12 @@ export function isFormElicitationSupported(value: unknown): boolean {
  * recognize needs nothing, because {@link import('./validators.js').isMCPInputRequestMap}
  * has already refused the round it would have travelled in. Total over hostile input.
  *
+ * The `elicitation` value names the ARM the round needs, so a client can act on the refusal
+ * by declaring exactly what the payload asks for. A missing URL arm answers `{ url: {} }`, a
+ * missing form arm answers the empty record this package reads as form-only, and a round
+ * needing both answers `{ form: {}, url: {} }`. An empty record for a URL round would name
+ * the declaration a URL-capable client already sent, and refuse the identical round again.
+ *
  * @param requests - The round the server is about to issue
  * @param capabilities - The client capability record the request declared
  * @returns The missing capabilities, or `undefined` when the client declared every one
@@ -129,6 +135,8 @@ export function computeMissingCapabilities(
 	const owned = attempt(() => cloneJSONRecord(capabilities))
 	const declared: Readonly<Record<string, unknown>> = owned.success ? owned.value : {}
 	const missing: Record<string, MCPMetaObject> = {}
+	let formUndeclared = false
+	let urlUndeclared = false
 	for (const request of Object.values(requests)) {
 		if (request.method === 'sampling/createMessage') {
 			if (!isRecord(declared['sampling'])) missing['sampling'] = {}
@@ -140,11 +148,14 @@ export function computeMissingCapabilities(
 		}
 		const elicitation = declared['elicitation']
 		if (request.params.mode === 'url') {
-			if (!isRecord(elicitation) || !isRecord(elicitation['url'])) missing['elicitation'] = {}
+			if (!isRecord(elicitation) || !isRecord(elicitation['url'])) urlUndeclared = true
 			continue
 		}
-		if (!isFormElicitationSupported(declared)) missing['elicitation'] = {}
+		if (!isFormElicitationSupported(declared)) formUndeclared = true
 	}
+	if (formUndeclared && !urlUndeclared) missing['elicitation'] = {}
+	if (urlUndeclared && !formUndeclared) missing['elicitation'] = { url: {} }
+	if (formUndeclared && urlUndeclared) missing['elicitation'] = { form: {}, url: {} }
 	return Object.keys(missing).length === 0 ? undefined : Object.freeze(missing)
 }
 

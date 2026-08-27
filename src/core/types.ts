@@ -410,6 +410,41 @@ export type MCPContent =
 	| MCPResourceLink
 	| MCPEmbeddedResource
 
+/** A model's request to call one tool, carried inside a sampling completion. */
+export interface MCPToolUseContent {
+	readonly type: 'tool_use'
+	readonly id: string
+	readonly name: string
+	readonly input: Readonly<Record<string, unknown>>
+	readonly _meta?: MCPMetaObject
+}
+
+/** One tool's outcome returned to the model, carried inside a sampling completion. */
+export interface MCPToolResultContent {
+	readonly type: 'tool_result'
+	readonly toolUseId: string
+	readonly content: readonly MCPContent[]
+	readonly isError?: boolean
+	readonly structuredContent?: JSONValue
+	readonly _meta?: MCPMetaObject
+}
+
+/**
+ * One block a sampling completion may carry.
+ *
+ * @remarks
+ * The dated schema's `SamplingMessageContentBlock`: the text, image, and audio blocks
+ * {@link MCPContent} also admits, plus the two tool blocks a tool-using model produces. The
+ * resource arms of {@link MCPContent} are deliberately absent — the schema leaves them out of
+ * a sampling completion.
+ */
+export type MCPSampleContent =
+	| MCPTextContent
+	| MCPImageContent
+	| MCPAudioContent
+	| MCPToolUseContent
+	| MCPToolResultContent
+
 /**
  * A `tools/call` result BEFORE the modern stamp — the executed tool's output as
  * `content` blocks, with `isError` flagging a tool failure.
@@ -556,11 +591,11 @@ export interface MCPElicitResult {
  * One embedded multi-round-trip request.
  *
  * @remarks
- * A consumer composes any of the three arms into an {@link MCPInputRound}. The elicitation
- * arm is fully typed because this package issues its schema and enforces the answer against
- * it. The deprecated sampling and roots arms keep OPEN parameter records: the dated schema
- * leaves their request bodies to the caller, and narrowing them here would refuse parameters
- * the protocol permits.
+ * A consumer composes any of the three arms into an {@link MCPInputRound}, and this server
+ * issues whichever arms that round carries. The elicitation arm is fully typed because this
+ * package issues its schema and enforces the answer against it. The sampling and roots arms
+ * keep OPEN parameter records: the dated schema leaves their request bodies to the caller, and
+ * narrowing them here would refuse parameters the protocol permits.
  */
 export type MCPInputRequest =
 	| MCPElicitRequest
@@ -573,7 +608,7 @@ export type MCPInputRequest =
 			readonly params?: Readonly<Record<string, unknown>>
 	  }
 
-/** A server-keyed map of embedded requests the client must fulfil. */
+/** A consumer-keyed map of embedded requests the client must fulfil. */
 export type MCPInputRequestMap = Readonly<Record<string, MCPInputRequest>>
 
 /** One filesystem root a client exposes to a server. */
@@ -593,14 +628,16 @@ export interface MCPRootResult {
  * The client's answer to one embedded `sampling/createMessage` request.
  *
  * @remarks
- * The dated schema types this as one sampling message plus the model that produced it, so
- * `content` is a single block rather than an array and carries no resource arms. `stopReason`
- * is an open string because the schema names `endTurn`, `stopSequence`, and `maxTokens` while
+ * `content` is the dated schema's own `anyOf`: one {@link MCPSampleContent} block, or an array
+ * of them. A tool-using model answers with `tool_use` and `tool_result` blocks, and a model
+ * answering in several parts answers with the array, so narrowing this to a single text, image,
+ * or audio block would refuse completions the schema permits. `stopReason` is an open string
+ * because the schema names `endTurn`, `stopSequence`, `maxTokens`, and `toolUse` while
  * permitting any other value a provider reports.
  */
 export interface MCPSampleResult {
 	readonly role: 'user' | 'assistant'
-	readonly content: MCPTextContent | MCPImageContent | MCPAudioContent
+	readonly content: MCPSampleContent | readonly MCPSampleContent[]
 	readonly model: string
 	readonly stopReason?: string
 	readonly _meta?: MCPMetaObject
@@ -618,7 +655,7 @@ export interface MCPSampleResult {
  */
 export type MCPInputResponse = MCPElicitResult | MCPSampleResult | MCPRootResult
 
-/** A server-keyed map of the client's answers to one issued round. */
+/** A consumer-keyed map of the client's answers to one issued round. */
 export type MCPInputResponseMap = Readonly<Record<string, MCPInputResponse>>
 
 /**
@@ -732,7 +769,7 @@ export interface MCPInputOptions {
 	/** Resolves the authenticated principal for the call in hand. */
 	readonly principal: MCPPrincipalHandler
 	/** Composes the next round of input requests, including on verified retries. */
-	readonly round: MCPInputHandler
+	readonly selector: MCPInputHandler
 }
 
 /** One official request-scoped progress payload. */
@@ -2459,10 +2496,11 @@ export interface MCPClientOptions {
  * - `progress` receives each `notifications/progress` frame the peer publishes for this
  *   request. Supplying it is what stamps the request's progress token, so a peer only
  *   reports where a caller is listening.
- * - `input` carries one input-required retry. Its `state` and `responses` leaves are
- *   required together. The retry must repeat the original `name` and byte-identical
- *   `arguments`; the client maps the leaves to the top-level `requestState` and
- *   `inputResponses` parameters.
+ * - `input` carries one input-required retry. `responses` is required; `state` is optional
+ *   because a peer may issue a round with no `requestState` to return, and the client sends
+ *   the `requestState` parameter exactly when a state is supplied. The retry must repeat the
+ *   original `name` and byte-identical `arguments`; the client maps the leaves to the
+ *   top-level `requestState` and `inputResponses` parameters.
  *
  * No option survives the call: the continuation data is placed only on that request, and when
  * the request settles — answered, refused, timed out, aborted, or drained by a `disconnect` —
@@ -2473,9 +2511,9 @@ export interface MCPCallOptions {
 	readonly signal?: AbortSignal
 	/** Receives this request's progress frames; supplying it stamps the progress token. */
 	readonly progress?: MCPProgressHandler
-	/** Carries the protected state and responses for one input-required retry. */
+	/** Carries the responses, and any protected state, for one input-required retry. */
 	readonly input?: {
-		readonly state: string
+		readonly state?: string
 		readonly responses: Readonly<Record<string, unknown>>
 	}
 }

@@ -86,6 +86,7 @@ import {
 	isMCPResultMetaObject,
 	isMCPRoot,
 	isMCPRootResult,
+	isMCPSampleContent,
 	isMCPSampleResult,
 	isMCPServerCapabilities,
 	isMCPStringArguments,
@@ -803,9 +804,27 @@ describe('multi-round-trip validators', () => {
 		expect(computeMissingCapabilities({ approval: form }, { elicitation: { url: {} } })).toEqual({
 			elicitation: {},
 		})
+		// The refusal names the ARM the round needs. Answering a URL round with the empty
+		// record names the declaration a URL-capable client already sent, so that client
+		// re-sends the identical declaration and is refused identically. `{ url: {} }` is the
+		// spelling `isFormElicitationSupported` reads as URL-only, so declaring it exits.
 		expect(computeMissingCapabilities({ approval: url }, { elicitation: {} })).toEqual({
-			elicitation: {},
+			elicitation: { url: {} },
 		})
+		// A round needing BOTH arms names both, because neither spelling alone authorizes it:
+		// the empty record excludes URL and the URL-only record excludes form.
+		expect(computeMissingCapabilities({ approval: form, login: url }, {})).toEqual({
+			elicitation: { form: {}, url: {} },
+		})
+		expect(
+			computeMissingCapabilities({ approval: form, login: url }, { elicitation: { url: {} } }),
+		).toEqual({ elicitation: {} })
+		expect(
+			computeMissingCapabilities(
+				{ approval: form, login: url },
+				{ elicitation: { form: {}, url: {} } },
+			),
+		).toBeUndefined()
 		// Total over hostile capability records, which read as declaring nothing.
 		const { proxy, revoke } = Proxy.revocable({}, {})
 		revoke()
@@ -966,9 +985,14 @@ describe('multi-round-trip validators', () => {
 		expect(isMCPRoot({ uri: 'file:///workspace', name: 'workspace', _meta: {} })).toBe(true)
 		expect(isMCPRoot({ uri: 'file:///workspace', name: 7 })).toBe(false)
 		expect(isMCPRoot({ name: 'workspace' })).toBe(false)
+		// The schema declares `format: uri` on a root, the same keyword the URL-elicitation
+		// `url` carries, so a relative reference is refused at both fields alike.
+		expect(isMCPRoot({ uri: 'workspace' })).toBe(false)
+		expect(isMCPRoot({ uri: '/workspace' })).toBe(false)
 		expect(isMCPRootResult({ roots: [] })).toBe(true)
 		expect(isMCPRootResult({ roots: [{ uri: 'file:///a' }, { uri: 'file:///b' }] })).toBe(true)
 		expect(isMCPRootResult({ roots: [{ uri: 'file:///a' }, { name: 'b' }] })).toBe(false)
+		expect(isMCPRootResult({ roots: [{ uri: 'file:///a' }, { uri: './b' }] })).toBe(false)
 		expect(isMCPRootResult({ roots: {} })).toBe(false)
 		expect(isMCPRootResult({})).toBe(false)
 
@@ -987,11 +1011,41 @@ describe('multi-round-trip validators', () => {
 				model: 'test-model',
 			}),
 		).toBe(true)
-		// The schema names three stop reasons and permits any other a provider reports.
+		// The schema names four stop reasons and permits any other a provider reports.
 		expect(isMCPSampleResult({ ...sample, stopReason: 'providerSpecific' })).toBe(true)
 		expect(isMCPSampleResult({ ...sample, role: 'system' })).toBe(false)
 		expect(isMCPSampleResult({ ...sample, model: 7 })).toBe(false)
-		expect(isMCPSampleResult({ ...sample, content: [{ type: 'text', text: 'Paris' }] })).toBe(false)
+		// `CreateMessageResult.content` is the schema's own `anyOf`: one block, or an ARRAY of
+		// blocks. A model answering in several parts, and a tool-using model answering with
+		// `tool_use` and `tool_result`, both send completions this guard admits.
+		expect(isMCPSampleResult({ ...sample, content: [{ type: 'text', text: 'Paris' }] })).toBe(true)
+		expect(isMCPSampleResult({ ...sample, content: [] })).toBe(true)
+		expect(
+			isMCPSampleResult({
+				...sample,
+				content: [
+					{ type: 'text', text: 'Looking that up' },
+					{ type: 'tool_use', id: 'call-1', name: 'lookup', input: { city: 'Paris' } },
+				],
+			}),
+		).toBe(true)
+		expect(
+			isMCPSampleResult({
+				...sample,
+				role: 'user',
+				content: {
+					type: 'tool_result',
+					toolUseId: 'call-1',
+					content: [{ type: 'text', text: '2.1 million' }],
+					isError: false,
+					structuredContent: { population: 2_100_000 },
+				},
+			}),
+		).toBe(true)
+		// A nested array is not a block, so an array of arrays is refused.
+		expect(isMCPSampleResult({ ...sample, content: [[{ type: 'text', text: 'Paris' }]] })).toBe(
+			false,
+		)
 		// A resource block is legal MCP content and is NOT a legal sampling completion.
 		expect(
 			isMCPSampleResult({
@@ -999,6 +1053,58 @@ describe('multi-round-trip validators', () => {
 				content: { type: 'resource_link', name: 'doc', uri: 'https://example.test/doc' },
 			}),
 		).toBe(false)
+		expect(
+			isMCPSampleResult({
+				...sample,
+				content: [{ type: 'resource_link', name: 'doc', uri: 'https://example.test/doc' }],
+			}),
+		).toBe(false)
+	})
+
+	it('validates one sampling content block against the dated block union', () => {
+		expect(isMCPSampleContent({ type: 'text', text: 'Paris' })).toBe(true)
+		expect(isMCPSampleContent({ type: 'image', data: 'AAAA', mimeType: 'image/png' })).toBe(true)
+		expect(isMCPSampleContent({ type: 'audio', data: 'AAAA', mimeType: 'audio/wav' })).toBe(true)
+		expect(isMCPSampleContent({ type: 'tool_use', id: 'c1', name: 'lookup', input: {} })).toBe(true)
+		expect(
+			isMCPSampleContent({ type: 'tool_use', id: 'c1', name: 'lookup', input: {}, _meta: {} }),
+		).toBe(true)
+		// Every `tool_use` member the schema requires is required here.
+		expect(isMCPSampleContent({ type: 'tool_use', name: 'lookup', input: {} })).toBe(false)
+		expect(isMCPSampleContent({ type: 'tool_use', id: 'c1', input: {} })).toBe(false)
+		expect(isMCPSampleContent({ type: 'tool_use', id: 'c1', name: 'lookup' })).toBe(false)
+		expect(isMCPSampleContent({ type: 'tool_use', id: 'c1', name: 'lookup', input: [] })).toBe(
+			false,
+		)
+		expect(isMCPSampleContent({ type: 'tool_result', toolUseId: 'c1', content: [] })).toBe(true)
+		// `structuredContent` is any JSON value; `isError` is a boolean when present.
+		expect(
+			isMCPSampleContent({
+				type: 'tool_result',
+				toolUseId: 'c1',
+				content: [{ type: 'text', text: 'done' }],
+				structuredContent: null,
+			}),
+		).toBe(true)
+		expect(
+			isMCPSampleContent({ type: 'tool_result', toolUseId: 'c1', content: [], isError: 'yes' }),
+		).toBe(false)
+		expect(isMCPSampleContent({ type: 'tool_result', content: [] })).toBe(false)
+		expect(isMCPSampleContent({ type: 'tool_result', toolUseId: 'c1' })).toBe(false)
+		// A `tool_result` carries ordinary content blocks, so an unusable one refuses.
+		expect(
+			isMCPSampleContent({ type: 'tool_result', toolUseId: 'c1', content: [{ type: 'text' }] }),
+		).toBe(false)
+		// The resource arms of `isMCPContent` are outside the sampling union.
+		expect(
+			isMCPSampleContent({ type: 'resource_link', name: 'doc', uri: 'https://example.test/doc' }),
+		).toBe(false)
+		expect(
+			isMCPSampleContent({ type: 'resource', resource: { uri: 'file:///a', text: 'a' } }),
+		).toBe(false)
+		expect(isMCPSampleContent({ type: 'unheard-of' })).toBe(false)
+		expect(isMCPSampleContent([])).toBe(false)
+		expect(isMCPSampleContent(undefined)).toBe(false)
 	})
 
 	it('answers each input response against the exact request that was issued', () => {
@@ -2150,6 +2256,7 @@ const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = 
 	isMCPResultMetaObject,
 	isMCPRoot,
 	isMCPRootResult,
+	isMCPSampleContent,
 	isMCPSampleResult,
 	isMCPServerCapabilities,
 	isMCPStringArguments,

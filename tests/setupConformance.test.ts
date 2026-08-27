@@ -57,6 +57,18 @@ import {
 import { existsSync } from 'node:fs'
 import { normalize, resolve } from 'node:path'
 
+// One selector context for one named tool at one point in its walk. The state is the only
+// thing `buildConformanceInput` reads besides the name, so the request and the arguments stay
+// the same inert values at every round.
+function buildInputContext(name: string, state?: number): MCPInputContext {
+	return {
+		request: createJSONRPCRequest({ method: 'tools/call', params: { name: 'ignored' } }),
+		name,
+		arguments: {},
+		...(state === undefined ? {} : { state }),
+	}
+}
+
 describe('the pinned runner', () => {
 	it('resolves the installed entry and reports the release the manifest pins', async () => {
 		const release = readConformanceRelease()
@@ -334,15 +346,12 @@ describe('the fixture registries', () => {
 	})
 
 	it('walks each tool’s rounds by the state the previous round carried', () => {
-		const call = createJSONRPCRequest({ method: 'tools/call', params: { name: 'ignored' } })
-		const context = (name: string, state?: number): MCPInputContext => ({
-			request: call,
-			name,
-			arguments: {},
-			...(state === undefined ? {} : { state }),
-		})
-		const walked = buildConformanceInput(context('test_input_required_result_multi_round'))
-		const next = buildConformanceInput(context('test_input_required_result_multi_round', 0))
+		const walked = buildConformanceInput(
+			buildInputContext('test_input_required_result_multi_round'),
+		)
+		const next = buildConformanceInput(
+			buildInputContext('test_input_required_result_multi_round', 0),
+		)
 
 		expect(walked).toEqual({
 			requests: CONFORMANCE_ROUNDS['test_input_required_result_multi_round']?.[0],
@@ -354,11 +363,11 @@ describe('the fixture registries', () => {
 		})
 		// The rounds run out rather than repeating, which is how the tool finally executes.
 		expect(
-			buildConformanceInput(context('test_input_required_result_multi_round', 1)),
+			buildConformanceInput(buildInputContext('test_input_required_result_multi_round', 1)),
 		).toBeUndefined()
 		// A tool absent from the table owes this host nothing at any state.
-		expect(buildConformanceInput(context('test_simple_text'))).toBeUndefined()
-		expect(buildConformanceInput(context('test_simple_text', 0))).toBeUndefined()
+		expect(buildConformanceInput(buildInputContext('test_simple_text'))).toBeUndefined()
+		expect(buildConformanceInput(buildInputContext('test_simple_text', 0))).toBeUndefined()
 	})
 
 	it('asks only for sampling wherever the scenario declares only sampling', () => {

@@ -1284,6 +1284,32 @@ describe('MCPClient — call() (the content round-trip)', () => {
 		expect(Object.hasOwn(bare, 'inputResponses')).toBe(false)
 	})
 
+	// A peer may issue a round with NO `requestState`, and SEP-2322 requires the retry to
+	// answer that round while omitting the parameter. So `state` is optional and the parameter
+	// rides exactly when a caller supplies one: an absent state must leave the key off the
+	// wire rather than send `undefined`, an empty string, or a carrier this client invented.
+	it('omits requestState from a retry the peer sealed no state for', async () => {
+		const peer = callPeer((request) =>
+			request.method === 'tools/call' && request.id !== undefined
+				? callResponse(request.id, {
+						resultType: 'complete',
+						content: [{ type: 'text', text: 'done' }],
+					})
+				: undefined,
+		)
+		const client = createMCPClient({ transport: peer })
+		await client.connect()
+		const responses = { confirmation: { action: 'accept' } }
+
+		await client.call('NAME', {}, { input: { responses } })
+
+		const sent = peer.requests.filter((request) => request.method === 'tools/call')[0]?.params
+		if (sent === undefined) throw new Error('Expected the peer to receive the retry')
+
+		expect(sent['inputResponses']).toBe(responses)
+		expect(Object.hasOwn(sent, 'requestState')).toBe(false)
+	})
+
 	it('continues an input-required call with protected state and responses', async () => {
 		const client = createMCPClient({
 			transport: createLoopback(createInputServer(toolRegistry())),

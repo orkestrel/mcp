@@ -11,7 +11,6 @@ import type {
 	MCPCallResult,
 	MCPCompletion,
 	MCPCompletionManagerInterface,
-	MCPClientCapabilities,
 	MCPCompletionParams,
 	MCPDispatchOptions,
 	MCPIdentity,
@@ -29,6 +28,7 @@ import type {
 	MCPPromptGetResult,
 	MCPPromptManagerInterface,
 	MCPPromptPage,
+	MCPRequestContext,
 	MCPResourceManagerInterface,
 	MCPResourcePage,
 	MCPResourceReadParams,
@@ -533,13 +533,7 @@ export class MCPServer implements MCPServerInterface {
 		}
 		if (isMCPInputResult(captured[0])) {
 			const input: MCPInputResult = captured[0]
-			return buildJSONRPCResult(request.id, {
-				...input,
-				_meta: {
-					...(input['_meta'] ?? {}),
-					[MCP_META_SERVER]: this.#options.identity,
-				},
-			})
+			return this.#forward(input, request)
 		}
 		if (
 			!Array.isArray(captured[0]) ||
@@ -685,13 +679,7 @@ export class MCPServer implements MCPServerInterface {
 		}
 		if (isMCPInputResult(captured[0])) {
 			const input: MCPInputResult = captured[0]
-			return buildJSONRPCResult(request.id, {
-				...input,
-				_meta: {
-					...(input['_meta'] ?? {}),
-					[MCP_META_SERVER]: this.#options.identity,
-				},
-			})
+			return this.#forward(input, request)
 		}
 		if (!isMCPPromptGetResult(captured[0])) {
 			return buildJSONRPCError(
@@ -1001,7 +989,7 @@ export class MCPServer implements MCPServerInterface {
 		if (params?.['requestState'] !== undefined || params?.['inputResponses'] !== undefined) {
 			return this.#retry(request, name, digest, args, options)
 		}
-		const selected = await configured.round({ request, name, arguments: args }, options)
+		const selected = await configured.selector({ request, name, arguments: args }, options)
 		if (selected === undefined) return undefined
 		const round = this.#round(selected)
 		const context = parseRequestContext(request, {
@@ -1015,7 +1003,7 @@ export class MCPServer implements MCPServerInterface {
 				'Invalid params: input policy returned an invalid round or continuation context',
 			)
 		}
-		const refusal = this.#gate(round, context?.capabilities, id)
+		const refusal = this.#gate(round, context, id)
 		if (refusal !== undefined) return refusal
 		const principal = await configured.principal(request, options)
 		return this.#required(request, name, digest, round, principal, id, undefined)
@@ -1023,18 +1011,29 @@ export class MCPServer implements MCPServerInterface {
 
 	// The capability rule, which is about SENDING: a server never issues a request kind the
 	// client's declared capabilities exclude. So it is checked against the ROUND rather than
-	// against the method, at each of the two places a round is issued — and at both of them it
-	// stands ahead of the seal, so a round this server may not send costs no continuation write.
+	// against the method, at every place a round leaves this server — the first `tools/call`
+	// round, a further round on a retry, and a round a `prompts/get` or `resources/read`
+	// manager authored — and at each of them it stands ahead of the seal or the stamp, so a
+	// round this server may not send costs no continuation write.
 	//
-	// An unparsed context refuses too, and with the same payload: a request whose modern
-	// metadata did not survive parsing declared nothing, and nothing is exactly what the gate
-	// measures against.
+	// An UNPARSABLE modern context is a different failure and gets the different answer: a
+	// request whose `_meta` did not survive parsing declared nothing to measure, which is the
+	// malformed-metadata refusal `#modern` already gives it at the ingress, in the same words.
+	// A request carrying a STAMPED EMPTY declaration is not that case — an empty declaration
+	// parses, and it excludes every kind, so it is gated rather than refused as malformed.
 	#gate(
 		round: MCPInputRound,
-		capabilities: MCPClientCapabilities | undefined,
+		context: MCPRequestContext | undefined,
 		id: JSONRPCId,
 	): JSONRPCErrorResponse | undefined {
-		const missing = computeMissingCapabilities(round.requests, capabilities ?? {})
+		if (context === undefined) {
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				'Invalid params: malformed modern request metadata',
+			)
+		}
+		const missing = computeMissingCapabilities(round.requests, context.capabilities)
 		if (missing === undefined) return undefined
 		return buildJSONRPCError(
 			id,
@@ -1042,6 +1041,31 @@ export class MCPServer implements MCPServerInterface {
 			'Server requires a client capability this request did not declare',
 			{ requiredCapabilities: missing },
 		)
+	}
+
+	// A `prompts/get` or `resources/read` manager may answer with an `MCPInputResult` of its
+	// own, and that result leaves as THIS server's wire. So the round it carries meets the same
+	// capability gate a `tools/call` round meets: the rule binds every issuer, not one method,
+	// and a round the client's declared capabilities exclude must not be stamped and sent from
+	// a port either. A result carrying only a continuation carrier asks nothing, so there is
+	// nothing to measure and the stamp is all that is left to do.
+	#forward(input: MCPInputResult, request: JSONRPCRequest): JSONRPCResponse {
+		const requests = input.inputRequests
+		if (requests !== undefined) {
+			const context = parseRequestContext(request, {
+				bytes: this.#limits.message,
+				depth: this.#limits.depth,
+			})
+			const refusal = this.#gate({ requests }, context, request.id)
+			if (refusal !== undefined) return refusal
+		}
+		return buildJSONRPCResult(request.id, {
+			...input,
+			_meta: {
+				...(input['_meta'] ?? {}),
+				[MCP_META_SERVER]: this.#options.identity,
+			},
+		})
 	}
 
 	// The retry ingress and its verification. Every structural binding is verified before the
@@ -1081,7 +1105,7 @@ export class MCPServer implements MCPServerInterface {
 			return buildJSONRPCError(
 				id,
 				JSONRPC_INVALID_PARAMS,
-				'Invalid params: request state could not be verified for this retry',
+				'Invalid params: malformed modern request metadata',
 			)
 		}
 		const verified = await configured.continuation.open(requestState)
@@ -1136,7 +1160,7 @@ export class MCPServer implements MCPServerInterface {
 				'Invalid params: request state could not be verified for this retry',
 			)
 		}
-		const selected = await configured.round(
+		const selected = await configured.selector(
 			{
 				request,
 				name,
@@ -1165,7 +1189,7 @@ export class MCPServer implements MCPServerInterface {
 				'Invalid params: input policy returned an invalid round or continuation context',
 			)
 		}
-		const refusal = this.#gate(round, context.capabilities, id)
+		const refusal = this.#gate(round, context, id)
 		if (refusal !== undefined) return refusal
 		// The ORIGINAL id and the prior window travel into the next round: the id because a
 		// multi-round exchange is one correlated call, the window because a further round

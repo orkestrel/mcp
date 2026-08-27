@@ -1553,7 +1553,7 @@ export function buildConformanceOptions(): MCPServerOptions {
 			continuation: CONFORMANCE_CONTINUATION,
 			ttl: CONFORMANCE_TTL,
 			principal: () => CONFORMANCE_PRINCIPAL,
-			round: buildConformanceInput,
+			selector: buildConformanceInput,
 		},
 		execution: async (context) => {
 			// The request-scoped reporter exists only when the caller sent a `progressToken`, and

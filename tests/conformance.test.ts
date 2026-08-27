@@ -129,15 +129,15 @@ const EXPECTED_RED = EXPECTED.filter((scenario) => scenario.failed > 0).map(
 const EXPECTED_CLIENT: readonly ConformanceOutcome[] = [
 	{ name: 'tools_call', passed: 1, failed: 0, warnings: 0 },
 	{ name: 'request-metadata', passed: 8, failed: 0, warnings: 0 },
-	// Fails one SEP-2322 check. The peer answers `test_mrtr_no_state` with an
-	// `input_required` result carrying `inputRequests` and NO `requestState`, and the spec
-	// requires the retry to answer it while omitting `requestState`. `MCPCallOptions.input`
-	// declares `state: string` as a REQUIRED leaf, so a retry that carries responses without
-	// a state is unreachable through the client's public surface: the seam is the `input`
-	// option's shape, not the wire. The other four checks — the exact echo, the distinct
-	// JSON-RPC id, the isolation of one call's round from another's, and the missing
-	// `resultType` defaulting to complete — all pass.
-	{ name: 'sep-2322-client-request-state', passed: 4, failed: 1, warnings: 0 },
+	// Green since `MCPCallOptions.input.state` became optional. The peer answers
+	// `test_mrtr_no_state` with an `input_required` result carrying `inputRequests` and NO
+	// `requestState`, and SEP-2322 requires the retry to answer it while omitting
+	// `requestState`. While `state` was a required leaf that retry was unreachable through
+	// the client's public surface, and the runner reported "Tool was not called by client or
+	// MRTR flow not completed". The checks are the stateless round, the exact echo, the
+	// distinct JSON-RPC id, the isolation of one call's round from another's, and the missing
+	// `resultType` defaulting to complete.
+	{ name: 'sep-2322-client-request-state', passed: 5, failed: 0, warnings: 0 },
 	{ name: 'http-standard-headers', passed: 3, failed: 0, warnings: 0 },
 	// Fails every SEP-2243 `Mcp-Param` check: the client sends no `Mcp-Param-*` header at
 	// all, because it reads no `x-mcp-header` annotation from a tool's `inputSchema`. The

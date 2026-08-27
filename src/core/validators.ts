@@ -52,6 +52,7 @@ import type {
 	MCPResultMetaObject,
 	MCPRoot,
 	MCPRootResult,
+	MCPSampleContent,
 	MCPSampleResult,
 	MCPServerCapabilities,
 	MCPSubscriptionFilter,
@@ -1633,7 +1634,7 @@ export function isMCPElicitRequest(value: unknown): value is MCPElicitRequest {
  * Determines whether a value is one legal embedded multi-round-trip request.
  *
  * @param value - The unknown value to inspect
- * @returns `true` for elicitation, deprecated sampling, or deprecated roots requests
+ * @returns `true` for an embedded elicitation, sampling, or roots request
  *
  * @example
  * ```ts
@@ -1655,7 +1656,7 @@ export function isMCPInputRequest(value: unknown): value is MCPInputRequest {
 }
 
 /**
- * Determines whether a value is a server-keyed map of embedded input requests.
+ * Determines whether a value is a consumer-keyed map of embedded input requests.
  *
  * @param value - The unknown value to inspect
  * @returns `true` when every own value is a legal {@link MCPInputRequest}
@@ -1846,12 +1847,18 @@ export function isElicitContent(
 /**
  * Determines whether a value is one filesystem root a client exposes.
  *
+ * @remarks
+ * The dated schema declares `uri` with `format: uri`, so this applies the same RFC 3986
+ * check {@link isAbsoluteURI} gives every other `format: uri` field the package validates,
+ * including a URL-mode elicitation's `url`. Total over hostile input.
+ *
  * @param value - The unknown value to inspect
- * @returns `true` when `value` carries a string `uri` and an optional string `name`
+ * @returns `true` when `value` carries an absolute `uri` and an optional string `name`
  *
  * @example
  * ```ts
  * isMCPRoot({ uri: 'file:///workspace', name: 'workspace' }) // true
+ * isMCPRoot({ uri: 'workspace' }) // false — the schema declares `format: uri`
  * ```
  */
 export function isMCPRoot(value: unknown): value is MCPRoot {
@@ -1861,7 +1868,7 @@ export function isMCPRoot(value: unknown): value is MCPRoot {
 		const root = owned.value
 		const name = root['name']
 		const metadata = root['_meta']
-		if (!isString(root['uri'])) return false
+		if (!isAbsoluteURI(root['uri'])) return false
 		if (!isUndefined(name) && !isString(name)) return false
 		return isUndefined(metadata) || isMCPMetaObject(metadata)
 	} catch {
@@ -1873,8 +1880,8 @@ export function isMCPRoot(value: unknown): value is MCPRoot {
  * Determines whether a value is one client answer to an embedded `roots/list` request.
  *
  * @remarks
- * The dated schema requires the `roots` array and constrains a root's `uri` no further than
- * a string, so neither does this. Total over hostile input.
+ * The dated schema requires the `roots` array, and each root is checked by
+ * {@link isMCPRoot}. Total over hostile input.
  *
  * @param value - The unknown value to inspect
  * @returns `true` when `value` carries an array of valid roots
@@ -1900,13 +1907,59 @@ export function isMCPRootResult(value: unknown): value is MCPRootResult {
 }
 
 /**
+ * Determines whether a value is one block a sampling completion may carry.
+ *
+ * @remarks
+ * The schema's `SamplingMessageContentBlock`: the text, image, and audio blocks
+ * {@link isMCPContent} also admits, plus `tool_use` and `tool_result`. The resource arms of
+ * {@link isMCPContent} are refused, because the schema leaves them out of a sampling
+ * completion. A `tool_result` carries ordinary {@link isMCPContent} blocks and an open
+ * `structuredContent`, which the schema constrains to no shape at all. Total over hostile
+ * input.
+ *
+ * @param value - The unknown value to inspect
+ * @returns `true` when `value` is one legal sampling content block
+ *
+ * @example
+ * ```ts
+ * isMCPSampleContent({ type: 'text', text: 'Paris' }) // true
+ * isMCPSampleContent({ type: 'tool_use', id: 'c1', name: 'lookup', input: {} }) // true
+ * isMCPSampleContent({ type: 'resource_link', name: 'doc', uri: 'file:///doc' }) // false
+ * ```
+ */
+export function isMCPSampleContent(value: unknown): value is MCPSampleContent {
+	const owned = attempt(() => cloneJSONRecord(value))
+	if (!owned.success) return false
+	try {
+		const block = owned.value
+		const metadata = block['_meta']
+		if (!isUndefined(metadata) && !isMCPMetaObject(metadata)) return false
+		if (block['type'] === 'tool_use') {
+			return isString(block['id']) && isString(block['name']) && isRecord(block['input'])
+		}
+		if (block['type'] === 'tool_result') {
+			const carried = block['content']
+			const failed = block['isError']
+			if (!Array.isArray(carried) || !carried.every((entry) => isMCPContent(entry))) return false
+			if (!isUndefined(failed) && !isBoolean(failed)) return false
+			return isString(block['toolUseId'])
+		}
+		if (!isMCPContent(block)) return false
+		return block.type === 'text' || block.type === 'image' || block.type === 'audio'
+	} catch {
+		return false
+	}
+}
+
+/**
  * Determines whether a value is one client answer to an embedded sampling request.
  *
  * @remarks
- * The schema's `CreateMessageResult` is one sampling message plus the model that produced
- * it, so `content` is a SINGLE block and carries neither of the resource arms
- * {@link isMCPContent} also admits. `stopReason` stays an open string because the schema
- * names three values and permits any other a provider reports. Total over hostile input.
+ * The schema's `CreateMessageResult` types `content` as an `anyOf` over one
+ * {@link isMCPSampleContent} block or an ARRAY of them, so both are admitted here: a
+ * tool-using model answers with `tool_use` and `tool_result` blocks, and a model answering in
+ * several parts answers with the array. `stopReason` stays an open string because the schema
+ * names four values and permits any other a provider reports. Total over hostile input.
  *
  * @param value - The unknown value to inspect
  * @returns `true` when `value` has the sampling-completion shape
@@ -1916,6 +1969,11 @@ export function isMCPRootResult(value: unknown): value is MCPRootResult {
  * isMCPSampleResult({
  * 	role: 'assistant',
  * 	content: { type: 'text', text: 'Paris' },
+ * 	model: 'test-model',
+ * }) // true
+ * isMCPSampleResult({
+ * 	role: 'assistant',
+ * 	content: [{ type: 'text', text: 'Paris' }],
  * 	model: 'test-model',
  * }) // true
  * ```
@@ -1930,10 +1988,9 @@ export function isMCPSampleResult(value: unknown): value is MCPSampleResult {
 		const reason = result['stopReason']
 		const metadata = result['_meta']
 		if (role !== 'user' && role !== 'assistant') return false
-		if (!isString(result['model']) || !isMCPContent(content)) return false
-		if (content.type !== 'text' && content.type !== 'image' && content.type !== 'audio') {
-			return false
-		}
+		if (!isString(result['model'])) return false
+		const blocks = Array.isArray(content) ? content : [content]
+		if (!blocks.every((block) => isMCPSampleContent(block))) return false
 		if (!isUndefined(reason) && !isString(reason)) return false
 		return isUndefined(metadata) || isMCPMetaObject(metadata)
 	} catch {

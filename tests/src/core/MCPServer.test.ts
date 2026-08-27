@@ -188,6 +188,15 @@ class MemoryPromptManager implements MCPPromptManagerInterface {
 		if (params.name === 'input') {
 			return { resultType: 'input_required', requestState: 'prompt-state' }
 		}
+		// The arm that ASKS the client something. The carrier-only arm above asks nothing, so
+		// only this one reaches the server's capability gate.
+		if (params.name === 'round') {
+			return {
+				resultType: 'input_required',
+				inputRequests: { context: { method: 'sampling/createMessage', params: {} } },
+				requestState: 'prompt-state',
+			}
+		}
 		if (params.name !== 'greet') return undefined
 		return {
 			resultType: 'complete',
@@ -516,7 +525,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 				continuation: new MemoryContinuation(),
 				ttl: 60_000,
 				principal: () => 'user-1',
-				round: () => undefined,
+				selector: () => undefined,
 			},
 		})
 		const absentResponse = responseOf(
@@ -537,7 +546,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 				continuation: new MemoryContinuation(),
 				ttl: 60_000,
 				principal: () => 'user-1',
-				round: () => undefined,
+				selector: () => undefined,
 			},
 		})
 		const incomingPeer = createHostilePeer(incoming)
@@ -565,7 +574,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 				continuation: new MemoryContinuation(),
 				ttl: 60_000,
 				principal: () => 'user-1',
-				round: () => createRound(APPROVAL_FORM, 'x'.repeat(512)),
+				selector: () => createRound(APPROVAL_FORM, 'x'.repeat(512)),
 			},
 		})
 		const outgoingPeer = createHostilePeer(outgoing)
@@ -595,7 +604,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 				continuation: new MemoryContinuation(),
 				ttl: 60_000,
 				principal: () => 'user-1',
-				round: () => createRound(),
+				selector: () => createRound(),
 			},
 		})
 		const signedPeer = createHostilePeer(signed)
@@ -1031,7 +1040,7 @@ describe('MCPServer — W01 modern execution and progress', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				round: () => {
+				selector: () => {
 					selections += 1
 					return undefined
 				},
@@ -1609,7 +1618,7 @@ describe('MCPServer — W01 modern execution and progress', () => {
 	})
 })
 
-describe('MCPServer — multi-round-trip form elicitation', () => {
+describe('MCPServer — multi-round-trip input', () => {
 	it('passes the in-scope dispatch options to the principal handler', async () => {
 		const seen: MCPMethodOptions[] = []
 		const caller = Object.freeze({ subject: 'principal-user' })
@@ -1623,7 +1632,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 					seen.push(options)
 					return 'operator-1'
 				},
-				round: () => createRound(),
+				selector: () => createRound(),
 			},
 		})
 
@@ -1673,7 +1682,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 				continuation,
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				round: (context) => (context.responses === undefined ? createRound() : undefined),
+				selector: (context) => (context.responses === undefined ? createRound() : undefined),
 			},
 		})
 		const params = {
@@ -1725,8 +1734,8 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 						continuation: new MemoryContinuation(),
 						ttl: 1_000,
 						principal: () => 'operator-1',
-						round: async () => {
-							throw new Error('elicit provider detail')
+						selector: async () => {
+							throw new Error('selector provider detail')
 						},
 					},
 				}),
@@ -1741,7 +1750,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 						principal: async () => {
 							throw new Error('principal provider detail')
 						},
-						round: () => createRound(),
+						selector: () => createRound(),
 					},
 				}),
 				code: JSONRPC_INTERNAL_ERROR,
@@ -1760,7 +1769,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 						},
 						ttl: 1_000,
 						principal: () => 'operator-1',
-						round: () => createRound(),
+						selector: () => createRound(),
 					},
 				}),
 				code: JSONRPC_INTERNAL_ERROR,
@@ -1772,7 +1781,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 						continuation: new MemoryContinuation(),
 						ttl: 1_000,
 						principal: () => 'operator-1',
-						round: new Proxy(() => createRound(), { apply: () => 7 }),
+						selector: new Proxy(() => createRound(), { apply: () => 7 }),
 					},
 				}),
 				code: JSONRPC_INVALID_PARAMS,
@@ -1784,7 +1793,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 						continuation: new MemoryContinuation(),
 						ttl: 1_000,
 						principal: new Proxy(() => 'operator-1', { apply: () => 7 }),
-						round: () => createRound(),
+						selector: () => createRound(),
 					},
 				}),
 				code: JSONRPC_INVALID_PARAMS,
@@ -1803,7 +1812,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 						},
 						ttl: 1_000,
 						principal: () => 'operator-1',
-						round: () => createRound(),
+						selector: () => createRound(),
 					},
 				}),
 				code: JSONRPC_INVALID_PARAMS,
@@ -1837,7 +1846,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				round: (context) => {
+				selector: (context) => {
 					seen.push(context)
 					return context.responses === undefined
 						? createRound(
@@ -1940,7 +1949,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				round: (context) => {
+				selector: (context) => {
 					seen.push(context)
 					return context.responses === undefined ? { requests: MIXED_ROUND } : undefined
 				},
@@ -1998,7 +2007,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				round: () => ({ requests: MIXED_ROUND }),
+				selector: () => ({ requests: MIXED_ROUND }),
 			},
 		})
 		const response = responseOf(
@@ -2043,7 +2052,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				round: (context) => (context.responses === undefined ? createRound() : undefined),
+				selector: (context) => (context.responses === undefined ? createRound() : undefined),
 			},
 		})
 		const params = {
@@ -2183,7 +2192,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 15,
 				principal: () => principal,
-				round: (context) => (context.responses === undefined ? createRound() : undefined),
+				selector: (context) => (context.responses === undefined ? createRound() : undefined),
 			},
 		})
 		const params = {
@@ -2237,7 +2246,7 @@ describe('MCPServer — multi-round-trip form elicitation', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				round: () => {
+				selector: () => {
 					selections += 1
 					return createRound()
 				},
@@ -3299,7 +3308,7 @@ function modernFaults(): readonly FaultScenario[] {
 					},
 					ttl: 1_000,
 					principal: () => 'operator-1',
-					round: () => createRound(),
+					selector: () => createRound(),
 				},
 			}),
 			request: createJSONRPCRequest({
@@ -3334,7 +3343,7 @@ function modernFaults(): readonly FaultScenario[] {
 					},
 					ttl: 1_000,
 					principal: () => 'operator-1',
-					round: () => createRound(),
+					selector: () => createRound(),
 				},
 			}),
 			request: createJSONRPCRequest({
@@ -3364,7 +3373,7 @@ function modernFaults(): readonly FaultScenario[] {
 					},
 					ttl: 1_000,
 					principal: () => 'operator-1',
-					round: () => createRound(),
+					selector: () => createRound(),
 				},
 			}),
 			request: createJSONRPCRequest({
@@ -3389,7 +3398,7 @@ function modernFaults(): readonly FaultScenario[] {
 					principal: () => {
 						throw new Error('principal detail must not escape')
 					},
-					round: () => createRound(),
+					selector: () => createRound(),
 				},
 			}),
 			request: createJSONRPCRequest({
@@ -3974,7 +3983,7 @@ function inputProbe(
 				principals.push(resolved)
 				return 'operator-1'
 			},
-			round: async (context) => {
+			selector: async (context) => {
 				selections.push(context)
 				if (options.stall !== undefined) await waitForDelay(options.stall)
 				return selections.length > rounds
@@ -4084,7 +4093,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				round: (context) => {
+				selector: (context) => {
 					calls.push(context.arguments)
 					return undefined
 				},
@@ -4122,7 +4131,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				round: async () => {
+				selector: async () => {
 					// Mutating the caller's own object mid-flight, at a real await point.
 					params['arguments'] = { value: 'mutated' }
 					await waitForDelay()
@@ -4250,6 +4259,101 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(probe.continuation.sealed).toHaveLength(0)
 	})
 
+	// A declaration that PARSES and excludes every kind, and a `_meta` that does not parse at
+	// all, are different failures and earn different codes. A legacy-projected call is the
+	// first: it arrives with a stamped empty declaration, so it is gated. An unparsable
+	// `_meta` is the second, on the first-round door and the retry door alike — the same
+	// `-32602` the ingress gives it, in the same words, so one condition has one answer.
+	it('separates an empty declaration from an unparsable one, at both MRTR doors', async () => {
+		const probe = inputProbe()
+		const gated = responseOf(
+			await probe.server.dispatch(
+				createJSONRPCRequest({
+					id: 'reading-1',
+					method: 'tools/call',
+					params: {
+						name: 'echo',
+						_meta: { [MCP_META_VERSION]: '2026-07-28', [MCP_META_CAPABILITIES]: {} },
+					},
+				}),
+			),
+		)
+		const first = responseOf(
+			await probe.server.dispatch(
+				createJSONRPCRequest({
+					id: 'reading-2',
+					method: 'tools/call',
+					params: {
+						name: 'echo',
+						_meta: { [MCP_META_VERSION]: '2026-07-28', [MCP_META_CAPABILITIES]: 'not a record' },
+					},
+				}),
+			),
+		)
+		const continued = inputProbe()
+		const issued = responseOf(await continued.server.dispatch(formCall('reading-3')))
+		const round = roundOf(issued)
+		const retry = responseOf(
+			await continued.server.dispatch(
+				createJSONRPCRequest({
+					id: 'reading-4',
+					method: 'tools/call',
+					params: {
+						name: 'echo',
+						requestState: round.requestState,
+						inputResponses: { [round.key]: { action: 'accept' } },
+						_meta: { [MCP_META_VERSION]: '2026-07-28', [MCP_META_CAPABILITIES]: 'not a record' },
+					},
+				}),
+			),
+		)
+
+		expect(gated?.error?.code).toBe(MCP_MISSING_CAPABILITY)
+		expect(first?.error).toEqual({
+			code: JSONRPC_INVALID_PARAMS,
+			message: 'Invalid params: malformed modern request metadata',
+		})
+		expect(retry?.error).toEqual({
+			code: JSONRPC_INVALID_PARAMS,
+			message: 'Invalid params: malformed modern request metadata',
+		})
+		// Neither unparsable call reached the policy at all, so neither cost a selector run:
+		// the gated call is the only selection on the first probe, and the issued round is the
+		// only one on the second.
+		expect(probe.selections).toHaveLength(1)
+		expect(continued.selections).toHaveLength(1)
+	})
+
+	// This server seals a carrier on every round it issues, so the pair stays required on the
+	// retry it accepts: answers with no carrier answer a round this server never sent. The
+	// CLIENT half of SEP-2322's stateless arm is `MCPCallOptions.input.state`, which is
+	// optional because a different peer may issue a round with no state to return.
+	it('refuses a retry carrying answers with no state, and one carrying state with no answers', async () => {
+		const probe = inputProbe()
+		const issued = responseOf(await probe.server.dispatch(formCall('pairing-1')))
+		const round = roundOf(issued)
+		const stateless = responseOf(
+			await probe.server.dispatch(
+				formCall('pairing-2', {
+					inputResponses: { [round.key]: { action: 'accept' } },
+				}),
+			),
+		)
+		const answerless = responseOf(
+			await probe.server.dispatch(formCall('pairing-3', { requestState: round.requestState })),
+		)
+
+		expect(stateless?.error).toEqual({
+			code: JSONRPC_INVALID_PARAMS,
+			message: 'Invalid params: `inputResponses` and `requestState` are required together',
+		})
+		expect(answerless?.error).toEqual({
+			code: JSONRPC_INVALID_PARAMS,
+			message: 'Invalid params: `inputResponses` and `requestState` are required together',
+		})
+		expect(probe.executions).toHaveLength(0)
+	})
+
 	// The selector's output is owned and frozen the moment it is produced, so a
 	// provider that mutates what it returned changes neither what the client is asked nor
 	// what the sealed state binds.
@@ -4272,7 +4376,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 				continuation,
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				round: () => selected,
+				selector: () => selected,
 			},
 		})
 
@@ -4679,7 +4783,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// A throwing selector or principal resolver is contained — one detail-free
 	// `-32603` on the wire, the caught value on `error`, exactly once.
 	it('contains a throwing selector and principal as one detail-free -32603 reported once', async () => {
-		for (const failing of ['elicit', 'principal'] as const) {
+		for (const failing of ['selector', 'principal'] as const) {
 			const mcp = createMCPServer({
 				identity: { name: 'test-server', version: '1.2.3' },
 				tools: tools(),
@@ -4690,8 +4794,8 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 						if (failing === 'principal') throw new Error(`${failing} provider detail`)
 						return 'operator-1'
 					},
-					round: () => {
-						if (failing === 'elicit') throw new Error(`${failing} provider detail`)
+					selector: () => {
+						if (failing === 'selector') throw new Error(`${failing} provider detail`)
 						return createRound()
 					},
 				},
@@ -5037,7 +5141,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 					continuation: new MemoryContinuation(),
 					ttl: 1_000,
 					principal: () => 'operator-1',
-					round: () => createRound(),
+					selector: () => createRound(),
 				},
 			},
 		)
@@ -6025,7 +6129,7 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
-				round: () => createRound(),
+				selector: () => createRound(),
 			},
 		})
 		const deferred = taskServer({ tasks: new TestTaskManager(), defer: () => undefined })
@@ -6644,6 +6748,53 @@ describe('MCP resources/read', () => {
 		})
 		expect(answer).not.toHaveProperty('result.ttlMs')
 	})
+
+	// The capability rule binds every ISSUER, not one method. A round a manager authored
+	// leaves as this server's wire, so it meets the same gate a `tools/call` round meets —
+	// and it meets it BEFORE the stamp, so a round the client may not receive is never sent.
+	it('refuses a manager round the client did not declare the capability for', async () => {
+		const resources = new MemoryResourceManager()
+		const mcp = createMCPServer({
+			identity: { name: 'resources', version: '1.0.0' },
+			tools: createToolManager(),
+			resources,
+		})
+		const refused = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					method: 'resources/read',
+					params: { uri: 'memory://resource/round', _meta: MODERN_METADATA },
+				}),
+			),
+		)
+		const allowed = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					id: 2,
+					method: 'resources/read',
+					params: {
+						uri: 'memory://resource/round',
+						_meta: {
+							[MCP_META_VERSION]: '2026-07-28',
+							[MCP_META_CAPABILITIES]: { roots: {} },
+						},
+					},
+				}),
+			),
+		)
+
+		expect(refused?.error).toEqual({
+			code: MCP_MISSING_CAPABILITY,
+			message: 'Server requires a client capability this request did not declare',
+			data: { requiredCapabilities: { roots: {} } },
+		})
+		expect(refused?.result).toBeUndefined()
+		expect(allowed?.result).toMatchObject({
+			resultType: 'input_required',
+			inputRequests: { workspace: { method: 'roots/list' } },
+			requestState: 'resource-state',
+		})
+	})
 })
 
 describe('MCP resources/templates/list', () => {
@@ -6909,6 +7060,51 @@ describe('MCP prompts/get', () => {
 			},
 		})
 		expect(answer).not.toHaveProperty('result.ttlMs')
+	})
+
+	// The same rule on the other port. A carrier-only result asks nothing and is stamped
+	// whatever the client declared, because there is no round to measure.
+	it('refuses a manager round the client did not declare the capability for', async () => {
+		const mcp = createMCPServer({
+			identity: { name: 'prompts', version: '1.0.0' },
+			tools: createToolManager(),
+			prompts: new MemoryPromptManager(),
+		})
+		const refused = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					method: 'prompts/get',
+					params: { name: 'round', _meta: MODERN_METADATA },
+				}),
+			),
+		)
+		const allowed = responseOf(
+			await mcp.dispatch(
+				createJSONRPCRequest({
+					id: 2,
+					method: 'prompts/get',
+					params: {
+						name: 'round',
+						_meta: {
+							[MCP_META_VERSION]: '2026-07-28',
+							[MCP_META_CAPABILITIES]: { sampling: {} },
+						},
+					},
+				}),
+			),
+		)
+
+		expect(refused?.error).toEqual({
+			code: MCP_MISSING_CAPABILITY,
+			message: 'Server requires a client capability this request did not declare',
+			data: { requiredCapabilities: { sampling: {} } },
+		})
+		expect(refused?.result).toBeUndefined()
+		expect(allowed?.result).toMatchObject({
+			resultType: 'input_required',
+			inputRequests: { context: { method: 'sampling/createMessage', params: {} } },
+			requestState: 'prompt-state',
+		})
 	})
 
 	it('accepts a string, refuses a non-string before lookup, and maps a missing prompt', async () => {

@@ -378,7 +378,7 @@ export function createCalculatorServer(): MCPServerInterface {
  * the server writes into it intact. The registry is a parameter because the tools a
  * continuation scenario needs belong to that scenario, not to the input configuration.
  *
- * The `elicit` selector answers on the round it can tell apart: a first round arrives with no
+ * The `selector` answers on the round it can tell apart: a first round arrives with no
  * response and receives the approval question, and a retry arrives carrying one and receives
  * `undefined`, which is what lets the tool run.
  *
@@ -402,7 +402,7 @@ export function createInputServer(tools: ToolManagerInterface): MCPServerInterfa
 			},
 			ttl: 60_000,
 			principal: () => 'operator-1',
-			round: ({ responses }) =>
+			selector: ({ responses }) =>
 				responses === undefined
 					? {
 							requests: {
@@ -571,6 +571,15 @@ export class MemoryResourceManager implements MCPResourceManagerInterface {
 		this.#options.push(options)
 		if (params.uri === 'memory://resource/input') {
 			return { resultType: 'input_required', requestState: 'resource-state' }
+		}
+		// The arm that ASKS the client something. The carrier-only arm above asks nothing, so
+		// only this one reaches the server's capability gate.
+		if (params.uri === 'memory://resource/round') {
+			return {
+				resultType: 'input_required',
+				inputRequests: { workspace: { method: 'roots/list' } },
+				requestState: 'resource-state',
+			}
 		}
 		return this.#records.get(params.uri)
 	}
