@@ -155,6 +155,7 @@ const ANNOTATED_TOOLS = {
 		resultType: 'complete',
 		ttlMs: 0,
 		cacheScope: 'private',
+		nextCursor: 'page-2',
 		tools: [
 			{
 				name: 'valid_tool',
@@ -187,6 +188,35 @@ const CALL_METADATA = {
 	'io.modelcontextprotocol/clientCapabilities': {},
 }
 
+// A listing that advertises one annotated tool, and the fresh listing that no longer carries
+// it. A `tools/list` sent with no `cursor` REPLACES what the caller was told, so the second
+// of these leaves the transport with nothing to project for `gone`. The Node face pins the
+// same interleaving, plus the continuation half.
+const GONE_LISTING = {
+	jsonrpc: '2.0',
+	id: 1,
+	result: {
+		resultType: 'complete',
+		ttlMs: 0,
+		cacheScope: 'private',
+		tools: [
+			{
+				name: 'gone',
+				inputSchema: {
+					type: 'object',
+					properties: { region: { type: 'string', 'x-mcp-header': 'Region' } },
+				},
+			},
+		],
+	},
+}
+
+const EMPTY_LISTING = {
+	jsonrpc: '2.0',
+	id: 2,
+	result: { resultType: 'complete', ttlMs: 0, cacheScope: 'private', tools: [] },
+}
+
 describe('HTTPClientTransport — the x-mcp-header contract', () => {
 	it('excludes an invalidly annotated tool and reports the exclusion on error', async () => {
 		const messages: JSONRPCMessage[] = []
@@ -212,7 +242,11 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 		const tools = delivered.result['tools']
 		if (!Array.isArray(tools)) throw new Error('the delivered result carries no tool array')
 		expect(tools.map((tool) => (isRecord(tool) ? tool['name'] : undefined))).toEqual(['valid_tool'])
+		// The rest of the result travels through untouched — the cache stamps a caller reads
+		// freshness from, and the cursor it pages with.
 		expect(delivered.result['resultType']).toBe('complete')
+		expect(delivered.result['ttlMs']).toBe(0)
+		expect(delivered.result['nextCursor']).toBe('page-2')
 		expect(faults).toHaveLength(1)
 		expect(String(faults[0])).toContain('invalid_duplicate_diff_case')
 	})
@@ -272,6 +306,45 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 		const called = headers[0]
 		if (called === undefined) throw new Error('the transport issued no call')
 		expect(called.get('mcp-name')).toBe('valid_tool')
+		expect(called.get('mcp-param-region')).toBeNull()
+	})
+
+	it('projects nothing for a tool a later cursorless listing no longer carries', async () => {
+		const headers: Headers[] = []
+		let issued = 0
+		const transport = new HTTPClientTransport({
+			url: 'http://127.0.0.1:1/mcp',
+			fetch: (_input, init) => {
+				headers.push(new Headers(init?.headers))
+				issued += 1
+				if (issued === 1) return Promise.resolve(Response.json(GONE_LISTING))
+				if (issued === 2) return Promise.resolve(Response.json(EMPTY_LISTING))
+				return Promise.resolve(new Response(null, { status: 202 }))
+			},
+		})
+
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/list',
+			params: { _meta: CALL_METADATA },
+		})
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 2,
+			method: 'tools/list',
+			params: { _meta: CALL_METADATA },
+		})
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 3,
+			method: 'tools/call',
+			params: { name: 'gone', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+		})
+
+		const called = headers[2]
+		if (called === undefined) throw new Error('the transport issued no call')
+		expect(called.get('mcp-name')).toBe('gone')
 		expect(called.get('mcp-param-region')).toBeNull()
 	})
 })

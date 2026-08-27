@@ -1922,6 +1922,15 @@ export type MCPServerEventMap = {
 	 * inbound traffic. Only SCALARS are reported: nothing read out of the request graph
 	 * escapes here, so a listener can never observe a value the ownership seam has not yet
 	 * bounded.
+	 *
+	 * Not every reported invocation arrived from a peer. A modern `tools/call` reaching the
+	 * HTTP POST handler (`createMCPPostHandler`) reports the SYNTHETIC `tools/list` that
+	 * handler dispatches to read the called tool's `x-mcp-header` annotations, ahead of the
+	 * call itself. Each carries the RESERVED id `0`, and one fires per page the handler
+	 * walks, up to {@link MCP_LOOKUP_PAGES}. So an observer accounting for inbound traffic
+	 * subtracts a `('tools/list', 0, 'modern')` that precedes a `tools/call`, and one
+	 * tracing the server's own work keeps it. The id is reserved by convention rather than
+	 * enforced: a peer sending its own `tools/list` under id `0` is not told apart here.
 	 */
 	readonly request: readonly [method: string, id: JSONRPCId | undefined, era: MCPEra]
 	/**

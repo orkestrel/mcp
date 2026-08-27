@@ -2104,6 +2104,7 @@ Passing a legacy revision to
 | `MCP_SENTINEL_SUFFIX`                | const | `'?='` — the sentinel's closing marker.                                                                              |
 | `MCP_PARAM_PREFIX`                   | const | `'Mcp-Param-'` — the field-name prefix an `x-mcp-header` annotation projects a tool argument onto.                   |
 | `MCP_HEADER_ANNOTATION`              | const | `'x-mcp-header'` — the tool-schema key naming the header one parameter projects into.                                |
+| `MCP_LOOKUP_PAGES`                   | const | `8` — the `tools/list` pages one modern `tools/call` walks to reach its own annotations.                             |
 | `MCP_HEADER_MISMATCH`                | const | `-32020` — required HTTP metadata does not match the request body.                                                   |
 | `MCP_MISSING_CAPABILITY`             | const | `-32021` — the GENERIC undeclared-client-capability code; `data.requiredCapabilities` names which one.               |
 | `MCP_UNSUPPORTED_VERSION`            | const | `-32022` — the request names an unsupported protocol revision.                                                       |
@@ -2524,10 +2525,25 @@ mutates cannot leave the validation reading a table that no longer holds. A reco
 header that is absent while the body supplies its value, one whose payload is not a valid
 Base64 sentinel, one whose decoded value disagrees, and one asserting a value the body omits
 are each HTTP `400` + `-32020`. An `integer` parameter compares numerically. A
-`Mcp-Param-*` name no served definition annotates is forwarded untouched. The cost is one
-extra in-memory `tools/list` dispatch per `tools/call`; a consumer that replaced
-`tools/list` with an expensive or held-open handler pays for it there, and a held-open
+`Mcp-Param-*` name no served definition annotates is forwarded untouched. A held-open
 answer is released and read as no definition.
+
+That dispatch follows `nextCursor` until it reaches the named tool or the answer carries no
+cursor, bounded by `MCP_LOOKUP_PAGES` pages. The built-in `tools/list` answers the whole
+registry on one page and never reaches the second, so the bound binds a consumer that
+replaced `tools/list` with a paging handler. **The residual limit:** a definition further in
+than that bound reads as no definition, so its `Mcp-Param-*` headers are forwarded
+untouched — the answer an unannotated name receives, which is also the answer a client
+forging them for such a tool receives. Page a replacement listing coarsely enough to keep
+every annotated tool inside the bound. The cost is one in-memory `tools/list` dispatch per
+page walked, per `tools/call`; a consumer whose replacement is expensive or held-open pays
+for it there.
+
+Each of those dispatches is observable. The synthetic `tools/list` fires the server's
+`request` event with the reserved id `0` ahead of the `tools/call`'s own, so an observer
+accounting for inbound traffic subtracts a `('tools/list', 0, 'modern')` that precedes a
+`tools/call`. The id is reserved by convention rather than enforced: a peer sending its own
+`tools/list` under id `0` is not told apart on that event.
 
 Headerless
 legacy `initialize` is accepted; a headerless post-initialize legacy request is
@@ -4344,10 +4360,11 @@ caller has already been told failed, under a table the caller never saw, and the
 is the wrong layer to decide that a second invocation of somebody's tool is safe. **What it
 costs:** against a server that changes tool annotations mid-connection, one call fails with
 `-32020` that a retry would have carried. **The consumer's obligation:** call `tools()` again
-and retry the call; the transport re-caches from that listing and the next call projects the
-current headers. **Closer:** a retry policy owned by `MCPClient` rather than by a transport,
-with the caller able to decline it — not scheduled, and it needs the per-request options seam
-the entries above name.
+and retry the call. That listing carries no `cursor`, so the transport REPLACES its table
+with it: the next call projects the current headers for a tool the listing still advertises,
+and projects nothing for one it no longer advertises. **Closer:** a retry policy owned by
+`MCPClient` rather than by a transport, with the caller able to decline it — not scheduled,
+and it needs the per-request options seam the entries above name.
 
 **`Mcp-Param-*` / `x-mcp-header` client projection — satisfied, without widening the shared
 transport contract.** An HTTP client MUST project tool arguments annotated with
@@ -4362,7 +4379,12 @@ from that result and projects a later `tools/call` from the cache plus the call'
 arguments. `MCPClientTransportInterface` is unchanged, and stdio, WebSocket, and
 `MessagePort` are untouched — the annotations bind Streamable HTTP alone. A `tools/call` for
 a tool this transport never carried a listing for projects nothing, because inventing a
-lookup is how a client sends a header the peer never advertised.
+lookup is how a client sends a header the peer never advertised. The SENT request decides
+whether a delivered page joins that table or replaces it: a `tools/list` carrying no
+`cursor` is a fresh listing and CLEARS the table before caching its page, while a
+continuation carrying the cursor the previous page handed back accumulates onto it. So a
+tool a fresh listing omits stops projecting, and a tool on an earlier page of one paged
+listing keeps projecting.
 
 **Tool-invocation rate limiting — not satisfied, and no unit will close it.**
 2025-11-25's `server/tools` § Security Considerations binds a server to validate tool
@@ -4778,6 +4800,9 @@ in request`, no `as`) — is HTTP **400** with a JSON-RPC error BODY carrying no
     value disagrees, and one asserting a value the body omits. An `integer` parameter
     compares numerically. A `MCP_PARAM_PREFIX` name no served definition annotates is
     forwarded untouched, and a definition whose annotations are invalid recognizes none.
+    The lookup follows `nextCursor` through at most `MCP_LOOKUP_PAGES` pages, so a
+    replacement `tools/list` that pages the named tool further in than that recognizes
+    none either; each page dispatched fires the `request` event under the reserved id `0`.
     Headerless `initialize` is accepted; a live-session legacy request uses its
     pinned negotiated revision; every other headerless request is **400** +
     `-32020`. A request without `Origin` is allowed; a canonical `localhost`, `[::1]`,
@@ -4938,7 +4963,8 @@ application/json` and an `Accept` of BOTH `application/json` and
     reported on `error` naming the tool; a later `tools/call` for a cached tool carries the
     `MCP_PARAM_PREFIX` headers `buildHeaderProjection` derives from that table and the
     call's own `arguments`, and a `tools/call` for a tool no listing carried projects
-    nothing. The captured
+    nothing. A `tools/list` sent with no `cursor` REPLACES that table with its own page; one
+    sent with a `cursor` accumulates onto it. The captured
     headers are merged before `options.headers`, so a caller-supplied key wins.
 16. **The WebSocket transport is the full-duplex ingress over the spine
     upgrade seam (`src/server`).** `createWebSocketServer(mcp, options)`
@@ -5209,9 +5235,10 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     and `MCP_METHOD_HEADER` from the body, plus `MCP_NAME_HEADER` only for
     `tools/call` through `encodeSentinel`; legacy requests carry only the captured
     negotiated protocol. It runs the SAME SEP-2243 `x-mcp-header` contract the Node face's
-    clause states — cache the annotations a delivered `tools/list` result carries, drop each
-    invalidly annotated definition and report it on `error`, project a later `tools/call`'s
-    own `arguments` onto `MCP_PARAM_PREFIX` headers.
+    clause states — cache the annotations a delivered `tools/list` result carries, replace
+    that cache on a listing sent with no `cursor` and accumulate onto it on one sent with a
+    `cursor`, drop each invalidly annotated definition and report it on `error`, project a
+    later `tools/call`'s own `arguments` onto `MCP_PARAM_PREFIX` headers.
     An `application/json` reply is narrowed with `parseJSONRPCMessage`, a
     `text/event-stream` reply is decoded with the browser face's OWN
     `readEventStream` (`@orkestrel/sse`, the same decode shape as

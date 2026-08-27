@@ -20,6 +20,7 @@ import {
 	MCP_MODERN_VERSION,
 	MCP_FALLBACK_VERSION,
 	MCP_HANDSHAKE_VERSION,
+	MCP_LOOKUP_PAGES,
 } from '@src/core'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
@@ -989,24 +990,46 @@ describe('createMCPPostHandler', () => {
 // over a real MCPServer and a real ToolManager. The annotated tool lives here rather than in
 // `tests/setup.ts` because no other suite drives an annotated definition.
 
+const ROUTE_SCHEMA = {
+	type: 'object',
+	properties: {
+		value: { type: 'string', 'x-mcp-header': 'value' },
+		count: { type: 'integer', 'x-mcp-header': 'Count' },
+		note: { type: 'string' },
+	},
+}
+
 function createAnnotatedServer(): MCPServerInterface {
 	const tools = createToolManager()
 	tools.add(
 		createTool({
 			name: 'route',
 			description: 'Echo the routed arguments back to the caller.',
-			parameters: {
-				type: 'object',
-				properties: {
-					value: { type: 'string', 'x-mcp-header': 'value' },
-					count: { type: 'integer', 'x-mcp-header': 'Count' },
-					note: { type: 'string' },
-				},
-			},
+			parameters: ROUTE_SCHEMA,
 			execute: (values) => values,
 		}),
 	)
 	return createMCPServer({ identity: { name: 'router', version: '1.0.0' }, tools })
+}
+
+// A consumer that replaced `tools/list` with a handler paging ONE definition per page — the
+// documented `methods.add` seam. `route` sits on the page at `depth`, so the header lookup
+// reaches its annotations only by following `nextCursor` that far.
+function createPagedServer(depth: number): MCPServerInterface {
+	const server = createAnnotatedServer()
+	server.methods.add('tools/list', async (request) => {
+		const cursor = request.params?.['cursor']
+		const page = typeof cursor === 'string' ? Number(cursor) : 0
+		const listed =
+			page === depth
+				? { name: 'route', inputSchema: ROUTE_SCHEMA }
+				: { name: `filler_${page}`, inputSchema: { type: 'object', properties: {} } }
+		return buildJSONRPCResult(request.id, {
+			tools: [listed],
+			...(page === depth ? {} : { nextCursor: String(page + 1) }),
+		})
+	})
+	return server
 }
 
 async function callAnnotated(
@@ -1014,7 +1037,16 @@ async function callAnnotated(
 	headers: Readonly<Record<string, string>>,
 	args: Readonly<Record<string, unknown>>,
 ): Promise<Response> {
-	const handler = createMCPPostHandler(createAnnotatedServer(), { streaming: false })
+	return await callTool(createAnnotatedServer(), name, headers, args)
+}
+
+async function callTool(
+	server: MCPServerInterface,
+	name: string,
+	headers: Readonly<Record<string, string>>,
+	args: Readonly<Record<string, unknown>>,
+): Promise<Response> {
+	const handler = createMCPPostHandler(server, { streaming: false })
 	return await handler(
 		new Request('http://localhost/mcp', {
 			method: 'POST',
@@ -1142,6 +1174,52 @@ describe('createMCPPostHandler — Mcp-Param headers validated against the reque
 		expect(body.error).toEqual({ code: -32020, message: test.message })
 		expect(body.error).not.toHaveProperty('data')
 		expect(test.message).not.toContain('client-supplied-value')
+	})
+
+	it('refuses a forged header for a tool a replacement listing pages onto page two', async () => {
+		const response = await callTool(
+			createPagedServer(1),
+			'route',
+			{ 'Mcp-Param-value': 'client-supplied-value' },
+			{ value: 'Hello' },
+		)
+		const body = await response.json()
+
+		// The definition is reachable only through `nextCursor`, so a lookup reading page one
+		// alone would recognize no `value` parameter and forward the forgery untouched.
+		expect(response.status).toBe(400)
+		expect(body.error).toEqual({
+			code: -32020,
+			message: "Mcp-Param-value header does not match the request body value at 'value'.",
+		})
+	})
+
+	it('admits a matching header for a tool a replacement listing pages onto page two', async () => {
+		const response = await callTool(
+			createPagedServer(1),
+			'route',
+			{ 'Mcp-Param-value': 'Hello' },
+			{ value: 'Hello' },
+		)
+		const body = await response.json()
+
+		expect(response.status).toBe(200)
+		expect(body.error).toBeUndefined()
+	})
+
+	it('forwards a header unrecognized for a tool paged past the walk bound', async () => {
+		const response = await callTool(
+			createPagedServer(MCP_LOOKUP_PAGES),
+			'route',
+			{ 'Mcp-Param-value': 'client-supplied-value' },
+			{ value: 'Hello' },
+		)
+		const body = await response.json()
+
+		// The bound is the residual limit: a definition further in than the walk reaches reads
+		// as no definition, exactly as a name no served definition annotates does.
+		expect(response.status).toBe(200)
+		expect(body.error).toBeUndefined()
 	})
 
 	it('recognizes no parameter for a tool this server serves no definition for', async () => {

@@ -261,12 +261,20 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 	// which is this transport's observation channel for a contained fault a `send` swallows.
 	// Everything else in the result — the cache stamps, the metadata, the valid siblings —
 	// travels through unchanged.
+	//
+	// The SENT request decides whether this page joins the table or replaces it. A
+	// `tools/list` carrying no `cursor` is a FRESH listing, so the table is cleared before
+	// this page is cached: what the caller has now been told is this listing and nothing
+	// earlier. A continuation carries the cursor the previous page handed back, so its page
+	// accumulates onto the ones before it. Without the split, a tool the fresh listing OMITS
+	// keeps projecting headers from a listing the caller has already been told is superseded.
 	#select(message: JSONRPCMessage, sent: JSONRPCMessage): JSONRPCMessage {
 		if (!isModernRequest(sent) || sent.method !== 'tools/list') return message
 		if (!isJSONRPCResponse(message) || message.error !== undefined) return message
 		const result = message.result
 		const listed = isRecord(result) ? result['tools'] : undefined
 		if (!isRecord(result) || !isArray(listed)) return message
+		if (sent.params?.['cursor'] === undefined) this.#parameters.clear()
 		const kept: unknown[] = []
 		for (const tool of listed) {
 			if (!isRecord(tool) || !isString(tool['name'])) {

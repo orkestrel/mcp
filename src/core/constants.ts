@@ -107,6 +107,22 @@ export const MCP_PARAM_PREFIX = 'Mcp-Param-'
  */
 export const MCP_HEADER_ANNOTATION = 'x-mcp-header'
 
+/**
+ * The `tools/list` pages one modern `tools/call` walks to reach its own annotations.
+ *
+ * @remarks
+ * The HTTP POST handler reads a called tool's {@link MCP_HEADER_ANNOTATION} annotations by
+ * dispatching `tools/list` fresh on every `tools/call`, following `nextCursor` until the
+ * named tool is found or the answer carries no cursor. The walk is bounded because its cost
+ * is paid per call: at a page size of 100 this bound reaches 800 definitions, and a consumer
+ * whose replacement `tools/list` pages more finely than that pays the extra dispatches on
+ * every call it serves. The built-in listing answers the whole registry on one page and
+ * never reaches the second. A definition further in than the walk reaches reads as no
+ * definition, so its {@link MCP_PARAM_PREFIX} headers are forwarded untouched — the same
+ * answer a name no served definition annotates receives.
+ */
+export const MCP_LOOKUP_PAGES = 8
+
 /** MCP reserved error: required HTTP metadata does not match the request body. */
 export const MCP_HEADER_MISMATCH = -32020
 

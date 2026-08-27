@@ -6,6 +6,7 @@ import {
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_PARSE_ERROR,
 	MCP_HEADER_MISMATCH,
+	MCP_LOOKUP_PAGES,
 	MCP_UNSUPPORTED_VERSION,
 	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
 	buildHeaderParameters,
@@ -17,7 +18,7 @@ import {
 	parseRequestContext,
 	parseJSONRPCMessage,
 } from '@src/core'
-import { isString } from '@orkestrel/contract'
+import { isRecord, isString } from '@orkestrel/contract'
 import { openStream } from '@orkestrel/server'
 import {
 	MCP_PROTOCOL_VERSION_HEADER,
@@ -136,17 +137,46 @@ export function createMCPPostHandler<TState = unknown>(
 		// so a consumer that replaced `tools/list` with a stream refuses nothing.
 		const called = invocation.params?.['name']
 		if (era === 'modern' && invocation.method === 'tools/call' && isString(called)) {
-			const answer = await mcp.dispatch({
-				jsonrpc: '2.0',
-				// The id never leaves this handler: nothing correlates against it, and the answer is
-				// read here and discarded.
-				id: 0,
-				method: 'tools/list',
-				params: { _meta: invocation.params?.['_meta'] },
-			})
 			let parameters: readonly MCPHeaderParameter[] = []
-			if (Symbol.asyncIterator in answer) answer.stop()
-			else parameters = buildHeaderParameters(extractToolSchema(answer, called)) ?? []
+			let cursor: string | undefined = undefined
+			// A replacement `tools/list` may page, so the named tool is not necessarily on the
+			// page a cursorless dispatch answers, and a lookup that read that page alone would
+			// forward a forged header for every tool further in. The walk follows `nextCursor`
+			// until the definition is found or the answer carries none, bounded by
+			// `MCP_LOOKUP_PAGES` because every page costs one in-memory dispatch on every
+			// `tools/call`. A cap hit reads as no definition — today's answer for an
+			// unrecognized name — rather than as a refusal, so a deep replacement listing
+			// degrades exactly as an unannotated tool does.
+			for (let page = 0; page < MCP_LOOKUP_PAGES; page += 1) {
+				const answer = await mcp.dispatch({
+					jsonrpc: '2.0',
+					// The id never leaves this handler: nothing correlates against it, and the answer
+					// is read here and discarded. It is RESERVED rather than arbitrary so an observer
+					// on the server's `request` event can tell this synthetic listing from a peer's.
+					id: 0,
+					method: 'tools/list',
+					params: {
+						_meta: invocation.params?.['_meta'],
+						...(cursor === undefined ? {} : { cursor }),
+					},
+				})
+				if (Symbol.asyncIterator in answer) {
+					answer.stop()
+					break
+				}
+				const schema = extractToolSchema(answer, called)
+				if (schema !== undefined) {
+					parameters = buildHeaderParameters(schema) ?? []
+					break
+				}
+				// Annotated `unknown` rather than inferred: the walk's next cursor is read out of
+				// `answer`, and `answer`'s own dispatch reads `cursor`, so an inferred local here
+				// makes the two circular and `tsc` reports `answer` as implicitly `any`.
+				const listing: unknown = answer.result
+				const next: unknown = isRecord(listing) ? listing['nextCursor'] : undefined
+				if (!isString(next)) break
+				cursor = next
+			}
 			const refusal = inferParameterRefusal(request, parameters, invocation.params?.['arguments'])
 			if (refusal !== undefined) {
 				return Response.json(buildJSONRPCError(id, MCP_HEADER_MISMATCH, refusal), {
