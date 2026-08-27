@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/mcp",
-	"version": "0.0.25",
+	"version": "0.0.26",
 	"description": "A typed Model Context Protocol client/server with pluggable HTTP, WebSocket, and stdio transports. Part of the @orkestrel line.",
 	"keywords": [
 		"json-rpc",
@@ -97,7 +97,7 @@
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.13",
 		"@orkestrel/emitter": "^0.0.8",
-		"@orkestrel/process": "^0.0.6",
+		"@orkestrel/process": "^0.0.7",
 		"@orkestrel/sse": "^0.0.5",
 		"@orkestrel/tool": "^0.0.12",
 		"@orkestrel/websocket": "^0.0.10"
@@ -105,11 +105,11 @@
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.0",
 		"@modelcontextprotocol/conformance": "0.2.0-alpha.10",
-		"@orkestrel/guide": "^0.0.14",
+		"@orkestrel/guide": "^0.0.15",
 		"@orkestrel/probe": "^0.0.9",
-		"@orkestrel/router": "^0.0.11",
+		"@orkestrel/router": "^0.0.12",
 		"@orkestrel/scaffold": "^0.0.57",
-		"@orkestrel/server": "^0.0.15",
+		"@orkestrel/server": "^0.0.16",
 		"@orkestrel/test": "^0.0.11",
 		"@types/node": "^26.4.0",
 		"@vitest/browser-playwright": "^4.1.11",
@@ -122,8 +122,8 @@
 		"vitest": "^4.1.11"
 	},
 	"peerDependencies": {
-		"@orkestrel/router": "^0.0.11",
-		"@orkestrel/server": "^0.0.15"
+		"@orkestrel/router": "^0.0.12",
+		"@orkestrel/server": "^0.0.16"
 	},
 	"engines": {
 		"node": ">=22.12.0"
