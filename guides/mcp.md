@@ -23,8 +23,9 @@
 > **The dispatch core is transport-agnostic and provider-agnostic.** `MCPServer`
 > and `MCPClient` live in [`src/core`](../src/core) and import only siblings —
 > JSON-RPC types, `@orkestrel/tool`'s tool registry, `@orkestrel/emitter`'s
-> observable surface, `@orkestrel/contract`'s guards. No HTTP, no WebSocket, no
-> stdio, and no `as`: every value off the wire is narrowed by a total guard. The
+> observable surface, `@orkestrel/contract`'s guards, `@orkestrel/codec`'s Base64
+> coding. No HTTP, no WebSocket, no stdio, and no `as`: every value off the wire is
+> narrowed by a total guard. The
 > server's entry points are `dispatch` and `handle` — `dispatch` runs an already-parsed
 > `JSONRPCInvocation`, resolving a `JSONRPCResponse` for a `JSONRPCRequest` and
 > `undefined` for a `JSONRPCNotification` (its overloads say exactly that, so
@@ -140,7 +141,13 @@ form and leaves every other value literal; `decodeSentinel` reads it back, exclu
 optional whitespace first per RFC 9110 § 5.5. The server decodes before comparing, so an
 encoded header still matches its body. A value wearing the markers whose payload is not
 canonical Base64 over well-formed UTF-8 is refused rather than read as a literal, and the
-refusal is the same HTTP `400` + `-32020`.
+refusal is the same HTTP `400` + `-32020`. `@orkestrel/codec`'s `decodeBase64` owns that
+grammar, so the payload is held to the RFC 4648 § 4 canonical spelling: a payload leaving a
+non-zero bit in the sextet its padding discards is a second spelling of a byte and refuses,
+which makes `=?base64?QR==?=` invalid where `=?base64?QQ==?=` carries the byte it reached
+for. `isStandardBase64` is a wider and separate rule that names JSON Schema `byte`
+membership for the blob, image, and audio content a peer sends; it does not govern this
+payload.
 
 Use the client and HTTP transport together and none of that wire anatomy reaches the
 call site — the transport derives all reserved metadata and headers:
@@ -4811,9 +4818,9 @@ JSON.stringify(value) }], structuredContent: value }`, carrying the value unchan
    finite integers. `parseJSONRPCMessage` returns a frozen owned snapshot;
    every non-`undefined` output satisfies `isJSONRPCMessage` and shares no caller-owned graph.
 9. **The CORE is provider-agnostic, no transport.** `src/core` imports ONLY
-   `@orkestrel/emitter`, `@orkestrel/tool`, and `@orkestrel/contract` (plus,
-   for the client's per-request deadline, `AbortSignal.timeout`) — never
-   `@orkestrel/server`, `@orkestrel/router`, `@orkestrel/sse`, or
+   `@orkestrel/emitter`, `@orkestrel/tool`, `@orkestrel/contract`, and
+   `@orkestrel/codec` (plus, for the client's per-request deadline,
+   `AbortSignal.timeout`) — never `@orkestrel/server`, `@orkestrel/router`, `@orkestrel/sse`, or
    `@orkestrel/websocket` — and carries no transport, no HTTP, and no model.
    Both the dispatch core (the server) AND the client live here,
    transport-abstract; every transport lives ONE layer out in `src/server`

@@ -1767,6 +1767,13 @@ describe('decodeSentinel — the value a standard header carries', () => {
 		expect(decodeSentinel('=?base64?AAAA?=BBBB?=')).toBeUndefined()
 	})
 
+	it('refuses a sentinel whose payload sets a bit the padding discards', () => {
+		// `QR==` and `QQ==` reach for the same byte, but only `QQ==` zeroes the sextet the
+		// padding drops, so the canonical grammar admits one spelling of that byte.
+		expect(decodeSentinel('=?base64?QR==?=')).toBeUndefined()
+		expect(decodeSentinel('=?base64?QQ==?=')).toBe('A')
+	})
+
 	it('refuses a sentinel whose payload is not UTF-8', () => {
 		expect(decodeSentinel('=?base64?/w==?=')).toBeUndefined()
 	})

@@ -32,6 +32,7 @@ import type {
 	MCPSubscriptionResult,
 	MCPSubscriptionResultMetaObject,
 } from './types.js'
+import { decodeBase64, encodeBase64 } from '@orkestrel/codec'
 import {
 	attempt,
 	cloneJSONRecord,
@@ -73,7 +74,6 @@ import {
 	isMCPMetaObject,
 	isMCPTaskNotification,
 	isMCPTaskResult,
-	isStandardBase64,
 } from './validators.js'
 
 /**
@@ -1202,13 +1202,20 @@ export function decodeBoundedMessage(
  * The sentinel format is `=?base64?{Base64OfUTF8}?=`, spelled once as
  * {@link MCP_SENTINEL_PREFIX} and {@link MCP_SENTINEL_SUFFIX} and read from there by both
  * directions of the codec.
- * The markers alone decide whether a value is a sentinel: a value carrying both is one, and
- * its payload is then held to {@link import('./validators.js').isStandardBase64} — the one
- * canonical-Base64 membership rule this package owns — and to well-formed UTF-8. A malformed
+ * The markers alone decide whether a value is a sentinel: a value carrying the prefix and the
+ * suffix is one, and its payload is then held to `decodeBase64` from `@orkestrel/codec` — the
+ * canonical RFC 4648 § 4 grammar, which admits exactly one spelling per byte sequence — and to
+ * well-formed UTF-8. A payload leaving a non-zero bit in the sextet its padding discards is a
+ * second spelling of a byte, so it is refused: `=?base64?QR==?=` reaches for the byte
+ * `=?base64?QQ==?=` spells canonically, and only the canonical spelling decodes. A malformed
  * payload answers `undefined` rather than falling back to the literal, because the protocol
  * requires a server to REJECT invalid characters, and a fallback would admit the very value
  * the rule exists to refuse. A value missing either marker is a literal and comes back
  * unchanged.
+ *
+ * {@link import('./validators.js').isStandardBase64} is a wider and separate rule: it names
+ * JSON Schema `byte` membership for the blob, image, and audio content a peer sends, where
+ * this package receives liberally. It does not govern this payload.
  *
  * Optional whitespace is excluded first, per RFC 9110 § 5.5: a recipient parses a field value
  * with its surrounding spaces and horizontal tabs removed, so a peer that padded a plain value
@@ -1225,6 +1232,7 @@ export function decodeBoundedMessage(
  * decodeSentinel('=?base64?Y2Fmw6k=?=') // 'café'
  * decodeSentinel('  search  ') // 'search' — optional whitespace excluded
  * decodeSentinel('=?base64?SGVsbG8?=') // undefined — invalid padding
+ * decodeSentinel('=?base64?QR==?=') // undefined — a non-canonical spelling
  * ```
  */
 export function decodeSentinel(value: string): string | undefined {
@@ -1235,13 +1243,9 @@ export function decodeSentinel(value: string): string | undefined {
 		field.endsWith(MCP_SENTINEL_SUFFIX)
 	if (!marked) return field
 	const payload = field.slice(MCP_SENTINEL_PREFIX.length, field.length - MCP_SENTINEL_SUFFIX.length)
-	if (!isStandardBase64(payload)) return undefined
-	const decoded = attempt(() => {
-		const binary = atob(payload)
-		const bytes = new Uint8Array(binary.length)
-		for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
-		return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
-	})
+	const bytes = decodeBase64(payload)
+	if (bytes === undefined) return undefined
+	const decoded = attempt(() => new TextDecoder('utf-8', { fatal: true }).decode(bytes))
 	return decoded.success ? decoded.value : undefined
 }
 
@@ -1254,7 +1258,9 @@ export function decodeSentinel(value: string): string | undefined {
  * plain printable ASCII — every code point in `U+0020`–`U+007E`, the RFC 9110 field-value
  * range this package admits — and {@link decodeSentinel} gives it back unchanged. Every other
  * value travels wrapped in {@link MCP_SENTINEL_PREFIX} and {@link MCP_SENTINEL_SUFFIX}, the
- * same markers the decode recognizes a sentinel by.
+ * same markers the decode recognizes a sentinel by. `encodeBase64` from `@orkestrel/codec`
+ * spells the payload, so the wire form carries the canonical spelling {@link decodeSentinel}
+ * accepts.
  *
  * That one rule covers each row of the protocol's encoding table. A non-ASCII value and a
  * value carrying a control character fail the ASCII test. A value with leading or trailing
@@ -1273,9 +1279,8 @@ export function decodeSentinel(value: string): string | undefined {
  */
 export function encodeSentinel(value: string): string {
 	if (/^[ -~]*$/.test(value) && decodeSentinel(value) === value) return value
-	let binary = ''
-	for (const byte of new TextEncoder().encode(value)) binary += String.fromCharCode(byte)
-	return `${MCP_SENTINEL_PREFIX}${btoa(binary)}${MCP_SENTINEL_SUFFIX}`
+	const payload = encodeBase64(new TextEncoder().encode(value))
+	return `${MCP_SENTINEL_PREFIX}${payload}${MCP_SENTINEL_SUFFIX}`
 }
 
 /**

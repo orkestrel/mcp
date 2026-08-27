@@ -95,6 +95,7 @@
 		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup"
 	},
 	"dependencies": {
+		"@orkestrel/codec": "file:tmp/tarballs/orkestrel-codec-0.0.1.tgz",
 		"@orkestrel/contract": "^0.0.13",
 		"@orkestrel/emitter": "^0.0.8",
 		"@orkestrel/process": "^0.0.7",
