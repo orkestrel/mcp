@@ -217,6 +217,47 @@ const EMPTY_LISTING = {
 	result: { resultType: 'complete', ttlMs: 0, cacheScope: 'private', tools: [] },
 }
 
+// Two pages of ONE listing, the second requested with the cursor the first handed back. A
+// continuation ACCUMULATES, so both tools stay projectable.
+const FIRST_PAGE = {
+	jsonrpc: '2.0',
+	id: 1,
+	result: {
+		resultType: 'complete',
+		ttlMs: 0,
+		cacheScope: 'private',
+		nextCursor: 'page-2',
+		tools: [
+			{
+				name: 'paged_one',
+				inputSchema: {
+					type: 'object',
+					properties: { region: { type: 'string', 'x-mcp-header': 'Region' } },
+				},
+			},
+		],
+	},
+}
+
+const SECOND_PAGE = {
+	jsonrpc: '2.0',
+	id: 2,
+	result: {
+		resultType: 'complete',
+		ttlMs: 0,
+		cacheScope: 'private',
+		tools: [
+			{
+				name: 'paged_two',
+				inputSchema: {
+					type: 'object',
+					properties: { priority: { type: 'integer', 'x-mcp-header': 'Priority' } },
+				},
+			},
+		],
+	},
+}
+
 describe('HTTPClientTransport — the x-mcp-header contract', () => {
 	it('excludes an invalidly annotated tool and reports the exclusion on error', async () => {
 		const messages: JSONRPCMessage[] = []
@@ -346,5 +387,187 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 		if (called === undefined) throw new Error('the transport issued no call')
 		expect(called.get('mcp-name')).toBe('gone')
 		expect(called.get('mcp-param-region')).toBeNull()
+	})
+
+	// Overlapping listings: `send` opens an independent `fetch` per call, so two `tools/list`
+	// answers can arrive in the opposite order to their requests. The stub holds the first
+	// answer back to script exactly that arrival order — it answers with real `Response`
+	// objects and reimplements nothing this package owns. The Node face pins the same rows.
+	it('caches nothing from a listing a fresh one superseded before its answer arrived', async () => {
+		const headers: Headers[] = []
+		let issued = 0
+		let release: ((response: Response) => void) | undefined
+		const transport = new HTTPClientTransport({
+			url: 'http://127.0.0.1:1/mcp',
+			fetch: (_input, init) => {
+				headers.push(new Headers(init?.headers))
+				issued += 1
+				if (issued === 1) {
+					return new Promise<Response>((resolve) => {
+						release = resolve
+					})
+				}
+				if (issued === 2) return Promise.resolve(Response.json(EMPTY_LISTING))
+				return Promise.resolve(new Response(null, { status: 202 }))
+			},
+		})
+
+		// A continuation goes out first and its answer is held; the fresh cursorless listing
+		// sent behind it lands first and replaces the table.
+		const superseded = transport.send({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/list',
+			params: { cursor: 'page-2', _meta: CALL_METADATA },
+		})
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 2,
+			method: 'tools/list',
+			params: { _meta: CALL_METADATA },
+		})
+		if (release === undefined) throw new Error('the transport issued no continuation')
+		release(Response.json(SECOND_PAGE))
+		await superseded
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 3,
+			method: 'tools/call',
+			params: { name: 'paged_two', arguments: { priority: 3 }, _meta: CALL_METADATA },
+		})
+
+		const called = headers[2]
+		if (called === undefined) throw new Error('the transport issued no call')
+		expect(called.get('mcp-name')).toBe('paged_two')
+		expect(called.get('mcp-param-priority')).toBeNull()
+	})
+
+	// Withholding the cache is not withholding the answer. The caller still receives the
+	// superseded page with its invalid definition dropped and the exclusion still on `error`;
+	// only the projection table is left alone.
+	it('excludes and reports an invalid definition on a superseded listing it caches nothing from', async () => {
+		const headers: Headers[] = []
+		const messages: JSONRPCMessage[] = []
+		const faults: unknown[] = []
+		let issued = 0
+		let release: ((response: Response) => void) | undefined
+		const transport = new HTTPClientTransport({
+			url: 'http://127.0.0.1:1/mcp',
+			fetch: (_input, init) => {
+				headers.push(new Headers(init?.headers))
+				issued += 1
+				if (issued === 1) {
+					return new Promise<Response>((resolve) => {
+						release = resolve
+					})
+				}
+				if (issued === 2) return Promise.resolve(Response.json(EMPTY_LISTING))
+				return Promise.resolve(new Response(null, { status: 202 }))
+			},
+		})
+		transport.emitter.on('message', (message) => messages.push(message))
+		transport.emitter.on('error', (error) => faults.push(error))
+
+		const superseded = transport.send({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/list',
+			params: { cursor: 'page-2', _meta: CALL_METADATA },
+		})
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 2,
+			method: 'tools/list',
+			params: { _meta: CALL_METADATA },
+		})
+		if (release === undefined) throw new Error('the transport issued no continuation')
+		release(Response.json(ANNOTATED_TOOLS))
+		await superseded
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 3,
+			method: 'tools/call',
+			params: { name: 'valid_tool', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+		})
+
+		const delivered = messages[1]
+		if (delivered === undefined || !('result' in delivered) || !isRecord(delivered.result)) {
+			throw new Error('the transport delivered no superseded tools/list result')
+		}
+		const tools = delivered.result['tools']
+		if (!Array.isArray(tools)) throw new Error('the delivered result carries no tool array')
+		expect(tools.map((tool) => (isRecord(tool) ? tool['name'] : undefined))).toEqual(['valid_tool'])
+		expect(faults).toHaveLength(1)
+		expect(String(faults[0])).toContain('invalid_duplicate_diff_case')
+		// The page was delivered whole and cached not at all.
+		const called = headers[2]
+		if (called === undefined) throw new Error('the transport issued no call')
+		expect(called.get('mcp-param-region')).toBeNull()
+	})
+
+	it('keeps both pages projectable when a fresh listing and its own continuation overlap', async () => {
+		const headers: Headers[] = []
+		let issued = 0
+		let listing: ((response: Response) => void) | undefined
+		let continuation: ((response: Response) => void) | undefined
+		const transport = new HTTPClientTransport({
+			url: 'http://127.0.0.1:1/mcp',
+			fetch: (_input, init) => {
+				headers.push(new Headers(init?.headers))
+				issued += 1
+				if (issued === 1) {
+					return new Promise<Response>((resolve) => {
+						listing = resolve
+					})
+				}
+				if (issued === 2) {
+					return new Promise<Response>((resolve) => {
+						continuation = resolve
+					})
+				}
+				return Promise.resolve(new Response(null, { status: 202 }))
+			},
+		})
+
+		// Both pages of ONE listing are in flight together, and they answer in order.
+		const fresh = transport.send({
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'tools/list',
+			params: { _meta: CALL_METADATA },
+		})
+		const paged = transport.send({
+			jsonrpc: '2.0',
+			id: 2,
+			method: 'tools/list',
+			params: { cursor: 'page-2', _meta: CALL_METADATA },
+		})
+		if (listing === undefined || continuation === undefined) {
+			throw new Error('the transport issued no listing')
+		}
+		listing(Response.json(FIRST_PAGE))
+		await fresh
+		continuation(Response.json(SECOND_PAGE))
+		await paged
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 3,
+			method: 'tools/call',
+			params: { name: 'paged_one', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+		})
+		await transport.send({
+			jsonrpc: '2.0',
+			id: 4,
+			method: 'tools/call',
+			params: { name: 'paged_two', arguments: { priority: 3 }, _meta: CALL_METADATA },
+		})
+
+		const first = headers[2]
+		const second = headers[3]
+		if (first === undefined || second === undefined) {
+			throw new Error('the transport issued no call')
+		}
+		expect(first.get('mcp-param-region')).toBe('us-west1')
+		expect(second.get('mcp-param-priority')).toBe('3')
 	})
 })

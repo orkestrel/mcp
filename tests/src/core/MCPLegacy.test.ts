@@ -245,6 +245,18 @@ const cases: ReadonlyArray<readonly [string, JSONRPCInvocation, JSONRPCResponse 
 			error: { code: -32601, message: 'Method not found: unknown/method' },
 		},
 	],
+	// A method the MODERN era defines is refused by the legacy door for the same reason an
+	// invented one is: the decorator forwards only what legacy names, so `server/discover`
+	// reaches the same arm rather than a modern handler behind it.
+	[
+		'modern-method-not-found',
+		{ jsonrpc: '2.0', id: 22, method: 'server/discover' },
+		{
+			jsonrpc: '2.0',
+			id: 22,
+			error: { code: -32601, message: 'Method not found: server/discover' },
+		},
+	],
 	[
 		'malformed-null-id',
 		{ jsonrpc: '2.0', id: malformedId, method: 'ping' },

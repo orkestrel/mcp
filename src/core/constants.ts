@@ -160,10 +160,11 @@ export const DEFAULT_MCP_CACHE_TTL = 60_000
  * One MiB admits ordinary JSON-RPC requests and substantial tool arguments; 16 KiB admits
  * extension-rich modern metadata and signed multi-round state; four MiB admits substantial
  * JSON tool output without allowing an unconfigured service to serialize arbitrary process
- * memory; 64 metadata keys admits the reserved keys plus many extensions; 128 concurrent
- * streams admits a busy service while bounding retained producers; depth 32 admits ordinary
- * JSON documents while rejecting stack-hostile nesting. Frozen so callers cannot alter the
- * defaults observed by later servers.
+ * memory; 64 keys admits `_meta`'s reserved keys plus many extensions, and bounds a produced
+ * result's breadth by the same leaf; 128 concurrent streams admits a busy service while
+ * bounding retained producers; depth 32 admits ordinary JSON documents while rejecting
+ * stack-hostile nesting. Frozen so callers cannot alter the defaults observed by later
+ * servers.
  */
 export const DEFAULT_MCP_LIMITS = Object.freeze({
 	message: 1_048_576,

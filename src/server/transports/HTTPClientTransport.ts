@@ -93,8 +93,14 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 	// transport delivered. The annotations describe a call's own arguments, so the table a
 	// `tools/call` projects from is the one the caller was told about and nothing else.
 	readonly #parameters = new Map<string, readonly MCPHeaderParameter[]>()
+	// The listing lineage each `tools/list` send belongs to, stamped at send time and read back
+	// when its answer arrives. `send` opens an independent `fetch` per call, so two listings can
+	// answer in the opposite order to their requests; the stamp is what tells an answer from a
+	// superseded listing apart from one the current lineage is still owed.
+	readonly #stamps = new WeakMap<JSONRPCMessage, number>()
 	#session: string | undefined = undefined
 	#protocol: string | undefined = undefined
+	#generation = 0
 	#closed = false
 
 	constructor(options: HTTPClientTransportOptions) {
@@ -127,6 +133,7 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 	}
 
 	async send(message: JSONRPCMessage): Promise<void> {
+		this.#stamp(message)
 		const request = new AbortController()
 		this.#pending.add(request)
 		try {
@@ -134,6 +141,15 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 		} finally {
 			this.#pending.delete(request)
 		}
+	}
+
+	// Stamp a `tools/list` send with the listing lineage its answer may cache into, at SEND time:
+	// a cursorless listing starts the next lineage, and a continuation joins whichever one was
+	// current when it went out. Nothing else is stamped, because nothing else reaches the table.
+	#stamp(message: JSONRPCMessage): void {
+		if (!isModernRequest(message) || message.method !== 'tools/list') return
+		if (message.params?.['cursor'] === undefined) this.#generation += 1
+		this.#stamps.set(message, this.#generation)
 	}
 
 	// One request/response exchange under `signal`: `close` aborts it, and a `timeout` option
@@ -268,13 +284,21 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 	// earlier. A continuation carries the cursor the previous page handed back, so its page
 	// accumulates onto the ones before it. Without the split, a tool the fresh listing OMITS
 	// keeps projecting headers from a listing the caller has already been told is superseded.
+	//
+	// Arrival order decides nothing, because the SEND's own lineage stamp does. A listing another
+	// cursorless `tools/list` superseded before its answer arrived is DELIVERED whole — the
+	// exclusion and its `error` still apply — and caches nothing, so the table describes the
+	// latest fresh listing and its own continuations however overlapping answers interleave. A
+	// caller working from a superseded page projects nothing for its tools, which is the safe
+	// direction: the server's own bounded lookup stays the validation authority.
 	#select(message: JSONRPCMessage, sent: JSONRPCMessage): JSONRPCMessage {
 		if (!isModernRequest(sent) || sent.method !== 'tools/list') return message
 		if (!isJSONRPCResponse(message) || message.error !== undefined) return message
 		const result = message.result
 		const listed = isRecord(result) ? result['tools'] : undefined
 		if (!isRecord(result) || !isArray(listed)) return message
-		if (sent.params?.['cursor'] === undefined) this.#parameters.clear()
+		const current = this.#stamps.get(sent) === this.#generation
+		if (current && sent.params?.['cursor'] === undefined) this.#parameters.clear()
 		const kept: unknown[] = []
 		for (const tool of listed) {
 			if (!isRecord(tool) || !isString(tool['name'])) {
@@ -291,7 +315,7 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 				)
 				continue
 			}
-			this.#parameters.set(tool['name'], parameters)
+			if (current) this.#parameters.set(tool['name'], parameters)
 			kept.push(tool)
 		}
 		return { ...message, result: { ...result, tools: kept } }

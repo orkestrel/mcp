@@ -4458,7 +4458,9 @@ whether a delivered page joins that table or replaces it: a `tools/list` carryin
 `cursor` is a fresh listing and CLEARS the table before caching its page, while a
 continuation carrying the cursor the previous page handed back accumulates onto it. So a
 tool a fresh listing omits stops projecting, and a tool on an earlier page of one paged
-listing keeps projecting.
+listing keeps projecting. Arrival order cannot merge two listings into one table: a listing
+another cursorless `tools/list` supersedes before its answer arrives is still delivered to
+the caller, exclusions and all, and caches nothing.
 
 **The stdio client shuts a child down signal-first, not stdin-first — a declared SHOULD
 departure owned by another package.** The stdio page says a client SHOULD close the child's
@@ -5055,8 +5057,9 @@ application/json` and an `Accept` of BOTH `application/json` and
     `MCP_PARAM_PREFIX` headers `buildHeaderProjection` derives from that table and the
     call's own `arguments`, and a `tools/call` for a tool no listing carried projects
     nothing. A `tools/list` sent with no `cursor` REPLACES that table with its own page; one
-    sent with a `cursor` accumulates onto it. The captured
-    headers are merged before `options.headers`, so a caller-supplied key wins.
+    sent with a `cursor` accumulates onto it, and a listing another cursorless `tools/list`
+    supersedes before its answer arrives is delivered to the caller but never cached. The
+    captured headers are merged before `options.headers`, so a caller-supplied key wins.
 16. **The WebSocket transport is the full-duplex ingress over the spine
     upgrade seam (`src/server`).** `createWebSocketServer(mcp, options)`
     returns an `UpgradeHandler` (`@orkestrel/server`) to register with
@@ -5331,8 +5334,9 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     negotiated protocol. It runs the SAME SEP-2243 `x-mcp-header` contract the Node face's
     clause states — cache the annotations a delivered `tools/list` result carries, replace
     that cache on a listing sent with no `cursor` and accumulate onto it on one sent with a
-    `cursor`, drop each invalidly annotated definition and report it on `error`, project a
-    later `tools/call`'s own `arguments` onto `MCP_PARAM_PREFIX` headers.
+    `cursor`, deliver but never cache a listing another cursorless `tools/list` supersedes
+    before its answer arrives, drop each invalidly annotated definition and report it on
+    `error`, project a later `tools/call`'s own `arguments` onto `MCP_PARAM_PREFIX` headers.
     An `application/json` reply is narrowed with `parseJSONRPCMessage`, a
     `text/event-stream` reply is decoded with the browser face's OWN
     `readEventStream` (`@orkestrel/sse`, the same decode shape as
