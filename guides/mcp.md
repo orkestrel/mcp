@@ -4041,8 +4041,9 @@ release `package.json` pins as a development dependency — against specificatio
 recorded server-mode result is **102 passed / 8 failed**, the `dns-rebinding-protection`
 security regression guard (2 passed) included. `tests/conformance.test.ts` records that
 result scenario by scenario, and names each failing scenario with its cause:
-`server-stateless` (26 passed / 2 failed), whose probing call declares no client capabilities
-so the round it asks for is refused `-32021` over HTTP 400; and
+`server-stateless` (26 passed / 2 failed), whose SEP-2575 checks omit the body's `_meta` — or
+its `protocolVersion` — and expect `-32602`, while the shipped route reads the header through
+its legacy inference and answers `-32022`; and
 `http-custom-header-server-validation` (3 passed / 6 failed), where SEP-2243 wants a 400
 response and a `-32020` `HeaderMismatch` error for a mismatched or invalid `Mcp-Param`
 header while the shipped route accepts both and answers 200.
