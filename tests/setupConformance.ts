@@ -36,6 +36,7 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isFiniteNumber, isRecord, isString } from '@orkestrel/contract'
 import { createDispatcher } from '@orkestrel/router'
@@ -68,6 +69,44 @@ export const CONFORMANCE_TALLY = /^\S+ ([a-z0-9-]+): (\d+) passed, (\d+) failed$
 /** The runner's closing `Total: N passed, M failed` line. */
 export const CONFORMANCE_TOTAL = /^Total: (\d+) passed, (\d+) failed$/
 
+/** The scenario-name prefix marking the runner's OAuth family. */
+export const CONFORMANCE_AUTH = 'auth/'
+
+/** The `list` heading that opens the runner's client-scenario section. */
+export const CONFORMANCE_CLIENTS = /^Client scenarios/
+
+/** One `  - <scenario> [<revisions>]` entry inside a `list` section. */
+export const CONFORMANCE_LISTED = /^ {2}- (\S+) \[/
+
+/**
+ * Every client scenario the runner's own `list` reports as applicable at
+ * {@link CONFORMANCE_SPEC}, except the {@link CONFORMANCE_AUTH} family.
+ *
+ * @remarks
+ * The `auth/*` scenarios are EXCLUDED on purpose: each one drives an OAuth 2.1 client
+ * through discovery, dynamic registration, and a token grant, and this package ships no
+ * OAuth client at all. `createHTTPClientTransport` takes a `headers` record, so a consumer
+ * supplies its own bearer; the authorization flow that mints one is outside this package.
+ * Running those scenarios would measure a client this package does not publish.
+ *
+ * The set is written down rather than derived so the exclusion is a decision on the record.
+ * `tests/conformance.test.ts` compares it against what {@link parseConformanceClients} reads
+ * back from the runner, so a scenario the runner adds fails that comparison instead of
+ * disappearing from the run.
+ */
+export const CONFORMANCE_CLIENT_SCENARIOS: readonly string[] = Object.freeze([
+	'tools_call',
+	'request-metadata',
+	'sep-2322-client-request-state',
+	'http-standard-headers',
+	'http-custom-headers',
+	'http-invalid-tool-headers',
+	'json-schema-ref-no-deref',
+])
+
+/** The runner's per-scenario `Passed: N/D, M failed, W warnings` result line in client mode. */
+export const CONFORMANCE_OUTCOME = /^Passed: (\d+)\/\d+, (\d+) failed, (\d+) warnings$/
+
 // ── The runner's reported shape ──────────────────────────────────────────────
 
 /** One conformance scenario's tally, exactly as the runner's summary reports it. */
@@ -78,6 +117,28 @@ export interface ConformanceScenario {
 	readonly passed: number
 	/** Checks the scenario failed. */
 	readonly failed: number
+}
+
+/**
+ * One client scenario's outcome, exactly as the runner's per-scenario result block reports it.
+ *
+ * @remarks
+ * `warnings` has no counterpart in {@link ConformanceScenario} because the two modes report
+ * differently. The server-mode summary collapses each scenario to passed and failed, so a
+ * SHOULD-level check that reported WARNING is invisible there and shows up only as a row
+ * tallying neither. Client mode prints the warning count beside them, so this shape keeps it:
+ * the runner treats a warning as an overall failure, and a baseline that dropped the count
+ * would hide a check moving between WARNING and SUCCESS.
+ */
+export interface ConformanceOutcome {
+	/** The scenario identifier, such as `http-standard-headers`. */
+	readonly name: string
+	/** Checks the scenario passed. */
+	readonly passed: number
+	/** Checks the scenario failed. */
+	readonly failed: number
+	/** Checks the scenario reported at SHOULD level. */
+	readonly warnings: number
 }
 
 /** The parsed outcome of one whole conformance run. */
@@ -1669,4 +1730,142 @@ export async function executeConformance(url: string): Promise<ConformanceResult
 		)
 	}
 	return result
+}
+
+// ── The client under test ────────────────────────────────────────────────────
+
+/**
+ * Compose the command the runner spawns as the client under test.
+ *
+ * @remarks
+ * The runner splits `--command` on spaces and appends the scenario URL, so every token here
+ * must be space-free. That rules out `process.execPath`, whose usual Windows value sits
+ * under `Program Files`, and leaves the bare `node` the host resolves from `PATH`.
+ * `--experimental-strip-types` is passed because the driver is TypeScript: Node enables
+ * stripping by default from 22.18, and the manifest's `engines` floor is 22.12, so the flag
+ * covers the whole supported range and is accepted as a no-op above it.
+ *
+ * The driver imports the BUILT surface, which is the only client face a spawned `node`
+ * process can resolve. `dist/` must therefore exist before this runs. The gate chain builds
+ * before it tests, so `npm test` is satisfied; a standalone `npm run test:conformance` during
+ * development needs `npm run build:src` first.
+ *
+ * @returns The spawn command, driver path included
+ * @throws When the driver's path relative to the working directory contains a space, which
+ * the runner's own splitting cannot carry
+ */
+export function resolveConformanceDriver(): string {
+	const driver = fileURLToPath(new URL('./conformanceClient.ts', import.meta.url))
+	const command = relative(process.cwd(), driver).replaceAll('\\', '/')
+	if (command.includes(' ')) {
+		throw new Error(
+			`${CONFORMANCE_PACKAGE} splits its --command on spaces, and the driver resolves to ` +
+				`'${command}'. Run the conformance project from a directory whose path to ` +
+				`tests/conformanceClient.ts carries no space.`,
+		)
+	}
+	return `node --experimental-strip-types ${command}`
+}
+
+/**
+ * Read every client scenario name out of the runner's own `list` output.
+ *
+ * @remarks
+ * `list` prints one section per scenario family, each opening with its own heading and
+ * closing at the first line that is not an entry. This reads the client section alone, so a
+ * server or authorization-server scenario sharing a name never enters the answer.
+ *
+ * @param output - Everything `list` wrote
+ * @returns The client scenario names in the order the runner printed them, empty when it
+ * printed no client section
+ */
+export function parseConformanceClients(output: string): readonly string[] {
+	const names: string[] = []
+	let listing = false
+	for (const line of output.split(/\r?\n/)) {
+		if (!listing) {
+			listing = CONFORMANCE_CLIENTS.test(line)
+			continue
+		}
+		const matched = CONFORMANCE_LISTED.exec(line)
+		if (matched === null) break
+		const name = matched[1]
+		if (name !== undefined) names.push(name)
+	}
+	return names
+}
+
+/**
+ * Parse the runner's per-scenario result block from one client-mode run.
+ *
+ * @remarks
+ * Client mode prints no `=== SUMMARY ===` block for a single scenario. Its verdict is the
+ * one `Passed: N/D, M failed, W warnings` line, whose denominator is the passed-plus-failed
+ * total and carries nothing the three counts do not.
+ *
+ * @param name - The scenario the run drove
+ * @param output - Everything the runner wrote
+ * @returns The scenario's outcome, or `undefined` when it printed no result line
+ */
+export function parseConformanceOutcome(
+	name: string,
+	output: string,
+): ConformanceOutcome | undefined {
+	for (const line of output.split(/\r?\n/)) {
+		const matched = CONFORMANCE_OUTCOME.exec(line)
+		if (matched === null) continue
+		const passed = matched[1]
+		const failed = matched[2]
+		const warnings = matched[3]
+		if (passed === undefined || failed === undefined || warnings === undefined) continue
+		return {
+			name,
+			passed: Number.parseInt(passed, 10),
+			failed: Number.parseInt(failed, 10),
+			warnings: Number.parseInt(warnings, 10),
+		}
+	}
+	return undefined
+}
+
+/**
+ * Drive this package's own client through every scenario in
+ * {@link CONFORMANCE_CLIENT_SCENARIOS}.
+ *
+ * @remarks
+ * Each scenario runs as its own invocation rather than through `--suite`, for two reasons.
+ * The runner's suites are `all`, `core`, `extensions`, `backcompat`, `auth`, `metadata`,
+ * `draft`, and `sep-835`, and every one of them that reaches this package's scenarios also
+ * drags in the `auth/*` family this package excludes. And `--suite` runs its scenarios in
+ * parallel, so a hang reports as the whole suite rather than as the scenario that hung.
+ * Serial invocation costs a process launch per scenario and buys a per-scenario reading.
+ *
+ * The runner starts and stops each scenario's own server, so nothing here binds a port.
+ *
+ * @returns Every scenario's outcome, in {@link CONFORMANCE_CLIENT_SCENARIOS} order
+ * @throws When the runner produced no result line for a scenario, carrying everything it wrote
+ */
+export async function executeConformanceClient(): Promise<readonly ConformanceOutcome[]> {
+	const command = resolveConformanceDriver()
+	const outcomes: ConformanceOutcome[] = []
+	for (const scenario of CONFORMANCE_CLIENT_SCENARIOS) {
+		const output = await executeRunner([
+			'client',
+			'--command',
+			command,
+			'--scenario',
+			scenario,
+			'--spec-version',
+			CONFORMANCE_SPEC,
+		])
+		const outcome = parseConformanceOutcome(scenario, output)
+		if (outcome === undefined) {
+			throw new Error(
+				`${CONFORMANCE_PACKAGE} printed no result for client scenario ${scenario}. ` +
+					`Its output was:\n${output}`,
+			)
+		}
+		outcomes.push(outcome)
+	}
+	return outcomes
 }

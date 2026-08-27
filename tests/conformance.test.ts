@@ -4,10 +4,17 @@
 // dependency and the socket is local, so the run is hermetic and `npm test` gates it.
 
 import type { StartedServerInterface } from './setupServer.js'
-import type { ConformanceResult, ConformanceScenario } from './setupConformance.js'
+import type {
+	ConformanceOutcome,
+	ConformanceResult,
+	ConformanceScenario,
+} from './setupConformance.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { DEFAULT_MCP_PATH } from '@src/server'
 import {
+	CONFORMANCE_AUTH,
+	CONFORMANCE_CLIENT_SCENARIOS,
+	CONFORMANCE_SPEC,
 	TASK_SCHEMA_CAPABILITY_ROWS,
 	TASK_SCHEMA_CREATE_ROWS,
 	TASK_SCHEMA_DETAIL_ROWS,
@@ -21,7 +28,9 @@ import {
 	TASK_SCHEMA_SUBSCRIPTION_ROWS,
 	TASK_SCHEMA_TASK_ROWS,
 	executeConformance,
+	executeConformanceClient,
 	executeRunner,
+	parseConformanceClients,
 	readConformanceDrift,
 	readConformanceRelease,
 	readFileDigest,
@@ -99,6 +108,52 @@ const EXPECTED: readonly ConformanceScenario[] = [
 /** Scenario names carrying a nonzero red baseline: the exact list a later change shrinks. */
 const EXPECTED_RED = EXPECTED.filter((scenario) => scenario.failed > 0).map(
 	(scenario) => scenario.name,
+)
+
+// The recorded baseline for the runner's own CLIENT mode, driving this package's
+// `createMCPClient` over `createHTTPClientTransport` through every non-auth 2026-07-28
+// client scenario. `CONFORMANCE_CLIENT_SCENARIOS` names the set and records why the
+// `auth/*` family is out. The reading is per scenario for the same reason the server
+// baseline is: a scenario that stopped running is invisible in a total.
+//
+// Every row with `failed: 0` is a check the shipped client passes. Each row with a nonzero
+// `failed` is a named LIBRARY gap this suite carries on purpose, and the comment above it
+// is the gap. A check the runner reports at SHOULD level tallies as a warning instead, so
+// `warnings` is recorded beside the counts rather than folded into them.
+//
+// A SKIPPED check tallies as neither. `http-standard-headers` declares its Mcp-Method and
+// Mcp-Name checks for `initialize`, `notifications/initialized`, `resources/list`,
+// `resources/read`, `prompts/list`, and `prompts/get`; `MCPClientInterface` publishes no
+// method that issues any of those, so the runner reports each SKIPPED rather than failed
+// and the row tallies only the `tools/list` and `tools/call` checks the client does reach.
+const EXPECTED_CLIENT: readonly ConformanceOutcome[] = [
+	{ name: 'tools_call', passed: 1, failed: 0, warnings: 0 },
+	{ name: 'request-metadata', passed: 8, failed: 0, warnings: 0 },
+	// Fails one SEP-2322 check. The peer answers `test_mrtr_no_state` with an
+	// `input_required` result carrying `inputRequests` and NO `requestState`, and the spec
+	// requires the retry to answer it while omitting `requestState`. `MCPCallOptions.input`
+	// declares `state: string` as a REQUIRED leaf, so a retry that carries responses without
+	// a state is unreachable through the client's public surface: the seam is the `input`
+	// option's shape, not the wire. The other four checks — the exact echo, the distinct
+	// JSON-RPC id, the isolation of one call's round from another's, and the missing
+	// `resultType` defaulting to complete — all pass.
+	{ name: 'sep-2322-client-request-state', passed: 4, failed: 1, warnings: 0 },
+	{ name: 'http-standard-headers', passed: 3, failed: 0, warnings: 0 },
+	// Fails every SEP-2243 `Mcp-Param` check: the client sends no `Mcp-Param-*` header at
+	// all, because it reads no `x-mcp-header` annotation from a tool's `inputSchema`. The
+	// three green checks are the negative ones — an unannotated parameter and a null-valued
+	// one both correctly produce no header.
+	{ name: 'http-custom-headers', passed: 3, failed: 15, warnings: 0 },
+	// Fails every SEP-2243 exclusion check for the same missing annotation reading: the
+	// client keeps every advertised tool, so the driver calls the malformed ones too. The
+	// green check is the complementary one — the valid tool survives.
+	{ name: 'http-invalid-tool-headers', passed: 1, failed: 10, warnings: 0 },
+	{ name: 'json-schema-ref-no-deref', passed: 1, failed: 0, warnings: 0 },
+]
+
+/** Client scenario names carrying a nonzero red baseline. */
+const EXPECTED_CLIENT_RED = EXPECTED_CLIENT.filter((outcome) => outcome.failed > 0).map(
+	(outcome) => outcome.name,
 )
 
 describe('Tasks schema authority pins', () => {
@@ -225,5 +280,46 @@ describe('MCP server conformance', () => {
 
 	it('reports the recorded total', () => {
 		expect([result.passed, result.failed]).toEqual([102, 8])
+	})
+})
+
+describe('MCP client conformance', () => {
+	let outcomes: readonly ConformanceOutcome[]
+	let listing: string
+
+	// The runner starts and stops each scenario's own server, so this block owns no listener
+	// and needs no teardown. The budget covers one serial invocation per recorded scenario,
+	// each of which launches the runner, binds an ephemeral port, and spawns the driver as
+	// its own process.
+	beforeAll(async () => {
+		listing = await executeRunner(['list', '--spec-version', CONFORMANCE_SPEC])
+		outcomes = await executeConformanceClient()
+	}, 120_000)
+
+	// The recorded set is a decision, so it is written down rather than derived from the
+	// runner. This is what keeps that decision honest: the runner's own listing is the second
+	// mechanism, and a client scenario it adds at this revision reddens here rather than
+	// silently dropping out of the run.
+	it('records every non-auth client scenario the runner reports at this revision', () => {
+		expect(
+			parseConformanceClients(listing).filter((name) => !name.startsWith(CONFORMANCE_AUTH)),
+		).toEqual(CONFORMANCE_CLIENT_SCENARIOS)
+	})
+
+	it('runs every non-auth 2026-07-28 client scenario against the recorded baseline', () => {
+		expect(outcomes).toEqual(EXPECTED_CLIENT)
+	})
+
+	it('names the exact client scenarios carrying the recorded red baseline', () => {
+		expect(outcomes.filter((outcome) => outcome.failed > 0).map((outcome) => outcome.name)).toEqual(
+			EXPECTED_CLIENT_RED,
+		)
+	})
+
+	// No total is asserted here. Client mode prints no cross-scenario total when each
+	// scenario runs on its own, so a total would be this file's own arithmetic over the array
+	// it already compared — an assertion that cannot disagree with the thing it checks.
+	it('reports no SHOULD-level warning on any client scenario', () => {
+		expect(outcomes.filter((outcome) => outcome.warnings > 0)).toEqual([])
 	})
 })

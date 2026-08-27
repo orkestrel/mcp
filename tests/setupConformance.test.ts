@@ -26,7 +26,9 @@ import {
 	buildConformanceOptions,
 	buildConformanceRound,
 	buildConformanceTools,
+	CONFORMANCE_AUTH,
 	CONFORMANCE_CANDIDATES,
+	CONFORMANCE_CLIENT_SCENARIOS,
 	CONFORMANCE_CONTENT,
 	CONFORMANCE_CONTENTS,
 	CONFORMANCE_DESCRIPTOR,
@@ -38,17 +40,22 @@ import {
 	CONFORMANCE_REQUESTS,
 	CONFORMANCE_RESOURCES,
 	CONFORMANCE_ROUNDS,
+	CONFORMANCE_SPEC,
 	CONFORMANCE_TEMPLATE,
 	executeConformance,
 	executeRunner,
 	parseConformance,
+	parseConformanceClients,
+	parseConformanceOutcome,
 	readConformanceAnswers,
 	readConformanceTemplate,
 	readConformanceRelease,
+	resolveConformanceDriver,
 	resolveConformanceRunner,
 	startConformance,
 } from './setupConformance.js'
-import { normalize } from 'node:path'
+import { existsSync } from 'node:fs'
+import { normalize, resolve } from 'node:path'
 
 describe('the pinned runner', () => {
 	it('resolves the installed entry and reports the release the manifest pins', async () => {
@@ -112,6 +119,88 @@ describe('parseConformance', () => {
 		expect(parseConformance('✓ ping: 3 passed, 0 failed')).toBeUndefined()
 		expect(parseConformance('')).toBeUndefined()
 		expect(parseConformance('Total: some passed, none failed')).toBeUndefined()
+	})
+})
+
+describe('the client under test', () => {
+	it('composes a command whose every token the runner can carry', () => {
+		const command = resolveConformanceDriver()
+		const tokens = command.split(' ')
+		const driver = tokens.at(-1) ?? ''
+
+		// The runner splits `--command` on spaces and appends the scenario URL, so the split is
+		// the contract this command has to survive. Reading the driver back off the split is
+		// what proves the path token stayed whole.
+		expect(tokens[0]).toBe('node')
+		expect(driver).toMatch(/(?:^|\/)tests\/conformanceClient\.ts$/)
+		// The path is relative to the working directory, which is the runner's own, so it is
+		// resolved against that directory on this host rather than assumed to be portable text.
+		expect(existsSync(resolve(process.cwd(), driver))).toBe(true)
+	})
+
+	it('excludes the runner OAuth family from the recorded scenario set', () => {
+		// The exclusion is the reason this set is written down rather than derived, so it is
+		// proved here rather than left to the comment beside the constant.
+		expect(
+			CONFORMANCE_CLIENT_SCENARIOS.filter((name) => name.startsWith(CONFORMANCE_AUTH)),
+		).toEqual([])
+		expect(new Set(CONFORMANCE_CLIENT_SCENARIOS).size).toBe(CONFORMANCE_CLIENT_SCENARIOS.length)
+	})
+})
+
+describe('parseConformanceOutcome', () => {
+	it('reads the counts out of a client-mode result block', () => {
+		const output = ['Checks:', 'Test Results:', 'Passed: 3/18, 15 failed, 2 warnings'].join('\n')
+
+		expect(parseConformanceOutcome('http-custom-headers', output)).toEqual({
+			name: 'http-custom-headers',
+			passed: 3,
+			failed: 15,
+			warnings: 2,
+		})
+	})
+
+	it('answers undefined when the runner printed no result block', () => {
+		expect(parseConformanceOutcome('tools_call', '')).toBeUndefined()
+		// The server mode's own total line is close enough in wording to reach the same parse if
+		// the pattern were loose, so it is the control this parser has to refuse.
+		expect(parseConformanceOutcome('tools_call', 'Total: 4 passed, 2 failed')).toBeUndefined()
+		expect(parseConformanceOutcome('tools_call', 'Passed: 3/18, 15 failed')).toBeUndefined()
+	})
+})
+
+describe('parseConformanceClients', () => {
+	it('reads the client section alone out of a listing', () => {
+		const output = [
+			'Server scenarios (test against a server):',
+			'  - tools-list [2026-07-28]',
+			'',
+			'Client scenarios (test against a client):',
+			'  - tools_call [2025-06-18,2026-07-28]',
+			'  - auth/metadata-default [2026-07-28]',
+			'',
+			'Authorization server scenarios (test against an authorization server):',
+			'  - authorization-code-grant [2026-07-28]',
+		].join('\n')
+
+		expect(parseConformanceClients(output)).toEqual(['tools_call', 'auth/metadata-default'])
+	})
+
+	it('answers an empty set when the listing names no client section', () => {
+		expect(parseConformanceClients('Server scenarios:\n  - tools-list [2026-07-28]')).toEqual([])
+		expect(parseConformanceClients('')).toEqual([])
+	})
+
+	it('reads a real listing the same way it reads the fixture', async () => {
+		const names = parseConformanceClients(
+			await executeRunner(['list', '--spec-version', CONFORMANCE_SPEC]),
+		)
+
+		// The fixture proves the section boundary; this proves the pattern still matches what the
+		// installed runner actually prints, which is the half a fixture can never settle.
+		expect(names).toContain('tools_call')
+		expect(names).not.toContain('tools-list')
+		for (const scenario of CONFORMANCE_CLIENT_SCENARIOS) expect(names).toContain(scenario)
 	})
 })
 
