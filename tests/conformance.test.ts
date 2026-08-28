@@ -45,8 +45,15 @@ import {
 // comment above each such row is the gap. Every row a fixture could answer has been answered,
 // so a new nonzero row is a regression rather than an unfinished host.
 //
-// A row at `0 passed, 0 failed` is neither: its checks are SHOULD-level, so the runner reports
-// WARNING and tallies nothing either way.
+// A SHOULD-level check is neither: the runner reports WARNING and tallies nothing either way,
+// so a row records only the MUST-level checks beside it.
+//
+// Every row also carries the runner's own `wire-schema-valid` check, which reads every JSON-RPC
+// message this server sent against the spec's JSON schema for the negotiated revision. The
+// runner emits that check only where it observed a message on its own instrumented client path,
+// so `server-stateless`, `server-sse-multiple-streams`, and `dns-rebinding-protection` — which
+// drive raw HTTP outside it — carry none. The per-row comments name each scenario's own checks
+// and leave that one to this paragraph.
 const EXPECTED: readonly ConformanceScenario[] = [
 	// Green since a protocol header naming a MODERN revision began holding the request to that
 	// revision's own rule: a body with no parsable modern `_meta` answers -32602 rather than
@@ -56,30 +63,30 @@ const EXPECTED: readonly ConformanceScenario[] = [
 	// for `sampling/createMessage`, and the server refuses that round -32021 over HTTP 400
 	// because the call declared no capabilities.
 	{ name: 'server-stateless', passed: 28, failed: 0 },
-	{ name: 'completion-complete', passed: 1, failed: 0 },
-	{ name: 'tools-list', passed: 2, failed: 0 },
-	{ name: 'tools-call-simple-text', passed: 1, failed: 0 },
-	{ name: 'tools-call-image', passed: 1, failed: 0 },
-	{ name: 'tools-call-audio', passed: 1, failed: 0 },
-	{ name: 'tools-call-embedded-resource', passed: 1, failed: 0 },
-	{ name: 'tools-call-mixed-content', passed: 1, failed: 0 },
-	{ name: 'tools-call-error', passed: 1, failed: 0 },
-	{ name: 'tools-call-with-progress', passed: 1, failed: 0 },
-	{ name: 'json-schema-2020-12', passed: 7, failed: 0 },
+	{ name: 'completion-complete', passed: 2, failed: 0 },
+	{ name: 'tools-list', passed: 3, failed: 0 },
+	{ name: 'tools-call-simple-text', passed: 2, failed: 0 },
+	{ name: 'tools-call-image', passed: 2, failed: 0 },
+	{ name: 'tools-call-audio', passed: 2, failed: 0 },
+	{ name: 'tools-call-embedded-resource', passed: 2, failed: 0 },
+	{ name: 'tools-call-mixed-content', passed: 2, failed: 0 },
+	{ name: 'tools-call-error', passed: 2, failed: 0 },
+	{ name: 'tools-call-with-progress', passed: 2, failed: 0 },
+	{ name: 'json-schema-2020-12', passed: 8, failed: 0 },
 	{ name: 'server-sse-multiple-streams', passed: 2, failed: 0 },
-	{ name: 'resources-list', passed: 1, failed: 0 },
-	{ name: 'resources-read-text', passed: 1, failed: 0 },
-	{ name: 'resources-read-binary', passed: 1, failed: 0 },
-	{ name: 'resources-templates-read', passed: 1, failed: 0 },
-	{ name: 'sep-2164-resource-not-found', passed: 2, failed: 0 },
-	{ name: 'prompts-list', passed: 1, failed: 0 },
-	{ name: 'prompts-get-simple', passed: 1, failed: 0 },
-	{ name: 'prompts-get-with-args', passed: 1, failed: 0 },
-	{ name: 'prompts-get-embedded-resource', passed: 1, failed: 0 },
-	{ name: 'prompts-get-with-image', passed: 1, failed: 0 },
+	{ name: 'resources-list', passed: 2, failed: 0 },
+	{ name: 'resources-read-text', passed: 2, failed: 0 },
+	{ name: 'resources-read-binary', passed: 2, failed: 0 },
+	{ name: 'resources-templates-read', passed: 2, failed: 0 },
+	{ name: 'sep-2164-resource-not-found', passed: 3, failed: 0 },
+	{ name: 'prompts-list', passed: 2, failed: 0 },
+	{ name: 'prompts-get-simple', passed: 2, failed: 0 },
+	{ name: 'prompts-get-with-args', passed: 2, failed: 0 },
+	{ name: 'prompts-get-embedded-resource', passed: 2, failed: 0 },
+	{ name: 'prompts-get-with-image', passed: 2, failed: 0 },
 	{ name: 'dns-rebinding-protection', passed: 2, failed: 0 },
-	{ name: 'caching', passed: 7, failed: 0 },
-	{ name: 'http-header-validation', passed: 13, failed: 0 },
+	{ name: 'caching', passed: 8, failed: 0 },
+	{ name: 'http-header-validation', passed: 14, failed: 0 },
 	// Green since the POST handler began validating every `Mcp-Param-*` header its OWN tool
 	// definitions annotate against the call's body. The checks that moved are three refusals,
 	// each counted twice — once for the HTTP 400 and once for the -32020 error code: a Base64
@@ -87,29 +94,29 @@ const EXPECTED: readonly ConformanceScenario[] = [
 	// for a value the body supplies. The three that were already green are the accepts — a
 	// well-formed sentinel decoded and matched, and a value missing either marker read as a
 	// literal.
-	{ name: 'http-custom-header-server-validation', passed: 9, failed: 0 },
+	{ name: 'http-custom-header-server-validation', passed: 10, failed: 0 },
 	// The SEP-2322 rows below all drive `MCPServerOptions.input`, whose answer is the round the
 	// consumer composed: its own keys, and any mixture of the elicitation, sampling, and roots
 	// kinds the client declared. The prompt arm reaches the same wire the other way — the
 	// prompt port returns its own `MCPInputResult` — which is what `-non-tool-request` proves.
-	{ name: 'input-required-result-basic-elicitation', passed: 2, failed: 0 },
-	{ name: 'input-required-result-basic-sampling', passed: 2, failed: 0 },
-	{ name: 'input-required-result-basic-list-roots', passed: 2, failed: 0 },
-	{ name: 'input-required-result-request-state', passed: 2, failed: 0 },
-	{ name: 'input-required-result-multiple-input-requests', passed: 2, failed: 0 },
-	{ name: 'input-required-result-multi-round', passed: 3, failed: 0 },
-	// Passes at 0/0: the scenario's one check is a SHOULD, so a retry carrying `inputResponses`
+	{ name: 'input-required-result-basic-elicitation', passed: 3, failed: 0 },
+	{ name: 'input-required-result-basic-sampling', passed: 3, failed: 0 },
+	{ name: 'input-required-result-basic-list-roots', passed: 3, failed: 0 },
+	{ name: 'input-required-result-request-state', passed: 3, failed: 0 },
+	{ name: 'input-required-result-multiple-input-requests', passed: 3, failed: 0 },
+	{ name: 'input-required-result-multi-round', passed: 4, failed: 0 },
+	// Passes at 1/0: the scenario's own check is a SHOULD, so a retry carrying `inputResponses`
 	// without a `requestState` — which this server refuses with -32602 — reports WARNING and
-	// the runner tallies neither a pass nor a fail.
-	{ name: 'input-required-result-missing-input-response', passed: 0, failed: 0 },
-	{ name: 'input-required-result-non-tool-request', passed: 2, failed: 0 },
-	{ name: 'input-required-result-result-type', passed: 1, failed: 0 },
-	{ name: 'input-required-result-unsupported-methods', passed: 1, failed: 0 },
-	{ name: 'input-required-result-tampered-state', passed: 1, failed: 0 },
-	{ name: 'input-required-result-capability-check', passed: 1, failed: 0 },
-	// Passes at 0/0 for the same SHOULD reason as `-missing-input-response`.
-	{ name: 'input-required-result-ignore-extra-params', passed: 0, failed: 0 },
-	{ name: 'input-required-result-validate-input', passed: 2, failed: 0 },
+	// the runner tallies neither a pass nor a fail. The recorded pass is the wire-schema check.
+	{ name: 'input-required-result-missing-input-response', passed: 1, failed: 0 },
+	{ name: 'input-required-result-non-tool-request', passed: 3, failed: 0 },
+	{ name: 'input-required-result-result-type', passed: 2, failed: 0 },
+	{ name: 'input-required-result-unsupported-methods', passed: 2, failed: 0 },
+	{ name: 'input-required-result-tampered-state', passed: 2, failed: 0 },
+	{ name: 'input-required-result-capability-check', passed: 2, failed: 0 },
+	// Passes at 1/0 for the same SHOULD reason as `-missing-input-response`.
+	{ name: 'input-required-result-ignore-extra-params', passed: 1, failed: 0 },
+	{ name: 'input-required-result-validate-input', passed: 3, failed: 0 },
 ]
 
 /** Scenario names carrying a nonzero red baseline: the exact list a later change shrinks. */
@@ -133,8 +140,16 @@ const EXPECTED_RED = EXPECTED.filter((scenario) => scenario.failed > 0).map(
 // `resources/read`, `prompts/list`, and `prompts/get`; `MCPClientInterface` publishes no
 // method that issues any of those, so the runner reports each SKIPPED rather than failed
 // and the row tallies only the `tools/list` and `tools/call` checks the client does reach.
+//
+// The runner also emits its own `wire-schema-valid` check, which reads every JSON-RPC message
+// this client sent against the spec's JSON schema for the negotiated revision. It emits that
+// check only for a scenario whose server it instruments, so `tools_call` and
+// `json-schema-2020-12-preservation` carry it and every row driving raw HTTP carries none.
 const EXPECTED_CLIENT: readonly ConformanceOutcome[] = [
-	{ name: 'tools_call', passed: 1, failed: 0, warnings: 0 },
+	// The row tallies the scenario's own `tool-add-numbers` check beside `wire-schema-valid`.
+	// At runner 0.2.0-alpha.10 it tallied `tool-add-numbers` alone: that build emitted no
+	// wire-schema check here, and the driver's own behavior on this scenario did not change.
+	{ name: 'tools_call', passed: 2, failed: 0, warnings: 0 },
 	{ name: 'request-metadata', passed: 8, failed: 0, warnings: 0 },
 	// Green since `MCPCallOptions.input.state` became optional. The peer answers
 	// `test_mrtr_no_state` with an `input_required` result carrying `inputRequests` and NO
@@ -160,6 +175,16 @@ const EXPECTED_CLIENT: readonly ConformanceOutcome[] = [
 	// two duplicate names, and four names outside the RFC 9110 token set.
 	{ name: 'http-invalid-tool-headers', passed: 11, failed: 0, warnings: 0 },
 	{ name: 'json-schema-ref-no-deref', passed: 1, failed: 0, warnings: 0 },
+	// Green since the driver began filling a free-form object argument with another listed
+	// tool's received schema. That arms the scenario's echo: the client hands `json_schema_echo`
+	// the `inputSchema` it received for the focal tool, and the runner compares that against its
+	// own fixture. While the echo went unanswered the preservation checks reported SKIPPED, so
+	// what the client preserved was unmeasured rather than proven. The checks are the
+	// `tools/list` observation, the completed echo, the `$schema`, `$defs`, and
+	// `additionalProperties` rows SEP-1613 requires, the SEP-2106 composition, conditional, and
+	// `$anchor` rows — which this revision reports at MUST level rather than SKIPPED — and
+	// `wire-schema-valid`.
+	{ name: 'json-schema-2020-12-preservation', passed: 9, failed: 0, warnings: 0 },
 ]
 
 /** Client scenario names carrying a nonzero red baseline. */
@@ -290,7 +315,7 @@ describe('MCP server conformance', () => {
 	})
 
 	it('reports the recorded total', () => {
-		expect([result.passed, result.failed]).toEqual([110, 0])
+		expect([result.passed, result.failed]).toEqual([147, 0])
 	})
 })
 

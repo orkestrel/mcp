@@ -20,7 +20,9 @@
 // It carries NO scenario knowledge. It calls exactly the tools the client itself listed, or
 // exactly the calls the runner scripted, with arguments read from each tool's own advertised
 // schema. So a check about which tools a client keeps measures the client rather than this
-// file: a tool the client failed to exclude is a tool this driver calls.
+// file: a tool the client failed to exclude is a tool this driver calls. A free-form object
+// argument is the one leaf whose schema describes no shape to build, so it carries another
+// listed tool's received schema — peer data rather than scenario knowledge.
 
 import type {
 	MCPCallOutcome,
@@ -30,6 +32,7 @@ import type {
 	MCPInputRequestMap,
 	MCPInputResponse,
 } from '@orkestrel/mcp'
+import type { ToolInterface } from '@orkestrel/tool'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { createMCPClient } from '@orkestrel/mcp'
 import { createHTTPClientTransport } from '@orkestrel/mcp/server'
@@ -78,6 +81,53 @@ function buildSchemaRecord(schema: unknown): Record<string, MCPElicitValue> {
 	for (const [key, leaf] of Object.entries(properties)) {
 		const value = readSchemaValue(leaf)
 		if (value !== undefined) record[key] = value
+	}
+	return record
+}
+
+/**
+ * Read the schema this driver received for a listed tool other than the one being called.
+ *
+ * @remarks
+ * A free-form object argument declares no shape the driver could compose, so the only object
+ * it can supply without inventing one is an object the peer itself delivered: another listed
+ * tool's `inputSchema`. The tool being called is skipped, because handing a peer back the
+ * schema it just sent under that same name reports nothing about what the client preserved.
+ *
+ * @param tools - Every tool the client listed
+ * @param name - The tool being called
+ * @returns The other tool's received schema, or `undefined` when the listing holds no other
+ * tool
+ */
+function readReceivedSchema(
+	tools: readonly ToolInterface[],
+	name: string,
+): Readonly<Record<string, unknown>> | undefined {
+	return tools.find((tool) => tool.name !== name)?.parameters
+}
+
+/**
+ * Build one tool call's arguments from that tool's own advertised schema.
+ *
+ * @remarks
+ * Every leaf {@link buildSchemaRecord} can supply is supplied exactly as an elicitation
+ * answer supplies it. A property typed `object` that declares no `properties` of its own is
+ * the one leaf this adds: that is a free-form object slot, and `received` fills it verbatim.
+ * An object leaf that DOES declare its own properties stays omitted, because a record the
+ * driver did not compose from that leaf would contradict the shape the leaf declares.
+ *
+ * @param schema - The tool's advertised `inputSchema`
+ * @param received - The schema to place in a free-form object slot, absent when the listing
+ * offered none
+ * @returns The filled argument record
+ */
+function buildCallArguments(schema: unknown, received: unknown): Record<string, unknown> {
+	const record: Record<string, unknown> = buildSchemaRecord(schema)
+	const properties = isRecord(schema) ? schema['properties'] : undefined
+	if (received === undefined || !isRecord(properties)) return record
+	for (const [key, leaf] of Object.entries(properties)) {
+		if (!isRecord(leaf) || leaf['type'] !== 'object' || isRecord(leaf['properties'])) continue
+		record[key] = received
 	}
 	return record
 }
@@ -200,7 +250,10 @@ try {
 	const scripted = readScriptedCalls(process.env['MCP_CONFORMANCE_CONTEXT'])
 	const calls =
 		scripted ??
-		tools.map((tool) => ({ name: tool.name, arguments: buildSchemaRecord(tool.parameters) }))
+		tools.map((tool) => ({
+			name: tool.name,
+			arguments: buildCallArguments(tool.parameters, readReceivedSchema(tools, tool.name)),
+		}))
 	for (const call of calls) {
 		try {
 			await driveCall(client, call)

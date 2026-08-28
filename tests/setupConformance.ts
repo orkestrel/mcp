@@ -102,6 +102,7 @@ export const CONFORMANCE_CLIENT_SCENARIOS: readonly string[] = Object.freeze([
 	'http-custom-headers',
 	'http-invalid-tool-headers',
 	'json-schema-ref-no-deref',
+	'json-schema-2020-12-preservation',
 ])
 
 /** The runner's per-scenario `Passed: N/D, M failed, W warnings` result line in client mode. */
