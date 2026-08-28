@@ -110,7 +110,7 @@
 		"@orkestrel/probe": "^0.0.10",
 		"@orkestrel/router": "^0.0.12",
 		"@orkestrel/scaffold": "^0.0.59",
-		"@orkestrel/server": "^0.0.16",
+		"@orkestrel/server": "^0.0.17",
 		"@orkestrel/test": "^0.0.11",
 		"@types/node": "^26.4.0",
 		"@vitest/browser-playwright": "^4.1.11",
