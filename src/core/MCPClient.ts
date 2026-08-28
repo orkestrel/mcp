@@ -143,7 +143,10 @@ export class MCPClient implements MCPClientInterface {
 	readonly #tasks: MCPTaskClientInterface
 	// The in-flight requests, keyed by JSON-RPC id, each holding its promise settlers —
 	// resolved on the matching response, rejected on an error response, the deadline, an
-	// abort, or `disconnect`. Genuinely private glue: the settler shape lives inline here.
+	// abort, or `disconnect`. Genuinely private glue: the whole settler shape lives inline here
+	// and nowhere else — `#openSubscription` builds its subscription entry as an argument to
+	// `set` and reads it back, so this declaration types that literal instead of being copied
+	// beside it.
 	//
 	// The entry is also where every per-request REGISTRATION lives, and that placement is the
 	// whole reason the exits nobody enumerates are already covered. `#settle` is the single
@@ -472,21 +475,22 @@ export class MCPClient implements MCPClientInterface {
 						}),
 			},
 		}
-		const subscription: {
-			readonly queue: JSONRPCNotification[]
-			readonly capacity: number
-			waiter?: PromiseWithResolvers<JSONRPCNotification | MCPSubscriptionResult>
-			terminal?: MCPSubscriptionResult
-			failure?: { readonly reason: unknown }
-		} = { queue: [], capacity }
 		const abort = this.#abortSubscription.bind(this, id, signal)
 		signal.addEventListener('abort', abort, { once: true })
 		this.#pending.set(id, {
 			method,
 			signal,
 			abort,
-			subscription,
+			subscription: { queue: [], capacity },
 		})
+		// ONE declaration of the subscription shape, and it is `#pending`'s: the literal above
+		// takes its type from the map's value type rather than restating it here. The loop below
+		// then drives the object the map holds, read back ONCE — `#settle` deletes the entry
+		// before it writes `waiter` / `terminal` / `failure` onto that same object, so a later
+		// read of the map would find nothing and a second literal would be a second shape to
+		// drift. The refusal answers the map's `get` type, which cannot know what was just set.
+		const subscription = this.#pending.get(id)?.subscription
+		if (subscription === undefined) throw new Error('MCP subscription state is missing')
 		this.#transport.send(request).catch((error: unknown) => this.#settle(id, error, true))
 		try {
 			for (;;) {
@@ -514,10 +518,10 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	// Issue a request and await its correlated response, bounded by the per-request
-	// deadline. A monotonic numeric id keys the pending settlers; `AbortSignal.timeout`
-	// (the taverna idiom — never a raw setTimeout) rejects the pending request if the
-	// server never answers. The transport `send` is awaited so a write failure rejects
-	// here rather than leaving a pending request to time out.
+	// deadline. A monotonic numeric id keys the pending settlers; `AbortSignal.timeout` (never a
+	// raw `setTimeout`) rejects the pending request if the server never answers. The transport
+	// `send` is awaited so a write failure rejects here rather than leaving a pending request to
+	// time out.
 	//
 	// `options` carries the CALLER's per-request registrations, and each is recorded on
 	// the pending entry rather than around this call, so the single `#settle` door releases

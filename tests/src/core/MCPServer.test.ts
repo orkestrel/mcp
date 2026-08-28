@@ -4911,11 +4911,15 @@ describe('MCPServer — W02-B: custom carriers and the resolved-option seam', ()
 	})
 
 	// Separate claims, deliberately kept apart because one instrument cannot carry them together.
-	// The arity check guards the PARAMETER at the registration seam: every member declares the
-	// resolved options, so the registry has one shape rather than several that happen to agree.
-	// It says nothing about what any member then does with the value — substituting a different
-	// options object survives it — which is why the resolved VALUE is proved separately, at the
-	// built-ins that own provider hooks, caller identity and signal together.
+	// The arity check guards the PARAMETER at the registration seam: a member binds the resolved
+	// options only where it spends them. `server/discover` and `tools/list` are live registry
+	// reads with no await, so they have no cancellation point to spend a signal on and take the
+	// request alone; `tools/call` and `subscriptions/listen` take both. `MCPMethodHandler`
+	// declares both parameters and admits a handler taking fewer, so the seam stays one contract
+	// either way. The arity says nothing about what a member then does with the value —
+	// substituting a different options object survives it — which is why the resolved VALUE is
+	// proved separately, at the built-ins that own provider hooks, caller identity and signal
+	// together.
 	it('resolves options into every built-in registration', async () => {
 		const listened: MCPMethodOptions[] = []
 		const probe = inputProbe()
@@ -4949,7 +4953,7 @@ describe('MCPServer — W02-B: custom carriers and the resolved-option seam', ()
 		)
 		await drainStream(stream)
 
-		expect(arities).toEqual([2, 2, 2, 2])
+		expect(arities).toEqual([1, 1, 2, 2])
 		expect(probe.principals).toHaveLength(1)
 		expect(probe.principals[0]?.caller).toBe(caller)
 		expect(probe.principals[0]?.signal).toBeInstanceOf(AbortSignal)

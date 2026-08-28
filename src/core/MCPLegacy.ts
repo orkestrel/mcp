@@ -12,7 +12,7 @@ import type {
 	MCPStreamControllerInterface,
 	MCPTextStreamControllerInterface,
 } from './types.js'
-import { isRecord, isString } from '@orkestrel/contract'
+import { isRecord, isString, parseJSON } from '@orkestrel/contract'
 import {
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_INVALID_REQUEST,
@@ -98,12 +98,10 @@ export class MCPLegacy implements MCPDispatcherInterface {
 				buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Invalid Request'),
 			)
 		}
-		let parsed: unknown
-		try {
-			parsed = JSON.parse(message)
-		} catch {
-			return this.#options.dispatcher.handle(message, options)
-		}
+		// `parseJSON` is the declared JSON boundary: unparsable text answers `undefined`, which
+		// the invocation check below forwards along with every other shape this layer does not
+		// translate — so the boundary needs no branch of its own.
+		const parsed = parseJSON(message)
 		if (isModernRequest(parsed) || !isJSONRPCInvocation(parsed)) {
 			return this.#options.dispatcher.handle(message, options)
 		}

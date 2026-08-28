@@ -11,6 +11,7 @@ import {
 	isRecord,
 	isString,
 	isUndefined,
+	parseJSON,
 } from '@orkestrel/contract'
 import { snapshotJSON } from './cloners.js'
 import {
@@ -160,7 +161,7 @@ export function parseRequestContext(
 export function parseMCPInputState(value: unknown): MCPInputState | undefined {
 	try {
 		if (!isString(value)) return undefined
-		const parsed: unknown = JSON.parse(value)
+		const parsed: unknown = parseJSON(value)
 		if (!isRecord(parsed)) return undefined
 		const principal = parsed['principal']
 		const expiry = parsed['expiry']

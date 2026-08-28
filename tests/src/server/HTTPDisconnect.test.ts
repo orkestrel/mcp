@@ -3,8 +3,8 @@ import { HTTPDisconnect } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { openStream } from '@orkestrel/server'
 import { waitForDelay } from '@orkestrel/test'
-import { waitForSettlement } from '../../../setup.js'
-import { createStreamStub } from '../../../setupServer.js'
+import { waitForSettlement } from '../../setup.js'
+import { createStreamStub } from '../../setupServer.js'
 
 describe('HTTPDisconnect', () => {
 	it('propagates incoming request abort to the composed signal', async () => {

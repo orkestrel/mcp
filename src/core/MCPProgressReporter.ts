@@ -2,7 +2,7 @@ import type {
 	JSONRPCNotification,
 	MCPJSONLimitOptions,
 	MCPProgress,
-	MCPProgressInterface,
+	MCPProgressOwnerInterface,
 } from './types.js'
 import { snapshotJSON } from './cloners.js'
 import { buildProgressNotification } from './helpers.js'
@@ -31,7 +31,7 @@ import { isMCPProgress } from './validators.js'
  * reporter.stop()
  * ```
  */
-export class MCPProgressReporter implements MCPProgressInterface {
+export class MCPProgressReporter implements MCPProgressOwnerInterface {
 	readonly #token: string | number
 	readonly #limits: MCPJSONLimitOptions
 	readonly #signal: AbortSignal

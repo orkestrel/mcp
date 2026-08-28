@@ -8,6 +8,7 @@ import {
 	isModernRequest,
 	parseJSONRPCMessage,
 } from '@src/core'
+import { parseJSON } from '@orkestrel/contract'
 import { openStream } from '@orkestrel/server'
 import {
 	DEFAULT_MCP_PATH,
@@ -24,7 +25,7 @@ import {
 } from './helpers.js'
 import { inferHeaderIssue, inferLegacyVersion } from './inferers.js'
 import { MCPSession } from './MCPSession.js'
-import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
+import { HTTPDisconnect } from './HTTPDisconnect.js'
 
 /**
  * Creates the native MCP session {@link MiddlewareHandler} — the plug-and-play stateful layer
@@ -107,12 +108,14 @@ export function createMCPSession<TState extends MCPSessionState>(
 		let parsed: JSONRPCMessage | undefined
 		let text: string | undefined
 		if (context.method === 'POST') {
+			// Reading the body is the only step here that can throw. The JSON boundary itself is
+			// `parseJSON`, which answers `undefined` rather than throwing, so it sits outside.
 			try {
 				text = await request.text()
-				parsed = parseJSONRPCMessage(JSON.parse(text))
 			} catch {
-				parsed = undefined
+				text = undefined
 			}
+			parsed = text === undefined ? undefined : parseJSONRPCMessage(parseJSON(text))
 			if (text !== undefined && parsed !== undefined && isModernRequest(parsed)) {
 				return next(
 					new Request(context.url, {

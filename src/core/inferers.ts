@@ -1,4 +1,4 @@
-import type { JSONRPCMessage, MCPEra, MCPModernVersion } from './types.js'
+import type { JSONRPCInvocation, JSONRPCMessage, MCPEra, MCPModernVersion } from './types.js'
 import { isMCPLegacyVersion, isMCPModernVersion, isModernRequest } from './validators.js'
 import { isRecord, isString } from '@orkestrel/contract'
 import { MCP_META_VERSION, SUPPORTED_MODERN_PROTOCOL_VERSIONS } from './constants.js'
@@ -19,6 +19,28 @@ export function inferEra(version: string): MCPEra | undefined {
 	if (isMCPModernVersion(version)) return 'modern'
 	if (isMCPLegacyVersion(version)) return 'legacy'
 	return undefined
+}
+
+/**
+ * Infers the wire era one invocation's own structure selects.
+ *
+ * @remarks
+ * The STRUCTURAL read, distinct from {@link inferEra}'s read of a revision string: era is fixed
+ * by the reserved modern metadata a request carries, so this answers for a message whose
+ * revision has not been read and cannot answer `undefined` — every invocation took one of the
+ * two published wire shapes. It is what an observation surface reports and what an ingress
+ * routes on, so both derive it here rather than each spelling the ternary out.
+ *
+ * @param invocation - The invocation whose structure selects the era
+ * @returns `'modern'` when the invocation carries the modern request shape, `'legacy'` otherwise
+ *
+ * @example
+ * ```ts
+ * inferRequestEra({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: { _meta: meta } })
+ * ```
+ */
+export function inferRequestEra(invocation: JSONRPCInvocation): MCPEra {
+	return isModernRequest(invocation) ? 'modern' : 'legacy'
 }
 
 /**

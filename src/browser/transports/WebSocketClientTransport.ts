@@ -5,7 +5,7 @@ import type {
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { WebSocketClientTransportOptions } from '../types.js'
-import { parseJSONRPCMessage } from '@src/core'
+import { deliverMessage } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
@@ -32,8 +32,8 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   reporting `CLOSING` / `CLOSED`, REJECTS with `WebSocket transport is not connected` rather
  *   than resolving on a frame nobody wrote. Only the closed state rejects — a pre-open `send`
  *   still queues.
- * - **Inbound (`message`).** Each decoded text frame is `JSON.parse`d (guarded) and
- *   narrowed with `parseJSONRPCMessage` — a well-formed {@link JSONRPCMessage}
+ * - **Inbound (`message`).** Each decoded text frame runs through the shared
+ *   `deliverMessage` fold (parse, then narrow) — a well-formed {@link JSONRPCMessage}
  *   re-emits on this transport's `message` event; a non-text (binary) frame or a
  *   non-JSON / non-message text frame surfaces on `error` and is DROPPED (never
  *   throws on adversarial wire input).
@@ -215,28 +215,16 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		reject(new Error('WebSocket connection failed'))
 	}
 
-	// Decode one inbound frame: a non-text (binary) frame is rejected without a throw; a
-	// text frame is `JSON.parse`d → `parseJSONRPCMessage`. A well-formed message re-emits on
-	// `message`; a malformed / non-message frame surfaces on `error` and is dropped
+	// Decode one inbound frame: a non-text (binary) frame is rejected without a throw; a text
+	// frame runs through the shared `deliverMessage` fold. A well-formed message re-emits on
+	// `message`; an unparsable or non-message frame surfaces on `error` and is dropped
 	// (never throws on adversarial wire input).
 	#receive(data: unknown): void {
 		if (!isString(data)) {
 			this.#emitter.emit('error', new Error('non-text WebSocket frame'))
 			return
 		}
-		let parsed: unknown
-		try {
-			parsed = JSON.parse(data)
-		} catch (error) {
-			this.#emitter.emit('error', error)
-			return
-		}
-		const message = parseJSONRPCMessage(parsed)
-		if (message === undefined) {
-			this.#emitter.emit('error', new Error('non-JSON-RPC WebSocket frame'))
-			return
-		}
-		this.#emitter.emit('message', message)
+		deliverMessage(this.#emitter, data, 'non-JSON-RPC WebSocket frame')
 	}
 
 	// The socket closed underneath us — fire `close` once. Only the socket this transport still

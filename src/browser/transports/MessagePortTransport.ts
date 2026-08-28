@@ -38,11 +38,12 @@ import { isString } from '@orkestrel/contract'
  * - **`messageerror` is IGNORED, not routed to `closed`.** A `messageerror` event
  *   (the structured-clone deserialization of an inbound message threw) reports one
  *   BAD FRAME, not a dead channel — the port itself keeps working and later, well-
- *   formed messages still arrive. Routing it to `closed` would tear down the
+ *   formed messages still arrive. This transport registers no listener for it: an
+ *   unhandled `messageerror` on a `MessagePort` neither throws, closes the port, nor
+ *   reaches this transport, so one bad frame costs exactly that frame and nothing
+ *   tears the binding down. Routing it to `closed` would tear down the
  *   `bindServer`/`bindClient` wiring (and, transitively, every session it carries)
- *   over a single malformed frame, which is far more destructive than dropping that
- *   one frame — so this transport registers a `messageerror` listener that does
- *   nothing, deliberately.
+ *   over a single malformed frame.
  * - **`close()`** is idempotent: it closes the underlying `port` (`MessagePort.close()`
  *   disconnects it — further `postMessage` calls on EITHER end are silently
  *   undelivered, per the platform contract) and fires the registered `closed`
@@ -67,7 +68,6 @@ import { isString } from '@orkestrel/contract'
 export class MessagePortTransport implements MCPTransportInterface {
 	readonly #port: MessagePort
 	readonly #message = (event: MessageEvent): void => this.#receive(event.data)
-	readonly #malformed = (): void => {}
 	#onMessage: ((message: string) => void) | undefined = undefined
 	#onClosed: (() => void) | undefined = undefined
 	#closed = false
@@ -75,7 +75,6 @@ export class MessagePortTransport implements MCPTransportInterface {
 	constructor(options: MessagePortTransportOptions) {
 		this.#port = options.port
 		this.#port.addEventListener('message', this.#message)
-		this.#port.addEventListener('messageerror', this.#malformed)
 		this.#port.start()
 	}
 
@@ -99,7 +98,6 @@ export class MessagePortTransport implements MCPTransportInterface {
 		this.#onMessage = undefined
 		this.#onClosed = undefined
 		this.#port.removeEventListener('message', this.#message)
-		this.#port.removeEventListener('messageerror', this.#malformed)
 		this.#port.close()
 		onClosed?.()
 	}

@@ -1,3 +1,4 @@
+import type { EmitterInterface } from '@orkestrel/emitter'
 import type { ToolCall, ToolManagerInterface } from '@orkestrel/tool'
 import type {
 	JSONRPCErrorResponse,
@@ -10,6 +11,7 @@ import type {
 	MCPCallOutcome,
 	MCPClientCapabilities,
 	MCPClientInterface,
+	MCPClientTransportEventMap,
 	MCPDiscoverResult,
 	MCPDispatchOptions,
 	MCPHeaderParameter,
@@ -42,6 +44,7 @@ import {
 	isNumber,
 	isRecord,
 	isString,
+	parseJSON,
 } from '@orkestrel/contract'
 import {
 	DEFAULT_MCP_CACHE_TTL,
@@ -1168,7 +1171,7 @@ export function buildInitializeResult(
  *
  * @remarks
  * The bound is checked FIRST, against the raw string, so an oversized message is never
- * `JSON.parse`d at all: a decoder that parses before it measures has already spent the work
+ * parsed at all: a decoder that parses before it measures has already spent the work
  * the bound exists to refuse. A message over the bound, malformed JSON, and a well-formed
  * value that is not a JSON-RPC message are one answer — `undefined` — because a binder does
  * exactly the same thing with each of them: nothing, and let
@@ -1191,8 +1194,52 @@ export function decodeBoundedMessage(
 	limits: MCPJSONLimitOptions,
 ): JSONRPCMessage | undefined {
 	if (!isBoundedString(message, limits.bytes)) return undefined
-	const parsed = attempt<unknown>(() => JSON.parse(message))
-	return parsed.success ? parseJSONRPCMessage(parsed.value, limits) : undefined
+	return parseJSONRPCMessage(parseJSON(message), limits)
+}
+
+/**
+ * Decodes one inbound frame and delivers it onto a transport emitter as `message` or `error`.
+ *
+ * @remarks
+ * The ONE inbound fold every message-carrying transport in this package runs: parse the frame,
+ * narrow it with `parseJSONRPCMessage`, emit `message` for a well-formed
+ * {@link JSONRPCMessage}, and emit `error` for anything else. Total — an adversarial frame
+ * produces an `error` emission and never a throw.
+ *
+ * The two failures report differently on purpose. Unparsable text emits the CAUGHT parse
+ * error, which names the offending position; well-formed JSON that is not a JSON-RPC message
+ * has no caught value to report, so it emits `fault` — the carrier's own wording, passed in
+ * rather than forked into a second copy of this body.
+ *
+ * @param emitter - The transport's emitter to deliver onto
+ * @param text - One inbound frame's raw text
+ * @param fault - The message for the error emitted when the frame parses but is not JSON-RPC
+ *
+ * @example
+ * ```ts
+ * deliverMessage(transport.emitter, frame, 'non-JSON-RPC WebSocket frame')
+ * ```
+ */
+export function deliverMessage(
+	emitter: EmitterInterface<MCPClientTransportEventMap>,
+	text: string,
+	fault: string,
+): void {
+	// The one boundary in this package that keeps its own `try`: the caught value IS the
+	// report here, so `parseJSON`'s `undefined` would discard what this emit exists to carry.
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(text)
+	} catch (error) {
+		emitter.emit('error', error)
+		return
+	}
+	const message = parseJSONRPCMessage(parsed)
+	if (message === undefined) {
+		emitter.emit('error', new Error(fault))
+		return
+	}
+	emitter.emit('message', message)
 }
 
 /**

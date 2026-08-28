@@ -11,7 +11,7 @@ import type { Duplex } from 'node:stream'
 import { randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
-import { parseJSONRPCMessage } from '@src/core'
+import { deliverMessage } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import {
@@ -44,8 +44,8 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   transport while the handshake was on the wire, both WIN — the socket that arrives late is
  *   DESTROYED and never bound, so no orphan is left re-emitting frames at nobody. Both
  *   `start()` calls still resolve; exactly one socket is ever bound.
- * - **Inbound (`message`).** Each decoded text frame is `JSON.parse`d (guarded) and narrowed
- *   with `parseJSONRPCMessage` — a {@link JSONRPCMessage} re-emits on this transport's `message`
+ * - **Inbound (`message`).** Each decoded text frame runs through the shared `deliverMessage`
+ *   fold (parse, then narrow) — a {@link JSONRPCMessage} re-emits on this transport's `message`
  *   event (the reply the {@link import('@orkestrel/mcp').MCPClientInterface} correlates by `id`); a
  *   non-JSON / non-message frame surfaces on `error` and is dropped. The socket's `close`
  *   / `error` bridge to this transport's events.
@@ -115,7 +115,7 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		if (this.#socket !== undefined) return
 		this.#closed = false
 		try {
-			await this.#connect(this.#httpURL(), randomBytes(16).toString('base64'))
+			await this.#connect(this.#toHTTPURL(), randomBytes(16).toString('base64'))
 		} finally {
 			// Whatever the handshake did, it is no longer on the wire, so nothing is left for a
 			// later `close` to cancel.
@@ -238,23 +238,11 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 		socket.emitter.off('error', this.#failure)
 	}
 
-	// Decode one inbound text frame: `JSON.parse` → `parseJSONRPCMessage`. A well-formed
-	// message re-emits on `message`; a malformed / non-message frame surfaces on `error` and
-	// is dropped (never throws on adversarial wire input).
+	// One frame through the shared `deliverMessage` fold: a well-formed message re-emits on
+	// `message`; an unparsable or non-message frame surfaces on `error` and is dropped (never
+	// throws on adversarial wire input).
 	#receive(text: string): void {
-		let parsed: unknown
-		try {
-			parsed = JSON.parse(text)
-		} catch (error) {
-			this.#emitter.emit('error', error)
-			return
-		}
-		const message = parseJSONRPCMessage(parsed)
-		if (message === undefined) {
-			this.#emitter.emit('error', new Error('non-JSON-RPC WebSocket frame'))
-			return
-		}
-		this.#emitter.emit('message', message)
+		deliverMessage(this.#emitter, text, 'non-JSON-RPC WebSocket frame')
 	}
 
 	// The current socket closed underneath us — fire `close` once. Only the socket this
@@ -271,7 +259,7 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 	// Normalize `options.url` to the `http(s)` URL the underlying upgrade request uses: a
 	// `ws://` → `http://`, a `wss://` → `https://`; an `http(s)://` URL passes through. Any
 	// other scheme throws (a clear boundary error, not a silent mis-dial).
-	#httpURL(): URL {
+	#toHTTPURL(): URL {
 		const url = new URL(this.#url)
 		if (url.protocol === 'ws:') url.protocol = 'http:'
 		else if (url.protocol === 'wss:') url.protocol = 'https:'

@@ -5,7 +5,7 @@ import type {
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
-import { parseJSONRPCMessage } from '@src/core'
+import { deliverMessage } from '@src/core'
 import { Emitter } from '@orkestrel/emitter'
 import { WEBSOCKET_READY_OPEN } from '@orkestrel/websocket'
 
@@ -24,7 +24,7 @@ import { WEBSOCKET_READY_OPEN } from '@orkestrel/websocket'
  *   session id is the deferred sessions tier). The name keeps the role explicit even though
  *   the shape is shared.
  * - **Inbound (`message`).** `start()` subscribes to the socket's `message` event; each text
- *   frame is `JSON.parse`d inside a try/catch and narrowed with `parseJSONRPCMessage` — a
+ *   frame runs through the shared `deliverMessage` fold (parse, then narrow) — a
  *   well-formed {@link JSONRPCMessage} is re-emitted on this transport's `message` event (the
  *   parsed envelope the {@link import('@orkestrel/mcp').MCPServerInterface} pump dispatches), while
  *   a non-JSON or non-message frame is surfaced on `error` and DROPPED, never thrown. It
@@ -111,23 +111,11 @@ export class WebSocketServerTransport implements MCPClientTransportInterface {
 		this.#emitter.emit('close')
 	}
 
-	// Decode one inbound text frame: `JSON.parse` → `parseJSONRPCMessage`. A well-formed
-	// message re-emits on `message`; a malformed / non-message frame surfaces on `error` and
-	// is dropped (the bridge never throws on adversarial wire input).
+	// One frame through the shared `deliverMessage` fold: a well-formed message re-emits on
+	// `message`; an unparsable or non-message frame surfaces on `error` and is dropped (the
+	// bridge never throws on adversarial wire input).
 	#receive(text: string): void {
-		let parsed: unknown
-		try {
-			parsed = JSON.parse(text)
-		} catch (error) {
-			this.#emitter.emit('error', error)
-			return
-		}
-		const message = parseJSONRPCMessage(parsed)
-		if (message === undefined) {
-			this.#emitter.emit('error', new Error('non-JSON-RPC WebSocket frame'))
-			return
-		}
-		this.#emitter.emit('message', message)
+		deliverMessage(this.#emitter, text, 'non-JSON-RPC WebSocket frame')
 	}
 
 	// The socket closed (peer close frame, transport teardown) — fire this transport's `close`

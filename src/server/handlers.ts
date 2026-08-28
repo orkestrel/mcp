@@ -12,13 +12,13 @@ import {
 	buildHeaderParameters,
 	buildJSONRPCError,
 	extractToolSchema,
+	inferRequestEra,
 	isMCPLegacyVersion,
 	isMCPModernVersion,
-	isModernRequest,
 	parseRequestContext,
 	parseJSONRPCMessage,
 } from '@src/core'
-import { isRecord, isString } from '@orkestrel/contract'
+import { isRecord, isString, parseJSON } from '@orkestrel/contract'
 import { openStream } from '@orkestrel/server'
 import {
 	MCP_PROTOCOL_VERSION_HEADER,
@@ -27,7 +27,7 @@ import {
 } from './constants.js'
 import { acceptsEventStream, allowsOrigin, sendEventStream } from './helpers.js'
 import { inferHeaderIssue, inferParameterRefusal, inferStatus } from './inferers.js'
-import { HTTPDisconnect } from './transports/HTTPDisconnect.js'
+import { HTTPDisconnect } from './HTTPDisconnect.js'
 
 /**
  * Creates the Streamable-HTTP POST handler used by `createMCPRoutes`.
@@ -86,10 +86,8 @@ export function createMCPPostHandler<TState = unknown>(
 				status: 400,
 			})
 		}
-		let parsed: unknown
-		try {
-			parsed = JSON.parse(text)
-		} catch {
+		const parsed = parseJSON(text)
+		if (parsed === undefined) {
 			return Response.json(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'), {
 				status: 400,
 			})
@@ -101,7 +99,7 @@ export function createMCPPostHandler<TState = unknown>(
 				{ status: 400 },
 			)
 		}
-		const era = isModernRequest(invocation) ? 'modern' : 'legacy'
+		const era = inferRequestEra(invocation)
 		const id = invocation.id
 		const protocol = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
 		// A protocol header naming a MODERN revision is the client declaring the revision this

@@ -12,12 +12,13 @@ import type { IncomingMessage } from 'node:http'
 import type { LineExtraction, MCPOriginOptions } from './types.js'
 import { createSSEParser } from '@orkestrel/sse'
 import {
+	deliverMessage,
 	isJSONRPCInvocation,
 	JSONRPC_INVALID_REQUEST,
 	buildJSONRPCError,
 	parseJSONRPCMessage,
 } from '@src/core'
-import { isString } from '@orkestrel/contract'
+import { isString, parseJSON } from '@orkestrel/contract'
 import { MCP_SESSION_HEADER } from './constants.js'
 
 /**
@@ -293,19 +294,17 @@ export async function readEventStream(response: Response): Promise<readonly JSON
  * when it is not one — the per-event step {@link readEventStream} folds over.
  *
  * @remarks
- * `JSON.parse`s the `data` (the server serializes the JSON-RPC envelope as the event's
- * `data`) inside a try/catch and narrows the parsed value with `parseJSONRPCMessage`.
- * Total: malformed JSON or a non-message value yields `undefined`, never throws.
+ * Parses the `data` (the server serializes the JSON-RPC envelope as the event's `data`)
+ * with `@orkestrel/contract`'s `parseJSON` — the declared JSON boundary, which answers
+ * `undefined` instead of throwing — and narrows the parsed value with
+ * `parseJSONRPCMessage`. Total: malformed JSON or a non-message value yields `undefined`,
+ * never throws.
  *
  * @param data - One SSE event's `data` payload
  * @returns The decoded {@link JSONRPCMessage}, or `undefined`
  */
 export function decodeEvent(data: string): JSONRPCMessage | undefined {
-	try {
-		return parseJSONRPCMessage(JSON.parse(data))
-	} catch {
-		return undefined
-	}
+	return parseJSONRPCMessage(parseJSON(data))
 }
 
 /**
@@ -397,11 +396,12 @@ export function writeLine(output: NodeJS.WritableStream, line: string): Promise<
  * extractLines}, the client transport takes its lines from the process supervisor.
  *
  * @remarks
- * A blank line is skipped (a stray trailing newline). Every other line is decoded
- * with {@link decodeEvent} (`JSON.parse` + `parseJSONRPCMessage`, guarded); a
- * well-formed {@link JSONRPCMessage} emits `message`, a malformed / non-message line
- * emits `error` (total, never throws). Pure w.r.t. its own state — the emit is
- * the caller-owned side effect.
+ * A blank line is skipped (a stray trailing newline). Every other line runs through the
+ * shared {@link import('@orkestrel/mcp').deliverMessage} fold, the one inbound decode every
+ * transport in this package shares: a well-formed {@link JSONRPCMessage} emits `message`,
+ * unparsable text emits the caught parse error, and a well-formed non-message line emits
+ * `error` naming a non-JSON-RPC stdio line (total, never throws). Pure w.r.t. its own state
+ * — the emit is the caller-owned side effect.
  *
  * @param emitter - The transport's {@link EmitterInterface} to emit `message` / `error` onto
  * @param lines - The complete lines to decode and deliver
@@ -412,12 +412,7 @@ export function dispatchLines(
 ): void {
 	for (const line of lines) {
 		if (line.length === 0) continue
-		const message = decodeEvent(line)
-		if (message === undefined) {
-			emitter.emit('error', new Error('non-JSON-RPC stdio line'))
-			continue
-		}
-		emitter.emit('message', message)
+		deliverMessage(emitter, line, 'non-JSON-RPC stdio line')
 	}
 }
 

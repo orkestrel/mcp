@@ -564,9 +564,11 @@ describe('createMessagePortTransport — a symmetric MCPTransportInterface over 
 			closedCalls += 1
 		})
 
-		// Dispatch a genuine `messageerror` event directly on port1 — the real native
-		// event this transport's listener is registered for (a `MessagePort` is a real
-		// `EventTarget`, so this is a real event dispatch, not a mock of the transport).
+		// Dispatch a genuine `messageerror` event directly on port1 — the real native event
+		// this transport registers NO listener for (a `MessagePort` is a real `EventTarget`,
+		// so this is a real event dispatch, not a mock of the transport). An unhandled
+		// `messageerror` neither throws, closes the port, nor reaches the transport, and that
+		// is what this asserts.
 		port1.dispatchEvent(new MessageEvent('messageerror', { data: null }))
 		port2.postMessage('still works')
 		await vi.waitFor(() => expect(received).toEqual(['still works']))

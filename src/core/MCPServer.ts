@@ -46,7 +46,14 @@ import type {
 	MCPTextStreamControllerInterface,
 } from './types.js'
 import { Emitter } from '@orkestrel/emitter'
-import { isJSONValue, isRecord, isString, isUndefined, sanitizeBudget } from '@orkestrel/contract'
+import {
+	isJSONValue,
+	isRecord,
+	isString,
+	isUndefined,
+	parseJSON,
+	sanitizeBudget,
+} from '@orkestrel/contract'
 import { snapshotJSON, snapshotToolResult } from './cloners.js'
 import {
 	DEFAULT_MCP_CACHE_TTL,
@@ -85,6 +92,7 @@ import { MCPMethodManager } from './MCPMethodManager.js'
 import { MCPProgressReporter } from './MCPProgressReporter.js'
 import { MCPStreamController } from './MCPStreamController.js'
 import { MCPTextStreamController } from './MCPTextStreamController.js'
+import { inferRequestEra } from './inferers.js'
 import { parseJSONRPCMessage, parseMCPInputState, parseRequestContext } from './parsers.js'
 import {
 	isAbsoluteURI,
@@ -224,7 +232,12 @@ export class MCPServer implements MCPServerInterface {
 		invocation: JSONRPCInvocation,
 		options: MCPDispatchOptions,
 	): Promise<JSONRPCResponse | MCPStreamControllerInterface | undefined> {
-		this.#emitter.emit('request', invocation.method, invocation.id, 'modern')
+		// The era is READ off the invocation rather than assumed: an invocation of either
+		// published wire shape reaches this ingress (`#modern` refuses the one it cannot
+		// dispatch, further down), so an observer partitioning by era sees what arrived instead
+		// of what this seam expects. One derivation, `inferRequestEra`, shared with the HTTP
+		// ingress that routes on the same fact.
+		this.#emitter.emit('request', invocation.method, invocation.id, inferRequestEra(invocation))
 		// A NOTIFICATION is handled (the `request` event already fired) but NEVER produces
 		// a response, whatever its method (`notifications/initialized`, a fire-and-forget
 		// `ping`, an unknown method — all silent). So short-circuit here, and the branches
@@ -267,10 +280,8 @@ export class MCPServer implements MCPServerInterface {
 		if (!isBoundedString(message, this.#limits.message)) {
 			return JSON.stringify(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'))
 		}
-		let parsed: unknown
-		try {
-			parsed = JSON.parse(message)
-		} catch {
+		const parsed = parseJSON(message)
+		if (parsed === undefined) {
 			return JSON.stringify(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'))
 		}
 		const decoded = parseJSONRPCMessage(parsed, {
@@ -305,16 +316,14 @@ export class MCPServer implements MCPServerInterface {
 	// ternary answering `undefined` for a case that cannot arrive; the seam's own type now says
 	// that, so the guards are gone rather than restated per member.
 	//
-	// Every registration DECLARES the resolved options, and every one that reaches a provider
-	// hook spends them. The declared parameter is the seam itself and is what a caller can
-	// observe of it: a registry whose members disagree about their own shape is several places
-	// that happen to agree rather than one contract, and the member that never declared it is
-	// the one whoever adds the first await has to re-plumb. `_options` therefore stays here,
-	// where conformance needs it, and is absent from the live registry reads below, where
-	// nothing does.
+	// A registration BINDS the resolved options only where it spends them. `MCPMethodHandler`
+	// declares both parameters, and a handler that takes fewer still satisfies it, so the two
+	// live registry reads — `server/discover` and `tools/list`, neither of which awaits
+	// anything and so has no cancellation point to spend a signal on — bind the request alone
+	// rather than an unused `_options` the seam does not require.
 	#register(): void {
-		this.#methods.add('server/discover', async (request, _options) => this.#discover(request))
-		this.#methods.add('tools/list', async (request, _options) => this.#list(request))
+		this.#methods.add('server/discover', async (request) => this.#discover(request))
+		this.#methods.add('tools/list', async (request) => this.#list(request))
 		this.#methods.add('tools/call', async (request, options) => this.#call(request, options))
 		this.#methods.add('subscriptions/listen', async (request, options) =>
 			this.#subscribe(request, options),
@@ -449,8 +458,10 @@ export class MCPServer implements MCPServerInterface {
 		return buildJSONRPCResult(request.id, result)
 	}
 
-	// The built-in modern `tools/call` handler — stamped, and NOT cacheable, so it
-	// carries no cache fields.
+	// The built-in modern `resources/list` handler — a cacheable paged projection over the
+	// consumer's resource manager, so the page it returns carries both cache stamps. The page
+	// is owned before it is read: a manager is consumer-written, so an oversized or malformed
+	// one is answered `-32603` rather than forwarded.
 	async #resources(
 		request: JSONRPCRequest,
 		manager: MCPResourceManagerInterface,
@@ -758,6 +769,8 @@ export class MCPServer implements MCPServerInterface {
 		})
 	}
 
+	// The built-in modern `tools/call` handler — stamped, and NOT cacheable, so it carries no
+	// cache fields.
 	async #call(
 		request: JSONRPCRequest,
 		options: MCPMethodOptions,
@@ -991,7 +1004,7 @@ export class MCPServer implements MCPServerInterface {
 		}
 		const selected = await configured.selector({ request, name, arguments: args }, options)
 		if (selected === undefined) return undefined
-		const round = this.#round(selected)
+		const round = this.#ownRound(selected)
 		const context = parseRequestContext(request, {
 			bytes: this.#limits.message,
 			depth: this.#limits.depth,
@@ -1144,7 +1157,7 @@ export class MCPServer implements MCPServerInterface {
 		// and each answer answers the question that was actually asked under that key. Extra
 		// response keys are IGNORED — the server reads exactly the keys it assigned — so a
 		// client batching unrelated answers is not refused for it.
-		const responses = this.#answers(state.requests, inputResponses)
+		const responses = this.#checkAnswers(state.requests, inputResponses)
 		if (responses === undefined) {
 			return buildJSONRPCError(
 				id,
@@ -1181,7 +1194,7 @@ export class MCPServer implements MCPServerInterface {
 			)
 		}
 		if (selected === undefined) return undefined
-		const round = this.#round(selected)
+		const round = this.#ownRound(selected)
 		if (round === undefined) {
 			return buildJSONRPCError(
 				id,
@@ -1202,7 +1215,7 @@ export class MCPServer implements MCPServerInterface {
 	// than a re-issue, so a tool never runs on a question the client left open — and each
 	// answer is checked against the request filed under its own key, so an elicitation answer
 	// cannot settle a sampling request by arriving in its place.
-	#answers(
+	#checkAnswers(
 		requests: MCPInputRequestMap,
 		responses: Readonly<Record<string, unknown>>,
 	): MCPInputResponseMap | undefined {
@@ -1220,7 +1233,7 @@ export class MCPServer implements MCPServerInterface {
 	// returned changes neither the questions the client is asked nor the round the sealed state
 	// binds — the two would otherwise be free to disagree. An EMPTY round is refused: a round
 	// asking nothing would seal state no retry could ever satisfy.
-	#round(round: unknown): MCPInputRound | undefined {
+	#ownRound(round: unknown): MCPInputRound | undefined {
 		const owned = snapshotJSON(round, {
 			bytes: this.#limits.content,
 			keys: this.#limits.keys,
@@ -1456,7 +1469,7 @@ export class MCPServer implements MCPServerInterface {
 	// they are instances of the same condition rather than distinct conditions. (The extension's
 	// own prose examples show `-32003`; the dated core schema fixes `-32021`, and a peer
 	// implements the dated schema.)
-	#named(request: JSONRPCRequest): string | JSONRPCErrorResponse {
+	#readTaskId(request: JSONRPCRequest): string | JSONRPCErrorResponse {
 		const id = request.id
 		const context = parseRequestContext(request, {
 			bytes: this.#limits.message,
@@ -1502,9 +1515,9 @@ export class MCPServer implements MCPServerInterface {
 		options: MCPMethodOptions,
 	): Promise<JSONRPCResponse> {
 		const id = request.id
-		const named = this.#named(request)
-		if (!isString(named)) return named
-		const found = await tasks.task(named, options)
+		const taskId = this.#readTaskId(request)
+		if (!isString(taskId)) return taskId
+		const found = await tasks.task(taskId, options)
 		if (found === undefined) {
 			return buildJSONRPCError(
 				id,
@@ -1557,8 +1570,8 @@ export class MCPServer implements MCPServerInterface {
 		options: MCPMethodOptions,
 	): Promise<JSONRPCResponse> {
 		const id = request.id
-		const named = this.#named(request)
-		if (!isString(named)) return named
+		const taskId = this.#readTaskId(request)
+		if (!isString(taskId)) return taskId
 		const responses = request.params?.['inputResponses']
 		if (!isRecord(responses)) {
 			return buildJSONRPCError(
@@ -1567,14 +1580,14 @@ export class MCPServer implements MCPServerInterface {
 				'Invalid params: an `inputResponses` object is required',
 			)
 		}
-		if (!isMCPTaskDetail(await tasks.task(named, options))) {
+		if (!isMCPTaskDetail(await tasks.task(taskId, options))) {
 			return buildJSONRPCError(
 				id,
 				JSONRPC_INVALID_PARAMS,
 				'Invalid params: no task is available for that `taskId`',
 			)
 		}
-		await tasks.update(named, responses, options)
+		await tasks.update(taskId, responses, options)
 		return buildJSONRPCResult(id, buildModernResult({}, this.#options.identity))
 	}
 
@@ -1596,16 +1609,16 @@ export class MCPServer implements MCPServerInterface {
 		options: MCPMethodOptions,
 	): Promise<JSONRPCResponse> {
 		const id = request.id
-		const named = this.#named(request)
-		if (!isString(named)) return named
-		if (!isMCPTaskDetail(await tasks.task(named, options))) {
+		const taskId = this.#readTaskId(request)
+		if (!isString(taskId)) return taskId
+		if (!isMCPTaskDetail(await tasks.task(taskId, options))) {
 			return buildJSONRPCError(
 				id,
 				JSONRPC_INVALID_PARAMS,
 				'Invalid params: no task is available for that `taskId`',
 			)
 		}
-		await tasks.abort(named, options)
+		await tasks.abort(taskId, options)
 		return buildJSONRPCResult(id, buildModernResult({}, this.#options.identity))
 	}
 

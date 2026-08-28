@@ -786,6 +786,32 @@ export interface MCPProgressInterface {
 }
 
 /**
+ * The OWNING half of one progress slot — {@link MCPProgressInterface} plus the consuming and
+ * stopping the slot's owner performs.
+ *
+ * @remarks
+ * Two interfaces over one entity because two parties hold it and they are owed different
+ * powers. An executor receives the narrow {@link MCPProgressInterface} through
+ * {@link MCPExecutionContext} and can publish and nothing else; the MCP-owned response stream
+ * that created the slot holds this one and also drains it and shuts it down. Naming the owner's
+ * half is what keeps `take` and `stop` documented as contract rather than as extra surface a
+ * class happens to expose.
+ *
+ * @example
+ * ```ts
+ * const owner: MCPProgressOwnerInterface = new MCPProgressReporter(id, limits, signal)
+ * const notification = await owner.take()
+ * owner.stop()
+ * ```
+ */
+export interface MCPProgressOwnerInterface extends MCPProgressInterface {
+	/** Takes the next progress notification, waiting for the single producer slot when empty. */
+	take(): Promise<JSONRPCNotification>
+	/** Stops the reporter permanently, rejects pending work, and detaches its abort listener. */
+	stop(): void
+}
+
+/**
  * Receives one progress report a peer published for a request this client issued.
  *
  * @remarks
@@ -950,6 +976,20 @@ export type MCPTaskNotificationParams = MCPTaskDetail & {
 	/** Open notification metadata, including the reserved subscription stamp. */
 	readonly _meta?: MCPNotificationMetaObject
 	readonly [key: string]: unknown
+}
+
+/**
+ * One well-formed `notifications/tasks` frame — the notification
+ * {@link import('./validators.js').isMCPTaskNotification} admits.
+ *
+ * @remarks
+ * The name of what that guard proves. A consumer reading `notification.params.taskId` off an
+ * admitted frame narrows to this type, so the narrowing has a name it can annotate, pass, and
+ * return rather than an anonymous intersection re-spelled at each site.
+ */
+export type MCPTaskNotification = JSONRPCNotification & {
+	readonly method: 'notifications/tasks'
+	readonly params: MCPTaskNotificationParams
 }
 
 /**

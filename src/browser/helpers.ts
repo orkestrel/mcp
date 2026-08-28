@@ -2,7 +2,7 @@ import type { JSONRPCMessage, MCPServerInterface } from '@src/core'
 import type { SSEParserInterface } from '@orkestrel/sse'
 import type { ServeMCPOptions, ScopeTransportInterface, ServeMCPScopeInterface } from './types.js'
 import { bindServer, createMCPServer, parseJSONRPCMessage } from '@src/core'
-import { isString } from '@orkestrel/contract'
+import { isString, parseJSON } from '@orkestrel/contract'
 import { createSSEParser } from '@orkestrel/sse'
 import { DEFAULT_MCP_SERVER_NAME, DEFAULT_MCP_SERVER_VERSION } from './constants.js'
 import { createScopeTransport } from './factories.js'
@@ -35,20 +35,17 @@ import { MessagePortTransport } from './transports/MessagePortTransport.js'
  * when it is not one — the per-event step {@link readEventStream} folds over.
  *
  * @remarks
- * `JSON.parse`s the `data` (the server serializes the JSON-RPC envelope as the
- * event's `data`) inside a try/catch and narrows the parsed value with
- * `parseJSONRPCMessage`. Total: malformed JSON or a non-message value yields
- * `undefined`, never throws.
+ * Parses the `data` (the server serializes the JSON-RPC envelope as the event's `data`)
+ * with `@orkestrel/contract`'s `parseJSON` — the declared JSON boundary, which answers
+ * `undefined` instead of throwing — and narrows the parsed value with
+ * `parseJSONRPCMessage`. Total: malformed JSON or a non-message value yields `undefined`,
+ * never throws.
  *
  * @param data - One SSE event's `data` payload
  * @returns The decoded {@link JSONRPCMessage}, or `undefined`
  */
 export function decodeEvent(data: string): JSONRPCMessage | undefined {
-	try {
-		return parseJSONRPCMessage(JSON.parse(data))
-	} catch {
-		return undefined
-	}
+	return parseJSONRPCMessage(parseJSON(data))
 }
 
 /**

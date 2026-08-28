@@ -60,7 +60,7 @@ import type {
 	MCPSubscriptionResult,
 	MCPTaskDetail,
 	MCPTaskDetailResult,
-	MCPTaskNotificationParams,
+	MCPTaskNotification,
 	MCPTaskResult,
 	MCPTaskStatus,
 	MCPTextResource,
@@ -1276,10 +1276,7 @@ export function isMCPTaskDetailResult(value: unknown): value is MCPTaskDetailRes
  *   params: { taskId: 'a' } }) // false — the params owe a whole snapshot
  * ```
  */
-export function isMCPTaskNotification(value: unknown): value is JSONRPCNotification & {
-	readonly method: 'notifications/tasks'
-	readonly params: MCPTaskNotificationParams
-} {
+export function isMCPTaskNotification(value: unknown): value is MCPTaskNotification {
 	const owned = attempt(() => cloneJSONRecord(value))
 	if (!owned.success) return false
 	const notification = owned.value

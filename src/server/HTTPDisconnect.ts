@@ -1,8 +1,8 @@
 import type { StreamInterface } from '@orkestrel/server'
-import type { MCPKeepaliveOptions } from '../types.js'
+import type { MCPKeepaliveOptions } from './types.js'
 import { sanitizeBudget } from '@orkestrel/contract'
-import { DEFAULT_MCP_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_COMMENT } from '../constants.js'
-import { createReadableStream } from '../helpers.js'
+import { DEFAULT_MCP_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_COMMENT } from './constants.js'
+import { createReadableStream } from './helpers.js'
 
 /**
  * Composes one incoming HTTP request lifetime with one MCP-owned SSE response lifetime.
