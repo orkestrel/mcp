@@ -145,9 +145,16 @@ refusal is the same HTTP `400` + `-32020`. `@orkestrel/codec`'s `decodeBase64` o
 grammar, so the payload is held to the RFC 4648 § 4 canonical spelling: a payload leaving a
 non-zero bit in the sextet its padding discards is a second spelling of a byte and refuses,
 which makes `=?base64?QR==?=` invalid where `=?base64?QQ==?=` carries the byte it reached
-for. `isStandardBase64` is a wider and separate rule that names JSON Schema `byte`
-membership for the blob, image, and audio content a peer sends; it does not govern this
-payload.
+for. The same package's `decodeUTF8` owns the text step behind it — strict RFC 3629, so an
+overlong, an encoded surrogate, a code point past U+10FFFF, and a truncated sequence each
+refuse, and total, so the refusal arrives as `undefined` rather than as a throw. It keeps a
+leading U+FEFF as a character of the value where the platform decoder consumes it as a byte
+order mark, so a target leading with U+FEFF survives `encodeSentinel` and comes back whole.
+The encode side stays on the platform `TextEncoder`: it is total, spelling ill-formed text
+with the replacement character, where `encodeUTF8` would refuse it and widen
+`encodeSentinel` to answer `undefined`. `isStandardBase64` is a wider and separate rule that
+names JSON Schema `byte` membership for the blob, image, and audio content a peer sends; it
+does not govern this payload.
 
 Use the client and HTTP transport together and none of that wire anatomy reaches the
 call site — the transport derives all reserved metadata and headers:

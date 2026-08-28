@@ -1803,6 +1803,9 @@ describe('decodeSentinel — the value a standard header carries', () => {
 		'test_simple_text',
 		'test://static-text',
 		'café',
+		// A leading U+FEFF is a character of the value, not a byte order mark the decode may
+		// consume, so the sentinel must hand it back.
+		'\uFEFFx',
 		'  padded  ',
 		'two\nlines',
 		'=?base64?SGVsbG8=?=',

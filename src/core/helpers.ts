@@ -32,7 +32,7 @@ import type {
 	MCPSubscriptionResult,
 	MCPSubscriptionResultMetaObject,
 } from './types.js'
-import { decodeBase64, encodeBase64, encodeHex } from '@orkestrel/codec'
+import { decodeBase64, decodeUTF8, encodeBase64, encodeHex } from '@orkestrel/codec'
 import {
 	attempt,
 	cloneJSONRecord,
@@ -1213,6 +1213,13 @@ export function decodeBoundedMessage(
  * the rule exists to refuse. A value missing either marker is a literal and comes back
  * unchanged.
  *
+ * `decodeUTF8` from `@orkestrel/codec` reads the bytes back as text: strict RFC 3629, where an
+ * overlong, an encoded surrogate, a code point past U+10FFFF, and a truncated sequence each
+ * answer `undefined` rather than a replacement character, and total, so the refusal arrives as
+ * that value instead of as a throw. It also keeps a leading U+FEFF as a character of the
+ * value, where the platform decoder consumes it as a byte order mark — which is what lets a
+ * value leading with U+FEFF survive {@link encodeSentinel} and come back whole.
+ *
  * {@link import('./validators.js').isStandardBase64} is a wider and separate rule: it names
  * JSON Schema `byte` membership for the blob, image, and audio content a peer sends, where
  * this package receives liberally. It does not govern this payload.
@@ -1245,8 +1252,7 @@ export function decodeSentinel(value: string): string | undefined {
 	const payload = field.slice(MCP_SENTINEL_PREFIX.length, field.length - MCP_SENTINEL_SUFFIX.length)
 	const bytes = decodeBase64(payload)
 	if (bytes === undefined) return undefined
-	const decoded = attempt(() => new TextDecoder('utf-8', { fatal: true }).decode(bytes))
-	return decoded.success ? decoded.value : undefined
+	return decodeUTF8(bytes)
 }
 
 /**
@@ -1267,6 +1273,14 @@ export function decodeSentinel(value: string): string | undefined {
  * whitespace comes back trimmed, so it fails the round trip. A value already wearing the
  * sentinel markers decodes to something else, or to nothing, so it fails the round trip too
  * and is encoded rather than read back as a sentinel it never was.
+ *
+ * The bytes come from the platform `TextEncoder`, not from codec's `encodeUTF8`, and that is a
+ * ruling rather than an oversight. `TextEncoder` is total: it spells ill-formed text — a lone
+ * surrogate, which has no UTF-8 spelling — with the replacement character, so this function
+ * answers a `string` for every input. `encodeUTF8` refuses that text with `undefined`, which
+ * would widen this return to `string | undefined` and oblige every header projection to handle
+ * a value it cannot send. The decode side carries no such tension, so it reads back through
+ * codec's strict `decodeUTF8`.
  *
  * @param value - The value the header must carry
  * @returns The literal value, or its Base64 sentinel form
