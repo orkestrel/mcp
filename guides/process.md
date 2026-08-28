@@ -75,7 +75,6 @@ The classes each factory constructs, from `@orkestrel/process/server`, and the e
 | `Session`        | class | The same supervised child read as raw bytes over an open stdin channel. |
 | `ProcessManager` | class | The keyed registry of live children with auto-eviction on exit.         |
 | `ProcessError`   | class | A child-process failure with a stable machine-readable `code`.          |
-| `Retention`      | class | The bounded stream-head accumulator with delivered and retained totals. |
 
 ### Guards
 
@@ -116,7 +115,7 @@ The resolution and environment building blocks every spawn composes, from
 | `mergeEnvironment`          | function | Merge environment overrides into the environment one child receives.      |
 | `mergePlatformEnvironment`  | function | Merge explicit environment layers under one platform's key rules.         |
 
-### Retention helpers
+### Capture helpers
 
 The byte-bounding and result-assembly building blocks, from `@orkestrel/process/server`.
 
@@ -124,6 +123,7 @@ The byte-bounding and result-assembly building blocks, from `@orkestrel/process/
 | -------------------- | -------- | --------------------------------------------------------------------------- |
 | `trimHead`           | function | Keep at most `limit` leading bytes without splitting a UTF-8 sequence.      |
 | `trimTail`           | function | Keep at most `limit` trailing bytes without splitting a UTF-8 sequence.     |
+| `captureChunk`       | function | Bound one delivered stream chunk to the bytes a capture still has room for. |
 | `buildExecuteResult` | function | Assemble one frozen `ExecuteResult` from captured bytes and terminal facts. |
 
 ### Termination helpers
@@ -200,13 +200,12 @@ The contracts and options, all from `@orkestrel/process`.
 
 ### Server contracts
 
-The Node-side contracts, from `@orkestrel/process/server`. They support the Node child boundary and
-capture helper, so they stay out of the host-independent face.
+The Node-side contracts, from `@orkestrel/process/server`. They type the Node child boundary, so
+they stay out of the host-independent face.
 
-| API                  | Kind      | Summary                                                                                                    |
-| -------------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
-| `ProcessChild`       | interface | The child boundary the termination helpers drive — `pid`, `exitCode`, `signalCode`, `kill`, `once`, `off`. |
-| `RetentionInterface` | interface | The retention surface — readonly `delivered` and `retained` totals plus `retain(chunk, limit)`.            |
+| API            | Kind      | Summary                                                                                                    |
+| -------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
+| `ProcessChild` | interface | The child boundary the termination helpers drive — `pid`, `exitCode`, `signalCode`, `kill`, `once`, `off`. |
 
 ### Surface notes
 
@@ -222,25 +221,6 @@ call-signature methods are documented under [Methods](#methods).
 The public methods of each behavioral interface. `Process` implements `ProcessInterface` exactly,
 `Session` implements `SessionInterface` exactly, and `ProcessManager` implements
 `ProcessManagerInterface` exactly, so each table doubles as the class's instance-method surface.
-
-#### `RetentionInterface`
-
-`Retention` implements `RetentionInterface` exactly. The `retain` method records each delivered buffer
-and returns the retained head slice while room remains under the limit.
-
-| Method   | Returns               | Behavior                                                                 |
-| -------- | --------------------- | ------------------------------------------------------------------------ |
-| `retain` | `Buffer \| undefined` | Record a delivered buffer and return its retained slice, or `undefined`. |
-
-```ts
-import { Buffer } from 'node:buffer'
-import { Retention } from '@orkestrel/process/server'
-
-const retention = new Retention()
-retention.retain(Buffer.from('hello'), 3)?.toString('utf8') // 'hel'
-retention.delivered // 5
-retention.retained // 3
-```
 
 #### `ProcessInterface`
 
@@ -936,6 +916,21 @@ Each of `stdout` and `stderr` is capped at `limit` bytes, keeping the captured h
 splitting a UTF-8 sequence. `truncated` reports that a cap was reached; `execute` and `executeSync`
 differ in what they do about it.
 
+`execute` captures one byte past that bound, so the final trim reads the first excluded byte and
+retreats off a sequence the cut split. `executeSync` hands `limit` to the host as `maxBuffer` and
+arrives at the same place from the other side: a child that overruns that ceiling still returns the
+bytes the host had already read, which reach past `limit`, so the trim has its excluded byte there
+too. Neither function returns a split sequence, and the returned text is bounded by `limit` in each
+case. `captureChunk` applies the per-chunk bound `execute` captures under:
+
+```ts
+import { Buffer } from 'node:buffer'
+import { captureChunk } from '@orkestrel/process/server'
+
+captureChunk(Buffer.from('hello'), 3)?.toString('utf8') // 'hel'
+captureChunk('hello', 3) // undefined
+```
+
 One `truncated` flag covers both streams, so a consumer that parses `stdout` structurally cannot
 tell from the result which stream overflowed. Nothing in the result recovers that: both captured
 strings are trimmed to `limit`, so a stream that stopped exactly at the cap and a stream that ran
@@ -944,9 +939,9 @@ past it read the same length. Where the distinction matters, re-run with a `limi
 the child with `Process`, which bounds `lines` and `evidence` separately.
 
 `execute` keeps reading past the cap, discards the excess, and reports `truncated` without failing
-the run. `executeSync` hands `limit` to the host as its buffer ceiling, so an overflow ends the
-child with `SIGKILL` and reports `truncated` and `failed` together, with the partial output trimmed
-to `limit`.
+the run. `executeSync` has no such option: the host ends the child with `SIGKILL` when the overflow
+arrives, so its result reports `truncated` and `failed` together, with the partial output trimmed to
+`limit`.
 
 ```ts
 import { execute, executeSync } from '@orkestrel/process/server'
@@ -1387,6 +1382,7 @@ Each name on this surface that reads against a house rule is settled here rather
 | Name                     | Ruling                                                                                                                                                                                                                                                                                                                                                                        |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `execute`, `executeSync` | Use the fixed lifecycle verb for primary work to completion. `executeSync` keeps the ecosystem `Sync` suffix.                                                                                                                                                                                                                                                                 |
+| `detach`                 | Retained as a bare verb where the standalone-helper default reads `{verb}{Noun}`. The call site is unmistakable without the noun: `detach` takes a `ProcessCommand` and its own `DetachOptions`, and it is the one word for the spawn that is not awaited. `detachProcess` was refused for repeating the type the argument already carries.                                   |
 | `process`, `processes`   | Retained. A registry exposes its contents as accessors named for what they hold, so the manager reads `manager.process(id)` and `manager.processes()`.                                                                                                                                                                                                                        |
 | `strict`                 | Replaces `reject`. A boolean reads as an adjective asserting a state, and `reject` named the reaction rather than the mode. `strict: false` resolves with the failed result.                                                                                                                                                                                                  |
 | `evidence`, `backlog`    | Byte bounds are named for their subject where an entity has several, so a `Process` carries `evidence` and `backlog` rather than flavours of `limit`. A run has one bound, so it is named for the bound: `limit`.                                                                                                                                                             |
@@ -1477,28 +1473,24 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   nothing after a `stop`. The endings pulled apart by a descendant holding the pipe, the `exit` event
   and promise agreeing once, the pid and the frozen `evidence` tail beside the live `stderr` chunks,
   the spawn-fault path, and the `invalid` refusals.
-- [`tests/src/server/Retention.test.ts`](../tests/src/server/Retention.test.ts) — the stream-head
-  accumulator: delivered and retained totals across a truncating stream.
 - [`tests/src/server/ProcessManager.test.ts`](../tests/src/server/ProcessManager.test.ts) — the
   registry: `launch` registration and its `duplicate`, `protocol`, and `invalid` refusals, including
   a teardown started from inside the caller's own option getter, the terminal moment of the child
   that refusal spawned arriving before the barrier resolves, the eviction of a child whose
   descendant holds the pipe at the drain cutoff, the unforgeable eviction and its ordering, the
   query surface, the `stop` overloads, and emitter-last `destroy`.
-- [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the building blocks:
-  the resolver under `PATHEXT` and an extension-bearing name, each platform input to the quoted
-  batch builder and its percent-sign refusal, the environment merge under each platform input, the
-  UTF-8-safe byte bounds, the validators, the termination helpers, and `waitForClose` across a close
-  inside its deadline, a deadline that elapsed first, and the listeners it leaves behind.
-- [`tests/src/server/execution/execute.test.ts`](../tests/src/server/execution/execute.test.ts) —
-  the asynchronous one-shot run: owned inputs, buffered outcomes, failure delivery, cancellation,
-  timeout, capture bounds, spawn faults, and pre-spawn refusal.
-- [`tests/src/server/execution/executeSync.test.ts`](../tests/src/server/execution/executeSync.test.ts)
-  — the blocking one-shot run: owned inputs, root-only timeout, buffered outcomes, failure delivery,
-  capture bounds, argument integrity, spawn faults, and pre-spawn refusal.
-- [`tests/src/server/execution/detach.test.ts`](../tests/src/server/execution/detach.test.ts) — the
-  fire-and-forget spawn: owned inputs, detached process-group behavior, invalid-input refusal, and
-  the validated working directory.
+- [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the building blocks
+  and the spawns that compose them: the resolver under `PATHEXT` and an extension-bearing name, each
+  platform input to the quoted batch builder and its percent-sign refusal, the environment merge
+  under each platform input, the UTF-8-safe byte bounds retreating a cut to a code-point boundary,
+  the per-chunk capture bound and the byte it keeps past `limit`, the validators, the termination
+  helpers, and `waitForClose` across a close inside its deadline, a deadline that elapsed first, and
+  the listeners it leaves behind. The runs carry their own rows: the asynchronous one-shot run's
+  owned inputs, buffered outcomes, failure delivery, cancellation, timeout, capture bounds, spawn
+  faults, and pre-spawn refusal; the blocking run's root-only timeout and argument integrity beside
+  its own owned inputs, buffered outcomes, failure delivery, capture bounds, spawn faults, and
+  pre-spawn refusal; and the fire-and-forget spawn's owned inputs, detached process-group behavior,
+  invalid-input refusal, and the validated working directory.
 - [`tests/guides.test.ts`](../tests/guides.test.ts) — this guide: every documented name resolves,
   every public export is documented, and every flagship fence returns what its comments claim.
 - [`tests/distribution.test.ts`](../tests/distribution.test.ts) — the artifact a consumer installs:
