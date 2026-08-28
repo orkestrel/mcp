@@ -98,7 +98,7 @@
 		"@orkestrel/codec": "^0.0.1",
 		"@orkestrel/contract": "^0.0.13",
 		"@orkestrel/emitter": "^0.0.8",
-		"@orkestrel/process": "^0.0.8",
+		"@orkestrel/process": "^0.0.9",
 		"@orkestrel/sse": "^0.0.5",
 		"@orkestrel/tool": "^0.0.12",
 		"@orkestrel/websocket": "^0.0.10"
