@@ -32,7 +32,7 @@ import type {
 	MCPSubscriptionResult,
 	MCPSubscriptionResultMetaObject,
 } from './types.js'
-import { decodeBase64, encodeBase64 } from '@orkestrel/codec'
+import { decodeBase64, encodeBase64, encodeHex } from '@orkestrel/codec'
 import {
 	attempt,
 	cloneJSONRecord,
@@ -444,7 +444,7 @@ export async function digestJSON(
 	const serialized = serializeJSON(value, limits)
 	if (serialized === undefined) return undefined
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized))
-	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+	return encodeHex(new Uint8Array(digest))
 }
 
 /**
