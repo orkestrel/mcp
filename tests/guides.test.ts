@@ -29,18 +29,18 @@ import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { createStdioClientTransport, createStdioServer } from '@src/server'
 import {
+	computeSymbolKey,
 	createGuide,
 	createSource,
 	createSourceManager,
-	fenceImports,
+	extractFenceImports,
 	findMissing,
+	findMissingSymbols,
 	findUnexampled,
 	findUnlisted,
 	isExternalLink,
-	missingSymbols,
 	parseManifest,
 	resolveLink,
-	symbolKey,
 } from '@orkestrel/guide'
 import { requireValue, waitForCondition } from '@orkestrel/test'
 import { createScratch, readInventory } from '@orkestrel/test/server'
@@ -58,7 +58,7 @@ const MODULES = Object.freeze({
 	'@orkestrel/mcp/server': 'src/server',
 })
 /**
- * Declarations deliberately kept out of the barrel, as `symbolKey` strings.
+ * Declarations deliberately kept out of the barrel, as `computeSymbolKey` strings.
  *
  * A class that one-class-per-file evicted from its single consumer cannot become a local, so
  * it stays exported without being public. Naming it here is what makes that intentional rather
@@ -274,14 +274,14 @@ describe('public package faces', () => {
 
 	// An intentional recorded limit, not a guarantee: this row asserts what the check does NOT do,
 	// so it goes red only if someone IMPROVES the refusal, and that is deliberate. Both refusals —
-	// unmapped self subpath and repository alias — see exactly what `fenceImports` surfaces, and
+	// unmapped self subpath and repository alias — see exactly what `extractFenceImports` surfaces, and
 	// what it surfaces is decided by its grammar, stated in full in the `findMissingNamedImports`
 	// TSDoc: `import`, whitespace, optionally `type` AND its own trailing whitespace, then the
 	// brace, and so on to the quoted specifier. The fences below are EXAMPLES of statements that
 	// grammar excludes, never the list of them — a form nobody enumerated is settled by reading the
 	// grammar sentence, not by its absence here. The mixed default-and-named form is the one that
 	// surprises: those are named bindings Guide is meant to surface and does not, so it is an
-	// upstream `fenceImports` limit rather than a boundary chosen here, and no fence in `guides/`
+	// upstream `extractFenceImports` limit rather than a boundary chosen here, and no fence in `guides/`
 	// uses it today. Closing any of these locally would mean a second import reader beside Guide's,
 	// which AGENTS.md's ban on a second source-language analyzer forbids; the remedy that remains
 	// is to record the gap where a
@@ -346,7 +346,7 @@ describe('public package faces', () => {
 	it('characterizes what Guide drops raw and recovers projected, and checks the face', () => {
 		// Inside the brace: the statement is still matched, and the binding alone is lost.
 		expect(
-			fenceImports("import { createMCPRoutes /* server face */ } from '@orkestrel/mcp'"),
+			extractFenceImports("import { createMCPRoutes /* server face */ } from '@orkestrel/mcp'"),
 		).toEqual([{ specifier: '@orkestrel/mcp', names: [] }])
 		// Inside the brace, carrying its own `}`, and outside it in positions the raw
 		// reading admits only as whitespace: the whole statement is lost, not just the binding.
@@ -356,7 +356,7 @@ describe('public package faces', () => {
 			"import { createMCPRoutes } /* server face */ from '@orkestrel/mcp'",
 			"import { createMCPRoutes } from /* server face */ '@orkestrel/mcp'",
 		]) {
-			expect(fenceImports(fence)).toEqual([])
+			expect(extractFenceImports(fence)).toEqual([])
 		}
 		for (const fence of [
 			"import { createMCPRoutes /* server face */ } from '@orkestrel/mcp'",
@@ -432,18 +432,18 @@ describe('public package faces', () => {
 	// that a string-embedded import ENTERS the check; it can never show what entering amounts to
 	// when `sources.get` misses, so on its own it reads as a promise of a face. This fence sits
 	// outside that rule: an unmapped foreign specifier, kept verbatim by the projection exactly as
-	// the sibling row proves, surfaced by `fenceImports` as its explicit expectation records, reached
+	// the sibling row proves, surfaced by `extractFenceImports` as its explicit expectation records, reached
 	// by neither refusal, and therefore compared against NO face. The `[]` is that absence, not a
 	// clean bill. The sibling row is what catches a projection that started masking ordinary-string
 	// payloads — its `['createMCPRoutes']` collapses to `[]` if that ever happens, and this row would
-	// not, since `fenceImports` reads the raw fence and never consults the projection. What the
+	// not, since `extractFenceImports` reads the raw fence and never consults the projection. What the
 	// surfaced-statement expectation records here is narrower and still worth pinning: that Guide's
 	// grammar surfaces a string-embedded statement at all, without which the `[]` beside it would go
 	// vacuous. Do not re-specifier this row onto a mapped face: the sibling row already owns
 	// that population, and merging the two leaves the boundary uncontrolled again.
 	it('checks a string-embedded unmapped foreign import against no face', () => {
 		const fence = 'const snippet = "import { createMCPServer } from \'@orkestrel/mcp-extra\'"'
-		expect(fenceImports(fence)).toEqual([
+		expect(extractFenceImports(fence)).toEqual([
 			{ specifier: '@orkestrel/mcp-extra', names: ['createMCPServer'] },
 		])
 		expect(findMissingNamedImports(fence, SOURCES, '@orkestrel/mcp')).toEqual([])
@@ -567,10 +567,10 @@ for (const entry of POPULATIONS) {
 			expect(source.surface().length).toBeGreaterThan(0)
 		})
 		it('strands exactly its expected declarations', () => {
-			expect(missingSymbols(source.exports(), source.surface())).toEqual(entry.stranded)
+			expect(findMissingSymbols(source.exports(), source.surface())).toEqual(entry.stranded)
 		})
 		it('re-exports exactly its expected phantom symbols', () => {
-			expect(missingSymbols(source.surface(), source.exports())).toEqual(entry.phantom)
+			expect(findMissingSymbols(source.surface(), source.exports())).toEqual(entry.phantom)
 		})
 	})
 }
@@ -589,25 +589,25 @@ for (const entry of manifest) {
 			expect(guide.surface().length).toBeGreaterThan(0)
 		})
 		it('re-exports every direct declaration that is not named internal', () => {
-			const stranded = missingSymbols(source.exports(), source.surface())
+			const stranded = findMissingSymbols(source.exports(), source.surface())
 			expect(stranded.filter((key) => !INTERNAL.includes(key))).toEqual([])
 		})
 		it('names no symbol internal that the barrel already exports', () => {
-			const stranded = missingSymbols(source.exports(), source.surface())
+			const stranded = findMissingSymbols(source.exports(), source.surface())
 			expect(INTERNAL.filter((key) => !stranded.includes(key))).toEqual([])
 		})
 		it('re-exports only direct declarations', () => {
-			expect(missingSymbols(source.surface(), source.exports())).toEqual([])
+			expect(findMissingSymbols(source.surface(), source.exports())).toEqual([])
 		})
 		it('documents every barrel export', () => {
-			expect(missingSymbols(source.surface(), guide.surface())).toEqual([])
+			expect(findMissingSymbols(source.surface(), guide.surface())).toEqual([])
 		})
 		it('documents only barrel exports', () => {
-			expect(missingSymbols(guide.surface(), source.surface())).toEqual([])
+			expect(findMissingSymbols(guide.surface(), source.surface())).toEqual([])
 		})
 
 		it('exposes no hidden module-scope declarations', () => {
-			expect(source.hidden().map(symbolKey)).toEqual([])
+			expect(source.hidden().map(computeSymbolKey)).toEqual([])
 		})
 
 		for (const group of guide.methods()) {
