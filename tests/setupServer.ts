@@ -11,7 +11,7 @@ import { createServer as createHTTPServer, request as httpRequest } from 'node:h
 import { connect } from 'node:net'
 import { Duplex, PassThrough } from 'node:stream'
 import { isRecord } from '@orkestrel/contract'
-import { extractSourceLines, fenceImports, findMissing } from '@orkestrel/guide'
+import { extractSourceLines, extractFenceImports, findMissing } from '@orkestrel/guide'
 import { waitForDelay } from '@orkestrel/test'
 import {
 	computeWebSocketAccept,
@@ -26,14 +26,14 @@ import {
  *
  * The fence is read through Guide's own comment-aware source projection — `extractSourceLines`
  * replaces every comment and template span with aligned spaces and keeps quoted text verbatim —
- * and the projected text is then handed to `fenceImports`. What this helper owns is a boundary,
- * not a grammar: every statement `fenceImports` surfaces is checked, and nothing else is. A
+ * and the projected text is then handed to `extractFenceImports`. What this helper owns is a boundary,
+ * not a grammar: every statement `extractFenceImports` surfaces is checked, and nothing else is. A
  * mapped specifier's named bindings compare against that Source's barrel surface; an unmapped
  * true subpath of `root` and a repository alias (`@src/*`, `@app/*`) are refused, the latter
  * because a public guide example must import through a published specifier; a similarly
  * prefixed sibling package stays external.
  *
- * The membership rule is therefore `fenceImports`'s own grammar rather than "named-brace
+ * The membership rule is therefore `extractFenceImports`'s own grammar rather than "named-brace
  * imports", and that grammar is one sentence, read literally rather than paraphrased: the letters
  * `import`, at least one whitespace character, optionally `type` followed by at least one further
  * whitespace character, then `{`, a body containing no `}`, a closing `}`, optional whitespace,
@@ -52,7 +52,7 @@ import {
  * every clause, so it is checked like any other statement and its alias specifier throws.
  *
  * The mixed form is an upstream limit and not a choice made here: those named bindings are
- * exactly what `fenceImports` exists to surface, and it does not surface them, so a guide example
+ * exactly what `extractFenceImports` exists to surface, and it does not surface them, so a guide example
  * written that way against `@src/*` passes unremarked. No fence in `guides/` uses it, so the gap
  * is recorded rather than closed — closing it here would mean a second import reader beside
  * Guide's, which the roadmap forbids. The parity suite's `records example import forms no refusal
@@ -80,7 +80,7 @@ import {
  * @param sources - Exact public package specifiers mapped to their Source projections
  * @param root - The true self-package root specifier
  * @returns A frozen list of missing named imports
- * @throws When a statement `fenceImports` surfaces from the projected fence uses an unmapped root
+ * @throws When a statement `extractFenceImports` surfaces from the projected fence uses an unmapped root
  *   or true self-package subpath, or a repository alias specifier. Nothing outside the grammar
  *   sentence above reaches either refusal; a statement satisfying it enters the check — including
  *   text that is not an import — where a mapped specifier is compared against its face and an
@@ -101,7 +101,7 @@ export function findMissingNamedImports(
 	const projected = extractSourceLines(fence)
 		.map((line) => line.code)
 		.join('\n')
-	for (const { specifier, names } of fenceImports(projected)) {
+	for (const { specifier, names } of extractFenceImports(projected)) {
 		const source = sources.get(specifier)
 		if (source === undefined) {
 			if (specifier === root || specifier.startsWith(`${root}/`)) {
