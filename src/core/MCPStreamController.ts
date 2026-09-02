@@ -6,7 +6,8 @@ import type {
 } from './types.js'
 
 /**
- * The one cancellation engine every modern held-open result leaves `MCPServer` through.
+ * Provides the one cancellation engine every modern held-open result leaves `MCPServer`
+ * through.
  *
  * @remarks
  * A native async generator decides cancellation with a QUEUE: `return()` and `throw()` wait

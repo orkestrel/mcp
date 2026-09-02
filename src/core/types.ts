@@ -20,11 +20,11 @@ import type { ToolCall, ToolInterface, ToolManagerInterface, ToolResult } from '
 // `invocation.id === undefined` and `response.error === undefined` narrow the union
 // at the one place a caller asks.
 
-/** A JSON-RPC 2.0 correlation id — the value a request and its response share. */
+/** Represents a JSON-RPC 2.0 correlation id — the value a request and its response share. */
 export type JSONRPCId = string | number
 
 /**
- * A JSON-RPC 2.0 request — a `method` call with optional `params`, correlated to
+ * Represents a JSON-RPC 2.0 request — a `method` call with optional `params`, correlated to
  * its response by the `id` it REQUIRES.
  *
  * @remarks
@@ -37,13 +37,13 @@ export interface JSONRPCRequest {
 	readonly method: string
 	/** Correlates the request with its response. */
 	readonly id: JSONRPCId
-	/** The method's open argument record (narrowed by the handler). */
+	/** Holds the method's open argument record (narrowed by the handler). */
 	readonly params?: Readonly<Record<string, unknown>>
 }
 
 /**
- * A JSON-RPC 2.0 notification — a fire-and-forget `method` call that is answered by
- * nothing (for example, `notifications/initialized`).
+ * Represents a JSON-RPC 2.0 notification — a fire-and-forget `method` call that is answered
+ * by nothing (for example, `notifications/initialized`).
  *
  * @remarks
  * A notification MUST NOT carry an `id`, so `id` is declared `never`: a
@@ -53,14 +53,14 @@ export interface JSONRPCRequest {
 export interface JSONRPCNotification {
 	readonly jsonrpc: '2.0'
 	readonly method: string
-	/** Forbidden — an id is what makes a call a {@link JSONRPCRequest} instead. */
+	/** Forbids this member; an id is what makes a call a {@link JSONRPCRequest} instead. */
 	readonly id?: never
-	/** The method's open argument record (narrowed by the handler). */
+	/** Holds the method's open argument record (narrowed by the handler). */
 	readonly params?: Readonly<Record<string, unknown>>
 }
 
 /**
- * One inbound JSON-RPC call — the common dispatch input.
+ * Represents one inbound JSON-RPC call — the common dispatch input.
  *
  * @remarks
  * Narrow the arms apart on the id: `invocation.id === undefined` is the notification
@@ -69,7 +69,7 @@ export interface JSONRPCNotification {
 export type JSONRPCInvocation = JSONRPCRequest | JSONRPCNotification
 
 /**
- * A JSON-RPC 2.0 error object — the `error` member of a
+ * Represents a JSON-RPC 2.0 error object — the `error` member of a
  * {@link JSONRPCErrorResponse}.
  *
  * @remarks
@@ -84,8 +84,8 @@ export interface JSONRPCError {
 }
 
 /**
- * The success arm of a JSON-RPC 2.0 response — the request's `id` echoed with the
- * method's `result`.
+ * Represents the success arm of a JSON-RPC 2.0 response — the request's `id` echoed with
+ * the method's `result`.
  *
  * @remarks
  * A result answers a request, and a request always has a readable `id`, so `id` is
@@ -96,13 +96,13 @@ export interface JSONRPCResultResponse {
 	readonly jsonrpc: '2.0'
 	readonly id: JSONRPCId
 	readonly result: MCPResult | MCPLegacyResult
-	/** Forbidden — an answer carries a result or an error, never both. */
+	/** Forbids this member; an answer carries a result or an error, never both. */
 	readonly error?: never
 }
 
 /**
- * The failure arm of a JSON-RPC 2.0 response — the request's `id` echoed with the
- * {@link JSONRPCError} that ended it.
+ * Represents the failure arm of a JSON-RPC 2.0 response — the request's `id` echoed with
+ * the {@link JSONRPCError} that ended it.
  *
  * @remarks
  * `id` is OMITTED, never `null`, when the request could not be parsed or its id
@@ -111,15 +111,15 @@ export interface JSONRPCResultResponse {
  */
 export interface JSONRPCErrorResponse {
 	readonly jsonrpc: '2.0'
-	/** The failed request's id; ABSENT when no id could be read. */
+	/** Holds the failed request's id; ABSENT when no id could be read. */
 	readonly id?: JSONRPCId
 	readonly error: JSONRPCError
-	/** Forbidden — an answer carries a result or an error, never both. */
+	/** Forbids this member; an answer carries a result or an error, never both. */
 	readonly result?: never
 }
 
 /**
- * A JSON-RPC 2.0 response — the answer to one {@link JSONRPCRequest}.
+ * Represents a JSON-RPC 2.0 response — the answer to one {@link JSONRPCRequest}.
  *
  * @remarks
  * The arms are mutually exclusive in the type and in their guards. Narrow them
@@ -128,7 +128,7 @@ export interface JSONRPCErrorResponse {
 export type JSONRPCResponse = JSONRPCResultResponse | JSONRPCErrorResponse
 
 /**
- * A JSON-RPC 2.0 message on the wire — a {@link JSONRPCInvocation} or a
+ * Represents a JSON-RPC 2.0 message on the wire — a {@link JSONRPCInvocation} or a
  * {@link JSONRPCResponse}.
  *
  * @remarks
@@ -141,7 +141,7 @@ export type JSONRPCMessage = JSONRPCInvocation | JSONRPCResponse
 // onto the JSON-RPC `result` member.
 
 /**
- * One modern MCP result — the open contract every dated-revision result satisfies.
+ * Represents one modern MCP result — the open contract every dated-revision result satisfies.
  *
  * @remarks
  * The dated schema requires a `resultType` on EVERY modern result and leaves the
@@ -159,15 +159,17 @@ export type JSONRPCMessage = JSONRPCInvocation | JSONRPCResponse
  * answer any registered method through, and nowhere else.
  */
 export interface MCPResult {
-	/** The result's protocol discriminator (`'complete'`, `'input_required'`, or a later value). */
+	/**
+	 * Names the result's protocol discriminator (`'complete'`, `'input_required'`, or a later value).
+	 */
 	readonly resultType: string
-	/** Open modern protocol metadata, including reserved namespaced keys. */
+	/** Carries open modern protocol metadata, including reserved namespaced keys. */
 	readonly _meta?: MCPResultMetaObject
 	readonly [key: string]: unknown
 }
 
 /**
- * One legacy-era result — the payload of an answer produced by the fixed legacy
+ * Represents one legacy-era result — the payload of an answer produced by the fixed legacy
  * method switch.
  *
  * @remarks
@@ -181,22 +183,22 @@ export interface MCPResult {
  * This arm exists only for the optional legacy server decorator and client transport adapter.
  */
 export interface MCPLegacyResult {
-	/** Forbidden — the legacy revision has no result discriminator. */
+	/** Forbids this member; the legacy revision has no result discriminator. */
 	readonly resultType?: never
 	readonly [key: string]: unknown
 }
 
-/** A modern protocol revision supported by the bare MCP server. */
+/** Names a modern protocol revision supported by the bare MCP server. */
 export type MCPModernVersion = '2026-07-28'
 
-/** A legacy protocol revision supported by the optional legacy decorators. */
+/** Names a legacy protocol revision supported by the optional legacy decorators. */
 export type MCPLegacyVersion = '2025-11-25' | '2025-06-18'
 
-/** A protocol revision supported by an MCP package surface. */
+/** Names a protocol revision supported by an MCP package surface. */
 export type MCPVersion = MCPModernVersion | MCPLegacyVersion
 
 /**
- * Exact finite JSON metadata carried by MCP `_meta` envelopes.
+ * Represents the exact finite JSON metadata carried by MCP `_meta` envelopes.
  *
  * @remarks
  * The `Object` suffix is not a role suffix from the type table — it NAMES THE SHAPE.
@@ -207,7 +209,7 @@ export type MCPVersion = MCPModernVersion | MCPLegacyVersion
  */
 export type MCPMetaObject = Readonly<Record<string, JSONValue>>
 
-/** The dated logging levels accepted by MCP request metadata. */
+/** Names the dated logging levels accepted by MCP request metadata. */
 export type MCPLoggingLevel =
 	| 'debug'
 	| 'info'
@@ -218,7 +220,7 @@ export type MCPLoggingLevel =
 	| 'alert'
 	| 'emergency'
 
-/** The open dated client-capability declaration carried by modern requests. */
+/** Represents the open dated client-capability declaration carried by modern requests. */
 export type MCPClientCapabilities = Readonly<Record<string, MCPMetaObject>> & {
 	readonly experimental?: Readonly<Record<string, MCPMetaObject>>
 	readonly roots?: MCPMetaObject
@@ -233,7 +235,7 @@ export type MCPClientCapabilities = Readonly<Record<string, MCPMetaObject>> & {
 	readonly extensions?: Readonly<Record<string, MCPMetaObject>>
 }
 
-/** The open dated server-capability declaration returned by discovery. */
+/** Represents the open dated server-capability declaration returned by discovery. */
 export type MCPServerCapabilities = Readonly<Record<string, MCPMetaObject>> & {
 	readonly experimental?: Readonly<Record<string, MCPMetaObject>>
 	readonly logging?: MCPMetaObject
@@ -248,7 +250,7 @@ export type MCPServerCapabilities = Readonly<Record<string, MCPMetaObject>> & {
 }
 
 /**
- * The wire era selected by an MCP request's structure.
+ * Names the wire era selected by an MCP request's structure.
  *
  * @remarks
  * `'modern'` and `'legacy'`, and not the boolean such a union would usually be: this is
@@ -260,17 +262,17 @@ export type MCPServerCapabilities = Readonly<Record<string, MCPMetaObject>> & {
  */
 export type MCPEra = 'modern' | 'legacy'
 
-/** The intended recipient of annotated MCP content. */
+/** Names the intended recipient of annotated MCP content. */
 export type MCPRole = 'user' | 'assistant'
 
-/** Optional audience, importance, and modification hints attached to MCP content. */
+/** Represents the optional audience, importance, and modification hints on MCP content. */
 export interface MCPAnnotations {
 	readonly audience?: readonly MCPRole[]
 	readonly priority?: number
 	readonly lastModified?: string
 }
 
-/** One sized, themed icon associated with an MCP resource link. */
+/** Represents one sized, themed icon associated with an MCP resource link. */
 export type MCPIcon = MCPMetaObject & {
 	readonly src: string
 	readonly mimeType?: string
@@ -278,7 +280,7 @@ export type MCPIcon = MCPMetaObject & {
 	readonly theme?: 'light' | 'dark'
 }
 
-/** A textual MCP content block. */
+/** Represents a textual MCP content block. */
 export interface MCPTextContent {
 	readonly type: 'text'
 	readonly text: string
@@ -286,7 +288,7 @@ export interface MCPTextContent {
 	readonly _meta?: MCPMetaObject
 }
 
-/** A base64-encoded image MCP content block. */
+/** Represents a base64-encoded image MCP content block. */
 export interface MCPImageContent {
 	readonly type: 'image'
 	readonly data: string
@@ -295,7 +297,7 @@ export interface MCPImageContent {
 	readonly _meta?: MCPMetaObject
 }
 
-/** A base64-encoded audio MCP content block. */
+/** Represents a base64-encoded audio MCP content block. */
 export interface MCPAudioContent {
 	readonly type: 'audio'
 	readonly data: string
@@ -304,7 +306,7 @@ export interface MCPAudioContent {
 	readonly _meta?: MCPMetaObject
 }
 
-/** A link to an MCP resource, including its exact dated-schema metadata. */
+/** Represents a link to an MCP resource, including its exact dated-schema metadata. */
 export interface MCPResourceLink {
 	readonly type: 'resource_link'
 	readonly name: string
@@ -318,7 +320,7 @@ export interface MCPResourceLink {
 	readonly _meta?: MCPMetaObject
 }
 
-/** One resource descriptor advertised by `resources/list`. */
+/** Represents one resource descriptor advertised by `resources/list`. */
 export interface MCPResource {
 	readonly uri: string
 	readonly name: string
@@ -331,7 +333,7 @@ export interface MCPResource {
 	readonly _meta?: MCPMetaObject
 }
 
-/** One RFC 6570 resource-template descriptor advertised by `resources/templates/list`. */
+/** Represents one RFC 6570 resource-template descriptor advertised by `resources/templates/list`. */
 export interface MCPResourceTemplate {
 	readonly uriTemplate: string
 	readonly name: string
@@ -343,7 +345,7 @@ export interface MCPResourceTemplate {
 	readonly _meta?: MCPMetaObject
 }
 
-/** One argument descriptor advertised with an MCP prompt. */
+/** Represents one argument descriptor advertised with an MCP prompt. */
 export interface MCPPromptArgument {
 	readonly name: string
 	readonly title?: string
@@ -351,7 +353,7 @@ export interface MCPPromptArgument {
 	readonly required?: boolean
 }
 
-/** One prompt descriptor advertised by `prompts/list`. */
+/** Represents one prompt descriptor advertised by `prompts/list`. */
 export interface MCPPrompt {
 	readonly name: string
 	readonly title?: string
@@ -361,13 +363,13 @@ export interface MCPPrompt {
 	readonly _meta?: MCPMetaObject
 }
 
-/** One user or assistant message returned by `prompts/get`. */
+/** Represents one user or assistant message returned by `prompts/get`. */
 export interface MCPPromptMessage {
 	readonly role: 'user' | 'assistant'
 	readonly content: MCPContent
 }
 
-/** Embedded textual resource contents. */
+/** Represents embedded textual resource contents. */
 export interface MCPTextResource {
 	readonly uri: string
 	readonly mimeType?: string
@@ -375,7 +377,7 @@ export interface MCPTextResource {
 	readonly text: string
 }
 
-/** Embedded base64-encoded resource contents. */
+/** Represents embedded base64-encoded resource contents. */
 export interface MCPBlobResource {
 	readonly uri: string
 	readonly mimeType?: string
@@ -384,7 +386,7 @@ export interface MCPBlobResource {
 }
 
 /**
- * Resource contents returned by `resources/read`.
+ * Represents the resource contents returned by `resources/read`.
  *
  * @remarks
  * The wire has no tag field. Presence of `text` or `blob` is the structural
@@ -394,7 +396,7 @@ export type MCPResourceContents =
 	| (MCPTextResource & { readonly blob?: never })
 	| (MCPBlobResource & { readonly text?: never })
 
-/** An MCP content block carrying embedded text or blob resource contents. */
+/** Represents an MCP content block carrying embedded text or blob resource contents. */
 export interface MCPEmbeddedResource {
 	readonly type: 'resource'
 	readonly resource: MCPTextResource | MCPBlobResource
@@ -402,7 +404,7 @@ export interface MCPEmbeddedResource {
 	readonly _meta?: MCPMetaObject
 }
 
-/** One exact dated-schema tool content block. */
+/** Represents one exact dated-schema tool content block. */
 export type MCPContent =
 	| MCPTextContent
 	| MCPImageContent
@@ -410,7 +412,7 @@ export type MCPContent =
 	| MCPResourceLink
 	| MCPEmbeddedResource
 
-/** A model's request to call one tool, carried inside a sampling completion. */
+/** Represents a model's request to call one tool, carried inside a sampling completion. */
 export interface MCPToolUseContent {
 	readonly type: 'tool_use'
 	readonly id: string
@@ -419,7 +421,7 @@ export interface MCPToolUseContent {
 	readonly _meta?: MCPMetaObject
 }
 
-/** One tool's outcome returned to the model, carried inside a sampling completion. */
+/** Represents one tool's outcome returned to the model, carried in a sampling completion. */
 export interface MCPToolResultContent {
 	readonly type: 'tool_result'
 	readonly toolUseId: string
@@ -430,7 +432,7 @@ export interface MCPToolResultContent {
 }
 
 /**
- * One block a sampling completion may carry.
+ * Represents one block a sampling completion may carry.
  *
  * @remarks
  * The dated schema's `SamplingMessageContentBlock`: the text, image, and audio blocks
@@ -446,7 +448,7 @@ export type MCPSampleContent =
 	| MCPToolResultContent
 
 /**
- * A `tools/call` result BEFORE the modern stamp — the executed tool's output as
+ * Represents a `tools/call` result BEFORE the modern stamp — the executed tool's output as
  * `content` blocks, with `isError` flagging a tool failure.
  *
  * @remarks
@@ -466,27 +468,27 @@ export type MCPSampleContent =
  */
 export type MCPUnstampedCallResult = {
 	readonly content: readonly MCPContent[]
-	/** The successful tool value in its original structure; absent when no value was returned. */
+	/** Holds the successful tool value in its original structure; absent when none was returned. */
 	readonly structuredContent?: JSONValue
-	/** `true` when the tool failed — its error text is in `content`. */
+	/** Flags a failed tool — its error text is in `content`. */
 	readonly isError?: boolean
-	/** Open modern protocol metadata, including reserved namespaced keys. */
+	/** Carries open modern protocol metadata, including reserved namespaced keys. */
 	readonly _meta?: MCPResultMetaObject
 }
 
-/** A required complete modern `tools/call` result. */
+/** Represents a required complete modern `tools/call` result. */
 export type MCPCallResult = MCPUnstampedCallResult & { readonly resultType: 'complete' }
 
-/** The primitive value shapes accepted in an MCP form elicitation response. */
+/** Names the primitive value shapes accepted in an MCP form elicitation response. */
 export type MCPElicitValue = string | number | boolean | readonly string[]
 
-/** One titled value in a form elicitation's single- or multi-select schema. */
+/** Represents one titled value in a form elicitation's single- or multi-select schema. */
 export interface MCPElicitChoice {
 	readonly const: string
 	readonly title: string
 }
 
-/** One restricted single-field schema accepted by MCP form-mode elicitation. */
+/** Represents one restricted single-field schema accepted by MCP form-mode elicitation. */
 export type MCPElicitFieldSchema =
 	| {
 			readonly type: 'boolean'
@@ -550,7 +552,7 @@ export type MCPElicitFieldSchema =
 				  }
 	  }
 
-/** The restricted top-level object schema carried by a form-mode elicitation request. */
+/** Represents the restricted top-level object schema in a form-mode elicitation request. */
 export interface MCPElicitSchema extends Readonly<Record<string, unknown>> {
 	readonly $schema?: string
 	readonly type: 'object'
@@ -558,37 +560,37 @@ export interface MCPElicitSchema extends Readonly<Record<string, unknown>> {
 	readonly required?: readonly string[]
 }
 
-/** The parameters of a form-mode `elicitation/create` request. */
+/** Represents the parameters of a form-mode `elicitation/create` request. */
 export interface MCPElicitForm {
 	readonly mode?: 'form'
 	readonly message: string
 	readonly requestedSchema: MCPElicitSchema
 }
 
-/** The parameters of a URL-mode `elicitation/create` request. */
+/** Represents the parameters of a URL-mode `elicitation/create` request. */
 export interface MCPElicitURL {
 	readonly mode: 'url'
 	readonly message: string
 	readonly url: string
 }
 
-/** The mode-discriminated parameters of an `elicitation/create` request. */
+/** Represents the mode-discriminated parameters of an `elicitation/create` request. */
 export type MCPElicitParams = MCPElicitForm | MCPElicitURL
 
-/** An embedded MCP request asking the client to elicit input from its operator. */
+/** Represents an embedded MCP request asking the client to elicit input from its operator. */
 export interface MCPElicitRequest {
 	readonly method: 'elicitation/create'
 	readonly params: MCPElicitParams
 }
 
-/** The result supplied by a client for one embedded {@link MCPElicitRequest}. */
+/** Represents the result supplied by a client for one embedded {@link MCPElicitRequest}. */
 export interface MCPElicitResult {
 	readonly action: 'accept' | 'decline' | 'cancel'
 	readonly content?: Readonly<Record<string, MCPElicitValue>>
 }
 
 /**
- * One embedded multi-round-trip request.
+ * Represents one embedded multi-round-trip request.
  *
  * @remarks
  * A consumer composes any of the three arms into an {@link MCPInputRound}, and this server
@@ -608,24 +610,24 @@ export type MCPInputRequest =
 			readonly params?: Readonly<Record<string, unknown>>
 	  }
 
-/** A consumer-keyed map of embedded requests the client must fulfil. */
+/** Represents a consumer-keyed map of embedded requests the client must fulfil. */
 export type MCPInputRequestMap = Readonly<Record<string, MCPInputRequest>>
 
-/** One filesystem root a client exposes to a server. */
+/** Represents one filesystem root a client exposes to a server. */
 export interface MCPRoot {
 	readonly uri: string
 	readonly name?: string
 	readonly _meta?: MCPMetaObject
 }
 
-/** The client's answer to one embedded `roots/list` request. */
+/** Represents the client's answer to one embedded `roots/list` request. */
 export interface MCPRootResult {
 	readonly roots: readonly MCPRoot[]
 	readonly _meta?: MCPMetaObject
 }
 
 /**
- * The client's answer to one embedded `sampling/createMessage` request.
+ * Represents the client's answer to one embedded `sampling/createMessage` request.
  *
  * @remarks
  * `content` is the dated schema's own `anyOf`: one {@link MCPSampleContent} block, or an array
@@ -644,7 +646,7 @@ export interface MCPSampleResult {
 }
 
 /**
- * One client answer to one embedded input request.
+ * Represents one client answer to one embedded input request.
  *
  * @remarks
  * The arms are discriminated by their own required members — `action` for an elicitation,
@@ -655,11 +657,12 @@ export interface MCPSampleResult {
  */
 export type MCPInputResponse = MCPElicitResult | MCPSampleResult | MCPRootResult
 
-/** A consumer-keyed map of the client's answers to one issued round. */
+/** Represents a consumer-keyed map of the client's answers to one issued round. */
 export type MCPInputResponseMap = Readonly<Record<string, MCPInputResponse>>
 
 /**
- * An incomplete modern result carrying input requests, protected request state, or both.
+ * Represents an incomplete modern result carrying input requests, protected request state,
+ * or both.
  *
  * @remarks
  * The union enforces the protocol's at-least-one-of rule at the type boundary:
@@ -680,7 +683,7 @@ export type MCPInputResult =
 	  }
 
 /**
- * The integrity-protected payload carried inside an opaque `requestState` token.
+ * Represents the integrity-protected payload carried inside an opaque `requestState` token.
  *
  * @remarks
  * `id` is the FIRST round's request id and stays bound across every later round, so a
@@ -697,25 +700,26 @@ export interface MCPInputState {
 	readonly id: JSONRPCId
 	readonly version: string
 	readonly method: string
-	/** The exact round issued under this state, enforced answer by answer on the retry. */
+	/** Holds the exact round issued under this state, enforced answer by answer on the retry. */
 	readonly requests: MCPInputRequestMap
 	readonly name: string
 	readonly digest: string
 	readonly state?: JSONValue
 }
 
-/** The call-in-hand context supplied to an {@link MCPInputHandler}. */
+/** Represents the call-in-hand context supplied to an {@link MCPInputHandler}. */
 export interface MCPInputContext {
 	readonly request: JSONRPCRequest
 	readonly name: string
 	readonly arguments: Readonly<Record<string, unknown>>
-	/** Every verified answer to the previous round, under the keys that round assigned. */
+	/** Holds every verified answer to the previous round, under the keys that round assigned. */
 	readonly responses?: MCPInputResponseMap
 	readonly state?: JSONValue
 }
 
 /**
- * One consumer-composed round of embedded requests, before MCP seals its continuation state.
+ * Represents one consumer-composed round of embedded requests, before MCP seals its
+ * continuation state.
  *
  * @remarks
  * The consumer owns the keys and the request kinds, because the keys are how it correlates
@@ -728,7 +732,7 @@ export interface MCPInputRound {
 	readonly state?: JSONValue
 }
 
-/** Host-neutral integrity and storage port for opaque MRTR continuation state. */
+/** Represents the host-neutral integrity and storage port for opaque MRTR continuation state. */
 export interface MCPContinuationInterface {
 	/** Protects a canonical state string and returns the opaque client carrier. */
 	seal(value: string): Promise<string>
@@ -760,11 +764,13 @@ export type MCPPrincipalHandler = (
 	options: MCPMethodOptions,
 ) => string | Promise<string>
 
-/** Consumer policy for the server's multi-round-trip input mechanism. */
+/** Configures the consumer policy for the server's multi-round-trip input mechanism. */
 export interface MCPInputOptions {
-	/** Host-neutral integrity/storage port for the opaque continuation carrier. */
+	/** Holds the host-neutral integrity/storage port for the opaque continuation carrier. */
 	readonly continuation: MCPContinuationInterface
-	/** Continuation lifetime in milliseconds; required so MCP never invents an expiry policy. */
+	/**
+	 * Sets the continuation lifetime in milliseconds; required so MCP never invents an expiry policy.
+	 */
 	readonly ttl: number
 	/** Resolves the authenticated principal for the call in hand. */
 	readonly principal: MCPPrincipalHandler
@@ -772,22 +778,25 @@ export interface MCPInputOptions {
 	readonly selector: MCPInputHandler
 }
 
-/** One official request-scoped progress payload. */
+/** Represents one official request-scoped progress payload. */
 export interface MCPProgress {
 	readonly progress: number
 	readonly total?: number
 	readonly message?: string
 }
 
-/** Backpressured request-scoped progress reporter supplied to an explicit executor. */
+/**
+ * Reports request-scoped progress under backpressure — the reporter supplied to an explicit
+ * executor.
+ */
 export interface MCPProgressInterface {
 	/** Reports one finite, strictly increasing progress value and awaits its consumption. */
 	report(progress: MCPProgress): Promise<void>
 }
 
 /**
- * The OWNING half of one progress slot — {@link MCPProgressInterface} plus the consuming and
- * stopping the slot's owner performs.
+ * Represents the OWNING half of one progress slot — {@link MCPProgressInterface} plus the
+ * consuming and stopping the slot's owner performs.
  *
  * @remarks
  * Two interfaces over one entity because two parties hold it and they are owed different
@@ -829,7 +838,7 @@ export interface MCPProgressOwnerInterface extends MCPProgressInterface {
  */
 export type MCPProgressHandler = (progress: MCPProgress) => void
 
-/** The explicit, host-neutral context for one modern tool execution. */
+/** Represents the explicit, host-neutral context for one modern tool execution. */
 export interface MCPExecutionContext {
 	readonly request: JSONRPCRequest
 	readonly call: ToolCall
@@ -866,7 +875,7 @@ export type MCPExecutionHandler = (
 // than on the server.
 
 /**
- * The lifecycle state of one durable task.
+ * Names the lifecycle state of one durable task.
  *
  * @remarks
  * `completed`, `failed`, and `cancelled` are TERMINAL: a task that reaches one never
@@ -884,7 +893,8 @@ export type MCPExecutionHandler = (
 export type MCPTaskStatus = 'working' | 'input_required' | 'completed' | 'failed' | 'cancelled'
 
 /**
- * One durable task's wire snapshot — the payload a deferred `tools/call` answers with.
+ * Represents one durable task's wire snapshot — the payload a deferred `tools/call` answers
+ * with.
  *
  * @remarks
  * Every field name here is a WIRE SPELLING carried verbatim from the extension's
@@ -897,22 +907,22 @@ export type MCPTaskStatus = 'working' | 'input_required' | 'completed' | 'failed
  * again; a manager that pushes notifications instead simply omits it.
  */
 export type MCPTask = {
-	/** The durable handle a later `tasks/get` / `tasks/update` / `tasks/cancel` names. */
+	/** Holds the durable handle a later `tasks/get` / `tasks/update` / `tasks/cancel` names. */
 	readonly taskId: string
 	readonly status: MCPTaskStatus
-	/** Optional human-readable detail about the current status. */
+	/** Carries optional human-readable detail about the current status. */
 	readonly statusMessage?: string
 	readonly createdAt: string
 	readonly lastUpdatedAt: string
-	/** Remaining lifetime in milliseconds, or `null` when the task does not expire. */
+	/** Reports the remaining lifetime in milliseconds, or `null` when the task does not expire. */
 	readonly ttlMs: number | null
-	/** Suggested milliseconds between polls; absent when the manager suggests none. */
+	/** Suggests the milliseconds between polls; absent when the manager suggests none. */
 	readonly pollIntervalMs?: number
 }
 
 /**
- * One task snapshot together with whatever its status carries — the shape `tasks/get`
- * and a task notification report.
+ * Represents one task snapshot together with whatever its status carries — the shape
+ * `tasks/get` and a task notification report.
  *
  * @remarks
  * The union is the schema's own: `input_required` carries the requests to answer,
@@ -937,7 +947,7 @@ export type MCPTaskDetail =
 	| (MCPTask & { readonly status: 'cancelled' })
 
 /**
- * The wire answer to `tasks/get` — one snapshot under the completed-result stamp.
+ * Represents the wire answer to `tasks/get` — one snapshot under the completed-result stamp.
  *
  * @remarks
  * DISTINCT from {@link MCPTaskDetail}, and the distinction is the whole point. A detail is
@@ -953,13 +963,13 @@ export type MCPTaskDetail =
  */
 export type MCPTaskDetailResult = MCPTaskDetail & {
 	readonly resultType: 'complete'
-	/** Open modern protocol metadata, including reserved namespaced keys. */
+	/** Carries open modern protocol metadata, including reserved namespaced keys. */
 	readonly _meta?: MCPResultMetaObject
 }
 
 /**
- * The parameters of a `notifications/tasks` frame — one snapshot, flat, optionally stamped
- * with the subscription that delivered it.
+ * Represents the parameters of a `notifications/tasks` frame — one snapshot, flat, optionally
+ * stamped with the subscription that delivered it.
  *
  * @remarks
  * FLAT, and that is the schema's shape rather than a choice: the extension types these
@@ -973,13 +983,13 @@ export type MCPTaskDetailResult = MCPTaskDetail & {
  * {@link MCPNotificationMetaObject}.
  */
 export type MCPTaskNotificationParams = MCPTaskDetail & {
-	/** Open notification metadata, including the reserved subscription stamp. */
+	/** Carries open notification metadata, including the reserved subscription stamp. */
 	readonly _meta?: MCPNotificationMetaObject
 	readonly [key: string]: unknown
 }
 
 /**
- * One well-formed `notifications/tasks` frame — the notification
+ * Represents one well-formed `notifications/tasks` frame — the notification
  * {@link import('./validators.js').isMCPTaskNotification} admits.
  *
  * @remarks
@@ -993,7 +1003,7 @@ export type MCPTaskNotification = JSONRPCNotification & {
 }
 
 /**
- * The modern `tools/call` result announcing that the call became a durable task.
+ * Represents the modern `tools/call` result announcing that the call became a durable task.
  *
  * @remarks
  * The only result in this package whose `resultType` is `'task'`. It is FLAT — the
@@ -1003,12 +1013,12 @@ export type MCPTaskNotification = JSONRPCNotification & {
  */
 export type MCPTaskResult = MCPTask & {
 	readonly resultType: 'task'
-	/** Open modern protocol metadata, including reserved namespaced keys. */
+	/** Carries open modern protocol metadata, including reserved namespaced keys. */
 	readonly _meta?: MCPResultMetaObject
 }
 
 /**
- * The call-in-hand context supplied to an {@link MCPTaskHandler} and to
+ * Represents the call-in-hand context supplied to an {@link MCPTaskHandler} and to
  * {@link MCPTaskManagerInterface.start}.
  *
  * @remarks
@@ -1033,8 +1043,8 @@ export interface MCPTaskContext {
 }
 
 /**
- * The consumer-owned durable store behind the Tasks extension — the port this package
- * creates tasks through and reads them back from.
+ * Represents the consumer-owned durable store behind the Tasks extension — the port this
+ * package creates tasks through and reads them back from.
  *
  * @remarks
  * There is deliberately NO plural accessor. The extension defines no `tasks/list`, and
@@ -1165,7 +1175,7 @@ export type MCPTaskHandler = (
 ) => string | undefined | Promise<string | undefined>
 
 /**
- * Consumer policy for the server's stable Tasks extension.
+ * Configures the consumer policy for the server's stable Tasks extension.
  *
  * @remarks
  * Supplying this is what turns the extension on: an unconfigured server advertises
@@ -1173,14 +1183,14 @@ export type MCPTaskHandler = (
  * reply from a server that does not implement an optional extension.
  */
 export interface MCPTaskOptions {
-	/** The durable store the server creates tasks in and reads them back from. */
+	/** Holds the durable store the server creates tasks in and reads them back from. */
 	readonly tasks: MCPTaskManagerInterface
 	/** Decides whether the call in hand is deferred, and under which stable key. */
 	readonly defer: MCPTaskHandler
 }
 
 /**
- * One entry of the MCP `tools/list` result — a tool's `name`, optional
+ * Represents one entry of the MCP `tools/list` result — a tool's `name`, optional
  * `description`, and its JSON-Schema `inputSchema`.
  *
  * @remarks
@@ -1195,7 +1205,7 @@ export interface MCPToolDescriptor {
 }
 
 /**
- * The JSON Schema types an `x-mcp-header` annotation may sit on.
+ * Names the JSON Schema types an `x-mcp-header` annotation may sit on.
  *
  * @remarks
  * The protocol admits primitives alone, and it splits the JSON Schema number tower: `integer`
@@ -1206,7 +1216,7 @@ export interface MCPToolDescriptor {
 export type MCPHeaderPrimitive = 'boolean' | 'integer' | 'string'
 
 /**
- * One `x-mcp-header` projection a tool's `inputSchema` declares.
+ * Represents one `x-mcp-header` projection a tool's `inputSchema` declares.
  *
  * @remarks
  * - `name` — the annotation's own value, appended verbatim to {@link MCP_PARAM_PREFIX} to
@@ -1222,29 +1232,29 @@ export interface MCPHeaderParameter {
 	readonly primitive: MCPHeaderPrimitive
 }
 
-/** Shared cursor parameters for every paginated modern list method. */
+/** Represents the cursor parameters shared by every paginated modern list method. */
 export interface MCPPaginationParams {
-	/** Opaque cursor returned by the preceding page. */
+	/** Holds the opaque cursor returned by the preceding page. */
 	readonly cursor?: string
 }
 
-/** Shared cursor result fields for every paginated modern list method. */
+/** Represents the cursor result fields shared by every paginated modern list method. */
 export interface MCPPaginationResult {
-	/** Opaque cursor for the following page; absent when this is the final page. */
+	/** Holds the opaque cursor for the following page; absent when this is the final page. */
 	readonly nextCursor?: string
 }
 
-/** One consumer-owned page projected by `resources/list`. */
+/** Represents one consumer-owned page projected by `resources/list`. */
 export interface MCPResourcePage extends MCPPaginationResult {
 	readonly resources: readonly MCPResource[]
 }
 
-/** One consumer-owned page projected by `resources/templates/list`. */
+/** Represents one consumer-owned page projected by `resources/templates/list`. */
 export interface MCPResourceTemplatePage extends MCPPaginationResult {
 	readonly resourceTemplates: readonly MCPResourceTemplate[]
 }
 
-/** One consumer-owned page projected by `prompts/list`. */
+/** Represents one consumer-owned page projected by `prompts/list`. */
 export interface MCPPromptPage extends MCPPaginationResult {
 	readonly prompts: readonly MCPPrompt[]
 }
@@ -1264,7 +1274,7 @@ export interface MCPPromptGetParams {
 	readonly requestState?: string
 }
 
-/** The complete cacheable `resources/list` result. */
+/** Represents the complete cacheable `resources/list` result. */
 export type MCPResourceListResult = MCPResourcePage & {
 	readonly resultType: 'complete'
 	readonly ttlMs: number
@@ -1272,7 +1282,7 @@ export type MCPResourceListResult = MCPResourcePage & {
 	readonly _meta?: MCPResultMetaObject
 }
 
-/** The complete cacheable `resources/read` result. */
+/** Represents the complete cacheable `resources/read` result. */
 export type MCPResourceReadResult = {
 	readonly contents: readonly MCPResourceContents[]
 	readonly resultType: 'complete'
@@ -1281,7 +1291,7 @@ export type MCPResourceReadResult = {
 	readonly _meta?: MCPResultMetaObject
 }
 
-/** The complete cacheable `resources/templates/list` result. */
+/** Represents the complete cacheable `resources/templates/list` result. */
 export type MCPResourceTemplateListResult = MCPResourceTemplatePage & {
 	readonly resultType: 'complete'
 	readonly ttlMs: number
@@ -1289,7 +1299,7 @@ export type MCPResourceTemplateListResult = MCPResourceTemplatePage & {
 	readonly _meta?: MCPResultMetaObject
 }
 
-/** The complete cacheable `prompts/list` result. */
+/** Represents the complete cacheable `prompts/list` result. */
 export type MCPPromptListResult = MCPPromptPage & {
 	readonly resultType: 'complete'
 	readonly ttlMs: number
@@ -1297,7 +1307,7 @@ export type MCPPromptListResult = MCPPromptPage & {
 	readonly _meta?: MCPResultMetaObject
 }
 
-/** The complete, non-cacheable `prompts/get` result. */
+/** Represents the complete, non-cacheable `prompts/get` result. */
 export interface MCPPromptGetResult {
 	readonly resultType: 'complete'
 	readonly description?: string
@@ -1306,7 +1316,7 @@ export interface MCPPromptGetResult {
 }
 
 /**
- * Consumer-supplied resource registry port.
+ * Represents the consumer-supplied resource registry port.
  *
  * @remarks
  * MCP owns no storage. The host may back this port with memory, a workspace, a database,
@@ -1359,7 +1369,7 @@ export interface MCPResourceManagerInterface {
 }
 
 /**
- * Consumer-supplied prompt registry port.
+ * Represents the consumer-supplied prompt registry port.
  *
  * @remarks
  * MCP owns no prompt storage. The host projects one shared-cursor page at a time and resolves
@@ -1394,28 +1404,28 @@ export interface MCPPromptManagerInterface {
 		| Promise<MCPPromptGetResult | MCPInputResult | undefined>
 }
 
-/** A completion reference to one named prompt. */
+/** Represents a completion reference to one named prompt. */
 export interface MCPPromptReference {
 	readonly type: 'ref/prompt'
 	readonly name: string
 }
 
-/** A completion reference to one resource-template URI descriptor. */
+/** Represents a completion reference to one resource-template URI descriptor. */
 export interface MCPResourceTemplateReference {
 	readonly type: 'ref/resource'
 	readonly uri: string
 }
 
-/** The prompt or resource-template reference accepted by `completion/complete`. */
+/** Represents the prompt or resource-template reference accepted by `completion/complete`. */
 export type MCPCompletionReference = MCPPromptReference | MCPResourceTemplateReference
 
-/** The argument fragment being completed. */
+/** Represents the argument fragment being completed. */
 export interface MCPCompletionArgument {
 	readonly name: string
 	readonly value: string
 }
 
-/** Previously resolved string arguments supplied as completion context. */
+/** Holds previously resolved string arguments supplied as completion context. */
 export interface MCPCompletionContext {
 	readonly arguments?: Readonly<Record<string, string>>
 }
@@ -1427,14 +1437,14 @@ export interface MCPCompletionParams {
 	readonly context?: MCPCompletionContext
 }
 
-/** One completion candidate set before the protocol's 100-value projection cap. */
+/** Represents one completion candidate set before the protocol's 100-value projection cap. */
 export interface MCPCompletion {
 	readonly values: readonly string[]
 	readonly total?: number
 	readonly hasMore?: boolean
 }
 
-/** The complete `completion/complete` result. */
+/** Represents the complete `completion/complete` result. */
 export interface MCPCompletionResult {
 	readonly resultType: 'complete'
 	readonly completion: MCPCompletion
@@ -1442,7 +1452,7 @@ export interface MCPCompletionResult {
 }
 
 /**
- * Consumer-supplied completion port for prompt and resource-template arguments.
+ * Represents the consumer-supplied completion port for prompt and resource-template arguments.
  *
  * @remarks
  * The host owns reference lookup and template-variable knowledge. MCP forwards the reference
@@ -1464,7 +1474,7 @@ export interface MCPCompletionManagerInterface {
 }
 
 /**
- * The MCP `tools/list` result — tool descriptors plus optional modern result
+ * Represents the MCP `tools/list` result — tool descriptors plus optional modern result
  * stamps.
  *
  * @remarks
@@ -1480,7 +1490,7 @@ export type MCPListResult = {
 	readonly _meta?: MCPResultMetaObject
 }
 
-/** The complete dated identity of an MCP server or client. */
+/** Represents the complete dated identity of an MCP server or client. */
 export type MCPIdentity = MCPMetaObject & {
 	readonly name: string
 	readonly version: string
@@ -1490,13 +1500,13 @@ export type MCPIdentity = MCPMetaObject & {
 	readonly icons?: readonly MCPIcon[]
 }
 
-/** Open result metadata with the dated reserved server identity field. */
+/** Carries open result metadata with the dated reserved server identity field. */
 export type MCPResultMetaObject = MCPMetaObject & {
 	readonly 'io.modelcontextprotocol/serverInfo'?: MCPIdentity
 }
 
 /**
- * Open notification metadata with the dated reserved subscription field.
+ * Carries open notification metadata with the dated reserved subscription field.
  *
  * @remarks
  * The subscription id is OPTIONAL here, and that is the schema's own split rather than
@@ -1509,12 +1519,14 @@ export type MCPResultMetaObject = MCPMetaObject & {
  * sits on the terminating result of a stream, so a subscription always exists to name.
  */
 export type MCPNotificationMetaObject = MCPMetaObject & {
-	/** The JSON-RPC id of the `subscriptions/listen` request whose stream delivered the frame. */
+	/**
+	 * Holds the JSON-RPC id of the `subscriptions/listen` request whose stream delivered the frame.
+	 */
 	readonly 'io.modelcontextprotocol/subscriptionId'?: JSONRPCId
 }
 
 /**
- * The validated per-request context projected from a modern request's reserved
+ * Represents the validated per-request context projected from a modern request's reserved
  * `_meta` keys.
  *
  * @remarks
@@ -1529,7 +1541,7 @@ export interface MCPRequestContext {
 	readonly identity?: MCPIdentity
 }
 
-/** The mandatory modern `server/discover` result. */
+/** Represents the mandatory modern `server/discover` result. */
 export type MCPDiscoverResult = {
 	readonly supportedVersions: readonly MCPModernVersion[]
 	readonly capabilities: MCPServerCapabilities
@@ -1541,7 +1553,7 @@ export type MCPDiscoverResult = {
 }
 
 /**
- * The notification families a client may opt in to on a `subscriptions/listen` stream.
+ * Names the notification families a client may opt in to on a `subscriptions/listen` stream.
  *
  * @remarks
  * Every key here is a WIRE SPELLING, carried verbatim from the dated schema's
@@ -1581,30 +1593,33 @@ export interface MCPSubscriptionFilter {
 	readonly taskIds?: readonly string[]
 }
 
-/** The required metadata on a graceful `subscriptions/listen` result. */
+/** Represents the required metadata on a graceful `subscriptions/listen` result. */
 export type MCPSubscriptionResultMetaObject = MCPResultMetaObject & {
-	/** The JSON-RPC id of the `subscriptions/listen` request whose stream is closing. */
+	/** Holds the JSON-RPC id of the `subscriptions/listen` request whose stream is closing. */
 	readonly 'io.modelcontextprotocol/subscriptionId': JSONRPCId
 }
 
-/** The terminating result returned when a `subscriptions/listen` stream closes gracefully. */
+/**
+ * Represents the terminating result returned when a `subscriptions/listen` stream closes
+ * gracefully.
+ */
 export type MCPSubscriptionResult = {
 	readonly resultType: 'complete'
 	readonly _meta: MCPSubscriptionResultMetaObject
 }
 
-/** A client subscription's owned notifications and graceful terminal result. */
+/** Represents a client subscription's owned notifications and graceful terminal result. */
 export type MCPSubscriptionStream = AsyncGenerator<
 	JSONRPCNotification,
 	MCPSubscriptionResult,
 	unknown
 >
 
-/** Per-subscription cancellation and bounded buffering policy. */
+/** Configures the per-subscription cancellation and bounded buffering policy. */
 export interface MCPListenOptions {
 	/** Aborts the subscription and rejects its pending read with the signal reason. */
 	readonly signal: AbortSignal
-	/** The maximum number of delivered frames retained while no read is parked. */
+	/** Bounds the number of delivered frames retained while no read is parked. */
 	readonly capacity?: number
 }
 
@@ -1614,7 +1629,7 @@ export interface MCPListenOptions {
 // revision's fixed method switch outside this server.
 
 /**
- * Per-request execution options every dispatched handler receives.
+ * Represents the per-request execution options every dispatched handler receives.
  *
  * @remarks
  * `caller` is consumer-ASSERTED and NEVER VERIFIED. Sessions mint transport identity, not
@@ -1625,12 +1640,12 @@ export interface MCPListenOptions {
 export interface MCPDispatchOptions {
 	/** Aborts when the bound transport can observe that the caller's request has ended. */
 	readonly signal?: AbortSignal
-	/** Consumer-asserted caller context, forwarded opaquely and never protocol-verified. */
+	/** Carries consumer-asserted caller context, forwarded opaquely and never protocol-verified. */
 	readonly caller?: unknown
 }
 
 /**
- * The RESOLVED per-request options one dispatched method receives.
+ * Represents the RESOLVED per-request options one dispatched method receives.
  *
  * @remarks
  * The mirror of {@link MCPDispatchOptions} on the far side of dispatch: a CALLER may
@@ -1656,7 +1671,7 @@ export interface MCPDispatchOptions {
 export interface MCPMethodOptions {
 	/** Aborts when the caller's request ends, or when the answer it produced is finished. */
 	readonly signal: AbortSignal
-	/** Consumer-asserted caller context, forwarded opaquely and never protocol-verified. */
+	/** Carries consumer-asserted caller context, forwarded opaquely and never protocol-verified. */
 	readonly caller?: unknown
 }
 
@@ -1677,16 +1692,16 @@ export type MCPSubscriptionHandler = (
 	options: MCPMethodOptions,
 ) => AsyncIterable<JSONRPCNotification> | Promise<AsyncIterable<JSONRPCNotification>>
 
-/** Configuration for the server's built-in `subscriptions/listen` method. */
+/** Configures the server's built-in `subscriptions/listen` method. */
 export interface MCPSubscriptionOptions {
-	/** The notification filter this server can actually honour. */
+	/** Holds the notification filter this server can actually honour. */
 	readonly notifications: MCPSubscriptionFilter
 	/** Opens the producer for one honoured filter. */
 	readonly listen: MCPSubscriptionHandler
 }
 
 /**
- * A held-open modern result: each `yield` is a {@link JSONRPCNotification}; the
+ * Represents a held-open modern result: each `yield` is a {@link JSONRPCNotification}; the
  * `return` value is the terminating response.
  *
  * @remarks
@@ -1703,12 +1718,12 @@ export interface MCPSubscriptionOptions {
  */
 export type MCPStream = AsyncGenerator<JSONRPCNotification, JSONRPCResponse, unknown>
 
-/** The string-boundary mirror of {@link MCPStream} — the same sequence, already serialized. */
+/** Mirrors {@link MCPStream} at the string boundary — the same sequence, already serialized. */
 export type MCPTextStream = AsyncGenerator<string, string, unknown>
 
 /**
- * A held-open modern result whose cancellation ONE owner arbitrates — the arm every
- * stream leaving `MCPServer.dispatch` takes.
+ * Represents a held-open modern result whose cancellation ONE owner arbitrates — the arm
+ * every stream leaving `MCPServer.dispatch` takes.
  *
  * @remarks
  * The generator protocol states what a stream yields and says nothing about who ends one,
@@ -1799,7 +1814,7 @@ export interface MCPStreamControllerInterface extends MCPStream {
 }
 
 /**
- * The string-boundary mirror of {@link MCPStreamControllerInterface} — the same exchange,
+ * Mirrors {@link MCPStreamControllerInterface} at the string boundary — the same exchange,
  * already serialized.
  *
  * @remarks
@@ -1873,7 +1888,7 @@ export interface MCPTextStreamControllerInterface extends MCPTextStream {
 }
 
 /**
- * One modern method, registered on the seam that dispatches it.
+ * Represents one modern method, registered on the seam that dispatches it.
  *
  * @remarks
  * A registered method answers a {@link JSONRPCRequest} — with a terminating
@@ -1909,8 +1924,8 @@ export type MCPMethodHandler = (
 ) => Promise<JSONRPCResponse | MCPStream>
 
 /**
- * The modern method registry an {@link MCPServerInterface} dispatches through — the ONE
- * seam carrying both the built-in methods and any method a consumer adds.
+ * Represents the modern method registry an {@link MCPServerInterface} dispatches through —
+ * the ONE seam carrying both the built-in methods and any method a consumer adds.
  *
  * @remarks
  * `server/discover`, `tools/list`, `tools/call`, and `subscriptions/listen` are registered here at construction,
@@ -1938,7 +1953,7 @@ export interface MCPMethodManagerInterface {
 }
 
 /**
- * The push observation surface of an {@link MCPServerInterface} — the
+ * Represents the push observation surface of an {@link MCPServerInterface} — the
  * dispatch moments a fire-and-forget observer (logging, tracing) subscribes to
  * through `server.emitter.on`.
  *
@@ -1952,7 +1967,7 @@ export interface MCPMethodManagerInterface {
  */
 export type MCPServerEventMap = {
 	/**
-	 * An invocation is being dispatched — its method, correlating id (absent for a
+	 * Reports that an invocation is being dispatched — its method, correlating id (absent for a
 	 * notification), and structural wire era.
 	 *
 	 * @remarks
@@ -1974,7 +1989,8 @@ export type MCPServerEventMap = {
 	 */
 	readonly request: readonly [method: string, id: JSONRPCId | undefined, era: MCPEra]
 	/**
-	 * An operational fault the server CONTAINED — the caught value, exactly once per fault.
+	 * Reports an operational fault the server CONTAINED — the caught value, exactly once per
+	 * fault.
 	 *
 	 * @remarks
 	 * Every fault this server answers with an internal-error response reports here first: a
@@ -1994,34 +2010,34 @@ export type MCPServerEventMap = {
 	readonly error: readonly [error: unknown]
 }
 
-/** Configurable hostile-input and live-resource bounds for an MCP server. */
+/** Configures the hostile-input and live-resource bounds for an MCP server. */
 export interface MCPLimitOptions {
-	/** Maximum UTF-8 bytes accepted by the raw string boundary. */
+	/** Bounds the UTF-8 bytes accepted by the raw string boundary. */
 	readonly message?: number
-	/** Maximum serialized UTF-8 bytes accepted in one `_meta` value. */
+	/** Bounds the serialized UTF-8 bytes accepted in one `_meta` value. */
 	readonly metadata?: number
 	/**
-	 * Maximum total enumerable keys accepted in one bounded value: one `_meta` value under
+	 * Bounds the total enumerable keys accepted in one bounded value: one `_meta` value under
 	 * `metadata`, and one produced tool-call result under `content`.
 	 */
 	readonly keys?: number
-	/** Maximum UTF-8 bytes accepted in one protected `requestState`. */
+	/** Bounds the UTF-8 bytes accepted in one protected `requestState`. */
 	readonly state?: number
-	/** Maximum serialized UTF-8 bytes accepted from one complete produced tool-call result. */
+	/** Bounds the serialized UTF-8 bytes accepted from one complete produced tool-call result. */
 	readonly content?: number
-	/** Maximum simultaneously live built-in subscription streams. */
+	/** Bounds the simultaneously live built-in subscription streams. */
 	readonly subscriptions?: number
-	/** Maximum nesting depth accepted by bounded JSON values. */
+	/** Bounds the nesting depth accepted by bounded JSON values. */
 	readonly depth?: number
 }
 
 /** Limits applied by {@link isBoundedJSON} to one JSON value. */
 export interface MCPJSONLimitOptions {
-	/** Maximum serialized UTF-8 bytes. */
+	/** Bounds the serialized UTF-8 bytes. */
 	readonly bytes: number
-	/** Maximum total enumerable keys; omitted when bytes alone bound breadth. */
+	/** Bounds the total enumerable keys; omitted when bytes alone bound breadth. */
 	readonly keys?: number
-	/** Maximum array/object nesting depth. */
+	/** Bounds the array/object nesting depth. */
 	readonly depth: number
 }
 
@@ -2055,19 +2071,21 @@ export interface MCPJSONLimitOptions {
  */
 export interface MCPServerOptions {
 	readonly on?: EmitterHooks<MCPServerEventMap>
-	/** The emitter's listener-error handler — a listener throw routes here, not to a domain event. */
+	/** Holds the emitter's listener-error handler — a listener throw routes here, not to a domain event. */
 	readonly error?: EmitterErrorHandler
 	readonly identity: MCPIdentity
-	/** The live tool registry the server exposes over `tools/list` / `tools/call`. */
+	/** Holds the live tool registry the server exposes over `tools/list` / `tools/call`. */
 	readonly tools: ToolManagerInterface
-	/** Optional consumer-owned resource registry exposed over the modern resource methods. */
+	/**
+	 * Holds the optional consumer-owned resource registry exposed over the modern resource methods.
+	 */
 	readonly resources?: MCPResourceManagerInterface
-	/** Optional consumer-owned prompt registry exposed over the modern prompt methods. */
+	/** Holds the optional consumer-owned prompt registry exposed over the modern prompt methods. */
 	readonly prompts?: MCPPromptManagerInterface
-	/** Optional host-owned prompt and resource-template completion provider. */
+	/** Holds the optional host-owned prompt and resource-template completion provider. */
 	readonly completion?: MCPCompletionManagerInterface
 	/**
-	 * Optional explicit execution policy above the canonical live tool registry.
+	 * Holds the optional explicit execution policy above the canonical live tool registry.
 	 *
 	 * @remarks
 	 * This is also the ONLY way a tool observes cancellation. The default path calls
@@ -2083,19 +2101,23 @@ export interface MCPServerOptions {
 	 * whose peer reads that key composes it through `buildModernResult` itself.
 	 */
 	readonly execution?: MCPExecutionHandler
-	/** Optional human guidance exposed by `server/discover`. */
+	/** Holds the optional human guidance exposed by `server/discover`. */
 	readonly instructions?: string
-	/** Modern cache stamps; omitted values use the protocol-safe defaults. */
+	/** Holds the modern cache stamps; omitted values use the protocol-safe defaults. */
 	readonly cache?: {
 		readonly ttl?: number
 		readonly scope?: 'public' | 'private'
 	}
-	/** Optional multi-round-trip input mechanism; all continuation and expiry policy is consumer-supplied. */
+	/**
+	 * Holds the optional multi-round-trip input mechanism; all continuation and expiry policy is
+	 * consumer-supplied.
+	 */
 	readonly input?: MCPInputOptions
-	/** Optional event-driven producer for the modern `subscriptions/listen` method. */
+	/** Holds the optional event-driven producer for the modern `subscriptions/listen` method. */
 	readonly subscription?: MCPSubscriptionOptions
 	/**
-	 * Optional Tasks extension; the durable store and the deferral decision are consumer-supplied.
+	 * Holds the optional Tasks extension; the durable store and the deferral decision are
+	 * consumer-supplied.
 	 *
 	 * @remarks
 	 * Omitting it leaves every existing path untouched — nothing is advertised, no call is
@@ -2103,20 +2125,20 @@ export interface MCPServerOptions {
 	 * snapshot dated 2026-07-28, so the shape this option admits is fixed.
 	 */
 	readonly task?: MCPTaskOptions
-	/** Hostile-input and live-resource bounds; omitted leaves use secure defaults. */
+	/** Holds the hostile-input and live-resource bounds; omitted leaves use secure defaults. */
 	readonly limit?: MCPLimitOptions
 }
 
-/** Construction options for the removable legacy protocol decorator. */
+/** Represents the construction options for the removable legacy protocol decorator. */
 export interface MCPLegacyOptions {
-	/** The sole dispatcher and execution engine. */
+	/** Holds the sole dispatcher and execution engine. */
 	readonly dispatcher: MCPDispatcherInterface
-	/** The identity returned by the legacy `initialize` handshake. */
+	/** Holds the identity returned by the legacy `initialize` handshake. */
 	readonly identity: MCPIdentity
 }
 
 /**
- * The minimal transport-facing MCP dispatch surface.
+ * Represents the minimal transport-facing MCP dispatch surface.
  *
  * @remarks
  * A transport-facing dispatcher needs the resolved message limit and the `dispatch` and
@@ -2124,9 +2146,9 @@ export interface MCPLegacyOptions {
  * no response channel for a contained transport fault and must report that fault as an event.
  */
 export interface MCPDispatcherInterface {
-	/** The shared server observation surface, including contained transport faults. */
+	/** Holds the shared server observation surface, including contained transport faults. */
 	readonly emitter: EmitterInterface<MCPServerEventMap>
-	/** The resolved bounds the dispatcher enforces. */
+	/** Holds the resolved bounds the dispatcher enforces. */
 	readonly limit: Required<MCPLimitOptions>
 	/**
 	 * Dispatches a parsed JSON-RPC request.
@@ -2172,8 +2194,7 @@ export interface MCPDispatcherInterface {
 }
 
 /**
- * A transport-agnostic Model Context Protocol server — dispatches JSON-RPC 2.0
- * modern requests over a live
+ * Dispatches JSON-RPC 2.0 modern requests over a live
  * {@link ToolManagerInterface}, with NO transport coupling (a transport layer
  * pumps strings through `handle`).
  *
@@ -2202,10 +2223,10 @@ export interface MCPDispatcherInterface {
  */
 export interface MCPServerInterface extends MCPDispatcherInterface {
 	readonly identity: MCPIdentity
-	/** The modern method registry this server dispatches through (built-ins included). */
+	/** Holds the modern method registry this server dispatches through (built-ins included). */
 	readonly methods: MCPMethodManagerInterface
 	/**
-	 * The bounds this server actually enforces — every leaf resolved, none optional.
+	 * Holds the bounds this server actually enforces — every leaf resolved, none optional.
 	 *
 	 * @remarks
 	 * Derived from {@link MCPServerOptions.limit} at construction and stored nowhere else, so
@@ -2294,7 +2315,7 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 // JSON-RPC string it carries remain entirely the core's.
 
 /**
- * A duplex message channel an environment face provides to the pure engine — the
+ * Represents a duplex message channel an environment face provides to the pure engine — the
  * one port `bindServer` and `bindClient` (`./helpers.js`) pipe an
  * {@link MCPServerInterface} / {@link MCPClientInterface} over.
  *
@@ -2338,7 +2359,7 @@ export interface MCPTransportInterface {
 // coupling.
 
 /**
- * The observable events of a {@link MCPMessageTransportInterface} — the moments the
+ * Lists the observable events of a {@link MCPMessageTransportInterface} — the moments the
  * {@link MCPClientInterface} (and any tracer) subscribes to through `transport.emitter.on`.
  *
  * @remarks
@@ -2354,18 +2375,18 @@ export interface MCPTransportInterface {
  *   type-literal satisfies `EventMap` structurally.
  */
 export type MCPMessageTransportEventMap = {
-	/** A JSON-RPC message arrived from the remote server (a response, or a notification). */
+	/** Reports that a JSON-RPC message arrived from the remote server (a response, or a notification). */
 	readonly message: readonly [message: JSONRPCMessage]
-	/** The transport's connection ended. */
+	/** Reports that the transport's connection ended. */
 	readonly close: readonly []
-	/** A transport-level fault — the caught error (typed `unknown`). */
+	/** Reports a transport-level fault — the caught error (typed `unknown`). */
 	readonly error: readonly [error: unknown]
 }
 
 /**
- * A transport-agnostic MCP message carrier — pumps JSON-RPC messages to a peer and
- * surfaces received messages on its `emitter`'s `message` event, with no knowledge
- * of the protocol role on either side.
+ * Pumps JSON-RPC messages to a peer and surfaces received messages on its `emitter`'s
+ * `message` event, with no knowledge of the protocol role on either side — a
+ * transport-agnostic MCP message carrier.
  *
  * @remarks
  * A client hands the transport one {@link JSONRPCMessage} through `send`, and the
@@ -2379,11 +2400,11 @@ export type MCPMessageTransportEventMap = {
  */
 export interface MCPMessageTransportInterface {
 	readonly emitter: EmitterInterface<MCPMessageTransportEventMap>
-	/** A server-assigned session id once a stateful transport has one; `undefined` otherwise. */
+	/** Holds a server-assigned session id after a stateful transport has one; `undefined` otherwise. */
 	readonly session: string | undefined
 	/**
-	 * Whether this carrier accepts a CLIENT-INITIATED notification — one written with no
-	 * `id`, which no response will ever answer.
+	 * Reports whether this carrier accepts a CLIENT-INITIATED notification — one written with
+	 * no `id`, which no response will ever answer.
 	 *
 	 * @remarks
 	 * The transport states it because only the transport knows it, and getting it wrong is
@@ -2510,18 +2531,18 @@ export interface HTTPClientTransportOptions {
  * the peer. Do not send unrelated id-`0` traffic through the wrapped transport in that window.
  */
 export interface MCPLegacyClientTransportOptions {
-	/** The client identity sent during the legacy handshake. */
+	/** Holds the client identity sent during the legacy handshake. */
 	readonly identity?: MCPIdentity
-	/** The client capabilities sent during the legacy handshake. */
+	/** Holds the client capabilities sent during the legacy handshake. */
 	readonly capabilities?: MCPClientCapabilities
-	/** The exact legacy revision to request and require. */
+	/** Names the exact legacy revision to request and require. */
 	readonly version?: MCPLegacyVersion
-	/** The legacy handshake and forwarded-request deadline in milliseconds. */
+	/** Sets the legacy handshake and forwarded-request deadline in milliseconds. */
 	readonly timeout?: number
 }
 
 /**
- * The push observation surface of an {@link MCPClientInterface} — the moments a
+ * Represents the push observation surface of an {@link MCPClientInterface} — the moments a
  * fire-and-forget observer (logging, tracing) subscribes to through `client.emitter.on`.
  *
  * @remarks
@@ -2542,13 +2563,13 @@ export interface MCPLegacyClientTransportOptions {
  *   Declared as a `type` alias so the literal satisfies `EventMap`.
  */
 export type MCPClientEventMap = {
-	/** Era negotiation completed — the client is connected. */
+	/** Reports that era negotiation completed — the client is connected. */
 	readonly connect: readonly []
-	/** The client disconnected — pending requests rejected, the connection it owned closed or its close failed. */
+	/** Reports that the client disconnected — pending requests rejected, the connection it owned closed or its close failed. */
 	readonly disconnect: readonly []
-	/** A server-initiated notification arrived (not a response to a pending request). */
+	/** Reports that a server-initiated notification arrived (not a response to a pending request). */
 	readonly notification: readonly [message: JSONRPCMessage]
-	/** A client-level fault surfaced for observation (typed `unknown`). */
+	/** Reports a client-level fault surfaced for observation (typed `unknown`). */
 	readonly error: readonly [error: unknown]
 }
 
@@ -2580,19 +2601,19 @@ export type MCPClientEventMap = {
  */
 export interface MCPClientOptions {
 	readonly on?: EmitterHooks<MCPClientEventMap>
-	/** The emitter's listener-error handler — a listener throw routes here, not to a domain event. */
+	/** Holds the emitter's listener-error handler — a listener throw routes here, not to a domain event. */
 	readonly error?: EmitterErrorHandler
 	readonly transport: MCPMessageTransportInterface
 	readonly identity?: MCPIdentity
-	/** The open client-capability record carried by modern requests. */
+	/** Holds the open client-capability record carried by modern requests. */
 	readonly capabilities?: MCPClientCapabilities
 	/**
-	 * An optional exact modern protocol revision pin; absence permits modern negotiation. A defined
+	 * Pins an optional exact modern protocol revision; absence permits modern negotiation. A defined
 	 * pin must match the peer's discovery advertisement. An unsupported runtime value throws an
 	 * {@link MCPError} synchronously during construction.
 	 */
 	readonly version?: MCPModernVersion
-	/** The per-request deadline in milliseconds (default {@link import('./constants.js').DEFAULT_MCP_REQUEST_TIMEOUT}). */
+	/** Sets the per-request deadline in milliseconds (default {@link import('./constants.js').DEFAULT_MCP_REQUEST_TIMEOUT}). */
 	readonly timeout?: number
 }
 
@@ -2633,7 +2654,7 @@ export interface MCPCallOptions {
 }
 
 /**
- * What one remote `tools/call` answered — the arms the dated protocol permits.
+ * Represents what one remote `tools/call` answered — the arms the dated protocol permits.
  *
  * @remarks
  * The peer chooses the arm, so the caller narrows on `resultType`:
@@ -2653,7 +2674,7 @@ export interface MCPCallOptions {
 export type MCPCallOutcome =
 	| {
 			readonly resultType: 'complete'
-			/** The remote tool's value — its `structuredContent`, or its parsed text. */
+			/** Holds the remote tool's value — its `structuredContent`, or its parsed text. */
 			readonly value: unknown
 	  }
 	| MCPTaskResult
@@ -2686,7 +2707,7 @@ export type MCPRequestFunction = (
 ) => Promise<unknown>
 
 /**
- * Construction options for an {@link MCPTaskClientInterface}.
+ * Represents the construction options for an {@link MCPTaskClientInterface}.
  *
  * @remarks
  * `request` is the correlated-request door (see {@link MCPRequestFunction}); an
@@ -2695,15 +2716,15 @@ export type MCPRequestFunction = (
  * to its own calls, stated here because this client does not read the other one's options.
  */
 export interface MCPTaskClientOptions {
-	/** The correlated-request door every task request is issued through. */
+	/** Holds the correlated-request door every task request is issued through. */
 	readonly request: MCPRequestFunction
-	/** The deadline each task request carries; omitted waits on the peer indefinitely. */
+	/** Sets the deadline each task request carries; omitted waits on the peer indefinitely. */
 	readonly timeout?: number
 }
 
 /**
- * The CLIENT half of the stable Tasks extension — reading, answering, and stopping a durable
- * task the peer created.
+ * Reads, answers, and stops a durable task the peer created — the CLIENT half of the stable
+ * Tasks extension.
  *
  * @remarks
  * The mirror of {@link MCPTaskManagerInterface} minus `start`, because creating a task is
@@ -2804,9 +2825,8 @@ export interface MCPTaskClientInterface {
 }
 
 /**
- * A transport-agnostic Model Context Protocol CLIENT — connects to a REMOTE MCP
- * server over an injected {@link MCPMessageTransportInterface}, negotiates the
- * modern wire revision, and exposes the server's tools as local
+ * Connects to a REMOTE MCP server over any injected {@link MCPMessageTransportInterface},
+ * negotiates the modern wire revision, and exposes the server's tools as local
  * {@link ToolInterface}s an agent can run.
  *
  * @remarks
@@ -2858,14 +2878,15 @@ export interface MCPTaskClientInterface {
  */
 export interface MCPClientInterface {
 	readonly emitter: EmitterInterface<MCPClientEventMap>
-	/** Whether modern revision negotiation has completed and the client is connected. */
+	/** Reports whether modern revision negotiation has completed and the client is connected. */
 	readonly connected: boolean
-	/** The negotiated protocol revision, or `undefined` while disconnected. */
+	/** Holds the negotiated protocol revision, or `undefined` while disconnected. */
 	readonly version: MCPModernVersion | undefined
-	/** The injected transport the client drives the remote server over. */
+	/** Holds the injected transport the client drives the remote server over. */
 	readonly transport: MCPMessageTransportInterface
 	/**
-	 * The stable Tasks extension's client half — reading, answering, and stopping a durable task.
+	 * Holds the stable Tasks extension's client half — reading, answering, and stopping a durable
+	 * task.
 	 *
 	 * @remarks
 	 * Always present, because the `tasks/*` methods are ordinary requests a client may

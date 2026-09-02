@@ -1,5 +1,5 @@
 /**
- * A Model Context Protocol error preserving its machine-readable numeric code and
+ * Preserves a Model Context Protocol error's machine-readable numeric code and
  * optional structured context.
  *
  * @remarks
@@ -44,7 +44,7 @@ export class MCPError extends Error {
  * Determines whether an unknown value is an {@link MCPError}.
  *
  * @param value - The unknown value to inspect
- * @returns `true` only when the value is an `MCPError`
+ * @returns True if the value is an `MCPError`; false otherwise
  *
  * @example
  * ```ts

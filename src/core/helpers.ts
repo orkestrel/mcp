@@ -90,7 +90,7 @@ import {
  * does not authorize a form request. Total over hostile input.
  *
  * @param value - The client capability record to inspect
- * @returns `true` when form-mode elicitation is declared
+ * @returns True if form-mode elicitation is declared; false otherwise
  *
  * @example
  * ```ts
@@ -191,7 +191,7 @@ export function computeMissingCapabilities(
  * the request in hand. Total over hostile input.
  *
  * @param value - The client capability record to inspect
- * @returns `true` when the tasks extension is declared as the schema's empty object
+ * @returns True if the tasks extension is declared as the schema's empty object; false otherwise
  *
  * @example
  * ```ts
@@ -529,7 +529,7 @@ export function buildCancelledNotification(id: JSONRPCId, reason?: string): JSON
  *
  * @param method - The method the pending request was issued for
  * @param resultType - The unknown `resultType` the peer answered with
- * @returns Whether that method may legally answer with that `resultType`
+ * @returns True if that method may legally answer with that `resultType`; false otherwise
  *
  * @example
  * ```ts
@@ -994,7 +994,7 @@ export function buildSubscriptionFilter(
  *
  * @param notification - The server notification offered by the configured producer
  * @param filter - The filter acknowledged to the client
- * @returns `true` when the notification belongs on this subscription stream
+ * @returns True if the notification belongs on this subscription stream; false otherwise
  */
 export function matchesSubscriptionNotification(
 	notification: JSONRPCNotification,

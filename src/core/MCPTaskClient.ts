@@ -9,8 +9,8 @@ import { MCPError } from './errors.js'
 import { isMCPTaskDetailResult } from './validators.js'
 
 /**
- * The CLIENT half of the stable Tasks extension — the `tasks/*` methods over one
- * correlated-request door, exposed as an {@link import('./types.js').MCPClientInterface}'s
+ * Issues the `tasks/*` methods over one correlated-request door — the CLIENT half of the
+ * stable Tasks extension, exposed as an {@link import('./types.js').MCPClientInterface}'s
  * `tasks`.
  *
  * @remarks

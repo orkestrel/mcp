@@ -134,7 +134,7 @@ export function isMCPResultMetaObject(value: unknown): value is MCPResultMetaObj
  * {@link JSONRPCId}, because a stamp naming nothing addressable is worse than no stamp.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when the value is exact metadata whose subscription stamp, if present, is valid
+ * @returns True if the value is exact metadata whose subscription stamp, if present, is valid; false otherwise
  *
  * @example
  * ```ts
@@ -168,7 +168,7 @@ export function isMCPLoggingLevel(value: unknown): value is MCPLoggingLevel {
  * Determines whether a value is standard padded base64 as required by JSON Schema `byte` format.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is an empty or completely padded standard base64 encoding
+ * @returns True if the value is an empty or completely padded standard base64 encoding; false otherwise
  */
 export function isStandardBase64(value: unknown): value is string {
 	return (
@@ -188,7 +188,7 @@ export function isStandardBase64(value: unknown): value is string {
  * {@link MCP_PARAM_PREFIX} and must survive as an HTTP field name.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is a non-empty RFC 9110 token
+ * @returns True if the value is a non-empty RFC 9110 token; false otherwise
  *
  * @example
  * ```ts
@@ -209,7 +209,7 @@ export function isFieldToken(value: unknown): value is string {
  * exactly, and the server compares it numerically.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is one of `'string'`, `'integer'`, or `'boolean'`
+ * @returns True if the value is one of `'string'`, `'integer'`, or `'boolean'`; false otherwise
  *
  * @example
  * ```ts
@@ -229,7 +229,7 @@ export function isMCPHeaderPrimitive(value: unknown): value is MCPHeaderPrimitiv
  * scheme allowlist. Component scanning is bounded by the input length.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is an RFC 3986 URI rather than a relative reference
+ * @returns True if the value is an RFC 3986 URI rather than a relative reference; false otherwise
  */
 export function isAbsoluteURI(value: unknown): value is string {
 	if (!isString(value) || value.length === 0) return false
@@ -350,7 +350,7 @@ export function isAbsoluteURI(value: unknown): value is string {
  * refuse. It is a SYNTAX guard: no time zone, locale, calendar era, or leap second applies.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is an RFC 3339 `full-date` for a day that exists
+ * @returns True if the value is an RFC 3339 `full-date` for a day that exists; false otherwise
  *
  * @example
  * ```ts
@@ -386,7 +386,7 @@ export function isRFC3339Date(value: unknown): value is string {
  * second.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is an RFC 3339 `date-time` for a day that exists
+ * @returns True if the value is an RFC 3339 `date-time` for a day that exists; false otherwise
  *
  * @example
  * ```ts
@@ -408,7 +408,7 @@ export function isRFC3339DateTime(value: unknown): value is string {
  * Determines whether a value is one exact finite MCP progress payload.
  *
  * @param value - The unknown value to inspect
- * @returns Whether required progress and optional total/message fields match the dated schema
+ * @returns True if required progress and optional total/message fields match the dated schema; false otherwise
  */
 export function isMCPProgress(value: unknown): value is MCPProgress {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -430,7 +430,7 @@ export function isMCPProgress(value: unknown): value is MCPProgress {
  * Determines whether a value carries valid dated-schema MCP content annotations.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is valid MCP annotations
+ * @returns True if the value is valid MCP annotations; false otherwise
  */
 export function isMCPAnnotations(value: unknown): value is MCPAnnotations {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -460,7 +460,7 @@ export function isMCPAnnotations(value: unknown): value is MCPAnnotations {
  * Determines whether a value is one exact dated-schema MCP icon.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is a valid MCP icon
+ * @returns True if the value is a valid MCP icon; false otherwise
  */
 export function isMCPIcon(value: unknown): value is MCPIcon {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -606,7 +606,7 @@ export function isMCPServerCapabilities(value: unknown): value is MCPServerCapab
  * Determines whether a value is embedded textual MCP resource contents.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is embedded textual resource contents
+ * @returns True if the value is embedded textual resource contents; false otherwise
  */
 export function isMCPTextResource(value: unknown): value is MCPTextResource {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -631,7 +631,7 @@ export function isMCPTextResource(value: unknown): value is MCPTextResource {
  * Determines whether a value is embedded blob MCP resource contents.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is embedded blob resource contents
+ * @returns True if the value is embedded blob resource contents; false otherwise
  */
 export function isMCPBlobResource(value: unknown): value is MCPBlobResource {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -656,7 +656,7 @@ export function isMCPBlobResource(value: unknown): value is MCPBlobResource {
  * Determines whether a value is one `resources/list` descriptor.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is a valid resource descriptor
+ * @returns True if the value is a valid resource descriptor; false otherwise
  */
 export function isMCPResource(value: unknown): value is MCPResource {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -689,7 +689,7 @@ export function isMCPResource(value: unknown): value is MCPResource {
  * level belong to the consumer-supplied resource manager; this package projects the string.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is a valid resource-template descriptor
+ * @returns True if the value is a valid resource-template descriptor; false otherwise
  */
 export function isMCPResourceTemplate(value: unknown): value is MCPResourceTemplate {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -717,7 +717,7 @@ export function isMCPResourceTemplate(value: unknown): value is MCPResourceTempl
  * Determines whether a value is structurally discriminated resource contents.
  *
  * @param value - The unknown value to inspect
- * @returns Whether exactly one of `text` and `blob` is present and valid
+ * @returns True if exactly one of `text` and `blob` is present and valid; false otherwise
  */
 export function isMCPResourceContents(value: unknown): value is MCPResourceContents {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -733,7 +733,7 @@ export function isMCPResourceContents(value: unknown): value is MCPResourceConte
  * Determines whether a value carries the shared optional pagination cursor.
  *
  * @param value - The unknown value to inspect
- * @returns Whether a present `cursor` is a string
+ * @returns True if a present `cursor` is a string; false otherwise
  */
 export function isMCPPaginationParams(value: unknown): value is MCPPaginationParams {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -744,7 +744,7 @@ export function isMCPPaginationParams(value: unknown): value is MCPPaginationPar
  * Determines whether a value is one consumer-owned resource page.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the resources and optional following cursor are valid
+ * @returns True if the resources and optional following cursor are valid; false otherwise
  */
 export function isMCPResourcePage(value: unknown): value is MCPResourcePage {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -762,7 +762,7 @@ export function isMCPResourcePage(value: unknown): value is MCPResourcePage {
  * Determines whether a value is one consumer-owned resource-template page.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the templates and optional following cursor are valid
+ * @returns True if the templates and optional following cursor are valid; false otherwise
  */
 export function isMCPResourceTemplatePage(value: unknown): value is MCPResourceTemplatePage {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -780,7 +780,7 @@ export function isMCPResourceTemplatePage(value: unknown): value is MCPResourceT
  * Determines whether a value is a string-valued MCP argument record.
  *
  * @param value - The unknown value to inspect
- * @returns Whether every own argument value is a string
+ * @returns True if every own argument value is a string; false otherwise
  */
 export function isMCPStringArguments(value: unknown): value is Readonly<Record<string, string>> {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -791,7 +791,7 @@ export function isMCPStringArguments(value: unknown): value is Readonly<Record<s
  * Determines whether a value is one prompt argument descriptor.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the prompt argument descriptor is valid
+ * @returns True if the prompt argument descriptor is valid; false otherwise
  */
 export function isMCPPromptArgument(value: unknown): value is MCPPromptArgument {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -809,7 +809,7 @@ export function isMCPPromptArgument(value: unknown): value is MCPPromptArgument 
  * Determines whether a value is one `prompts/list` descriptor.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the prompt descriptor is valid
+ * @returns True if the prompt descriptor is valid; false otherwise
  */
 export function isMCPPrompt(value: unknown): value is MCPPrompt {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -833,7 +833,7 @@ export function isMCPPrompt(value: unknown): value is MCPPrompt {
  * Determines whether a value is one prompt message with existing rich content.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the role and content are valid
+ * @returns True if the role and content are valid; false otherwise
  */
 export function isMCPPromptMessage(value: unknown): value is MCPPromptMessage {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -848,7 +848,7 @@ export function isMCPPromptMessage(value: unknown): value is MCPPromptMessage {
  * Determines whether a value is one consumer-owned prompt page.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the prompts and optional following cursor are valid
+ * @returns True if the prompts and optional following cursor are valid; false otherwise
  */
 export function isMCPPromptPage(value: unknown): value is MCPPromptPage {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -866,7 +866,7 @@ export function isMCPPromptPage(value: unknown): value is MCPPromptPage {
  * Determines whether a value is one complete `prompts/get` result.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the prompt result and all messages are valid
+ * @returns True if the prompt result and all messages are valid; false otherwise
  */
 export function isMCPPromptGetResult(value: unknown): value is MCPPromptGetResult {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -886,7 +886,7 @@ export function isMCPPromptGetResult(value: unknown): value is MCPPromptGetResul
  * Determines whether a value is a prompt or resource-template completion reference.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the discriminated reference is valid
+ * @returns True if the discriminated reference is valid; false otherwise
  */
 export function isMCPCompletionReference(value: unknown): value is MCPCompletionReference {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -901,7 +901,7 @@ export function isMCPCompletionReference(value: unknown): value is MCPCompletion
  * Determines whether a value is one `completion/complete` parameter object.
  *
  * @param value - The unknown value to inspect
- * @returns Whether its reference, fragment, and optional string context are valid
+ * @returns True if its reference, fragment, and optional string context are valid; false otherwise
  */
 export function isMCPCompletionParams(value: unknown): value is MCPCompletionParams {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -931,7 +931,7 @@ export function isMCPCompletionParams(value: unknown): value is MCPCompletionPar
  * Determines whether a value is one host-produced completion candidate set.
  *
  * @param value - The unknown value to inspect
- * @returns Whether its candidates and optional result facts are valid
+ * @returns True if its candidates and optional result facts are valid; false otherwise
  */
 export function isMCPCompletion(value: unknown): value is MCPCompletion {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -951,7 +951,7 @@ export function isMCPCompletion(value: unknown): value is MCPCompletion {
  * Determines whether a value is one complete, capped `completion/complete` result.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the result is complete and carries at most 100 candidates
+ * @returns True if the result is complete and carries at most 100 candidates; false otherwise
  */
 export function isMCPCompletionResult(value: unknown): value is MCPCompletionResult {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -968,7 +968,7 @@ export function isMCPCompletionResult(value: unknown): value is MCPCompletionRes
  * Determines whether a value is one exact dated-schema MCP tool content block.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is valid MCP content
+ * @returns True if the value is valid MCP content; false otherwise
  */
 export function isMCPContent(value: unknown): value is MCPContent {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -1023,7 +1023,7 @@ export function isMCPContent(value: unknown): value is MCPContent {
  * input.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is a modern result
+ * @returns True if the value is a modern result; false otherwise
  *
  * @example
  * ```ts
@@ -1050,7 +1050,7 @@ export function isMCPResult(value: unknown): value is MCPResult {
  * hostile input.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is a legacy result
+ * @returns True if the value is a legacy result; false otherwise
  *
  * @example
  * ```ts
@@ -1067,7 +1067,7 @@ export function isMCPLegacyResult(value: unknown): value is MCPLegacyResult {
  * Determines whether a value is a complete modern MCP tool result.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is a complete MCP call result
+ * @returns True if the value is a complete MCP call result; false otherwise
  */
 export function isMCPCallResult(value: unknown): value is MCPCallResult {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -1101,7 +1101,7 @@ export function isMCPCallResult(value: unknown): value is MCPCallResult {
  * INTEGER milliseconds because the schema formats them `int`.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is a well-formed `resultType: 'task'` result
+ * @returns True if the value is a well-formed `resultType: 'task'` result; false otherwise
  *
  * @example
  * ```ts
@@ -1138,7 +1138,7 @@ export function isMCPTaskResult(value: unknown): value is MCPTaskResult {
  * Determines whether a value is one of the extension's task lifecycle states.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is an {@link MCPTaskStatus}
+ * @returns True if the value is an {@link MCPTaskStatus}; false otherwise
  *
  * @example
  * ```ts
@@ -1176,7 +1176,7 @@ export function isMCPTaskStatus(value: unknown): value is MCPTaskStatus {
  * What is checked is what this package publishes as the contract.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is a well-formed {@link MCPTaskDetail}
+ * @returns True if the value is a well-formed {@link MCPTaskDetail}; false otherwise
  *
  * @example
  * ```ts
@@ -1230,7 +1230,7 @@ export function isMCPTaskDetail(value: unknown): value is MCPTaskDetail {
  * peer stamps there is the peer's to write.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is a well-formed {@link MCPTaskDetailResult}
+ * @returns True if the value is a well-formed {@link MCPTaskDetailResult}; false otherwise
  *
  * @example
  * ```ts
@@ -1265,7 +1265,7 @@ export function isMCPTaskDetailResult(value: unknown): value is MCPTaskDetailRes
  * to it, so a guard that demanded the stamp would refuse every frame a producer emits.
  *
  * @param value - The unknown value to inspect
- * @returns Whether the value is a well-formed `notifications/tasks` notification
+ * @returns True if the value is a well-formed `notifications/tasks` notification; false otherwise
  *
  * @example
  * ```ts
@@ -1301,7 +1301,7 @@ export function isMCPTaskNotification(value: unknown): value is MCPTaskNotificat
  *
  * @param value - The unknown value to inspect
  * @param bytes - The maximum accepted encoded bytes
- * @returns `true` only for a string whose UTF-8 representation fits the bound
+ * @returns True if `value` is a string whose UTF-8 representation fits the bound; false otherwise
  *
  * @example
  * ```ts
@@ -1340,7 +1340,7 @@ export function isBoundedString(value: unknown, bytes: number): value is string 
  *
  * @param value - The unknown value to inspect
  * @param limits - Serialized byte, optional key, and nesting-depth bounds
- * @returns `true` only for safe JSON satisfying every bound
+ * @returns True if `value` is safe JSON satisfying every bound; false otherwise
  *
  * @example
  * ```ts
@@ -1363,7 +1363,7 @@ export function isBoundedJSON<T>(value: T, limits: MCPJSONLimitOptions): value i
  * no minimum length. Total: any other input returns `false`.
  *
  * @param value - The already-parsed value to test
- * @returns `true` when `value` is a string or a finite integer
+ * @returns True if `value` is a string or a finite integer; false otherwise
  *
  * @example
  * ```ts
@@ -1382,7 +1382,7 @@ export function isJSONRPCId(value: unknown): value is JSONRPCId {
  * Determines whether a value is a supported {@link MCPVersion}.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when the value is one of {@link SUPPORTED_MCP_VERSIONS}
+ * @returns True if the value is one of {@link SUPPORTED_MCP_VERSIONS}; false otherwise
  */
 export function isMCPVersion(value: unknown): value is MCPVersion {
 	return isString(value) && SUPPORTED_MCP_VERSIONS.some((version) => version === value)
@@ -1392,7 +1392,7 @@ export function isMCPVersion(value: unknown): value is MCPVersion {
  * Determines whether a value is a modern protocol revision accepted by a bare server.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when the value is one of {@link SUPPORTED_MODERN_PROTOCOL_VERSIONS}
+ * @returns True if the value is one of {@link SUPPORTED_MODERN_PROTOCOL_VERSIONS}; false otherwise
  */
 export function isMCPModernVersion(value: unknown): value is MCPModernVersion {
 	return isString(value) && SUPPORTED_MODERN_PROTOCOL_VERSIONS.some((version) => version === value)
@@ -1402,7 +1402,7 @@ export function isMCPModernVersion(value: unknown): value is MCPModernVersion {
  * Determines whether a value is a revision accepted by the optional legacy decorator.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when the value is one of {@link SUPPORTED_LEGACY_PROTOCOL_VERSIONS}
+ * @returns True if the value is one of {@link SUPPORTED_LEGACY_PROTOCOL_VERSIONS}; false otherwise
  */
 export function isMCPLegacyVersion(value: unknown): value is MCPLegacyVersion {
 	return isString(value) && SUPPORTED_LEGACY_PROTOCOL_VERSIONS.some((version) => version === value)
@@ -1422,7 +1422,7 @@ export function isMCPLegacyVersion(value: unknown): value is MCPLegacyVersion {
  * the caller asked for.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when every recognized filter field has its protocol shape
+ * @returns True if every recognized filter field has its protocol shape; false otherwise
  */
 export function isMCPSubscriptionFilter(value: unknown): value is MCPSubscriptionFilter {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -1444,7 +1444,7 @@ export function isMCPSubscriptionFilter(value: unknown): value is MCPSubscriptio
  * Determines whether a value is a graceful `subscriptions/listen` result.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when the result is complete and carries a valid subscription id
+ * @returns True if the result is complete and carries a valid subscription id; false otherwise
  */
 export function isMCPSubscriptionResult(value: unknown): value is MCPSubscriptionResult {
 	const owned = attempt(() => cloneJSONRecord(value))
@@ -1461,7 +1461,7 @@ export function isMCPSubscriptionResult(value: unknown): value is MCPSubscriptio
  * Determines whether a value is one restricted primitive form-elicitation schema.
  *
  * @param value - The unknown value to inspect
- * @returns `true` for a supported boolean, numeric, string, or string-array schema
+ * @returns True if `value` is a supported boolean, numeric, string, or string-array schema; false otherwise
  *
  * @example
  * ```ts
@@ -1569,7 +1569,7 @@ export function isMCPElicitFieldSchema(value: unknown): value is MCPElicitFieldS
  * an unrecognized top-level annotation is data rather than a rejection.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when `value` is a restricted object schema of supported field schemas
+ * @returns True if `value` is a restricted object schema of supported field schemas; false otherwise
  *
  * @example
  * ```ts
@@ -1601,7 +1601,7 @@ export function isMCPElicitSchema(value: unknown): value is MCPElicitSchema {
  * Determines whether a value is a form-mode elicitation parameter object.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when `value` has the restricted form elicitation shape
+ * @returns True if `value` has the restricted form elicitation shape; false otherwise
  *
  * @example
  * ```ts
@@ -1628,7 +1628,7 @@ export function isMCPElicitForm(value: unknown): value is MCPElicitForm {
  * Determines whether a value is a URL-mode elicitation parameter object.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when `value` has the URL elicitation shape
+ * @returns True if `value` has the URL elicitation shape; false otherwise
  *
  * @example
  * ```ts
@@ -1650,7 +1650,7 @@ export function isMCPElicitURL(value: unknown): value is MCPElicitURL {
  * Determines whether a value is an embedded `elicitation/create` request.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when `value` is a form- or URL-mode elicitation request
+ * @returns True if `value` is a form- or URL-mode elicitation request; false otherwise
  *
  * @example
  * ```ts
@@ -1676,7 +1676,7 @@ export function isMCPElicitRequest(value: unknown): value is MCPElicitRequest {
  * Determines whether a value is one legal embedded multi-round-trip request.
  *
  * @param value - The unknown value to inspect
- * @returns `true` for an embedded elicitation, sampling, or roots request
+ * @returns True if `value` is an embedded elicitation, sampling, or roots request; false otherwise
  *
  * @example
  * ```ts
@@ -1701,7 +1701,7 @@ export function isMCPInputRequest(value: unknown): value is MCPInputRequest {
  * Determines whether a value is a consumer-keyed map of embedded input requests.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when every own value is a legal {@link MCPInputRequest}
+ * @returns True if every own value is a legal {@link MCPInputRequest}; false otherwise
  *
  * @example
  * ```ts
@@ -1722,7 +1722,7 @@ export function isMCPInputRequestMap(value: unknown): value is MCPInputRequestMa
  * Determines whether a value is one elicitation response.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when action/content have the protocol shape
+ * @returns True if action/content have the protocol shape; false otherwise
  *
  * @example
  * ```ts
@@ -1779,7 +1779,7 @@ export function isMCPElicitResult(value: unknown): value is MCPElicitResult {
  *
  * @param value - The accepted response content to check
  * @param schema - The exact {@link MCPElicitSchema} that was issued with the elicitation
- * @returns `true` when every declared and undeclared value is legal under `schema`
+ * @returns True if every declared and undeclared value is legal under `schema`; false otherwise
  *
  * @example
  * ```ts
@@ -1895,7 +1895,7 @@ export function isElicitContent(
  * including a URL-mode elicitation's `url`. Total over hostile input.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when `value` carries an absolute `uri` and an optional string `name`
+ * @returns True if `value` carries an absolute `uri` and an optional string `name`; false otherwise
  *
  * @example
  * ```ts
@@ -1926,7 +1926,7 @@ export function isMCPRoot(value: unknown): value is MCPRoot {
  * {@link isMCPRoot}. Total over hostile input.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when `value` carries an array of valid roots
+ * @returns True if `value` carries an array of valid roots; false otherwise
  *
  * @example
  * ```ts
@@ -1960,7 +1960,7 @@ export function isMCPRootResult(value: unknown): value is MCPRootResult {
  * input.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when `value` is one legal sampling content block
+ * @returns True if `value` is one legal sampling content block; false otherwise
  *
  * @example
  * ```ts
@@ -2004,7 +2004,7 @@ export function isMCPSampleContent(value: unknown): value is MCPSampleContent {
  * names four values and permits any other a provider reports. Total over hostile input.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when `value` has the sampling-completion shape
+ * @returns True if `value` has the sampling-completion shape; false otherwise
  *
  * @example
  * ```ts
@@ -2054,7 +2054,7 @@ export function isMCPSampleResult(value: unknown): value is MCPSampleResult {
  *
  * @param value - The client's answer to check
  * @param request - The exact {@link MCPInputRequest} that was issued under the same key
- * @returns `true` when the answer is legal for that request
+ * @returns True if the answer is legal for that request; false otherwise
  *
  * @example
  * ```ts
@@ -2083,7 +2083,7 @@ export function isMCPInputResponse(value: unknown, request: unknown): value is M
  * both must be present and valid. Total over hostile input.
  *
  * @param value - The unknown value to inspect
- * @returns `true` when `value` is a valid input-required result
+ * @returns True if `value` is a valid input-required result; false otherwise
  *
  * @example
  * ```ts
@@ -2121,7 +2121,7 @@ export function isMCPInputResult(value: unknown): value is MCPInputResult {
  * be a record. Total: any other input returns `false`.
  *
  * @param value - The already-parsed value to test
- * @returns `true` when `value` is a valid JSON-RPC request
+ * @returns True if `value` is a valid JSON-RPC request; false otherwise
  *
  * @example
  * ```ts
@@ -2149,7 +2149,7 @@ export function isJSONRPCRequest(value: unknown): value is JSONRPCRequest {
  * be a record. Total: any other input returns `false`.
  *
  * @param value - The already-parsed value to test
- * @returns `true` when `value` is a valid JSON-RPC notification
+ * @returns True if `value` is a valid JSON-RPC notification; false otherwise
  *
  * @example
  * ```ts
@@ -2176,7 +2176,7 @@ export function isJSONRPCNotification(value: unknown): value is JSONRPCNotificat
  * mutually exclusive, so a positive answer names exactly one arm. Total.
  *
  * @param value - The already-parsed value to test
- * @returns `true` when `value` is a valid JSON-RPC request or notification
+ * @returns True if `value` is a valid JSON-RPC request or notification; false otherwise
  */
 export function isJSONRPCInvocation(value: unknown): value is JSONRPCInvocation {
 	return isJSONRPCRequest(value) || isJSONRPCNotification(value)
@@ -2195,7 +2195,7 @@ export function isJSONRPCInvocation(value: unknown): value is JSONRPCInvocation 
  * Total.
  *
  * @param value - The already-parsed value to test
- * @returns `true` when `value` is a valid JSON-RPC result response
+ * @returns True if `value` is a valid JSON-RPC result response; false otherwise
  *
  * @example
  * ```ts
@@ -2232,7 +2232,7 @@ export function isJSONRPCResultResponse(value: unknown): value is JSONRPCResultR
  * itself the hostile step, and it is bounded here rather than allowed to escape. Total.
  *
  * @param value - The already-parsed value to test
- * @returns `true` when `value` carries an integer `code` and a string `message`
+ * @returns True if `value` carries an integer `code` and a string `message`; false otherwise
  *
  * @example
  * ```ts
@@ -2257,7 +2257,7 @@ export function isJSONRPCError(value: unknown): value is JSONRPCError {
  * `result`. `error` carries an integer `code` and a string `message`. Total.
  *
  * @param value - The already-parsed value to test
- * @returns `true` when `value` is a valid JSON-RPC error response
+ * @returns True if `value` is a valid JSON-RPC error response; false otherwise
  *
  * @example
  * ```ts
@@ -2282,7 +2282,7 @@ export function isJSONRPCErrorResponse(value: unknown): value is JSONRPCErrorRes
  * The union of the mutually exclusive arms. Total.
  *
  * @param value - The already-parsed value to test
- * @returns `true` when `value` is a valid JSON-RPC response
+ * @returns True if `value` is a valid JSON-RPC response; false otherwise
  */
 export function isJSONRPCResponse(value: unknown): value is JSONRPCResponse {
 	return isJSONRPCResultResponse(value) || isJSONRPCErrorResponse(value)
@@ -2296,7 +2296,7 @@ export function isJSONRPCResponse(value: unknown): value is JSONRPCResponse {
  * The union of {@link isJSONRPCInvocation} and {@link isJSONRPCResponse}. Total.
  *
  * @param value - The already-parsed value to test
- * @returns `true` when `value` is a valid JSON-RPC message
+ * @returns True if `value` is a valid JSON-RPC message; false otherwise
  */
 export function isJSONRPCMessage(value: unknown): value is JSONRPCMessage {
 	return isJSONRPCInvocation(value) || isJSONRPCResponse(value)
@@ -2306,7 +2306,7 @@ export function isJSONRPCMessage(value: unknown): value is JSONRPCMessage {
  * Determines whether a parsed value is an MCP `initialize` invocation.
  *
  * @param value - The already-parsed value to test
- * @returns `true` when `value` is a valid `initialize` request or notification
+ * @returns True if `value` is a valid `initialize` request or notification; false otherwise
  *
  * @example
  * ```ts
@@ -2330,7 +2330,7 @@ export function isInitializeRequest(value: unknown): value is JSONRPCInvocation 
  * legacy dispatch. Total over hostile and malformed input.
  *
  * @param value - The already-parsed value to inspect
- * @returns `true` when the value is an invocation carrying the reserved version key
+ * @returns True if the value is an invocation carrying the reserved version key; false otherwise
  */
 export function isModernRequest(value: unknown): value is JSONRPCInvocation {
 	const owned = attempt(() => cloneJSONRecord(value))

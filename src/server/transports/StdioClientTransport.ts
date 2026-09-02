@@ -9,9 +9,8 @@ import { DEFAULT_MCP_DELIVERY } from '../constants.js'
 import { dispatchLines } from '../helpers.js'
 
 /**
- * The stdio CLIENT transport for the Model Context Protocol — a
- * {@link StdioClientTransportInterface} that drives a CHILD PROCESS MCP server over
- * newline-delimited JSON-RPC on `stdin`/`stdout`, the stdio sibling of {@link
+ * Drives a CHILD PROCESS MCP server over newline-delimited JSON-RPC on `stdin`/`stdout` —
+ * a {@link StdioClientTransportInterface}, the stdio sibling of {@link
  * import('@orkestrel/mcp').HTTPClientTransport} and {@link
  * import('./WebSocketClientTransport.js').WebSocketClientTransport}.
  *

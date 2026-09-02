@@ -8,10 +8,10 @@
 // `DEFAULT_MCP_CLIENT_VERSION`, `src/core/constants.ts`), so `createScopeServer` falls
 // back to these when a caller omits them.
 
-/** The default server name `createScopeServer` reports (`initialize`'s `serverInfo.name`) when `options.name` is omitted. */
+/** Supplies the default server name `createScopeServer` reports (`initialize`'s `serverInfo.name`) when `options.name` is omitted. */
 export const DEFAULT_MCP_SERVER_NAME = '@orkestrel/mcp'
 
-/** The default server version `createScopeServer` reports (`initialize`'s `serverInfo.version`) when `options.version` is omitted. */
+/** Supplies the default server version `createScopeServer` reports (`initialize`'s `serverInfo.version`) when `options.version` is omitted. */
 export const DEFAULT_MCP_SERVER_VERSION = '1.0.0'
 
 // The WebSocket subprotocol constant, declared here independently of the Node face's
@@ -21,7 +21,7 @@ export const DEFAULT_MCP_SERVER_VERSION = '1.0.0'
 // `createWebSocketServer` selects it from the client's offer.
 
 /**
- * The WebSocket subprotocol `createWebSocketClientTransport` requests by default —
+ * Names the WebSocket subprotocol `createWebSocketClientTransport` requests by default —
  * `'mcp'`, which `createWebSocketServer` selects when the client offers it. Per RFC 6455
  * §4.1 a client MUST fail the connection if the server returns
  * a subprotocol it did not request; Node ≥ 22 (undici) enforces this strictly, so the

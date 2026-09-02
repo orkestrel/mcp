@@ -1,7 +1,7 @@
 import type { MCPMethodHandler, MCPMethodManagerInterface } from './types.js'
 
 /**
- * The modern method registry an {@link import('./types.js').MCPServerInterface}
+ * Holds the modern methods an {@link import('./types.js').MCPServerInterface}
  * dispatches through — a name-keyed store of {@link MCPMethodHandler}s that owns its
  * map rather than exposing one.
  *

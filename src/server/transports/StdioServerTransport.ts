@@ -9,11 +9,10 @@ import { Emitter } from '@orkestrel/emitter'
 import { dispatchLines, extractLines, writeLine } from '../helpers.js'
 
 /**
- * The stdio SERVER transport for the Model Context Protocol — wraps an injectable
- * readable/writable stream pair (`process.stdin`/`process.stdout` in production, a
- * test double in tests) as a {@link MCPMessageTransportInterface}, the newline-delimited
- * JSON-RPC channel {@link import('../factories.js').createStdioServer} pumps
- * `mcp.dispatch` over, the stdio mirror of {@link
+ * Wraps an injectable readable/writable stream pair (`process.stdin`/`process.stdout` in
+ * production, a test double in tests) as a {@link MCPMessageTransportInterface} — the
+ * newline-delimited JSON-RPC channel {@link import('../factories.js').createStdioServer}
+ * pumps `mcp.dispatch` over, the stdio mirror of {@link
  * import('./WebSocketServerTransport.js').WebSocketServerTransport}.
  *
  * @remarks

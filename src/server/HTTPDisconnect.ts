@@ -74,8 +74,8 @@ export class HTTPDisconnect {
 	}
 
 	/**
-	 * The signal aborted by the incoming request, or by any end of this response that is not
-	 * its graceful completion.
+	 * Returns the signal aborted by the incoming request, or by any end of this response that
+	 * is not its graceful completion.
 	 *
 	 * @returns The composed lifecycle signal
 	 */

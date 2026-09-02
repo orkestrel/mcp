@@ -65,8 +65,8 @@ export interface MessagePortTransportOptions {
 }
 
 /**
- * A duplex {@link MCPTransportInterface} adapting a message-event-bearing SCOPE
- * (`self` in a dedicated Web Worker, or any object shaped the same way) — the
+ * Adapts a message-event-bearing SCOPE (`self` in a dedicated Web Worker, or any object
+ * shaped the same way) as a duplex {@link MCPTransportInterface} — the
  * internal carrier `createScopeServer` binds to route the implicit (portless) message
  * channel, plus the `deliver` entry point the scope's own `message` listener pushes
  * an inbound string through (the scope itself never registers `listen`'s handler
@@ -78,7 +78,8 @@ export interface ScopeTransportInterface extends MCPTransportInterface {
 }
 
 /**
- * The structural shape {@link import('./factories.js').createScopeServer} needs from a
+ * Describes the structural shape {@link import('./factories.js').createScopeServer} needs
+ * from a
  * hostable scope — `self` in a dedicated Web Worker or a Service Worker (or any double
  * matching this shape).
  *
@@ -97,7 +98,7 @@ export interface ScopeInterface {
 }
 
 /**
- * One MCP server hosted inside a worker scope — what
+ * Represents one MCP server hosted inside a worker scope — what
  * {@link import('./factories.js').createScopeServer} returns.
  *
  * @remarks

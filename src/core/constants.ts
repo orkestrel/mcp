@@ -5,7 +5,7 @@ import type { MCPLegacyVersion, MCPModernVersion, MCPVersion } from './types.js'
 // transport, not core.
 
 /**
- * The revision offered and defaulted to in the legacy `initialize` handshake.
+ * Names the revision offered and defaulted to in the legacy `initialize` handshake.
  *
  * @remarks
  * This is deliberately a legacy revision, and the newest one supported. 2026-07-28 is stateless
@@ -14,14 +14,14 @@ import type { MCPLegacyVersion, MCPModernVersion, MCPVersion } from './types.js'
  */
 export const MCP_HANDSHAKE_VERSION: MCPLegacyVersion = '2025-11-25'
 
-/** The older legacy revision the optional legacy decorator accepts and an adapter can pin. */
+/** Names the older legacy revision the optional legacy decorator accepts and an adapter can pin. */
 export const MCP_FALLBACK_VERSION: MCPLegacyVersion = '2025-06-18'
 
-/** The modern revision offered by an unpinned client during discovery. */
+/** Names the modern revision offered by an unpinned client during discovery. */
 export const MCP_MODERN_VERSION: MCPModernVersion = '2026-07-28'
 
 /**
- * The modern MCP protocol revisions a bare server accepts and advertises.
+ * Lists the modern MCP protocol revisions a bare server accepts and advertises.
  *
  * @remarks
  * Frozen in discovery-advertisement order. Legacy revisions are absent because
@@ -32,35 +32,38 @@ export const SUPPORTED_MODERN_PROTOCOL_VERSIONS: readonly MCPModernVersion[] = O
 	MCP_MODERN_VERSION,
 ])
 
-/** The protocol revisions accepted by the optional legacy decorator. */
+/** Lists the protocol revisions accepted by the optional legacy decorator. */
 export const SUPPORTED_LEGACY_PROTOCOL_VERSIONS: readonly MCPLegacyVersion[] = Object.freeze([
 	MCP_HANDSHAKE_VERSION,
 	MCP_FALLBACK_VERSION,
 ])
 
-/** The protocol revisions the `isMCPVersion` guard admits, spanning the modern and legacy eras. */
+/**
+ * Lists the protocol revisions the `isMCPVersion` guard admits, spanning the modern and legacy
+ * eras.
+ */
 export const SUPPORTED_MCP_VERSIONS: readonly MCPVersion[] = Object.freeze([
 	...SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 	...SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
 ])
 
-/** Reserved modern `_meta` key carrying the request's protocol revision. */
+/** Names the reserved modern `_meta` key carrying the request's protocol revision. */
 export const MCP_META_VERSION = 'io.modelcontextprotocol/protocolVersion'
 
-/** Reserved modern `_meta` key carrying the client's open capability record. */
+/** Names the reserved modern `_meta` key carrying the client's open capability record. */
 export const MCP_META_CAPABILITIES = 'io.modelcontextprotocol/clientCapabilities'
 
-/** Reserved modern `_meta` key carrying the optional client identity. */
+/** Names the reserved modern `_meta` key carrying the optional client identity. */
 export const MCP_META_CLIENT = 'io.modelcontextprotocol/clientInfo'
 
-/** Reserved modern `_meta` key carrying the server identity on results. */
+/** Names the reserved modern `_meta` key carrying the server identity on results. */
 export const MCP_META_SERVER = 'io.modelcontextprotocol/serverInfo'
 
-/** Reserved modern `_meta` key carrying a `subscriptions/listen` request id. */
+/** Names the reserved modern `_meta` key carrying a `subscriptions/listen` request id. */
 export const MCP_META_SUBSCRIPTION = 'io.modelcontextprotocol/subscriptionId'
 
 /**
- * The reserved extension key identifying the stable Tasks extension.
+ * Names the reserved extension key identifying the stable Tasks extension.
  *
  * @remarks
  * The ONE spelling of it in this package, and the identity of the immutable snapshot dated
@@ -72,7 +75,7 @@ export const MCP_META_SUBSCRIPTION = 'io.modelcontextprotocol/subscriptionId'
 export const MCP_EXTENSION_TASKS = 'io.modelcontextprotocol/tasks'
 
 /**
- * The opening marker of the Base64 sentinel a standard MCP header value travels in.
+ * Names the opening marker of the Base64 sentinel a standard MCP header value travels in.
  *
  * @remarks
  * The markers are LOWERCASE and exact, and this constant with {@link MCP_SENTINEL_SUFFIX} is
@@ -82,11 +85,11 @@ export const MCP_EXTENSION_TASKS = 'io.modelcontextprotocol/tasks'
  */
 export const MCP_SENTINEL_PREFIX = '=?base64?'
 
-/** The closing marker of the Base64 sentinel a standard MCP header value travels in. */
+/** Names the closing marker of the Base64 sentinel a standard MCP header value travels in. */
 export const MCP_SENTINEL_SUFFIX = '?='
 
 /**
- * The request-header prefix an `x-mcp-header` annotation projects a tool argument onto.
+ * Names the request-header prefix an `x-mcp-header` annotation projects a tool argument onto.
  *
  * @remarks
  * The full field name is this prefix followed by the annotation's own value verbatim, so
@@ -102,7 +105,7 @@ export const MCP_PARAM_PREFIX = 'Mcp-Param-'
 // the drift the two faces already carried.
 
 /**
- * The Streamable-HTTP transport header that carries the MCP session id.
+ * Names the Streamable-HTTP transport header that carries the MCP session id.
  *
  * @remarks
  * A STATEFUL server sends it on the `initialize` reply, and
@@ -113,7 +116,7 @@ export const MCP_PARAM_PREFIX = 'Mcp-Param-'
 export const MCP_SESSION_HEADER = 'mcp-session-id'
 
 /**
- * The Streamable-HTTP transport header carrying the MCP protocol version.
+ * Names the Streamable-HTTP transport header carrying the MCP protocol version.
  *
  * @remarks
  * A modern request derives it from its own `_meta`; a legacy request echoes the revision the
@@ -122,7 +125,7 @@ export const MCP_SESSION_HEADER = 'mcp-session-id'
 export const MCP_PROTOCOL_VERSION_HEADER = 'mcp-protocol-version'
 
 /**
- * The modern Streamable-HTTP request header carrying the JSON-RPC method.
+ * Names the modern Streamable-HTTP request header carrying the JSON-RPC method.
  *
  * @remarks
  * It is stamped on every modern request and on no legacy request.
@@ -130,7 +133,7 @@ export const MCP_PROTOCOL_VERSION_HEADER = 'mcp-protocol-version'
 export const MCP_METHOD_HEADER = 'mcp-method'
 
 /**
- * The modern Streamable-HTTP request header carrying a named target.
+ * Names the modern Streamable-HTTP request header carrying a named target.
  *
  * @remarks
  * The HTTP client transport stamps it only for `tools/call`, from that request's `params.name`,
@@ -139,7 +142,7 @@ export const MCP_METHOD_HEADER = 'mcp-method'
 export const MCP_NAME_HEADER = 'mcp-name'
 
 /**
- * The tool-schema annotation key naming the header one parameter projects into.
+ * Identifies the tool-schema annotation key naming the header one parameter projects into.
  *
  * @remarks
  * It is valid ONLY on a primitive property schema statically reachable from the `inputSchema`
@@ -150,7 +153,7 @@ export const MCP_NAME_HEADER = 'mcp-name'
 export const MCP_HEADER_ANNOTATION = 'x-mcp-header'
 
 /**
- * The `tools/list` pages one modern `tools/call` walks to reach its own annotations.
+ * Bounds the `tools/list` pages one modern `tools/call` walks to reach its own annotations.
  *
  * @remarks
  * The HTTP POST handler reads a called tool's {@link MCP_HEADER_ANNOTATION} annotations by
@@ -165,11 +168,12 @@ export const MCP_HEADER_ANNOTATION = 'x-mcp-header'
  */
 export const MCP_LOOKUP_PAGES = 8
 
-/** MCP reserved error: required HTTP metadata does not match the request body. */
+/** Names the MCP reserved error for required HTTP metadata that does not match the request body. */
 export const MCP_HEADER_MISMATCH = -32020
 
 /**
- * MCP reserved error: an operation needs a client capability that was not declared.
+ * Names the MCP reserved error for an operation needing a client capability that was not
+ * declared.
  *
  * @remarks
  * The GENERIC code for the whole condition, not one capability's code. This server answers
@@ -183,11 +187,11 @@ export const MCP_HEADER_MISMATCH = -32020
  */
 export const MCP_MISSING_CAPABILITY = -32021
 
-/** MCP reserved error: a request names an unsupported protocol revision. */
+/** Names the MCP reserved error for a request naming an unsupported protocol revision. */
 export const MCP_UNSUPPORTED_VERSION = -32022
 
 /**
- * Default modern result freshness lifetime in milliseconds.
+ * Sets the default modern result freshness lifetime in milliseconds.
  *
  * @remarks
  * `ttlMs` is required on cacheable results, while zero means immediately stale
@@ -196,7 +200,8 @@ export const MCP_UNSUPPORTED_VERSION = -32022
 export const DEFAULT_MCP_CACHE_TTL = 60_000
 
 /**
- * Secure server bounds used when the matching `limit` option leaf is absent or malformed.
+ * Sets the secure server bounds used when the matching `limit` option leaf is absent or
+ * malformed.
  *
  * @remarks
  * One MiB admits ordinary JSON-RPC requests and substantial tool arguments; 16 KiB admits
@@ -219,7 +224,7 @@ export const DEFAULT_MCP_LIMITS = Object.freeze({
 })
 
 /**
- * The one empty argument record every argument-less modern `tools/call` runs with.
+ * Holds the one empty argument record every argument-less modern `tools/call` runs with.
  *
  * @remarks
  * Frozen and null-prototype, and SHARED: two calls that name no `arguments` receive the same
@@ -236,20 +241,21 @@ export const EMPTY_MCP_ARGUMENTS: Readonly<Record<string, unknown>> = Object.fre
 	Object.create(null),
 )
 
-/** JSON-RPC 2.0 reserved error: invalid JSON was received (the message did not parse). */
+/** Names the JSON-RPC 2.0 reserved error for invalid JSON received (the message did not parse). */
 export const JSONRPC_PARSE_ERROR = -32700
 
-/** JSON-RPC 2.0 reserved error: the payload was not a valid Request object. */
+/** Names the JSON-RPC 2.0 reserved error for a payload that was not a valid Request object. */
 export const JSONRPC_INVALID_REQUEST = -32600
 
-/** JSON-RPC 2.0 reserved error: the requested method does not exist. */
+/** Names the JSON-RPC 2.0 reserved error for a requested method that does not exist. */
 export const JSONRPC_METHOD_NOT_FOUND = -32601
 
-/** JSON-RPC 2.0 reserved error: the method's parameters were invalid. */
+/** Names the JSON-RPC 2.0 reserved error for a method's invalid parameters. */
 export const JSONRPC_INVALID_PARAMS = -32602
 
 /**
- * JSON-RPC 2.0 reserved error: the server failed while handling an otherwise valid request.
+ * Names the JSON-RPC 2.0 reserved error for a server that failed while handling an otherwise
+ * valid request.
  *
  * @remarks
  * The code every MODERN internal fault answers with — a provider, handler, continuation,
@@ -260,7 +266,7 @@ export const JSONRPC_INVALID_PARAMS = -32602
 export const JSONRPC_INTERNAL_ERROR = -32603
 
 /**
- * JSON-RPC 2.0 implementation-defined server error (the `-32000` to `-32099` range).
+ * Names the JSON-RPC 2.0 implementation-defined server error (the `-32000` to `-32099` range).
  *
  * @remarks
  * Retained for the LEGACY branch alone. A modern fault answers
@@ -273,17 +279,23 @@ export const JSONRPC_SERVER_ERROR = -32000
 // handshake (`clientInfo`) and the per-request deadline, when the caller supplies
 // none. The egress mirror of the server's protocol-version constants above.
 
-/** The default client name reported in the MCP `initialize` handshake (`clientInfo.name`). */
+/**
+ * Supplies the default client name reported in the MCP `initialize` handshake
+ * (`clientInfo.name`).
+ */
 export const DEFAULT_MCP_CLIENT_NAME = '@orkestrel/mcp'
 
-/** The default client version reported in the MCP `initialize` handshake (`clientInfo.version`). */
+/**
+ * Supplies the default client version reported in the MCP `initialize` handshake
+ * (`clientInfo.version`).
+ */
 export const DEFAULT_MCP_CLIENT_VERSION = '1.0.0'
 
 /**
- * The default per-request deadline (ms) an `MCPClient` applies when `options.timeout`
+ * Sets the default per-request deadline (ms) an `MCPClient` applies when `options.timeout`
  * is unset — a request the remote server does not answer within it rejects.
  */
 export const DEFAULT_MCP_REQUEST_TIMEOUT = 30_000
 
-/** The default number of subscription frames retained while no client read is parked. */
+/** Sets the default number of subscription frames retained while no client read is parked. */
 export const DEFAULT_MCP_SUBSCRIPTION_CAPACITY = 64

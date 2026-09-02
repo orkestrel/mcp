@@ -81,7 +81,7 @@ export async function sendEventStream(
 // last-event header reads as `undefined`, an absent `url` reads as `'/'`.
 
 /**
- * Whether the request's `Accept` header opts into a Server-Sent-Events response.
+ * Checks whether the request's `Accept` header opts into a Server-Sent-Events response.
  *
  * @remarks
  * Reads the fetch-standard `Request.headers.get('accept')` and returns `true` when it
@@ -91,7 +91,7 @@ export async function sendEventStream(
  * — an absent / unmatched header returns `false`.
  *
  * @param request - The fetch-standard `Request`
- * @returns `true` when the client `Accept`s `text/event-stream`, else `false`
+ * @returns True if the client `Accept`s `text/event-stream`; false otherwise
  */
 export function acceptsEventStream(request: Request): boolean {
 	const accept = request.headers.get('accept')
@@ -100,7 +100,7 @@ export function acceptsEventStream(request: Request): boolean {
 }
 
 /**
- * Whether an HTTP request satisfies the endpoint's origin gate.
+ * Checks whether an HTTP request satisfies the endpoint's origin gate.
  *
  * @remarks
  * Validation is enabled by default. A request without `Origin` is allowed. A canonical origin
@@ -111,7 +111,7 @@ export function acceptsEventStream(request: Request): boolean {
  *
  * @param request - The fetch-standard request to validate
  * @param options - Shared origin validation and delegation options
- * @returns `true` when the request may reach MCP dispatch
+ * @returns True if the request may reach MCP dispatch; false otherwise
  */
 export function allowsOrigin(request: Request, options?: MCPOriginOptions): boolean {
 	if (options?.enabled === false) return true

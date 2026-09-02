@@ -4,7 +4,7 @@ import type { MCPSessionEvent, MCPSessionInterface, MCPSessionOptions } from './
 import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constants.js'
 
 /**
- * One MCP transport session — the per-session entity a {@link
+ * Represents one MCP transport session — the per-session entity a {@link
  * import('./middlewares.js').createMCPSession} middleware owns, keyed by its `id`, carrying the
  * resumable server→client push channel with its bounded replay log FOLDED IN.
  *

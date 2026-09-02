@@ -11,9 +11,8 @@ import { Emitter } from '@orkestrel/emitter'
 import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
 
 /**
- * The browser-face WebSocket CLIENT transport for the Model Context Protocol — a
- * {@link MCPMessageTransportInterface} that drives a REMOTE MCP server over the native
- * `WebSocket` global, the browser sibling of the Node face's
+ * Drives a REMOTE MCP server over the native `WebSocket` global from the browser face — a
+ * CLIENT {@link MCPMessageTransportInterface}, the browser sibling of the Node face's
  * {@link import('@orkestrel/mcp/server').WebSocketClientTransport}.
  *
  * @remarks

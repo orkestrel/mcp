@@ -120,8 +120,8 @@ import {
 } from './validators.js'
 
 /**
- * A transport-agnostic Model Context Protocol server — dispatches JSON-RPC 2.0
- * requests over a live {@link ToolManagerInterface}, with NO transport coupling.
+ * Dispatches JSON-RPC 2.0 requests over a live {@link ToolManagerInterface}, with NO
+ * transport coupling.
  *
  * @remarks
  * - **`dispatch` and `handle`.** `dispatch(invocation)` runs an already-parsed invocation and

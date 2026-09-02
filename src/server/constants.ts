@@ -5,17 +5,17 @@
 // `createMCPRoutes` validates a present protocol version on every POST against the same
 // spelling the client wrote.
 
-/** The reverse-proxy response header controlling buffering of an SSE response. */
+/** Names the reverse-proxy response header controlling buffering of an SSE response. */
 export const SSE_BUFFERING_HEADER = 'x-accel-buffering'
 
-/** The `X-Accel-Buffering` value that disables reverse-proxy buffering. */
+/** Names the `X-Accel-Buffering` value that disables reverse-proxy buffering. */
 export const SSE_BUFFERING_DISABLED = 'no'
 
-/** The default request path `createMCPRoutes` mounts the transport's `POST` route at. */
+/** Names the default request path `createMCPRoutes` mounts the transport's `POST` route at. */
 export const DEFAULT_MCP_PATH = '/mcp'
 
 /**
- * The default interval in milliseconds between SSE keepalive comments on held-open MCP
+ * Sets the default interval in milliseconds between SSE keepalive comments on held-open MCP
  * responses.
  *
  * @remarks
@@ -24,11 +24,11 @@ export const DEFAULT_MCP_PATH = '/mcp'
  */
 export const DEFAULT_MCP_KEEPALIVE_INTERVAL = 15_000
 
-/** The comment text written by the held-open MCP response keepalive. */
+/** Names the comment text written by the held-open MCP response keepalive. */
 export const SSE_KEEPALIVE_COMMENT = 'keepalive'
 
 /**
- * The WebSocket subprotocol the MCP-over-WebSocket transports negotiate — sent by the
+ * Names the WebSocket subprotocol the MCP-over-WebSocket transports negotiate — sent by the
  * client in `Sec-WebSocket-Protocol`, echoed by the server in its `101` handshake.
  *
  * @remarks
@@ -41,7 +41,7 @@ export const SSE_KEEPALIVE_COMMENT = 'keepalive'
 export const MCP_WEBSOCKET_SUBPROTOCOL = 'mcp'
 
 /**
- * The default capacity of a session's FOLDED resumable event log (the per-{@link
+ * Sets the default capacity of a session's FOLDED resumable event log (the per-{@link
  * import('./MCPSession.js').MCPSession} replay log) — the maximum number of pushed
  * server→client messages retained for replay before the OLDEST is evicted.
  *
@@ -54,7 +54,7 @@ export const MCP_WEBSOCKET_SUBPROTOCOL = 'mcp'
 export const DEFAULT_MCP_SESSION_CAPACITY = 1024
 
 /**
- * The default per-event idle lifetime (ms) of a session's folded resumable event log — an
+ * Sets the default per-event idle lifetime (ms) of a session's folded resumable event log — an
  * entry older than this is lazily evicted on the next access (no background timer), bounding
  * how far back a reconnecting client may replay.
  *
@@ -66,7 +66,7 @@ export const DEFAULT_MCP_SESSION_CAPACITY = 1024
 export const DEFAULT_MCP_SESSION_TTL = 300_000
 
 /**
- * The default bound in milliseconds on one unconfirmed write to a stdio client transport's
+ * Sets the default bound in milliseconds on one unconfirmed write to a stdio client transport's
  * child `stdin` — the `delivery` a `createStdioClientTransport` caller who supplies none gets.
  *
  * @remarks

@@ -66,9 +66,9 @@ import {
 } from './validators.js'
 
 /**
- * A transport-agnostic Model Context Protocol CLIENT — connects to a REMOTE MCP server
- * over an injected {@link MCPMessageTransportInterface}, negotiates the modern revision, and
- * exposes the server's tools as local {@link ToolInterface}s an agent can run.
+ * Connects to a REMOTE MCP server over any injected {@link MCPMessageTransportInterface},
+ * negotiates the modern revision, and exposes the server's tools as local
+ * {@link ToolInterface}s an agent can run.
  *
  * @remarks
  * - **The mirror of `MCPServer`.** The server DISPATCHES requests over a tool registry;

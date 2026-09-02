@@ -10,9 +10,9 @@ import { Emitter } from '@orkestrel/emitter'
 import { WEBSOCKET_READY_OPEN } from '@orkestrel/websocket'
 
 /**
- * The per-connection JSON-RPC-over-WebSocket SERVER bridge — wraps a
- * {@link NodeWebSocketInterface} (the RFC 6455 wire wrapper) as a
- * {@link MCPMessageTransportInterface}, the bidirectional JSON-RPC message channel
+ * Wraps a {@link NodeWebSocketInterface} (the RFC 6455 wire wrapper) as a
+ * {@link MCPMessageTransportInterface} — the per-connection JSON-RPC-over-WebSocket SERVER
+ * bridge, the bidirectional JSON-RPC message channel
  * `createWebSocketServer` pumps `mcp.dispatch` over and the egress mirror's
  * {@link import('./WebSocketClientTransport.js').WebSocketClientTransport} reuses.
  *

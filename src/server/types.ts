@@ -37,7 +37,8 @@ import type { ServerEventMap, StreamInterface } from '@orkestrel/server'
 import type { MCPSession } from './MCPSession.js'
 
 /**
- * One required MCP HTTP header that is absent or disagrees with its server-derived value.
+ * Reports one required MCP HTTP header that is absent or disagrees with its server-derived
+ * value.
  *
  * @remarks
  * - `header` — the canonical HTTP field name safe to show to an integrator.
@@ -52,7 +53,7 @@ export interface MCPHeaderIssue {
 }
 
 /**
- * Shared options for the protocol-required HTTP `Origin` validation at the route and session
+ * Configures the protocol-required HTTP `Origin` validation shared by the route and session
  * enforcement sites.
  *
  * @remarks
@@ -68,7 +69,7 @@ export interface MCPOriginOptions {
 }
 
 /**
- * Shared SSE keepalive options for held-open HTTP responses.
+ * Configures the shared SSE keepalive for held-open HTTP responses.
  *
  * @remarks
  * - `interval` — milliseconds between SSE comment frames. Defaults to {@link
@@ -125,7 +126,7 @@ export type MCPCallerHandler<TState = unknown> = (
  */
 export interface HTTPHandlerOptions<TState = unknown> {
 	readonly streaming?: boolean
-	/** Must match the session layer's value; `origins` is ignored when `enabled` is `false`. */
+	/** Requires the session layer's value; `origins` is ignored when `enabled` is `false`. */
 	readonly origin?: MCPOriginOptions
 	readonly keepalive?: MCPKeepaliveOptions
 	readonly caller?: MCPCallerHandler<TState>
@@ -206,13 +207,13 @@ export interface MCPSessionMiddlewareOptions {
 	readonly ttl?: number
 	readonly capacity?: number
 	readonly clock?: () => number
-	/** Must match the route layer's value; `origins` is ignored when `enabled` is `false`. */
+	/** Requires the route layer's value; `origins` is ignored when `enabled` is `false`. */
 	readonly origin?: MCPOriginOptions
 	readonly keepalive?: MCPKeepaliveOptions
 }
 
 /**
- * One MCP transport session — the per-session entity a {@link
+ * Represents one MCP transport session — the per-session entity a {@link
  * import('./middlewares.js').createMCPSession} middleware owns (the {@link
  * import('./MCPSession.js').MCPSession} entity), carrying the resumable server→client push
  * channel with its bounded replay log FOLDED IN.
@@ -241,7 +242,7 @@ export interface MCPSessionInterface {
 }
 
 /**
- * The `context.state` slice a {@link import('./middlewares.js').createMCPSession}
+ * Declares the `context.state` slice a {@link import('./middlewares.js').createMCPSession}
  * middleware sets on a validated / minted request — a consumer's `TState` extends
  * this so the downstream route handler can read `context.state.session` to `push`
  * a server-initiated message onto the session's resumable stream.
@@ -257,9 +258,9 @@ export interface MCPSessionState {
 }
 
 /**
- * One entry of an {@link MCPSessionInterface}'s folded replay log — a single pushed {@link
- * JSONRPCMessage} tagged with the monotone event `id` the session assigned and the `timestamp`
- * it was appended at (for the lazy-TTL replay window).
+ * Represents one entry of an {@link MCPSessionInterface}'s folded replay log — a single pushed
+ * {@link JSONRPCMessage} tagged with the monotone event `id` the session assigned and the
+ * `timestamp` it was appended at (for the lazy-TTL replay window).
  *
  * @remarks
  * - `id` — the session-assigned, monotonically-increasing event id (a base36 string), the
@@ -277,10 +278,10 @@ export interface MCPSessionEvent {
 }
 
 /**
- * The closure store entry a {@link import('./middlewares.js').createMCPSession} middleware
- * keeps per minted session — the live {@link MCPSession} entity plus the epoch-ms instant it
- * was last touched (the lazy-TTL sweep's idle clock, independent of the session's own
- * replay-log TTL).
+ * Represents the closure store entry a {@link import('./middlewares.js').createMCPSession}
+ * middleware keeps per minted session — the live {@link MCPSession} entity plus the epoch-ms
+ * instant it was last touched (the lazy-TTL sweep's idle clock, independent of the session's
+ * own replay-log TTL).
  *
  * @remarks
  * - `session` — the live {@link MCPSession} entity the store keys by session id.
@@ -292,7 +293,7 @@ export interface MCPSessionEvent {
 export interface MCPSessionEntry {
 	readonly session: MCPSession
 	readonly touched: number
-	/** The legacy revision negotiated when this session was minted. */
+	/** Holds the legacy revision negotiated when this session was minted. */
 	readonly version: MCPVersion
 }
 
@@ -394,9 +395,9 @@ export interface StdioClientTransportOptions {
 }
 
 /**
- * The contract `createStdioClientTransport` returns — a {@link MCPMessageTransportInterface}
- * that also reports the supervised child's stderr tail, the diagnostic a child that dies at
- * startup leaves behind.
+ * Declares the contract `createStdioClientTransport` returns — a
+ * {@link MCPMessageTransportInterface} that also reports the supervised child's stderr tail, the
+ * diagnostic a child that dies at startup leaves behind.
  *
  * @remarks
  * This contract adds `evidence` and changes nothing else: `emitter`, `session`, `duplex`,
@@ -409,8 +410,8 @@ export interface StdioClientTransportOptions {
  */
 export interface StdioClientTransportInterface extends MCPMessageTransportInterface {
 	/**
-	 * The supervised child's decoded stderr tail — live while a child is held, and the value
-	 * captured at that child's end afterwards.
+	 * Reports the supervised child's decoded stderr tail — live while a child is held, and the
+	 * value captured at that child's end afterwards.
 	 *
 	 * @remarks
 	 * - **Readings.** `undefined` while no child has run and none has been captured — before the
@@ -477,9 +478,9 @@ export interface StdioServerOptions {
 }
 
 /**
- * The stdio INGRESS handle {@link import('./factories.js').createStdioServer} returns — arms
- * and tears down the newline-delimited JSON-RPC pump over the {@link StdioServerOptions}
- * stream pair.
+ * Arms and tears down the newline-delimited JSON-RPC pump over the {@link StdioServerOptions}
+ * stream pair — the stdio INGRESS handle {@link import('./factories.js').createStdioServer}
+ * returns.
  *
  * @remarks
  * - `start()` — arm the pump: subscribe to `input`, and dispatch every complete line through
@@ -501,7 +502,7 @@ export interface StdioServerInterface {
 }
 
 /**
- * The result of folding one more chunk of raw stdio bytes into a newline-framed
+ * Represents the result of folding one more chunk of raw stdio bytes into a newline-framed
  * buffer — every COMPLETE line extracted (newline-terminated in the wire bytes) plus
  * the trailing partial line carried forward as the new `remainder`.
  *

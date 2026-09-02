@@ -1,7 +1,7 @@
 import type { MCPStreamControllerInterface, MCPTextStreamControllerInterface } from './types.js'
 
 /**
- * The string-boundary mirror of a controlled held-open result — the same exchange, already
+ * Mirrors a controlled held-open result at the string boundary — the same exchange, already
  * serialized.
  *
  * @remarks

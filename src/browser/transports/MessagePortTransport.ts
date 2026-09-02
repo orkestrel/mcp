@@ -3,9 +3,9 @@ import type { MessagePortTransportOptions } from '../types.js'
 import { isString } from '@orkestrel/contract'
 
 /**
- * The browser-face `MessagePort` transport for the Model Context Protocol — a
- * {@link MCPTransportInterface} over a native `MessagePort`, the genuinely new
- * capability this face adds: MCP over `postMessage`.
+ * Carries the Model Context Protocol over a native `MessagePort` from the browser face — a
+ * {@link MCPTransportInterface}, the genuinely new capability this face adds: MCP over
+ * `postMessage`.
  *
  * @remarks
  * - **Symmetric.** Unlike {@link import('./WebSocketClientTransport.js').WebSocketClientTransport}

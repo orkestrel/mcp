@@ -9,7 +9,7 @@ import { buildProgressNotification } from './helpers.js'
 import { isMCPProgress } from './validators.js'
 
 /**
- * A bounded, request-scoped progress handoff between one producer and one serial consumer.
+ * Hands bounded, request-scoped progress from one producer to one serial consumer.
  *
  * The reporter holds at most one owned progress item. {@link report} applies backpressure until
  * {@link take} consumes that slot. It has no replay, queue, concurrent-consumer coordination,

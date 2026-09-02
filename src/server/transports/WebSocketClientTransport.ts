@@ -23,8 +23,8 @@ import {
 import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
 
 /**
- * The WebSocket CLIENT transport for the Model Context Protocol — a
- * {@link MCPMessageTransportInterface} that drives a REMOTE MCP server over a WebSocket, the
+ * Drives a REMOTE MCP server over a WebSocket — a CLIENT
+ * {@link MCPMessageTransportInterface} for the Model Context Protocol, the
  * egress mirror of {@link import('./factories.js').createWebSocketServer} and the WebSocket
  * sibling of {@link import('@orkestrel/mcp').HTTPClientTransport}.
  *

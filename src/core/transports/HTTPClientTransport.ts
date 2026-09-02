@@ -26,9 +26,9 @@ import { parseJSONRPCMessage } from '../parsers.js'
 import { isJSONRPCResponse, isMCPVersion, isModernRequest } from '../validators.js'
 
 /**
- * The HTTP CLIENT transport for the Model Context Protocol — a
- * {@link MCPMessageTransportInterface} that drives a REMOTE Streamable-HTTP MCP server over
- * `fetch`, the egress mirror of the server's `createMCPRoutes`.
+ * Drives a REMOTE Streamable-HTTP MCP server over `fetch` — a CLIENT
+ * {@link MCPMessageTransportInterface} for the Model Context Protocol, the egress mirror of
+ * the server's `createMCPRoutes`.
  *
  * @remarks
  * - **One class, both faces.** It touches `fetch`, `Response`, `AbortController`,
