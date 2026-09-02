@@ -1,6 +1,6 @@
 import type { JSONRPCMessage } from '@src/core'
 import type { StreamInterface } from '@orkestrel/server'
-import type { EventStoreEntry, MCPSessionInterface, MCPSessionOptions } from './types.js'
+import type { MCPSessionEvent, MCPSessionInterface, MCPSessionOptions } from './types.js'
 import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constants.js'
 
 /**
@@ -9,7 +9,7 @@ import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constan
  * resumable server→client push channel with its bounded replay log FOLDED IN.
  *
  * @remarks
- * The single session entity (the old `SessionState` + `EventStore` merged): it holds the
+ * One entity carries the whole session: it holds the
  * session `id`, its OWN bounded, replayable log of pushed server→client messages (the
  * resumable GET-SSE channel — a private `#events` `Map` + a monotone `#counter`, with
  * `capacity` / `ttl` eviction, not a separate store), and the set of open
@@ -21,7 +21,7 @@ import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constan
  *   SSE event (`stream.write({ id, data })`). A push with NO attached stream is still logged,
  *   so a client that connects (or reconnects with a `Last-Event-ID`) LATER replays it from the
  *   log. A `write` to a closed stream is a safe no-op (the {@link
- *   `@orkestrel/server`'s `openStream` contract), so a just-disconnected stream that
+ *   `@orkestrel/server`'s `createStream` contract), so a just-disconnected stream that
  *   has not yet been `detach`ed never throws. A replayed event and the live one carry the
  *   IDENTICAL id (the log assigns it once).
  *
@@ -60,7 +60,7 @@ import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constan
  */
 export class MCPSession implements MCPSessionInterface {
 	readonly #id: string
-	readonly #events = new Map<string, EventStoreEntry>()
+	readonly #events = new Map<string, MCPSessionEvent>()
 	readonly #streams = new Set<StreamInterface>()
 	readonly #capacity: number
 	readonly #ttl: number
@@ -93,9 +93,9 @@ export class MCPSession implements MCPSessionInterface {
 		return id
 	}
 
-	replay(afterId: string, now = Date.now()): readonly EventStoreEntry[] {
+	replay(afterId: string, now = Date.now()): readonly MCPSessionEvent[] {
 		this.#evict(now)
-		const out: EventStoreEntry[] = []
+		const out: MCPSessionEvent[] = []
 		let found = false
 		for (const entry of this.#events.values()) {
 			// Collect every entry STRICTLY AFTER `afterId`, in append order.
@@ -108,7 +108,7 @@ export class MCPSession implements MCPSessionInterface {
 	}
 
 	// Append a message to the bounded replay log under a fresh monotone id, evicting stale +
-	// over-capacity entries — the folded EventStore.append, now private to the session.
+	// over-capacity entries — the folded log's append, private to the session.
 	#append(message: JSONRPCMessage, now: number): string {
 		// Lazy TTL sweep BEFORE appending so an idle log shrinks as it is written.
 		this.#evict(now)

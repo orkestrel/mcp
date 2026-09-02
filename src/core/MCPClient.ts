@@ -1,7 +1,7 @@
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { ToolInterface } from '@orkestrel/tool'
 import type {
-	MCPClientTransportInterface,
+	MCPMessageTransportInterface,
 	JSONRPCId,
 	JSONRPCInvocation,
 	JSONRPCMessage,
@@ -67,7 +67,7 @@ import {
 
 /**
  * A transport-agnostic Model Context Protocol CLIENT — connects to a REMOTE MCP server
- * over an injected {@link MCPClientTransportInterface}, negotiates the modern revision, and
+ * over an injected {@link MCPMessageTransportInterface}, negotiates the modern revision, and
  * exposes the server's tools as local {@link ToolInterface}s an agent can run.
  *
  * @remarks
@@ -128,7 +128,7 @@ import {
  */
 export class MCPClient implements MCPClientInterface {
 	readonly #emitter: Emitter<MCPClientEventMap>
-	readonly #transport: MCPClientTransportInterface
+	readonly #transport: MCPMessageTransportInterface
 	readonly #identity: MCPIdentity
 	readonly #capabilities: MCPClientCapabilities
 	readonly #pin: MCPModernVersion | undefined
@@ -262,7 +262,7 @@ export class MCPClient implements MCPClientInterface {
 		return this.#version
 	}
 
-	get transport(): MCPClientTransportInterface {
+	get transport(): MCPMessageTransportInterface {
 		return this.#transport
 	}
 

@@ -1,4 +1,4 @@
-import type { MCPClientTransportEventMap, JSONRPCMessage } from '@src/core'
+import type { MCPMessageTransportEventMap, JSONRPCMessage } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { ProcessExit } from '@orkestrel/process'
 import type { StdioClientTransportInterface, StdioClientTransportOptions } from '../types.js'
@@ -12,7 +12,7 @@ import { dispatchLines } from '../helpers.js'
  * The stdio CLIENT transport for the Model Context Protocol — a
  * {@link StdioClientTransportInterface} that drives a CHILD PROCESS MCP server over
  * newline-delimited JSON-RPC on `stdin`/`stdout`, the stdio sibling of {@link
- * import('./HTTPClientTransport.js').HTTPClientTransport} and {@link
+ * import('@orkestrel/mcp').HTTPClientTransport} and {@link
  * import('./WebSocketClientTransport.js').WebSocketClientTransport}.
  *
  * @remarks
@@ -53,7 +53,7 @@ import { dispatchLines } from '../helpers.js'
  *   never moves again, so a detached descendant writing to the inherited stderr after the cutoff
  *   cannot grow it. See {@link StdioClientTransportInterface.evidence} for the readings and the
  *   byte bound.
- * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
+ * - **Observable.** Owns the `emitter` ({@link MCPMessageTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
  *   fault, including the child spawn cause the supervisor surfaces and the notice that this
  *   lifetime's `evidence` was cut off at the `drain` bound), distinct from the emitter's own
@@ -67,7 +67,7 @@ import { dispatchLines } from '../helpers.js'
  * ```
  */
 export class StdioClientTransport implements StdioClientTransportInterface {
-	readonly #emitter: Emitter<MCPClientTransportEventMap>
+	readonly #emitter: Emitter<MCPMessageTransportEventMap>
 	readonly #command: string
 	readonly #args: readonly string[]
 	readonly #env: Readonly<Record<string, string>> | undefined
@@ -77,14 +77,14 @@ export class StdioClientTransport implements StdioClientTransportInterface {
 	#closed = false
 
 	constructor(options: StdioClientTransportOptions) {
-		this.#emitter = new Emitter<MCPClientTransportEventMap>()
+		this.#emitter = new Emitter<MCPMessageTransportEventMap>()
 		this.#command = options.command
 		this.#args = options.args ?? []
 		this.#env = options.env
 		this.#delivery = options.delivery ?? DEFAULT_MCP_DELIVERY
 	}
 
-	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
+	get emitter(): EmitterInterface<MCPMessageTransportEventMap> {
 		return this.#emitter
 	}
 

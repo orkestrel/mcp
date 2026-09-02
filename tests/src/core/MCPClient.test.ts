@@ -1,6 +1,6 @@
 import type {
-	MCPClientTransportEventMap,
-	MCPClientTransportInterface,
+	MCPMessageTransportEventMap,
+	MCPMessageTransportInterface,
 	JSONRPCId,
 	JSONRPCInvocation,
 	JSONRPCMessage,
@@ -64,7 +64,7 @@ function recordAbortTimeout(deadline: number): AbortSignal {
 // transport, not a mock. `gate` optionally WITHHOLDS the response for a chosen method
 // (so a request stays pending), to drive the timeout / disconnect paths. `sent` records
 // every method sent, for the correlation / handshake assertions.
-interface LoopbackInterface extends MCPClientTransportInterface {
+interface LoopbackInterface extends MCPMessageTransportInterface {
 	readonly sent: readonly string[]
 	readonly requests: readonly JSONRPCInvocation[]
 	readonly started: number
@@ -99,7 +99,7 @@ function createLoopback(
 	server: MCPDispatcherInterface,
 	gate?: (method: string) => boolean,
 ): LoopbackInterface {
-	const emitter = createEmitter<MCPClientTransportEventMap>()
+	const emitter = createEmitter<MCPMessageTransportEventMap>()
 	const requests: JSONRPCInvocation[] = []
 	const lifecycle: string[] = []
 	let started = 0
@@ -191,7 +191,7 @@ interface FixturePeerOptions {
 // connections. No fake clock, no mock: each suspension is a real unresolved promise the test itself
 // settles, and each fault is a real rejection out of the real interface.
 function createFixturePeer(options: FixturePeerOptions): FixturePeerInterface {
-	const emitter = createEmitter<MCPClientTransportEventMap>()
+	const emitter = createEmitter<MCPMessageTransportEventMap>()
 	const requests: JSONRPCInvocation[] = []
 	const lifecycle: string[] = []
 	const held: Array<() => void> = []
@@ -353,7 +353,7 @@ function requestId(peer: LoopbackInterface, count: number): string | number {
 
 // A carrier whose `tools/call` write FAILS, in one of the shapes a failing write can
 // take — and they are one keyword apart. `throws` picks it: `true` is a non-`async` `send`
-// that throws SYNCHRONOUSLY, which `MCPClientTransportInterface` forbids; `false` is the same
+// that throws SYNCHRONOUSLY, which `MCPMessageTransportInterface` forbids; `false` is the same
 // non-`async` `send` returning a REJECTED promise, which is what the contract requires. The
 // carrier is `duplex` either way, so a cancellation frame CAN reach it and its absence means
 // the client did not write one rather than that nothing could have carried it.
@@ -362,7 +362,7 @@ function requestId(peer: LoopbackInterface, count: number): string | number {
 // and an `async` function converts a synchronous throw into a rejection — which is the whole
 // difference under test. This is the one carrier that has to be written the other way.
 function createWritePeer(throws: boolean): LoopbackInterface {
-	const emitter = createEmitter<MCPClientTransportEventMap>()
+	const emitter = createEmitter<MCPMessageTransportEventMap>()
 	const requests: JSONRPCInvocation[] = []
 	const lifecycle: string[] = []
 	let started = 0
@@ -868,8 +868,8 @@ describe('MCPClient — modern discovery', () => {
 	})
 
 	it('owns an inbound response before routing and rejects a forged post-validation arm', async () => {
-		const emitter = createEmitter<MCPClientTransportEventMap>()
-		const transport: MCPClientTransportInterface = {
+		const emitter = createEmitter<MCPMessageTransportEventMap>()
+		const transport: MCPMessageTransportInterface = {
 			emitter,
 			session: undefined,
 			duplex: true,
@@ -1172,7 +1172,7 @@ describe('MCPClient — modern discovery', () => {
 			expect(request.params?.['_meta']).toEqual({
 				[MCP_META_VERSION]: '2026-07-28',
 				[MCP_META_CAPABILITIES]: {},
-				[MCP_META_CLIENT]: { name: 'taverna', version: '1.0.0' },
+				[MCP_META_CLIENT]: { name: '@orkestrel/mcp', version: '1.0.0' },
 			})
 		}
 	})
@@ -2439,7 +2439,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		// The obligation the client cannot enforce, recorded where a reader meets it. A `start()`
 		// that acquires and then rejects hands back an error and no connection: the claim is made
 		// only when the open COMPLETES, so nothing is owned, nothing is closed, and no client-side
-		// mechanism can reach what only the transport knows it opened. `MCPClientTransportInterface`
+		// mechanism can reach what only the transport knows it opened. `MCPMessageTransportInterface`
 		// therefore obliges an implementation to release what it acquired before it rejects; this
 		// peer deliberately does not, so the strand it leaves shows up as a live connection the
 		// client never owned. This is a CONTRACT test, not a defect proof — it passes before and
@@ -2466,7 +2466,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 	}, 2_000)
 })
 
-// The `send` obligation `MCPClientTransportInterface` states and `MCPClient` cannot enforce:
+// The `send` obligation `MCPMessageTransportInterface` states and `MCPClient` cannot enforce:
 // a failing `send` REJECTS, it never throws synchronously. Both tests here are CONTRACT tests
 // like the `start` one above — they pass before and after the documentation, because the remedy
 // is a sentence on the transport, not machinery in `#request`. Every transport this package
@@ -2475,7 +2475,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 //
 // The pair is the instrument: the conforming half asserts silence, and silence is only evidence
 // once the same scenario one keyword away has been shown to break it.
-describe('MCPClientTransportInterface — a failing send rejects, never throws', () => {
+describe('MCPMessageTransportInterface — a failing send rejects, never throws', () => {
 	it('strands nothing when a non-async send REJECTS, so a later abort writes nothing', async () => {
 		const peer = createWritePeer(false)
 		const client = createMCPClient({ transport: peer, timeout: 5_000 })
@@ -3020,7 +3020,7 @@ describe('MCPClient — request-scoped progress', () => {
 		expect(peer.requests[1]?.params?.['_meta']).toEqual({
 			[MCP_META_VERSION]: '2026-07-28',
 			[MCP_META_CAPABILITIES]: {},
-			[MCP_META_CLIENT]: { name: 'taverna', version: '1.0.0' },
+			[MCP_META_CLIENT]: { name: '@orkestrel/mcp', version: '1.0.0' },
 			progressToken: id,
 		})
 
@@ -3087,7 +3087,7 @@ describe('MCPClient — request-scoped progress', () => {
 		const stamp = {
 			[MCP_META_VERSION]: '2026-07-28',
 			[MCP_META_CAPABILITIES]: {},
-			[MCP_META_CLIENT]: { name: 'taverna', version: '1.0.0' },
+			[MCP_META_CLIENT]: { name: '@orkestrel/mcp', version: '1.0.0' },
 		}
 
 		await client.call('watched', {}, { progress: () => undefined })
@@ -3858,9 +3858,9 @@ describe('MCPClient — subscriptions/listen', () => {
 
 describe('the client transport event map', () => {
 	it('surfaces a parsed JSON-RPC message on the client carrier', () => {
-		expectTypeOf<MCPClientTransportEventMap['message']>().toEqualTypeOf<
+		expectTypeOf<MCPMessageTransportEventMap['message']>().toEqualTypeOf<
 			readonly [message: JSONRPCMessage]
 		>()
-		expectTypeOf<MCPClientTransportEventMap['close']>().toEqualTypeOf<readonly []>()
+		expectTypeOf<MCPMessageTransportEventMap['close']>().toEqualTypeOf<readonly []>()
 	})
 })

@@ -4,8 +4,8 @@ import type {
 	JSONRPCMessage,
 	JSONRPCResponse,
 	MCPClientCapabilities,
-	MCPClientTransportEventMap,
-	MCPClientTransportInterface,
+	MCPMessageTransportEventMap,
+	MCPMessageTransportInterface,
 	MCPIdentity,
 	MCPLegacyClientTransportOptions,
 	MCPLegacyVersion,
@@ -49,9 +49,9 @@ import {
  * restores legacy results to modern complete-result shapes before delivery, and bounds retained
  * request correlations with the configured deadline.
  */
-export class MCPLegacyClientTransport implements MCPClientTransportInterface {
-	readonly #emitter = new Emitter<MCPClientTransportEventMap>()
-	readonly #transport: MCPClientTransportInterface
+export class MCPLegacyClientTransport implements MCPMessageTransportInterface {
+	readonly #emitter = new Emitter<MCPMessageTransportEventMap>()
+	readonly #transport: MCPMessageTransportInterface
 	readonly #client: MCPIdentity
 	readonly #capabilities: MCPClientCapabilities
 	readonly #pin: MCPLegacyVersion | undefined
@@ -68,7 +68,7 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 	 * @param transport - The legacy peer transport
 	 * @param options - The legacy handshake identity, capabilities, revision, and deadline
 	 */
-	constructor(transport: MCPClientTransportInterface, options?: MCPLegacyClientTransportOptions) {
+	constructor(transport: MCPMessageTransportInterface, options?: MCPLegacyClientTransportOptions) {
 		const requested: unknown = options?.version
 		if (requested !== undefined && !isMCPLegacyVersion(requested)) {
 			throw new MCPError('Unsupported legacy protocol version', MCP_UNSUPPORTED_VERSION, {
@@ -88,7 +88,7 @@ export class MCPLegacyClientTransport implements MCPClientTransportInterface {
 		transport.emitter.on('error', (error) => this.#emitter.emit('error', error))
 	}
 
-	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
+	get emitter(): EmitterInterface<MCPMessageTransportEventMap> {
 		return this.#emitter
 	}
 

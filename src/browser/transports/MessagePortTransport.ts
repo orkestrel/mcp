@@ -9,8 +9,8 @@ import { isString } from '@orkestrel/contract'
  *
  * @remarks
  * - **Symmetric.** Unlike {@link import('./WebSocketClientTransport.js').WebSocketClientTransport}
- *   / {@link import('./HTTPClientTransport.js').HTTPClientTransport} (CLIENT-only
- *   carriers of `@orkestrel/mcp`'s `MCPClientTransportInterface`), a `MessagePort` is a
+ *   / {@link import('@orkestrel/mcp').HTTPClientTransport} (CLIENT-only
+ *   carriers of `@orkestrel/mcp`'s `MCPMessageTransportInterface`), a `MessagePort` is a
  *   plain duplex channel — the SAME class implements `@orkestrel/mcp`'s
  *   `MCPTransportInterface` and is handed to EITHER `bindServer` or
  *   `bindClient`/`createDuplexClientTransport`; which role it plays comes entirely
@@ -21,7 +21,7 @@ import { isString } from '@orkestrel/contract'
  *   `MCPTransportInterface` has no separate open/connect step for the caller to hook
  *   a start into, so the constructor calls `port.start()` immediately: the port
  *   begins dispatching QUEUED messages the moment the transport exists. This is safe
- *   inside `serveMCP`'s flow (the transport is synchronously handed to `bindServer`
+ *   inside `createScopeServer`'s flow (the transport is synchronously handed to `bindServer`
  *   before control returns to the event loop), but is a **footgun for direct use**:
  *   if you construct `new MessagePortTransport({ port })` and then `await` anything
  *   before calling `listen`, messages that arrived in the gap are DROPPED. **Bind
@@ -33,7 +33,7 @@ import { isString } from '@orkestrel/contract'
  *   non-string `event.data` (a host or a misbehaving peer posting a structured
  *   object) is IGNORED — dropped silently, never forwarded, never thrown —
  *   because `MCPTransportInterface` carries no `error` channel for this port to
- *   surface a non-string frame on (unlike `MCPClientTransportInterface`'s `emitter`);
+ *   surface a non-string frame on (unlike `MCPMessageTransportInterface`'s `emitter`);
  *   silently ignoring is the total, contract-shaped choice.
  * - **`messageerror` is IGNORED, not routed to `closed`.** A `messageerror` event
  *   (the structured-clone deserialization of an inbound message threw) reports one

@@ -1,6 +1,6 @@
 import type {
-	MCPClientTransportEventMap,
-	MCPClientTransportInterface,
+	MCPMessageTransportEventMap,
+	MCPMessageTransportInterface,
 	JSONRPCMessage,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
@@ -11,13 +11,13 @@ import { dispatchLines, extractLines, writeLine } from '../helpers.js'
 /**
  * The stdio SERVER transport for the Model Context Protocol — wraps an injectable
  * readable/writable stream pair (`process.stdin`/`process.stdout` in production, a
- * test double in tests) as a {@link MCPClientTransportInterface}, the newline-delimited
+ * test double in tests) as a {@link MCPMessageTransportInterface}, the newline-delimited
  * JSON-RPC channel {@link import('../factories.js').createStdioServer} pumps
  * `mcp.dispatch` over, the stdio mirror of {@link
  * import('./WebSocketServerTransport.js').WebSocketServerTransport}.
  *
  * @remarks
- * - **Reuses `MCPClientTransportInterface`.** The same generic carrier the HTTP
+ * - **Reuses `MCPMessageTransportInterface`.** The same generic carrier the HTTP
  *   and WebSocket server transports implement — `emitter` (`message` / `close` /
  *   `error`), `start`, `send`, `close`. `session` is `undefined` (the stateless v1).
  * - **Inbound (`message`).** `start()` subscribes to `input`'s `data` event; each
@@ -43,12 +43,12 @@ import { dispatchLines, extractLines, writeLine } from '../helpers.js'
  *   listener receives data. The injected streams are owned by the caller (typically
  *   `process.stdin`/`process.stdout`), so the transport never destroys, ends, or blanket-clears
  *   them.
- * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); the
+ * - **Observable.** Owns the `emitter` ({@link MCPMessageTransportEventMap}); the
  *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
  *   fault), distinct from the emitter's own listener-error channel.
  */
-export class StdioServerTransport implements MCPClientTransportInterface {
-	readonly #emitter: Emitter<MCPClientTransportEventMap>
+export class StdioServerTransport implements MCPMessageTransportInterface {
+	readonly #emitter: Emitter<MCPMessageTransportEventMap>
 	readonly #input: NodeJS.ReadableStream
 	readonly #output: NodeJS.WritableStream
 	readonly #data = (chunk: Buffer | string): void => this.#receive(chunk.toString())
@@ -61,12 +61,12 @@ export class StdioServerTransport implements MCPClientTransportInterface {
 	#flowing = false
 
 	constructor(input: NodeJS.ReadableStream, output: NodeJS.WritableStream) {
-		this.#emitter = new Emitter<MCPClientTransportEventMap>()
+		this.#emitter = new Emitter<MCPMessageTransportEventMap>()
 		this.#input = input
 		this.#output = output
 	}
 
-	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
+	get emitter(): EmitterInterface<MCPMessageTransportEventMap> {
 		return this.#emitter
 	}
 

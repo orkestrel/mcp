@@ -2,8 +2,8 @@ import type {
 	JSONRPCInvocation,
 	JSONRPCMessage,
 	JSONRPCResponse,
-	MCPClientTransportEventMap,
-	MCPClientTransportInterface,
+	MCPMessageTransportEventMap,
+	MCPMessageTransportInterface,
 } from '@src/core'
 import { createEmitter } from '@orkestrel/emitter'
 import { describe, expect, it } from 'vitest'
@@ -20,7 +20,7 @@ import {
 import { isRecord } from '@orkestrel/contract'
 import { waitForDelay } from '@orkestrel/test'
 
-interface LegacyPeerInterface extends MCPClientTransportInterface {
+interface LegacyPeerInterface extends MCPMessageTransportInterface {
 	readonly sent: readonly JSONRPCMessage[]
 	readonly violations: readonly string[]
 	readonly closed: number
@@ -41,7 +41,7 @@ interface LegacyPeerOptions {
 }
 
 function createLegacyPeer(options?: LegacyPeerOptions): LegacyPeerInterface {
-	const emitter = createEmitter<MCPClientTransportEventMap>()
+	const emitter = createEmitter<MCPMessageTransportEventMap>()
 	const sent: JSONRPCMessage[] = []
 	const violations: string[] = []
 	const lifecycle: string[] = []

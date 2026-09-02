@@ -1,6 +1,6 @@
 import type {
-	MCPClientTransportEventMap,
-	MCPClientTransportInterface,
+	MCPMessageTransportEventMap,
+	MCPMessageTransportInterface,
 	JSONRPCMessage,
 	MCPClientInterface,
 	MCPClientOptions,
@@ -72,7 +72,7 @@ export function createMCPLegacy(server: MCPServerInterface): MCPDispatcherInterf
 
 /**
  * Creates a transport-agnostic Model Context Protocol CLIENT — connects to a REMOTE
- * MCP server over an injected {@link import('./types.js').MCPClientTransportInterface},
+ * MCP server over an injected {@link import('./types.js').MCPMessageTransportInterface},
  * negotiates the modern revision through `server/discover`, and exposes the server's tools as local
  * {@link import('@orkestrel/tool').ToolInterface}s an agent can run.
  *
@@ -126,15 +126,15 @@ export function createMCPClient(options: MCPClientOptions): MCPClientInterface {
  * ```
  */
 export function createMCPLegacyClientTransport(
-	transport: MCPClientTransportInterface,
+	transport: MCPMessageTransportInterface,
 	options?: MCPLegacyClientTransportOptions,
-): MCPClientTransportInterface {
+): MCPMessageTransportInterface {
 	return new MCPLegacyClientTransport(transport, options)
 }
 
 /**
  * Adapts an {@link MCPTransportInterface} (the environment-agnostic duplex message
- * channel) into a {@link MCPClientTransportInterface} — the additive bridge that lets
+ * channel) into a {@link MCPMessageTransportInterface} — the additive bridge that lets
  * `createMCPClient` run over the new port without any change to `MCPClient`'s
  * existing shape.
  *
@@ -157,7 +157,7 @@ export function createMCPLegacyClientTransport(
  * capable emitter for `bindClient` to push onto.
  *
  * @param transport - The duplex channel to adapt
- * @returns A {@link MCPClientTransportInterface} `createMCPClient` can drive
+ * @returns A {@link MCPMessageTransportInterface} `createMCPClient` can drive
  *
  * @example
  * ```ts
@@ -168,8 +168,8 @@ export function createMCPLegacyClientTransport(
  */
 export function createDuplexClientTransport(
 	transport: MCPTransportInterface,
-): MCPClientTransportInterface {
-	const emitter = new Emitter<MCPClientTransportEventMap>()
+): MCPMessageTransportInterface {
+	const emitter = new Emitter<MCPMessageTransportEventMap>()
 	return {
 		emitter,
 		session: undefined,

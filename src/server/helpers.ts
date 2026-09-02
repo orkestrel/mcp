@@ -1,66 +1,15 @@
-import type {
-	MCPClientTransportEventMap,
-	MCPClientTransportInterface,
-	JSONRPCMessage,
-	MCPTransportInterface,
-} from '@src/core'
-import type { MCPStreamControllerInterface } from '@src/core'
+import type { MCPMessageTransportEventMap, MCPStreamControllerInterface } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { SSEParserInterface } from '@orkestrel/sse'
 import type { StreamInterface } from '@orkestrel/server'
 import type { IncomingMessage } from 'node:http'
 import type { LineExtraction, MCPOriginOptions } from './types.js'
-import { createSSEParser } from '@orkestrel/sse'
 import {
 	deliverMessage,
-	isJSONRPCInvocation,
 	JSONRPC_INVALID_REQUEST,
 	buildJSONRPCError,
-	parseJSONRPCMessage,
+	MCP_SESSION_HEADER,
 } from '@src/core'
-import { isString, parseJSON } from '@orkestrel/contract'
-import { MCP_SESSION_HEADER } from './constants.js'
-
-/**
- * Builds the error for a non-success HTTP response that carried no JSON-RPC message.
- *
- * @param response - The response whose status is reported
- * @param type - The response's content type, or an empty string when absent
- * @returns An error naming the HTTP status and unsupported response shape
- *
- * @example
- * ```ts
- * const error = buildResponseError(new Response('', { status: 500 }), '')
- * ```
- */
-export function buildResponseError(response: Response, type: string): Error {
-	if (type.includes('application/json')) {
-		return new Error(
-			`HTTP ${response.status} response contained an application/json body that was not a JSON-RPC message`,
-		)
-	}
-	if (type.includes('text/event-stream')) {
-		return new Error(
-			`HTTP ${response.status} response contained a text/event-stream body without a JSON-RPC message`,
-		)
-	}
-	const shape = type === '' ? 'a body without a content type' : `an unsupported '${type}' body`
-	return new Error(`HTTP ${response.status} response contained ${shape}`)
-}
-
-/**
- * Creates a readable stream from its pull and cancellation behaviours.
- *
- * @param pull - The behaviour that supplies the stream's next chunk
- * @param cancel - The behaviour that releases the stream after consumer cancellation
- * @returns A readable stream backed by the supplied behaviours
- */
-export function createReadableStream<T>(
-	pull: (controller: ReadableStreamDefaultController<T>) => void | PromiseLike<void>,
-	cancel: (reason?: unknown) => void | PromiseLike<void>,
-): ReadableStream<T> {
-	return new ReadableStream<T>({ pull, cancel })
-}
+import { isString } from '@orkestrel/contract'
 
 /**
  * Pumps a controlled held-open exchange onto an open SSE stream — one `data:` event per
@@ -90,7 +39,7 @@ export function createReadableStream<T>(
  * ```ts
  * const answer = await mcp.dispatch(invocation, { signal: disconnect.signal })
  * if (answer !== undefined && Symbol.asyncIterator in answer) {
- * 	const sse = openStream()
+ * 	const sse = createStream()
  * 	queueMicrotask(() => void sendEventStream(answer, sse))
  * }
  * ```
@@ -121,17 +70,15 @@ export async function sendEventStream(
 }
 
 // The MCP server-transport helpers — module-scope names, so they carry no entity context.
-// The server-side reader `acceptsEventStream` reads the request's `Accept` header to
-// decide whether a Streamable-HTTP SSE response is allowed; `readSessionHeader` reads the
-// request's `mcp-session-id` header (the stateful transport's session validation);
-// `readLastEventId` reads the request's `Last-Event-ID` header (the resumable GET-SSE
-// replay cursor); the CLIENT-side reader `readEventStream` decodes a `fetch` Response's SSE
-// body back into JSON-RPC messages (the egress mirror, reusing `@orkestrel/sse`'s
-// `SSEParser`); `upgradeRequestPath` reads a raw `node:http` upgrade request's path (the
-// WebSocket transport's upgrade-path match). All are total and narrow at the boundary,
+// `acceptsEventStream` reads the request's `Accept` header to decide whether a
+// Streamable-HTTP SSE response is allowed; `readSessionHeader` reads the request's
+// `mcp-session-id` header (the stateful transport's session validation); `readLastEventId`
+// reads the request's `Last-Event-ID` header (the resumable GET-SSE replay cursor);
+// `upgradeRequestPath` reads a raw `node:http` upgrade request's path (the WebSocket
+// transport's upgrade-path match). The CLIENT-side SSE decode is `readEventStream` in
+// `@src/core`, beside the transport that reads it. All are total and narrow at the boundary,
 // never `as` — a missing / non-string Accept reads as "no", a missing session /
-// last-event header reads as `undefined`, a non-message SSE `data:` event is dropped, an
-// absent `url` reads as `'/'`.
+// last-event header reads as `undefined`, an absent `url` reads as `'/'`.
 
 /**
  * Whether the request's `Accept` header opts into a Server-Sent-Events response.
@@ -247,67 +194,6 @@ export function rejectUnknownSession(): Response {
 }
 
 /**
- * Decodes a `fetch` Response's Server-Sent-Events body into the JSON-RPC messages it
- * carried — the CLIENT-side inverse of the server's Streamable-HTTP SSE response.
- *
- * @remarks
- * Reads the whole `response.body` stream chunk-by-chunk through a `TextDecoder({
- * stream: true })` (handling a multi-byte char split across reads) and `@orkestrel/sse`'s
- * {@link SSEParserInterface} (handling a partial line / in-progress event split across
- * reads), then narrows each dispatched event's `data` to a {@link JSONRPCMessage} with
- * `parseJSONRPCMessage` (so a non-message / non-JSON `data:` event is DROPPED, never
- * thrown — total). It reuses the SAME `SSEParser` the server's `openStream` seam
- * serializes against, so the wire round-trips. A `null` body (no stream) yields no
- * messages; the {@link import('./transports/HTTPClientTransport.js').HTTPClientTransport}
- * reads a request/response SSE reply (the server sends one `data:` event then ends), so
- * this drains to completion.
- *
- * @param response - The SSE `fetch` Response to decode (its `body` is read to completion)
- * @returns Every {@link JSONRPCMessage} the stream carried, in order
- */
-export async function readEventStream(response: Response): Promise<readonly JSONRPCMessage[]> {
-	const body = response.body
-	if (body === null) return []
-	const reader = body.getReader()
-	const decoder = new TextDecoder()
-	const parser: SSEParserInterface = createSSEParser()
-	const messages: JSONRPCMessage[] = []
-	try {
-		for (;;) {
-			const { done, value } = await reader.read()
-			if (done) break
-			for (const event of parser.parse(decoder.decode(value, { stream: true }))) {
-				// JSON-parse the event's `data` (the JSON-RPC envelope the server wrote), then
-				// narrow it — a malformed / non-message payload is dropped, never thrown.
-				const message = decodeEvent(event.data)
-				if (message !== undefined) messages.push(message)
-			}
-		}
-	} finally {
-		reader.releaseLock()
-	}
-	return messages
-}
-
-/**
- * Decodes one SSE event's `data` string into a {@link JSONRPCMessage}, or `undefined`
- * when it is not one — the per-event step {@link readEventStream} folds over.
- *
- * @remarks
- * Parses the `data` (the server serializes the JSON-RPC envelope as the event's `data`)
- * with `@orkestrel/contract`'s `parseJSON` — the declared JSON boundary, which answers
- * `undefined` instead of throwing — and narrows the parsed value with
- * `parseJSONRPCMessage`. Total: malformed JSON or a non-message value yields `undefined`,
- * never throws.
- *
- * @param data - One SSE event's `data` payload
- * @returns The decoded {@link JSONRPCMessage}, or `undefined`
- */
-export function decodeEvent(data: string): JSONRPCMessage | undefined {
-	return parseJSONRPCMessage(parseJSON(data))
-}
-
-/**
  * Reads the path (without the query string) of a raw `node:http` protocol-upgrade request —
  * the `createWebSocketServer` upgrade-path match.
  *
@@ -391,7 +277,7 @@ export function writeLine(output: NodeJS.WritableStream, line: string): Promise<
 
 /**
  * Decodes and delivers each complete newline-framed line onto a {@link
- * MCPClientTransportEventMap} emitter — the shared per-chunk dispatch step both stdio
+ * MCPMessageTransportEventMap} emitter — the shared per-chunk dispatch step both stdio
  * transports run their framed lines through: the server transport frames with {@link
  * extractLines}, the client transport takes its lines from the process supervisor.
  *
@@ -407,93 +293,11 @@ export function writeLine(output: NodeJS.WritableStream, line: string): Promise<
  * @param lines - The complete lines to decode and deliver
  */
 export function dispatchLines(
-	emitter: EmitterInterface<MCPClientTransportEventMap>,
+	emitter: EmitterInterface<MCPMessageTransportEventMap>,
 	lines: readonly string[],
 ): void {
 	for (const line of lines) {
 		if (line.length === 0) continue
 		deliverMessage(emitter, line, 'non-JSON-RPC stdio line')
-	}
-}
-
-/**
- * Bridges a message-channel {@link MCPClientTransportInterface} (the shape the stdio and
- * WebSocket SERVER transports already implement) into the environment-agnostic
- * {@link import('@orkestrel/mcp').MCPTransportInterface} port — the adapter
- * {@link import('./factories.js').createStdioServer} and {@link
- * import('./factories.js').createWebSocketServer} pipe through `bindServer`, so the
- * request/reply/error pump those factories used to hand-roll identically now
- * lives ONCE in the core binder.
- *
- * @remarks
- * `send` decodes the already-serialized reply string back to a {@link JSONRPCMessage}
- * and writes it through `transport.send` (the same `JSON.stringify` the underlying
- * transport already performs, so the wire bytes are unchanged). `listen` filters
- * `transport`'s `message` event to INVOCATIONS ONLY — requests and notifications, never a
- * stray response, exactly as the prior hand-rolled pumps did — and re-serializes each one
- * back to a string for `bindServer`. `closed` bridges `transport`'s `close` event. `close`
- * closes the underlying `transport`.
- *
- * @remarks A message crossing this bridge is decoded and re-encoded TWICE, and that is
- * ACCEPTED rather than accidental. Inbound: the carrier already parsed the frame into a
- * {@link JSONRPCMessage}, and `listen` re-serializes it so `bindServer` can decode it again
- * under the server's own `limit`. Outbound: `bindServer` serialized the reply, `send` parses
- * it back, and the carrier stringifies it once more. The cost is two extra `JSON.parse` /
- * `JSON.stringify` round trips per message, paid to keep ONE pump in the core binder instead
- * of a hand-rolled one per carrier. It is BOUNDED rather than unbounded because the binder
- * decodes within `server.limit.message`, so an oversized frame is refused before the second
- * decode rather than after it. Removing the cost means giving `MCPTransportInterface` a
- * message-shaped face beside its string one, which every transport would then carry.
- *
- * @remarks Per {@link import('@orkestrel/mcp').MCPTransportInterface}, `listen`/`closed`
- * each hold THE SINGLE current handler (a second call REPLACES the first, never adds).
- * Because the underlying `transport.emitter` is ADD-based (`on` subscribes, never
- * replaces), this bridge installs ONE stable emitter listener per event on first use
- * and re-routes it to whichever handler is active (`undefined` while
- * none is), so rebinding never double-dispatches.
- *
- * @remarks A response whose `result` serializes away (for example, `undefined`) is dropped by
- * the message validators on the wire's decode side — an asymmetry the stdio/WS carrier
- * shares with the streamable-HTTP face, because both round-trip through `JSON.stringify`
- * / `JSON.parse` before re-validation.
- *
- * @param transport - The message-channel transport to bridge (stdio or WebSocket)
- * @returns An {@link import('@orkestrel/mcp').MCPTransportInterface} `bindServer` can drive
- *
- * @example
- * ```ts
- * import { bindServer } from '@orkestrel/mcp'
- *
- * const transport = new StdioServerTransport(process.stdin, process.stdout)
- * bindServer(mcp, bridgeMessageTransport(transport))
- * ```
- */
-export function bridgeMessageTransport(
-	transport: MCPClientTransportInterface,
-): MCPTransportInterface {
-	let onMessage: ((message: string) => void) | undefined
-	let onClosed: (() => void) | undefined
-	transport.emitter.on('message', (message) => {
-		if (!isJSONRPCInvocation(message)) return
-		onMessage?.(JSON.stringify(message))
-	})
-	transport.emitter.on('close', () => {
-		onClosed?.()
-	})
-	return {
-		async send(message) {
-			const decoded = decodeEvent(message)
-			if (decoded === undefined) return
-			await transport.send(decoded)
-		},
-		listen(handler) {
-			onMessage = handler
-		},
-		closed(handler) {
-			onClosed = handler
-		},
-		async close() {
-			await transport.close()
-		},
 	}
 }

@@ -7,25 +7,21 @@ import type { StartedServerInterface } from '../../setupServer.js'
 import { request } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-	MCP_FALLBACK_VERSION,
-	MCP_META_CAPABILITIES,
-	MCP_META_VERSION,
-	MCP_MODERN_VERSION,
 	buildJSONRPCResult,
 	createMCPClient,
 	createMCPLegacy,
 	createMCPLegacyClientTransport,
+	MCP_FALLBACK_VERSION,
+	MCP_META_CAPABILITIES,
+	MCP_META_VERSION,
+	MCP_METHOD_HEADER,
+	MCP_MODERN_VERSION,
+	MCP_PROTOCOL_VERSION_HEADER,
+	MCP_SESSION_HEADER,
 } from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
-import {
-	createHTTPClientTransport,
-	MCP_METHOD_HEADER,
-	createMCPRoutes,
-	createMCPSession,
-	MCP_PROTOCOL_VERSION_HEADER,
-	MCP_SESSION_HEADER,
-} from '@src/server'
+import { createHTTPClientTransport, createMCPRoutes, createMCPSession } from '@src/server'
 import { createTeardown, waitForDelay } from '@orkestrel/test'
 import {
 	createCalculatorServer,
@@ -541,7 +537,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 
 // Open the resumable GET-SSE stream for `id` and return the live `Response` + abort `controller`.
 // Sends the session header + optional resume cursor.
-async function openStream(
+async function openSessionStream(
 	base: string,
 	id: string,
 	lastEventId?: string,
@@ -584,7 +580,7 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 		if (id === null) return
 
 		// Open the GET stream (the middleware attaches it synchronously before the head flushes).
-		const { response, controller } = await openStream(handle.base, id)
+		const { response, controller } = await openSessionStream(handle.base, id)
 		expect(response.status).toBe(200)
 		expect(response.headers.get('content-type')).toContain('text/event-stream')
 		expect(response.headers.get('x-accel-buffering')).toBe('no')
@@ -610,7 +606,7 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 		if (id === null) return
 
 		// First connection: trigger THREE pushes and read all three (capturing their ids).
-		const first = await openStream(handle.base, id)
+		const first = await openSessionStream(handle.base, id)
 		await triggerPush(handle.base, id)
 		await triggerPush(handle.base, id)
 		await triggerPush(handle.base, id)
@@ -622,7 +618,7 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 		// (#2, #3) in order, ahead of any future live push.
 		const cursor = seen[0]?.id
 		expect(cursor).toBeDefined()
-		const second = await openStream(handle.base, id, cursor)
+		const second = await openSessionStream(handle.base, id, cursor)
 		const replayed = await takeEvents(second.response, 2)
 		second.controller.abort()
 		expect(replayed.map((event) => JSON.parse(event.data))).toEqual([pushed, pushed])
@@ -652,7 +648,7 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 
 describe('createMCPSession — lazy session TTL eviction', () => {
 	it('a session idle past the ttl reads as absent (a later echo → 404)', async () => {
-		// A 50ms TTL driven by the INJECTED manual clock (`MCPSessionOptions.clock`): mint at t=0,
+		// A 50ms TTL driven by the INJECTED manual clock (`MCPSessionMiddlewareOptions.clock`): mint at t=0,
 		// advance PAST the ttl without touching the session, and a subsequent echo finds it evicted
 		// (dropped lazily on the next access — no background timer). Manual time — no real wait, no
 		// wall-clock race under suite load.

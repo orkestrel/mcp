@@ -2,7 +2,6 @@ import type { StreamInterface } from '@orkestrel/server'
 import type { MCPKeepaliveOptions } from './types.js'
 import { sanitizeBudget } from '@orkestrel/contract'
 import { DEFAULT_MCP_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_COMMENT } from './constants.js'
-import { createReadableStream } from './helpers.js'
 
 /**
  * Composes one incoming HTTP request lifetime with one MCP-owned SSE response lifetime.
@@ -32,10 +31,10 @@ import { createReadableStream } from './helpers.js'
  * @example
  * ```ts
  * import { HTTPDisconnect } from '@orkestrel/mcp/server'
- * import { openStream } from '@orkestrel/server'
+ * import { createStream } from '@orkestrel/server'
  *
  * const disconnect = new HTTPDisconnect(request.signal, { interval: 15_000 })
- * const stream = openStream()
+ * const stream = createStream()
  * const response = disconnect.bridge(stream)
  * ```
  */
@@ -44,6 +43,15 @@ export class HTTPDisconnect {
 	readonly #lifecycle = new AbortController()
 	readonly #interval: number
 	readonly #signal: AbortSignal
+	// Bound once, as fields, so the body source is a pair of stable references rather than two
+	// arrows written inline inside `bridge` — the same idiom the transports use for their socket
+	// subscriptions.
+	readonly #pull = (controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> =>
+		this.#pump(controller)
+	readonly #cancel = (reason?: unknown): Promise<void> => this.#discard(reason)
+	// The upstream reader `bridge` took, held here because the source behaviours are fields
+	// rather than closures over that local.
+	#reader: ReadableStreamDefaultReader<Uint8Array> | undefined
 	#timer: ReturnType<typeof setInterval> | undefined
 	#bridged = false
 	#pulling = false
@@ -100,7 +108,7 @@ export class HTTPDisconnect {
 		const response = stream.response
 		const body = response.body
 		if (body === null) throw new Error('MCP SSE response has no body')
-		const reader = body.getReader()
+		this.#reader = body.getReader()
 		// This timer is SSE transport liveness, not polling for producer work: an idle response
 		// must write to let the HTTP writer observe a dead socket and cancel the body.
 		this.#timer = setInterval(() => {
@@ -120,36 +128,45 @@ export class HTTPDisconnect {
 		if (this.#signal.aborted) this.#release()
 		else if (stream.closed) this.#abort()
 		return new Response(
-			createReadableStream<Uint8Array>(
-				async (controller) => {
-					this.#pulling = true
-					try {
-						const chunk = await reader.read()
-						if (chunk.done) {
-							// The exchange FINISHED. Release the bridge without raising the signal:
-							// an abort here would tell a handler that already answered that its
-							// request was cancelled.
-							this.#release()
-							controller.close()
-						} else controller.enqueue(chunk.value)
-					} catch (error) {
-						this.#abort()
-						controller.error(error)
-					} finally {
-						this.#pulling = false
-					}
-				},
-				async (reason) => {
-					this.#abort()
-					await reader.cancel(reason)
-				},
-			),
+			new ReadableStream<Uint8Array>({ pull: this.#pull, cancel: this.#cancel }),
 			{
 				status: response.status,
 				statusText: response.statusText,
 				headers: response.headers,
 			},
 		)
+	}
+
+	// Forward one upstream chunk into the bridged body. `#reader` is set by `bridge` before the
+	// stream this pump belongs to exists, so an absent one means the pump outlived its bridge:
+	// close rather than invent a chunk.
+	async #pump(controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> {
+		const reader = this.#reader
+		if (reader === undefined) {
+			controller.close()
+			return
+		}
+		this.#pulling = true
+		try {
+			const chunk = await reader.read()
+			if (chunk.done) {
+				// The exchange FINISHED. Release the bridge without raising the signal: an abort
+				// here would tell a handler that already answered that its request was cancelled.
+				this.#release()
+				controller.close()
+			} else controller.enqueue(chunk.value)
+		} catch (error) {
+			this.#abort()
+			controller.error(error)
+		} finally {
+			this.#pulling = false
+		}
+	}
+
+	// The consumer cancelled the bridged body: end the response lifetime, then cancel upstream.
+	async #discard(reason?: unknown): Promise<void> {
+		this.#abort()
+		await this.#reader?.cancel(reason)
 	}
 
 	// Give up this bridge's OWN resources — the keepalive timer and the abort listener — without

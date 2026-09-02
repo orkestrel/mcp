@@ -2,22 +2,26 @@
 import type { MiddlewareContext, NextFunction, UpgradeHandler } from '@orkestrel/server'
 import type { MCPServerInterface } from '@src/core'
 import type { MCPOriginOptions, MCPSessionState } from '@src/server'
-import { bindServer, buildJSONRPCResult, isJSONRPCId } from '@src/core'
-import { createDispatcher } from '@orkestrel/router'
-import { createServer, mergeVary, resolveOrigin } from '@orkestrel/server'
-import { createNodeWebSocket } from '@orkestrel/websocket'
 import {
-	bridgeMessageTransport,
-	createMCPRoutes,
-	createMCPSession,
-	createWebSocketServer,
+	bindServer,
+	buildJSONRPCResult,
+	isJSONRPCId,
 	MCP_METHOD_HEADER,
 	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
+} from '@src/core'
+import { createDispatcher } from '@orkestrel/router'
+import { createServer, mergeVary, resolveOrigin } from '@orkestrel/server'
+import { createNodeWebSocket } from '@orkestrel/websocket'
+import {
 	MCP_WEBSOCKET_SUBPROTOCOL,
-	upgradeRequestPath,
 	WebSocketServerTransport,
+	createMCPRoutes,
+	createMCPSession,
+	createMessageTransportBridge,
+	createWebSocketServer,
+	upgradeRequestPath,
 } from '@src/server'
 import { isRecord, isString } from '@orkestrel/contract'
 import { createCalculatorServer } from '../setup.js'
@@ -170,7 +174,7 @@ export function createRecordingWebSocketHandler(mcp: MCPServerInterface): Upgrad
 		})
 		webSocket.emitter.on('message', recordFrame)
 		const transport = new WebSocketServerTransport(webSocket)
-		bindServer(mcp, bridgeMessageTransport(transport))
+		bindServer(mcp, createMessageTransportBridge(transport))
 		void transport.start()
 		return true
 	}

@@ -445,9 +445,9 @@ export class MCPServer implements MCPServerInterface {
 		return buildJSONRPCResult(request.id, buildDiscoverResult(this.#options))
 	}
 
-	// The built-in modern `tools/list` handler — a cacheable result, so it carries both
-	// schema-coupled cache stamps. It takes no options for the same reason `#discover` takes
-	// none: a live registry read with no await to cancel.
+	// The built-in modern `tools/list` handler — a cacheable result, so it carries the
+	// schema-coupled cache stamps `ttlMs` and `cacheScope`. It takes no options for the same
+	// reason `#discover` takes none: a live registry read with no await to cancel.
 	async #list(request: JSONRPCRequest): Promise<JSONRPCResponse> {
 		const result: MCPListResult = buildModernResult(
 			{ tools: buildToolDescriptors(this.#options.tools) },
@@ -459,9 +459,9 @@ export class MCPServer implements MCPServerInterface {
 	}
 
 	// The built-in modern `resources/list` handler — a cacheable paged projection over the
-	// consumer's resource manager, so the page it returns carries both cache stamps. The page
-	// is owned before it is read: a manager is consumer-written, so an oversized or malformed
-	// one is answered `-32603` rather than forwarded.
+	// consumer's resource manager, so the page it returns carries `ttlMs` and `cacheScope`. The
+	// page is owned before it is read: a manager is consumer-written, so an oversized or
+	// malformed one is answered `-32603` rather than forwarded.
 	async #resources(
 		request: JSONRPCRequest,
 		manager: MCPResourceManagerInterface,

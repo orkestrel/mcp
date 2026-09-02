@@ -2,7 +2,7 @@
 // (and `src:server`) projects. `node:*` imports belong here, never in `setup.ts`.
 
 import type { IncomingMessage, Server } from 'node:http'
-import type { MCPClientInterface, MCPClientTransportInterface } from '@src/core'
+import type { MCPClientInterface, MCPMessageTransportInterface } from '@src/core'
 import type { SourceInterface } from '@orkestrel/guide'
 import type { MiddlewareHandler, ServerInterface, StreamInterface } from '@orkestrel/server'
 import type { WebSocketFrame } from '@orkestrel/websocket'
@@ -169,7 +169,7 @@ export function createRequestStub(fields?: {
 
 // ── Fault-injectable SSE stream (a REAL StreamInterface, not a mock) ─────────
 //
-// `openStream` is the real seam and is used wherever the happy path is the claim. The
+// `createStream` is the real seam and is used wherever the happy path is the claim. The
 // terminals it cannot be driven into from outside are exactly the ones the ownership and
 // disconnect rows are about: a `write` that throws mid-stream, and a response body that
 // raises while it is being forwarded. This is a minimal real implementation of the same
@@ -463,7 +463,10 @@ export async function startServer<TState>(
  * A test resource released through {@link closeResource}: a started server, an MCP client, or a
  * bare client transport driven without one.
  */
-export type TestResource = StartedServerInterface | MCPClientInterface | MCPClientTransportInterface
+export type TestResource =
+	| StartedServerInterface
+	| MCPClientInterface
+	| MCPMessageTransportInterface
 
 /**
  * Release one {@link TestResource} from a suite that opens clients as well as servers.

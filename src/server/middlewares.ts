@@ -1,29 +1,25 @@
 import type { JSONRPCMessage } from '@src/core'
 import type { MiddlewareHandler } from '@orkestrel/server'
-import type { MCPSessionEntry, MCPSessionOptions, MCPSessionState } from './types.js'
+import type { MCPSessionEntry, MCPSessionMiddlewareOptions, MCPSessionState } from './types.js'
 import {
 	MCP_HEADER_MISMATCH,
+	MCP_PROTOCOL_VERSION_HEADER,
+	MCP_SESSION_HEADER,
 	buildJSONRPCError,
 	isInitializeRequest,
 	isModernRequest,
 	parseJSONRPCMessage,
 } from '@src/core'
 import { parseJSON } from '@orkestrel/contract'
-import { openStream } from '@orkestrel/server'
-import {
-	DEFAULT_MCP_PATH,
-	MCP_PROTOCOL_VERSION_HEADER,
-	MCP_SESSION_HEADER,
-	SSE_BUFFERING_DISABLED,
-	SSE_BUFFERING_HEADER,
-} from './constants.js'
+import { createStream } from '@orkestrel/server'
+import { DEFAULT_MCP_PATH, SSE_BUFFERING_DISABLED, SSE_BUFFERING_HEADER } from './constants.js'
 import {
 	allowsOrigin,
 	readLastEventId,
 	readSessionHeader,
 	rejectUnknownSession,
 } from './helpers.js'
-import { inferHeaderIssue, inferLegacyVersion } from './inferers.js'
+import { inferLegacyVersion, inferSessionHeaderIssue } from './inferers.js'
 import { MCPSession } from './MCPSession.js'
 import { HTTPDisconnect } from './HTTPDisconnect.js'
 
@@ -58,7 +54,7 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  *   a `DELETE` arriving while the request was suspended is not undone.
  * - **`GET {path}`.** Resolves the session the same way (no mint — only `initialize` mints);
  *   an invalid / unknown id is the same `404`. A valid session opens the resumable
- *   server→client stream through `@orkestrel/server`'s {@link import('@orkestrel/server').openStream}:
+ *   server→client stream through `@orkestrel/server`'s {@link import('@orkestrel/server').createStream}:
  *   replays every event after the client's `Last-Event-ID` ({@link readLastEventId}) BEFORE
  *   attaching the stream for live pushes, then attaches; cancellation of the streamed response
  *   body composes with `request.signal` and detaches it. Long-lived — never `end()`ed here.
@@ -76,7 +72,7 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  *   sweep window, ms — omit for sessions that live until an explicit `DELETE`), `capacity`
  *   (the folded per-session replay-log bound), and `clock` (the deterministic epoch-ms clock;
  *   defaults to `Date.now`), plus the shared `origin` validation options; see
- *   {@link MCPSessionOptions}
+ *   {@link MCPSessionMiddlewareOptions}
  * @returns A {@link MiddlewareHandler} that mints / validates sessions + serves the resumable
  *   `GET` / `DELETE`
  *
@@ -93,7 +89,7 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  * ```
  */
 export function createMCPSession<TState extends MCPSessionState>(
-	options?: MCPSessionOptions,
+	options?: MCPSessionMiddlewareOptions,
 ): MiddlewareHandler<TState> {
 	const path = options?.path ?? DEFAULT_MCP_PATH
 	const capacity = options?.capacity
@@ -153,7 +149,7 @@ export function createMCPSession<TState extends MCPSessionState>(
 		if (context.method === 'GET') {
 			if (entry === undefined) return rejectUnknownSession()
 			const session = entry.session
-			const stream = openStream()
+			const stream = createStream()
 			const disconnect = new HTTPDisconnect(request.signal, options?.keepalive)
 			stream.response.headers.set(SSE_BUFFERING_HEADER, SSE_BUFFERING_DISABLED)
 			// A comment write flushes the response headers immediately (the underlying node:http
@@ -195,7 +191,7 @@ export function createMCPSession<TState extends MCPSessionState>(
 		}
 		const headers = new Headers(request.headers)
 		if (parsed === undefined || !isInitializeRequest(parsed)) {
-			const issue = inferHeaderIssue(request, entry.version)
+			const issue = inferSessionHeaderIssue(request, entry.version)
 			if (issue?.reason === 'missing') {
 				headers.set(MCP_PROTOCOL_VERSION_HEADER, entry.version)
 			} else if (issue !== undefined) {

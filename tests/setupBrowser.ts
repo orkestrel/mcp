@@ -2,8 +2,9 @@
 // duplex proof observes. Loaded by the `src:browser` project only.
 
 import type { JSONRPCMessage } from '@src/core'
-import type { ScopeTransportInterface, ServeMCPScopeInterface } from '@src/browser'
-import { createScopeTransport, decodeEvent } from '@src/browser'
+import type { ScopeInterface, ScopeTransportInterface } from '@src/browser'
+import { decodeEvent } from '@src/core'
+import { createScopeTransport } from '@src/browser'
 import { isArray, isString } from '@orkestrel/contract'
 
 // ── Peer observation ─────────────────────────────────────────────────────────
@@ -54,7 +55,7 @@ export interface TestScopeCarrierInterface {
  * Wire real {@link createScopeTransport} halves into one in-page duplex carrier.
  *
  * @remarks
- * Each half is the shipped factory over a minimal {@link ServeMCPScopeInterface} whose
+ * Each half is the shipped factory over a minimal {@link ScopeInterface} whose
  * `postMessage` hands the string to the OTHER half's `deliver` — which is precisely how a
  * dedicated worker's implicit channel behaves, with the structured-clone hop removed. No
  * project-owned behaviour is reimplemented: both transports are the real ones.
@@ -71,7 +72,7 @@ export function createScopeCarrier(): TestScopeCarrierInterface {
 	const frames: JSONRPCMessage[] = []
 	let client: ScopeTransportInterface | undefined = undefined
 	let server: ScopeTransportInterface | undefined = undefined
-	const clientScope: ServeMCPScopeInterface = {
+	const clientScope: ScopeInterface = {
 		postMessage(message: unknown): void {
 			if (!isString(message)) return
 			const decoded = decodeEvent(message)
@@ -81,7 +82,7 @@ export function createScopeCarrier(): TestScopeCarrierInterface {
 		addEventListener(): void {},
 		removeEventListener(): void {},
 	}
-	const serverScope: ServeMCPScopeInterface = {
+	const serverScope: ScopeInterface = {
 		postMessage(message: unknown): void {
 			if (isString(message)) client?.deliver(message)
 		},

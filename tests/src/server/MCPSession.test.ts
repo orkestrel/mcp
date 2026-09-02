@@ -6,8 +6,8 @@ import { createRecorder } from '@orkestrel/test'
 import { createJSONRPCRequest } from '../../setup.js'
 
 // src/server/MCPSession.ts — one MCP transport session, the per-session entity a
-// `createMCPSession` middleware owns, with its bounded resumable replay log FOLDED IN (the old
-// SessionState + EventStore merged into one class). Pure mechanics (NO server, NO live model):
+// `createMCPSession` middleware owns, with its bounded resumable replay log FOLDED IN — one
+// class, not a session beside a separate store. Pure mechanics (NO server, NO live model):
 // `push` appends to the folded log under a MONOTONE base36 id (returned) AND fans the message out
 // to every `attach`ed (and not-yet-`detach`ed) SSE stream; `replay(afterId)` returns the entries
 // STRICTLY AFTER `afterId` in order (and NOTHING for an unknown / evicted cursor — the spec-sane
@@ -223,7 +223,7 @@ describe('MCPSession — push return id round-trips with the fanned-out event', 
 	})
 })
 
-// A tiny compile-time guard that `EventStoreEntry` is the unit `replay` yields (the kept type).
+// A tiny compile-time guard that `MCPSessionEvent` is the unit `replay` yields (the kept type).
 describe('MCPSession — replay entries carry id + message + timestamp', () => {
 	it('each replayed entry exposes its id, message, and timestamp', () => {
 		const session = new MCPSession('s')

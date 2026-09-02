@@ -1,48 +1,17 @@
-// The MCP browser-transport constants — the wire-level
-// header names the browser-face HTTP client transport echoes, matching the Node
-// face's session, protocol-version, method, and name headers byte-for-byte. The
-// browser face imports nothing from `src/server` (peer environment faces share no
-// import), so the literals are declared once here too — the SAME strings, not
-// shared symbols.
+// The MCP browser-transport constants — the server-identity defaults the browser-face
+// bootstrap falls back to, and the WebSocket subprotocol its client transport requests. The
+// Streamable-HTTP wire headers live in `@src/core` beside the transport that stamps them.
 
-/**
- * The Streamable-HTTP transport header that carries the MCP session id. The browser
- * face's {@link import('./transports/HTTPClientTransport.js').HTTPClientTransport}
- * ECHOES this header exactly like the Node face's `HTTPClientTransport`
- * (`src/server`), so the same client interoperates with an `MCPSession`-based
- * server unchanged.
- */
-export const MCP_SESSION_HEADER = 'mcp-session-id'
-
-/**
- * The Streamable-HTTP transport header carrying the MCP protocol version. Modern
- * requests derive it from their own `_meta`; legacy requests echo the negotiated
- * initialize result on each subsequent request.
- */
-export const MCP_PROTOCOL_VERSION_HEADER = 'mcp-protocol-version'
-
-/**
- * The modern Streamable-HTTP request header carrying the JSON-RPC method. It is
- * emitted on every modern request and never on a legacy request.
- */
-export const MCP_METHOD_HEADER = 'mcp-method'
-
-/**
- * The modern Streamable-HTTP request header carrying a named target. The browser
- * HTTP client emits it only for `tools/call`, from that request's `params.name`.
- */
-export const MCP_NAME_HEADER = 'mcp-name'
-
-// `serveMCP` server-identity defaults — `src/core`'s `createMCPServer` REQUIRES
-// `name`/`version`, but `ServeMCPOptions` (this face's bootstrap) makes both optional
+// Scope-server identity defaults — `src/core`'s `createMCPServer` REQUIRES
+// `name`/`version`, but `ScopeServerOptions` (this face's bootstrap) makes them optional
 // (mirroring the CLIENT identity defaults, `DEFAULT_MCP_CLIENT_NAME` /
-// `DEFAULT_MCP_CLIENT_VERSION`, `src/core/constants.ts`), so `serveMCPScope` falls
+// `DEFAULT_MCP_CLIENT_VERSION`, `src/core/constants.ts`), so `createScopeServer` falls
 // back to these when a caller omits them.
 
-/** The default server name `serveMCPScope` reports (`initialize`'s `serverInfo.name`) when `options.name` is omitted. */
-export const DEFAULT_MCP_SERVER_NAME = 'taverna'
+/** The default server name `createScopeServer` reports (`initialize`'s `serverInfo.name`) when `options.name` is omitted. */
+export const DEFAULT_MCP_SERVER_NAME = '@orkestrel/mcp'
 
-/** The default server version `serveMCPScope` reports (`initialize`'s `serverInfo.version`) when `options.version` is omitted. */
+/** The default server version `createScopeServer` reports (`initialize`'s `serverInfo.version`) when `options.version` is omitted. */
 export const DEFAULT_MCP_SERVER_VERSION = '1.0.0'
 
 // The WebSocket subprotocol constant, declared here independently of the Node face's

@@ -1,6 +1,6 @@
 import type { JSONRPCMessage, MCPClientInterface, MCPServerInterface } from '@src/core'
 import type { MiddlewareHandler } from '@orkestrel/server'
-import type { StartedServerInterface } from '../../../setupServer.js'
+import type { StartedServerInterface } from '../../setupServer.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
 	buildJSONRPCResult,
@@ -14,27 +14,24 @@ import {
 	createMCPLegacy,
 	createMCPLegacyClientTransport,
 	createMCPServer,
+	HTTPClientTransport,
+	MCP_METHOD_HEADER,
+	MCP_NAME_HEADER,
+	MCP_PROTOCOL_VERSION_HEADER,
 } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
-import {
-	createHTTPClientTransport,
-	createMCPRoutes,
-	inferHeaderIssue,
-	MCP_METHOD_HEADER,
-	MCP_NAME_HEADER,
-	MCP_PROTOCOL_VERSION_HEADER,
-} from '@src/server'
+import { createHTTPClientTransport, createMCPRoutes, inferHeaderIssue } from '@src/server'
 import { createServer as createHTTPServer } from 'node:http'
 import { createTeardown, waitForDelay } from '@orkestrel/test'
-import { HTTPClientTransport } from '@src/server'
-import { createHeaderProjectionRequest, HEADER_PROJECTION_CONTEXTS } from '../../../setup.js'
-import { startServer } from '../../../setupServer.js'
+import { createHeaderProjectionRequest, HEADER_PROJECTION_CONTEXTS } from '../../setup.js'
+import { startServer } from '../../setupServer.js'
 
-// src/server/mcp/HTTPClientTransport.ts — the HTTP CLIENT transport, proven END-TO-END
-// against the SHIPPED server transport (`createMCPRoutes`) over a REAL `node:http` server
+// The server environment composed end to end: the core HTTP CLIENT transport this face's
+// `createHTTPClientTransport` returns, driven against the SHIPPED server transport
+// (`createMCPRoutes`) over a REAL `node:http` server
 // + a REAL MCPServer over a REAL ToolManager (no mocks, no live model). An
 // `MCPClient` driving `createHTTPClientTransport` connects, discovers, and calls the
 // remote tools over `fetch`, exercising BOTH reply framings the server can choose: the
@@ -315,12 +312,12 @@ describe('HTTPClientTransport — lifecycle', () => {
 		).toBeUndefined()
 	})
 
-	// The Node half of the SHARED projection table. The browser face used to
-	// route the same read through `parseRequestContext` and withheld the header on every
-	// context that is modern-by-key-presence but not fully well formed; both faces now
-	// project through `inferRequestVersion`, so this table has one answer per row on both.
+	// The server-driven half of the SHARED projection table. Routing the same read through
+	// `parseRequestContext` withholds the header on every context that is modern by key
+	// presence but not fully well formed; the transport projects through
+	// `inferRequestVersion`, so this table has one answer per row.
 	it.each(HEADER_PROJECTION_CONTEXTS.map((context) => [context.label, context] as const))(
-		'projects %s exactly as the browser face does',
+		'projects %s exactly as the shared expectation reads it',
 		async (_label, context) => {
 			const headers: Headers[] = []
 			const transport = createHTTPClientTransport({
@@ -563,11 +560,11 @@ describe('HTTPClientTransport — close is idempotent', () => {
 	})
 })
 
-// SEP-2243's `x-mcp-header` contract on the Node face: what a `tools/list` reply delivers
-// after the transport has read it, and what a later `tools/call` carries because of it. The
-// peer is a boundary stub for `fetch` alone — it answers with a REAL `Response` carrying the
+// SEP-2243's `x-mcp-header` contract driven from this environment: what a `tools/list` reply
+// delivers after the transport has read it, and what a later `tools/call` carries because of it.
+// The peer is a boundary stub for `fetch` alone — it answers with a REAL `Response` carrying the
 // exact JSON a foreign 2026-07-28 server sends, and the transport under test is the real one.
-// The browser face pins the same rows in tests/src/browser/transports/HTTPClientTransport.test.ts.
+// The class's own rows live beside it in tests/src/core/transports/HTTPClientTransport.test.ts.
 
 const ANNOTATED_TOOLS = {
 	jsonrpc: '2.0',

@@ -9,8 +9,13 @@
 
 import type { MCPInputContext } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { createMCPServer, MCP_META_SERVER, MCP_MODERN_VERSION } from '@src/core'
-import { MCP_METHOD_HEADER, MCP_PROTOCOL_VERSION_HEADER } from '@src/server'
+import {
+	createMCPServer,
+	MCP_META_SERVER,
+	MCP_METHOD_HEADER,
+	MCP_MODERN_VERSION,
+	MCP_PROTOCOL_VERSION_HEADER,
+} from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import {
 	createHostilePeer,

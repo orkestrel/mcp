@@ -1,7 +1,7 @@
 import type { StreamInterface } from '@orkestrel/server'
 import { HTTPDisconnect } from '@src/server'
 import { describe, expect, it } from 'vitest'
-import { openStream } from '@orkestrel/server'
+import { createStream } from '@orkestrel/server'
 import { waitForDelay } from '@orkestrel/test'
 import { waitForSettlement } from '../../setup.js'
 import { createStreamStub } from '../../setupServer.js'
@@ -9,7 +9,7 @@ import { createStreamStub } from '../../setupServer.js'
 describe('HTTPDisconnect', () => {
 	it('propagates incoming request abort to the composed signal', async () => {
 		const request = new AbortController()
-		const stream = openStream()
+		const stream = createStream()
 		const disconnect = new HTTPDisconnect(request.signal, { interval: 10 })
 		const response = disconnect.bridge(stream)
 		const body = response.body
@@ -50,7 +50,7 @@ describe('HTTPDisconnect', () => {
 	})
 
 	it('forwards status, headers, and SSE body bytes', async () => {
-		const stream = openStream({ status: 201, headers: { 'x-probe': 'forwarded' } })
+		const stream = createStream({ status: 201, headers: { 'x-probe': 'forwarded' } })
 		const disconnect = new HTTPDisconnect(new AbortController().signal, { interval: 10 })
 		const response = disconnect.bridge(stream)
 
@@ -72,7 +72,7 @@ describe('HTTPDisconnect', () => {
 	})
 
 	it('writes keepalive comments while the upstream stream is idle', async () => {
-		const stream = openStream()
+		const stream = createStream()
 		const disconnect = new HTTPDisconnect(new AbortController().signal, { interval: 10 })
 		const response = disconnect.bridge(stream)
 		const body = response.body
@@ -97,7 +97,7 @@ describe('HTTPDisconnect', () => {
 	})
 
 	it('aborts and cancels upstream when the response consumer cancels', async () => {
-		const stream = openStream()
+		const stream = createStream()
 		const disconnect = new HTTPDisconnect(new AbortController().signal, { interval: 10 })
 		const response = disconnect.bridge(stream)
 		const body = response.body
@@ -149,7 +149,7 @@ describe('HTTPDisconnect', () => {
 	// the pump is NOT parked on a read: that is the dead-writer shape, where the interval is
 	// the only observer left to notice that the SSE stream underneath has gone.
 	it('aborts the composed signal when a keepalive tick finds the SSE stream closed', async () => {
-		const stream = openStream()
+		const stream = createStream()
 		const disconnect = new HTTPDisconnect(new AbortController().signal, { interval: 10 })
 		disconnect.bridge(stream)
 		stream.write({ data: 'first' })
@@ -264,7 +264,7 @@ describe('HTTPDisconnect', () => {
 	})
 
 	it('closes on upstream completion without inventing an abort', async () => {
-		const stream = openStream()
+		const stream = createStream()
 		const disconnect = new HTTPDisconnect(new AbortController().signal, { interval: 10 })
 		const response = disconnect.bridge(stream)
 		const body = response.body

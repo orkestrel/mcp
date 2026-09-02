@@ -2330,7 +2330,7 @@ export interface MCPTransportInterface {
 // MCP CLIENT (the egress side) — the mirror of the server, split the same way: a
 // transport-agnostic {@link MCPClientInterface} that drives a REMOTE MCP server
 // (`initialize` / `tools/list` / `tools/call`) over an injected {@link
-// MCPClientTransportInterface}, exposing each remote tool as a local {@link
+// MCPMessageTransportInterface}, exposing each remote tool as a local {@link
 // ToolInterface} an agent can run. The transport speaks only the JSON-RPC wire (a
 // concrete one — the HTTP transport — lives ONE layer out in `src/server/mcp`,
 // mirroring the server's core-vs-HTTP split); the client owns the request↔response
@@ -2338,7 +2338,7 @@ export interface MCPTransportInterface {
 // coupling.
 
 /**
- * The observable events of a {@link MCPClientTransportInterface} — the moments the
+ * The observable events of a {@link MCPMessageTransportInterface} — the moments the
  * {@link MCPClientInterface} (and any tracer) subscribes to through `transport.emitter.on`.
  *
  * @remarks
@@ -2353,7 +2353,7 @@ export interface MCPTransportInterface {
  *   (the `error` option), never onto this map. Declared as a `type` alias so the
  *   type-literal satisfies `EventMap` structurally.
  */
-export type MCPClientTransportEventMap = {
+export type MCPMessageTransportEventMap = {
 	/** A JSON-RPC message arrived from the remote server (a response, or a notification). */
 	readonly message: readonly [message: JSONRPCMessage]
 	/** The transport's connection ended. */
@@ -2377,8 +2377,8 @@ export type MCPClientTransportEventMap = {
  * later sessions tier. Concrete transports live in the browser and server environments;
  * the in-process loopback transport in the tests implements the same contract.
  */
-export interface MCPClientTransportInterface {
-	readonly emitter: EmitterInterface<MCPClientTransportEventMap>
+export interface MCPMessageTransportInterface {
+	readonly emitter: EmitterInterface<MCPMessageTransportEventMap>
 	/** A server-assigned session id once a stateful transport has one; `undefined` otherwise. */
 	readonly session: string | undefined
 	/**
@@ -2465,6 +2465,35 @@ export interface MCPClientTransportInterface {
 }
 
 /**
+ * Options for `createHTTPClientTransport` — the remote MCP server's URL and any extra
+ * request headers.
+ *
+ * @remarks
+ * - `url` — the absolute URL of the remote server's Streamable-HTTP endpoint (the
+ *   `POST` target every JSON-RPC message is written to, for example,
+ *   `http://localhost:3000/mcp`). REQUIRED.
+ * - `headers` — extra request headers merged onto every `POST` (for example, an
+ *   `Authorization` bearer for a guarded server). The transport always sets
+ *   `content-type: application/json` and an `Accept` of both `application/json` and
+ *   `text/event-stream` (so the server may answer with either framing); a key supplied
+ *   here is merged on top.
+ * - `fetch` — the `fetch` implementation to issue each `POST` with; defaults to
+ *   `globalThis.fetch` bound to `globalThis`. Injectable for a test double or a non-global
+ *   `fetch`.
+ * - `timeout` — an optional per-request timeout in milliseconds; when set, each
+ *   `fetch` call composes that deadline with the transport's own close through
+ *   `AbortSignal.any([close, AbortSignal.timeout(timeout)])`, so whichever fires first
+ *   ends the request. Omit for no transport-level deadline; the close signal is passed
+ *   either way.
+ */
+export interface HTTPClientTransportOptions {
+	readonly url: string
+	readonly headers?: Readonly<Record<string, string>>
+	readonly fetch?: typeof fetch
+	readonly timeout?: number
+}
+
+/**
  * Options for the explicit legacy client transport adapter.
  *
  * @remarks
@@ -2524,7 +2553,7 @@ export type MCPClientEventMap = {
 }
 
 /**
- * Options for `createMCPClient` — the {@link MCPClientTransportInterface} to drive, the
+ * Options for `createMCPClient` — the {@link MCPMessageTransportInterface} to drive, the
  * optional client {@link MCPIdentity}, the per-request `timeout`, and the reserved
  * `on` hooks.
  *
@@ -2553,7 +2582,7 @@ export interface MCPClientOptions {
 	readonly on?: EmitterHooks<MCPClientEventMap>
 	/** The emitter's listener-error handler — a listener throw routes here, not to a domain event. */
 	readonly error?: EmitterErrorHandler
-	readonly transport: MCPClientTransportInterface
+	readonly transport: MCPMessageTransportInterface
 	readonly identity?: MCPIdentity
 	/** The open client-capability record carried by modern requests. */
 	readonly capabilities?: MCPClientCapabilities
@@ -2776,7 +2805,7 @@ export interface MCPTaskClientInterface {
 
 /**
  * A transport-agnostic Model Context Protocol CLIENT — connects to a REMOTE MCP
- * server over an injected {@link MCPClientTransportInterface}, negotiates the
+ * server over an injected {@link MCPMessageTransportInterface}, negotiates the
  * modern wire revision, and exposes the server's tools as local
  * {@link ToolInterface}s an agent can run.
  *
@@ -2796,7 +2825,7 @@ export interface MCPTaskClientInterface {
  *   non-`'complete'` arm throws there instead.
  * - **Per-request cancellation.** `call`'s `options.signal` cancels ONE in-flight request:
  *   it rejects locally on every carrier, and additionally writes `notifications/cancelled`
- *   where the transport declares itself {@link MCPClientTransportInterface.duplex}. It
+ *   where the transport declares itself {@link MCPMessageTransportInterface.duplex}. It
  *   never cancels the connection, and never a durable task — a call that already answered
  *   `resultType: 'task'` is a request that is over. Cancellation is advisory, so a
  *   response arriving after the abort is discarded rather than raised.
@@ -2834,7 +2863,7 @@ export interface MCPClientInterface {
 	/** The negotiated protocol revision, or `undefined` while disconnected. */
 	readonly version: MCPModernVersion | undefined
 	/** The injected transport the client drives the remote server over. */
-	readonly transport: MCPClientTransportInterface
+	readonly transport: MCPMessageTransportInterface
 	/**
 	 * The stable Tasks extension's client half — reading, answering, and stopping a durable task.
 	 *
@@ -2961,7 +2990,7 @@ export interface MCPClientInterface {
 	 *
 	 * `options.signal` cancels THIS request only — the caller stops waiting, the pending
 	 * request rejects, and the peer is TOLD on a carrier that can carry a client
-	 * notification (see {@link MCPClientTransportInterface.duplex}). MCP cancellation is
+	 * notification (see {@link MCPMessageTransportInterface.duplex}). MCP cancellation is
 	 * advisory: the peer may answer anyway, and that late answer is discarded rather than
 	 * raised. `options.progress` receives this request's progress frames.
 	 *

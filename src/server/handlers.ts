@@ -7,6 +7,7 @@ import {
 	JSONRPC_PARSE_ERROR,
 	MCP_HEADER_MISMATCH,
 	MCP_LOOKUP_PAGES,
+	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_UNSUPPORTED_VERSION,
 	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
 	buildHeaderParameters,
@@ -19,12 +20,8 @@ import {
 	parseJSONRPCMessage,
 } from '@src/core'
 import { isRecord, isString, parseJSON } from '@orkestrel/contract'
-import { openStream } from '@orkestrel/server'
-import {
-	MCP_PROTOCOL_VERSION_HEADER,
-	SSE_BUFFERING_DISABLED,
-	SSE_BUFFERING_HEADER,
-} from './constants.js'
+import { createStream } from '@orkestrel/server'
+import { SSE_BUFFERING_DISABLED, SSE_BUFFERING_HEADER } from './constants.js'
 import { acceptsEventStream, allowsOrigin, sendEventStream } from './helpers.js'
 import { inferHeaderIssue, inferParameterRefusal, inferStatus } from './inferers.js'
 import { HTTPDisconnect } from './HTTPDisconnect.js'
@@ -202,7 +199,7 @@ export function createMCPPostHandler<TState = unknown>(
 			...(caller === undefined ? {} : { caller }),
 		})
 		if (response !== undefined && Symbol.asyncIterator in response) {
-			const stream = openStream()
+			const stream = createStream()
 			stream.response.headers.set(SSE_BUFFERING_HEADER, SSE_BUFFERING_DISABLED)
 			queueMicrotask(() => void sendEventStream(response, stream))
 			return disconnect.bridge(stream)
@@ -210,7 +207,7 @@ export function createMCPPostHandler<TState = unknown>(
 		const status = inferStatus(response, era)
 		if (response === undefined) return new Response(null, { status })
 		if (status === 200 && streaming && acceptsEventStream(request)) {
-			const stream = openStream()
+			const stream = createStream()
 			stream.response.headers.set(SSE_BUFFERING_HEADER, SSE_BUFFERING_DISABLED)
 			stream.write({ data: JSON.stringify(response) })
 			stream.end()

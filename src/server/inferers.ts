@@ -14,7 +14,10 @@ import {
 	MCP_META_VERSION,
 	MCP_MISSING_CAPABILITY,
 	MCP_HANDSHAKE_VERSION,
+	MCP_METHOD_HEADER,
+	MCP_NAME_HEADER,
 	MCP_PARAM_PREFIX,
+	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_UNSUPPORTED_VERSION,
 	decodeSentinel,
 	isInitializeRequest,
@@ -23,7 +26,6 @@ import {
 	renderHeaderValue,
 } from '@src/core'
 import { isRecord, isString } from '@orkestrel/contract'
-import { MCP_METHOD_HEADER, MCP_NAME_HEADER, MCP_PROTOCOL_VERSION_HEADER } from './constants.js'
 
 /**
  * Infers the target one modern request's `Mcp-Name` header must carry.
@@ -61,7 +63,7 @@ export function inferHeaderTarget(request: JSONRPCInvocation): string | undefine
 }
 
 /**
- * Infers the first required MCP HTTP header that is missing or mismatched.
+ * Infers the first required MCP HTTP header a request's own body contradicts.
  *
  * @remarks
  * A modern request derives its protocol, method, and name expectations from the JSON-RPC body,
@@ -70,12 +72,14 @@ export function inferHeaderTarget(request: JSONRPCInvocation): string | undefine
  * {@link import('@orkestrel/mcp').decodeSentinel} before the comparison, so a peer that had
  * to encode its value still matches; a sentinel whose payload is invalid decodes to nothing
  * and therefore mismatches, which is how an invalid header value is refused. A legacy request
- * body requires a protocol header after initialization, while a supplied legacy session
- * version additionally diagnoses a header that disagrees with the active session. Messages
- * name the expected value but never echo the client-supplied one.
+ * body requires a protocol header after initialization. Messages name the expected value but
+ * never echo the client-supplied one.
+ *
+ * The expectation a LIVE SESSION supplies is a different rule over a different input, so it
+ * is {@link inferSessionHeaderIssue} rather than a second arm of this one.
  *
  * @param request - The HTTP request carrying the headers
- * @param reference - The parsed invocation body, or the active legacy session version
+ * @param invocation - The parsed invocation body the expectations are derived from
  * @returns The first header issue, or `undefined` when the applicable headers agree
  *
  * @example
@@ -86,35 +90,18 @@ export function inferHeaderTarget(request: JSONRPCInvocation): string | undefine
  */
 export function inferHeaderIssue(
 	request: Request,
-	reference: JSONRPCInvocation | MCPVersion,
+	invocation: JSONRPCInvocation,
 ): MCPHeaderIssue | undefined {
 	const protocol = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
-	if (isString(reference)) {
-		if (protocol === null) {
-			return {
-				header: 'MCP-Protocol-Version',
-				reason: 'missing',
-				message: `Required MCP-Protocol-Version header is missing; the active session uses '${reference}'.`,
-			}
-		}
-		if (protocol !== reference) {
-			return {
-				header: 'MCP-Protocol-Version',
-				reason: 'mismatched',
-				message: `MCP-Protocol-Version header does not match the active session version '${reference}'.`,
-			}
-		}
-		return undefined
-	}
-	if (!isModernRequest(reference)) {
-		if (isInitializeRequest(reference) || protocol !== null) return undefined
+	if (!isModernRequest(invocation)) {
+		if (isInitializeRequest(invocation) || protocol !== null) return undefined
 		return {
 			header: 'MCP-Protocol-Version',
 			reason: 'missing',
 			message: `Required MCP-Protocol-Version header is missing; this server offers '${MCP_HANDSHAKE_VERSION}'.`,
 		}
 	}
-	const message = reference
+	const message = invocation
 	const metadata = isRecord(message.params?.['_meta']) ? message.params['_meta'] : undefined
 	const version = metadata?.[MCP_META_VERSION]
 	if (!isString(version)) return undefined
@@ -162,6 +149,49 @@ export function inferHeaderIssue(
 			header: 'Mcp-Name',
 			reason: 'mismatched',
 			message: `Mcp-Name header does not match the request body target '${target}'.`,
+		}
+	}
+	return undefined
+}
+
+/**
+ * Infers the protocol header issue an active legacy session's pinned revision diagnoses.
+ *
+ * @remarks
+ * The session layer's rule, distinct from the body-derived one {@link inferHeaderIssue} owns:
+ * a live legacy session pinned its revision at `initialize`, so every later request on that
+ * session must name the same one. An absent header reads as `missing`, which the session
+ * middleware answers by SUPPLYING the pinned revision rather than refusing; a present header
+ * naming another revision reads as `mismatched` and is refused. The message names the session's
+ * revision and never echoes the client-supplied value.
+ *
+ * @param request - The HTTP request carrying the headers
+ * @param version - The legacy revision the active session pinned at `initialize`
+ * @returns The protocol header issue, or `undefined` when the header agrees
+ *
+ * @example
+ * ```ts
+ * const issue = inferSessionHeaderIssue(request, '2025-06-18')
+ * issue?.reason // 'missing' when the request carries no protocol header
+ * ```
+ */
+export function inferSessionHeaderIssue(
+	request: Request,
+	version: MCPVersion,
+): MCPHeaderIssue | undefined {
+	const protocol = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
+	if (protocol === null) {
+		return {
+			header: 'MCP-Protocol-Version',
+			reason: 'missing',
+			message: `Required MCP-Protocol-Version header is missing; the active session uses '${version}'.`,
+		}
+	}
+	if (protocol !== version) {
+		return {
+			header: 'MCP-Protocol-Version',
+			reason: 'mismatched',
+			message: `MCP-Protocol-Version header does not match the active session version '${version}'.`,
 		}
 	}
 	return undefined

@@ -1,36 +1,9 @@
-// The MCP server-environment transport constants — the wire-level header
-// names, the default mount path, the folded event-log bounds, and the stdio client
-// transport's default write-delivery bound. The HEADER names are
-// the Streamable-HTTP transport's session /
-// protocol-version headers. `createMCPSession` owns the optional session id, while
-// `createMCPRoutes` validates a present protocol version on every POST. The
-// transport-agnostic dispatch core deliberately does NOT carry these — header names
-// belong to the HTTP transport, here.
-
-/**
- * The Streamable-HTTP transport header that carries the MCP session id. When a {@link
- * import('./middlewares.js').createMCPSession} middleware is mounted, it SETS this header on
- * the `initialize` response (the minted id) and READS it on every subsequent request
- * (validating the session); the stateless `createMCPRoutes` default neither sets nor reads it.
- */
-export const MCP_SESSION_HEADER = 'mcp-session-id'
-
-/**
- * The Streamable-HTTP transport header carrying the negotiated MCP protocol version
- * on every post-initialize client request.
- *
- * @remarks
- * Required by MCP 2025-06-18 after initialization. Both HTTP client transports
- * capture the initialize result's `protocolVersion` and send it on subsequent
- * requests; `createMCPRoutes` rejects a present unsupported value before dispatch.
- */
-export const MCP_PROTOCOL_VERSION_HEADER = 'mcp-protocol-version'
-
-/** The modern Streamable-HTTP request header carrying the JSON-RPC method name. */
-export const MCP_METHOD_HEADER = 'mcp-method'
-
-/** The modern Streamable-HTTP request header carrying a named method's target. */
-export const MCP_NAME_HEADER = 'mcp-name'
+// The MCP server-environment transport constants — the reverse-proxy buffering header, the
+// default mount path, the folded event-log bounds, and the stdio client transport's default
+// write-delivery bound. The Streamable-HTTP wire header names live in `@src/core` beside the
+// transport that stamps them: `createMCPSession` reads the session id from there and
+// `createMCPRoutes` validates a present protocol version on every POST against the same
+// spelling the client wrote.
 
 /** The reverse-proxy response header controlling buffering of an SSE response. */
 export const SSE_BUFFERING_HEADER = 'x-accel-buffering'

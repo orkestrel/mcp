@@ -96,6 +96,48 @@ export const MCP_SENTINEL_SUFFIX = '?='
  */
 export const MCP_PARAM_PREFIX = 'Mcp-Param-'
 
+// The Streamable-HTTP wire headers — the field names the HTTP client transport stamps and
+// the server face reads back. They live here because the transport that writes them and the
+// route layer that validates them are one wire contract, and a copy per environment face is
+// the drift the two faces already carried.
+
+/**
+ * The Streamable-HTTP transport header that carries the MCP session id.
+ *
+ * @remarks
+ * A STATEFUL server sends it on the `initialize` reply, and
+ * {@link import('./transports/HTTPClientTransport.js').HTTPClientTransport} echoes it as a
+ * request header on every subsequent request, so a client passes that server's session
+ * validation unchanged.
+ */
+export const MCP_SESSION_HEADER = 'mcp-session-id'
+
+/**
+ * The Streamable-HTTP transport header carrying the MCP protocol version.
+ *
+ * @remarks
+ * A modern request derives it from its own `_meta`; a legacy request echoes the revision the
+ * `initialize` result negotiated on each subsequent request.
+ */
+export const MCP_PROTOCOL_VERSION_HEADER = 'mcp-protocol-version'
+
+/**
+ * The modern Streamable-HTTP request header carrying the JSON-RPC method.
+ *
+ * @remarks
+ * It is stamped on every modern request and on no legacy request.
+ */
+export const MCP_METHOD_HEADER = 'mcp-method'
+
+/**
+ * The modern Streamable-HTTP request header carrying a named target.
+ *
+ * @remarks
+ * The HTTP client transport stamps it only for `tools/call`, from that request's `params.name`,
+ * in the Base64 sentinel form whenever the name cannot ride as plain ASCII.
+ */
+export const MCP_NAME_HEADER = 'mcp-name'
+
 /**
  * The tool-schema annotation key naming the header one parameter projects into.
  *
@@ -232,7 +274,7 @@ export const JSONRPC_SERVER_ERROR = -32000
 // none. The egress mirror of the server's protocol-version constants above.
 
 /** The default client name reported in the MCP `initialize` handshake (`clientInfo.name`). */
-export const DEFAULT_MCP_CLIENT_NAME = 'taverna'
+export const DEFAULT_MCP_CLIENT_NAME = '@orkestrel/mcp'
 
 /** The default client version reported in the MCP `initialize` handshake (`clientInfo.version`). */
 export const DEFAULT_MCP_CLIENT_VERSION = '1.0.0'

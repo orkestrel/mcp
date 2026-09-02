@@ -10,29 +10,26 @@ import type { StartedServerInterface } from '../../setupServer.js'
 import { request as httpRequest } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-	createMCPServer,
-	createMCPLegacy,
 	buildJSONRPCResult,
+	createMCPLegacy,
+	createMCPServer,
+	MCP_FALLBACK_VERSION,
+	MCP_HANDSHAKE_VERSION,
+	MCP_LOOKUP_PAGES,
 	MCP_META_CAPABILITIES,
 	MCP_META_SERVER,
 	MCP_META_SUBSCRIPTION,
 	MCP_META_VERSION,
+	MCP_METHOD_HEADER,
 	MCP_MODERN_VERSION,
-	MCP_FALLBACK_VERSION,
-	MCP_HANDSHAKE_VERSION,
-	MCP_LOOKUP_PAGES,
+	MCP_NAME_HEADER,
+	MCP_PROTOCOL_VERSION_HEADER,
 } from '@src/core'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import { createTeardown } from '@orkestrel/test'
-import {
-	createMCPPostHandler as createPostHandler,
-	createMCPRoutes,
-	MCP_METHOD_HEADER,
-	MCP_NAME_HEADER,
-	MCP_PROTOCOL_VERSION_HEADER,
-} from '@src/server'
+import { createMCPPostHandler as createPostHandler, createMCPRoutes } from '@src/server'
 import {
 	collectSSE,
 	createCalculatorServer,

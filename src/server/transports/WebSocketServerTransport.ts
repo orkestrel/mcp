@@ -1,6 +1,6 @@
 import type {
-	MCPClientTransportEventMap,
-	MCPClientTransportInterface,
+	MCPMessageTransportEventMap,
+	MCPMessageTransportInterface,
 	JSONRPCMessage,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
@@ -12,12 +12,12 @@ import { WEBSOCKET_READY_OPEN } from '@orkestrel/websocket'
 /**
  * The per-connection JSON-RPC-over-WebSocket SERVER bridge — wraps a
  * {@link NodeWebSocketInterface} (the RFC 6455 wire wrapper) as a
- * {@link MCPClientTransportInterface}, the bidirectional JSON-RPC message channel
+ * {@link MCPMessageTransportInterface}, the bidirectional JSON-RPC message channel
  * `createWebSocketServer` pumps `mcp.dispatch` over and the egress mirror's
  * {@link import('./WebSocketClientTransport.js').WebSocketClientTransport} reuses.
  *
  * @remarks
- * - **Reuses `MCPClientTransportInterface`.** It IS the same generic carrier the HTTP
+ * - **Reuses `MCPMessageTransportInterface`.** It IS the same generic carrier the HTTP
  *   client transport implements — `emitter` (`message` / `close` / `error`), `start`,
  *   `send`, `close` — so the WebSocket server and client both speak ONE transport contract,
  *   no near-duplicate sibling interface. `session` is `undefined` (the stateless v1; a
@@ -42,12 +42,12 @@ import { WEBSOCKET_READY_OPEN } from '@orkestrel/websocket'
  *   (idempotent — a second `close`, or a socket-driven close, emits once). A frame that arrives
  *   between that release and the peer's close echo reaches nothing: the socket-driven close path
  *   releases the same way, so a closed transport is never subscribed to a live socket.
- * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); the emitter
+ * - **Observable.** Owns the `emitter` ({@link MCPMessageTransportEventMap}); the emitter
  *   isolates a listener throw (a buggy observer never corrupts the bridge). `error` is a
  *   DOMAIN event (a transport-level fault), distinct from the emitter's listener-error channel.
  */
-export class WebSocketServerTransport implements MCPClientTransportInterface {
-	readonly #emitter: Emitter<MCPClientTransportEventMap>
+export class WebSocketServerTransport implements MCPMessageTransportInterface {
+	readonly #emitter: Emitter<MCPMessageTransportEventMap>
 	readonly #socket: NodeWebSocketInterface
 	// Bound once, as fields, so `close` can remove exactly the subscriptions `start` installed:
 	// an inline arrow is a new function on every call and can never be removed by reference.
@@ -58,11 +58,11 @@ export class WebSocketServerTransport implements MCPClientTransportInterface {
 	#closed = false
 
 	constructor(socket: NodeWebSocketInterface) {
-		this.#emitter = new Emitter<MCPClientTransportEventMap>()
+		this.#emitter = new Emitter<MCPMessageTransportEventMap>()
 		this.#socket = socket
 	}
 
-	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
+	get emitter(): EmitterInterface<MCPMessageTransportEventMap> {
 		return this.#emitter
 	}
 

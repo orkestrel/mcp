@@ -2,7 +2,7 @@ import type { JSONRPCMessage, JSONRPCNotification, JSONRPCResponse, MCPStream } 
 import { PassThrough, Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { MCPStreamController, MCPTextStreamController, sendStream } from '@src/core'
-import { StdioServerTransport, bridgeMessageTransport } from '@src/server'
+import { StdioServerTransport, createMessageTransportBridge } from '@src/server'
 import { waitForDelay } from '@orkestrel/test'
 import { createJSONRPCRequest } from '../../../setup.js'
 
@@ -231,7 +231,7 @@ describe('StdioServerTransport — send writes response lines the peer decodes',
 		)
 		await transport.start()
 
-		const pump = sendStream(stream, bridgeMessageTransport(transport))
+		const pump = sendStream(stream, createMessageTransportBridge(transport))
 		await waitForDelay()
 		expect(chunks.map((chunk) => JSON.parse(chunk))).toEqual([notification])
 		const releaseNotification = releases.shift()

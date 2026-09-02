@@ -1,7 +1,5 @@
 export * from './types.js'
 export * from './constants.js'
-export * from './helpers.js'
-export * from './transports/HTTPClientTransport.js'
 export * from './transports/MessagePortTransport.js'
 export * from './transports/WebSocketClientTransport.js'
 export * from './factories.js'

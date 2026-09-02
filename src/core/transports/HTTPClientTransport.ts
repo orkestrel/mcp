@@ -1,21 +1,11 @@
-import type {
-	MCPClientTransportEventMap,
-	MCPClientTransportInterface,
-	MCPHeaderParameter,
-	JSONRPCMessage,
-} from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { HTTPClientTransportOptions } from '../types.js'
-import {
-	buildHeaderParameters,
-	buildHeaderProjection,
-	encodeSentinel,
-	inferRequestVersion,
-	isJSONRPCResponse,
-	isMCPVersion,
-	isModernRequest,
-	parseJSONRPCMessage,
-} from '@src/core'
+import type {
+	HTTPClientTransportOptions,
+	JSONRPCMessage,
+	MCPHeaderParameter,
+	MCPMessageTransportEventMap,
+	MCPMessageTransportInterface,
+} from '../types.js'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import {
@@ -24,14 +14,28 @@ import {
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
 } from '../constants.js'
-import { buildResponseError, readEventStream } from '../helpers.js'
+import {
+	buildHeaderParameters,
+	buildHeaderProjection,
+	buildResponseError,
+	encodeSentinel,
+	readEventStream,
+} from '../helpers.js'
+import { inferRequestVersion } from '../inferers.js'
+import { parseJSONRPCMessage } from '../parsers.js'
+import { isJSONRPCResponse, isMCPVersion, isModernRequest } from '../validators.js'
 
 /**
  * The HTTP CLIENT transport for the Model Context Protocol — a
- * {@link MCPClientTransportInterface} that drives a REMOTE Streamable-HTTP MCP server over
+ * {@link MCPMessageTransportInterface} that drives a REMOTE Streamable-HTTP MCP server over
  * `fetch`, the egress mirror of the server's `createMCPRoutes`.
  *
  * @remarks
+ * - **One class, both faces.** It touches `fetch`, `Response`, `AbortController`,
+ *   `AbortSignal`, and `WeakMap` alone, so it is host-independent and lives in core. Each
+ *   environment face publishes its own `createHTTPClientTransport` over it —
+ *   `@orkestrel/mcp/browser` and `@orkestrel/mcp/server` — and both factories return this
+ *   class, so a reply reaches a page and a Node process through the same decode.
  * - **Request/response over `fetch`.** `send(message)` POSTs the JSON-serialized
  *   message to `options.url` with `content-type: application/json` and an
  *   `Accept` of BOTH `application/json` and `text/event-stream` (so the server may
@@ -42,7 +46,7 @@ import { buildResponseError, readEventStream } from '../helpers.js'
  * - **Both reply framings.** A `200` with an `application/json` body is parsed with
  *   `parseJSONRPCMessage`; a `200` with a `text/event-stream` body is decoded with the
  *   `@orkestrel/sse` {@link import('@orkestrel/sse').SSEParserInterface} ({@link
- *   readEventStream}) — the inverse of the server's `openStream` seam, so the wire
+ *   readEventStream}) — the inverse of the server's `createStream` seam, so the wire
  *   round-trips. A `202`
  *   Accepted (a notification) carries no body and emits nothing.
  * - **Session and protocol headers.** `start()` is a no-op (a
@@ -64,12 +68,15 @@ import { buildResponseError, readEventStream } from '../helpers.js'
  *   never ends would otherwise outlive the transport, with nothing left able to reach it. The
  *   aborted read surfaces on `error` and the `send` reporting it resolves. `close()` is
  *   idempotent (one `close` event per connected lifetime), and `start()` opens the next one.
- * - **Total at the boundary.** Every reply is narrowed (`parseJSONRPCMessage`,
- *   the SSE decoder). A non-message success reply is dropped, never asserted. A non-success
- *   reply that carries no valid JSON-RPC message rejects `send` with its HTTP status and body
- *   shape. A valid JSON-RPC error body is emitted at any HTTP status. A `fetch` / decode failure
- *   on a success response surfaces on the `error` event rather than escaping `send`.
- * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); fires
+ * - **Total at the boundary, and a non-success reply REJECTS.** Every reply is narrowed
+ *   (`parseJSONRPCMessage`, the SSE decoder). A non-message success reply is dropped, never
+ *   asserted. A non-success reply that carries no valid JSON-RPC message rejects `send` with
+ *   an error naming its HTTP status and body shape — the peer answered, and answering the
+ *   caller's request with silence would leave it waiting out its own deadline for a failure
+ *   the transport already read. A valid JSON-RPC error body is emitted at any HTTP status,
+ *   because the protocol carries that outcome in band. A `fetch` or decode failure on a
+ *   success response surfaces on the `error` event rather than escaping `send`.
+ * - **Observable.** Owns the `emitter` ({@link MCPMessageTransportEventMap}); fires
  *   `message` per decoded reply, `error` on a fault, and `close` on `close()`.
  *
  * @example
@@ -79,8 +86,8 @@ import { buildResponseError, readEventStream } from '../helpers.js'
  * await client.connect()
  * ```
  */
-export class HTTPClientTransport implements MCPClientTransportInterface {
-	readonly #emitter: Emitter<MCPClientTransportEventMap>
+export class HTTPClientTransport implements MCPMessageTransportInterface {
+	readonly #emitter: Emitter<MCPMessageTransportEventMap>
 	readonly #url: string
 	readonly #headers: Readonly<Record<string, string>>
 	readonly #fetch: typeof fetch
@@ -104,14 +111,14 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 	#closed = false
 
 	constructor(options: HTTPClientTransportOptions) {
-		this.#emitter = new Emitter<MCPClientTransportEventMap>()
+		this.#emitter = new Emitter<MCPMessageTransportEventMap>()
 		this.#url = options.url
 		this.#headers = options.headers ?? {}
-		this.#fetch = options.fetch ?? globalThis.fetch
+		this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis)
 		this.#timeout = options.timeout
 	}
 
-	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
+	get emitter(): EmitterInterface<MCPMessageTransportEventMap> {
 		return this.#emitter
 	}
 
@@ -203,7 +210,7 @@ export class HTTPClientTransport implements MCPClientTransportInterface {
 
 	// Modern requests announce their own protocol version, so the header is projected from the
 	// message through the SHARED `inferRequestVersion` — the same read the server's own
-	// expectation performs, and the same read the browser face performs. Legacy requests carry
+	// expectation performs. Legacy requests carry
 	// the version captured from the `initialize` handshake instead. `tools/call` is the one
 	// named method `MCPClientInterface` publishes, so it is the one that stamps `Mcp-Name`; the
 	// value rides through `encodeSentinel`, which leaves a plain tool name literal and

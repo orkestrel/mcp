@@ -1,16 +1,18 @@
 import type { JSONRPCMessage } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { isRecord } from '@orkestrel/contract'
-import { HTTPClientTransport } from '@src/browser'
+import { HTTPClientTransport } from '@src/core'
 import { waitForDelay } from '@orkestrel/test'
 
-// src/browser/transports/HTTPClientTransport.ts — what the browser face owes a caller that
-// closes it. The round trip against the real Node-face server is proven in
-// tests/src/browser/factories.test.ts; this file pins the RELEASE half, which needs a reply
-// that never arrives. The peer is a boundary stub for the platform `fetch`: it answers with a
-// REAL `Response` over a REAL `ReadableStream` that stays open, and honors `init.signal` the
-// way the platform does — erroring the body and failing the pending read. It reimplements
-// nothing this package owns; the transport under test is the real one.
+// src/core/transports/HTTPClientTransport.ts — the host-independent contract BOTH faces
+// publish, driven through the injected `fetch` the class already takes. The round trips
+// against a real Node-face server are proven in tests/src/server/integration.test.ts (Node)
+// and tests/src/browser/factories.test.ts (a real browser); this file pins what needs a reply
+// the wire cannot produce on demand: the RELEASE half, the sentinel stamping, the non-success
+// rejection, and the `x-mcp-header` selection. The peer is a boundary stub for the platform
+// `fetch`: it answers with a REAL `Response` over a REAL `ReadableStream`, and honors
+// `init.signal` the way the platform does — erroring the body and failing the pending read.
+// It reimplements nothing this package owns; the transport under test is the real one.
 
 interface EndlessFetchInterface {
 	/** The `fetch` to hand the transport through its public `fetch` option. */
@@ -127,6 +129,39 @@ describe('HTTPClientTransport — Mcp-Name travels in the protocol sentinel form
 		})
 
 		expect(names).toEqual(['add', '=?base64?Y2Fmw6k=?='])
+	})
+})
+
+// A non-success reply is ONE contract for every face, and it is the transport's own decision
+// rather than the peer's: the peer answered, so leaving the caller to wait out its deadline for
+// a failure this class already read is what the rejection exists to prevent. The rows below
+// drive the class directly through its injected `fetch`, which is the seam both
+// `createHTTPClientTransport` factories hand it.
+
+describe('HTTPClientTransport — a non-success reply carrying no message rejects send', () => {
+	it('rejects with the status and body shape when the error body is not JSON-RPC', async () => {
+		const transport = new HTTPClientTransport({
+			url: 'http://127.0.0.1:1/mcp',
+			fetch: () => Promise.resolve(Response.json({ error: 'unavailable' }, { status: 502 })),
+		})
+
+		await expect(transport.send({ jsonrpc: '2.0', id: 1, method: 'tools/list' })).rejects.toThrow(
+			'HTTP 502 response contained an application/json body that was not a JSON-RPC message',
+		)
+	})
+
+	it('emits a valid JSON-RPC error body at a non-success status instead of rejecting', async () => {
+		const answer = { jsonrpc: '2.0', id: 1, error: { code: -32601, message: 'Method not found' } }
+		const transport = new HTTPClientTransport({
+			url: 'http://127.0.0.1:1/mcp',
+			fetch: () => Promise.resolve(Response.json(answer, { status: 404 })),
+		})
+		const delivered: JSONRPCMessage[] = []
+		transport.emitter.on('message', (message) => delivered.push(message))
+
+		await transport.send({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+
+		expect(delivered).toEqual([answer])
 	})
 })
 

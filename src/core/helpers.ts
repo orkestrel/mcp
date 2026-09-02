@@ -1,4 +1,5 @@
 import type { EmitterInterface } from '@orkestrel/emitter'
+import type { SSEParserInterface } from '@orkestrel/sse'
 import type { ToolCall, ToolManagerInterface } from '@orkestrel/tool'
 import type {
 	JSONRPCErrorResponse,
@@ -11,7 +12,7 @@ import type {
 	MCPCallOutcome,
 	MCPClientCapabilities,
 	MCPClientInterface,
-	MCPClientTransportEventMap,
+	MCPMessageTransportEventMap,
 	MCPDiscoverResult,
 	MCPDispatchOptions,
 	MCPHeaderParameter,
@@ -35,6 +36,7 @@ import type {
 	MCPSubscriptionResultMetaObject,
 } from './types.js'
 import { decodeBase64, decodeUTF8, encodeBase64, encodeHex } from '@orkestrel/codec'
+import { createSSEParser } from '@orkestrel/sse'
 import {
 	attempt,
 	cloneJSONRecord,
@@ -487,7 +489,7 @@ export function buildProgressNotification(
  * rather than as a violation.
  *
  * Only write one on a carrier that accepts a client-initiated notification — see
- * {@link import('./types.js').MCPClientTransportInterface.duplex}. On Streamable HTTP the
+ * {@link import('./types.js').MCPMessageTransportInterface.duplex}. On Streamable HTTP the
  * dated revision defines no such frame, and closing the response stream is the
  * cancellation signal instead.
  *
@@ -1221,7 +1223,7 @@ export function decodeBoundedMessage(
  * ```
  */
 export function deliverMessage(
-	emitter: EmitterInterface<MCPClientTransportEventMap>,
+	emitter: EmitterInterface<MCPMessageTransportEventMap>,
 	text: string,
 	fault: string,
 ): void {
@@ -1240,6 +1242,103 @@ export function deliverMessage(
 		return
 	}
 	emitter.emit('message', message)
+}
+
+/**
+ * Decodes one SSE event's `data` string into a {@link JSONRPCMessage}, or `undefined`
+ * when it is not one — the per-event step {@link readEventStream} folds over.
+ *
+ * @remarks
+ * Parses the `data` (a peer serializes the JSON-RPC envelope as the event's `data`) with
+ * `@orkestrel/contract`'s `parseJSON` — the declared JSON boundary, which answers `undefined`
+ * instead of throwing — and narrows the parsed value with `parseJSONRPCMessage`. Total:
+ * malformed JSON or a non-message value yields `undefined`, never throws.
+ *
+ * @param data - One SSE event's `data` payload
+ * @returns The decoded {@link JSONRPCMessage}, or `undefined`
+ *
+ * @example
+ * ```ts
+ * decodeEvent('{"jsonrpc":"2.0","id":1,"result":{}}') // the decoded response
+ * ```
+ */
+export function decodeEvent(data: string): JSONRPCMessage | undefined {
+	return parseJSONRPCMessage(parseJSON(data))
+}
+
+/**
+ * Decodes a `fetch` Response's Server-Sent-Events body into the JSON-RPC messages it
+ * carried — the CLIENT-side inverse of a server's Streamable-HTTP SSE response.
+ *
+ * @remarks
+ * Reads the whole `response.body` stream chunk-by-chunk through a `TextDecoder({ stream: true
+ * })` (handling a multi-byte character split across reads) and `@orkestrel/sse`'s
+ * {@link SSEParserInterface} (handling a partial line or in-progress event split across
+ * reads), then narrows each dispatched event's `data` to a {@link JSONRPCMessage} through
+ * {@link decodeEvent} (so a non-message or non-JSON `data:` event is DROPPED, never thrown —
+ * total). It reuses the SAME `SSEParser` a server's `createStream` seam serializes against, so
+ * the wire round-trips. A `null` body (no stream) yields no messages;
+ * {@link import('./transports/HTTPClientTransport.js').HTTPClientTransport} reads a
+ * request/response SSE reply (the server sends one `data:` event then ends), so this drains to
+ * completion.
+ *
+ * @param response - The SSE `fetch` Response to decode (its `body` is read to completion)
+ * @returns Every {@link JSONRPCMessage} the stream carried, in order
+ *
+ * @example
+ * ```ts
+ * const messages = await readEventStream(await fetch(url, { method: 'POST', body }))
+ * ```
+ */
+export async function readEventStream(response: Response): Promise<readonly JSONRPCMessage[]> {
+	const body = response.body
+	if (body === null) return []
+	const reader = body.getReader()
+	const decoder = new TextDecoder()
+	const parser: SSEParserInterface = createSSEParser()
+	const messages: JSONRPCMessage[] = []
+	try {
+		for (;;) {
+			const { done, value } = await reader.read()
+			if (done) break
+			for (const event of parser.parse(decoder.decode(value, { stream: true }))) {
+				// JSON-parse the event's `data` (the JSON-RPC envelope the peer wrote), then narrow
+				// it — a malformed or non-message payload is dropped, never thrown.
+				const message = decodeEvent(event.data)
+				if (message !== undefined) messages.push(message)
+			}
+		}
+	} finally {
+		reader.releaseLock()
+	}
+	return messages
+}
+
+/**
+ * Builds the error for a non-success HTTP response that carried no JSON-RPC message.
+ *
+ * @param response - The response whose status is reported
+ * @param type - The response's content type, or an empty string when absent
+ * @returns An error naming the HTTP status and unsupported response shape
+ *
+ * @example
+ * ```ts
+ * const error = buildResponseError(new Response('', { status: 500 }), '')
+ * ```
+ */
+export function buildResponseError(response: Response, type: string): Error {
+	if (type.includes('application/json')) {
+		return new Error(
+			`HTTP ${response.status} response contained an application/json body that was not a JSON-RPC message`,
+		)
+	}
+	if (type.includes('text/event-stream')) {
+		return new Error(
+			`HTTP ${response.status} response contained a text/event-stream body without a JSON-RPC message`,
+		)
+	}
+	const shape = type === '' ? 'a body without a content type' : `an unsupported '${type}' body`
+	return new Error(`HTTP ${response.status} response contained ${shape}`)
 }
 
 /**
@@ -1794,7 +1893,7 @@ export function bindServer(
  * @remarks
  * The client's outbound writes flow through `client.transport.send` — its existing,
  * unmodified request/response correlation — so `client` must have been constructed
- * with a {@link import('./types.js').MCPClientTransportInterface} that itself carries
+ * with a {@link import('./types.js').MCPMessageTransportInterface} that itself carries
  * the SAME `transport` (see {@link import('./factories.js').createDuplexClientTransport},
  * the additive factory that adapts an {@link MCPTransportInterface} into that shape);
  * this binder then completes the inbound half by decoding each message and pushing it

@@ -11,24 +11,24 @@ import {
 	createMCPLegacy,
 	createMCPLegacyClientTransport,
 	createMCPServer,
-	MCP_META_SERVER,
-	MCP_MODERN_VERSION,
 	MCP_FALLBACK_VERSION,
 	MCP_HANDSHAKE_VERSION,
+	MCP_META_SERVER,
+	MCP_METHOD_HEADER,
+	MCP_MODERN_VERSION,
+	MCP_PROTOCOL_VERSION_HEADER,
+	MCP_SESSION_HEADER,
 } from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createServer } from '@orkestrel/server'
 import {
+	DEFAULT_MCP_PATH,
 	createMCPContinuation,
 	createMCPRoutes,
 	createStdioServer,
 	createWebSocketClientTransport,
 	createWebSocketServer,
-	DEFAULT_MCP_PATH,
-	MCP_METHOD_HEADER,
-	MCP_PROTOCOL_VERSION_HEADER,
-	MCP_SESSION_HEADER,
 } from '@src/server'
 import { WEBSOCKET_CLOSE_NORMAL, WEBSOCKET_OPCODE_CLOSE } from '@orkestrel/websocket'
 import { createTeardown, waitForAbort, waitForDelay } from '@orkestrel/test'
@@ -859,7 +859,7 @@ send({
 }
 
 // createStdioServer — the new seam: it now pipes its transport through the core
-// bindServer port (via bridgeMessageTransport) rather than a hand-rolled pump. Proven
+// bindServer port (via createMessageTransportBridge) rather than a hand-rolled pump. Proven
 // over REAL PassThrough streams + a REAL MCPServer — the request → reply
 // line round trip, a notification writing nothing, and a dispatch fault (an unknown
 // method reply, the in-band case; the transport-fault case is pinned at the core

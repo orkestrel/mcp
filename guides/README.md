@@ -21,7 +21,7 @@ An index into this repository's guides — by concept, and by directory (AGENTS.
 [`emitter.md`](emitter.md) is a byte-identical mirror of the guide for
 `@orkestrel/emitter` — a runtime dependency, the typed push-observation
 surface every entity in this package exposes as `emitter` (`MCPServer`,
-`MCPClient`, and every `ClientTransportInterface` implementation). It
+`MCPClient`, and every `MCPMessageTransportInterface` implementation). It
 documents **that package's** surface, not anything sourced in this repo; it
 is kept here so a reader of this package can see the primitive it is built
 from without leaving this guide set.

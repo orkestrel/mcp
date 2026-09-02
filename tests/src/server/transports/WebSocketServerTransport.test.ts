@@ -1,7 +1,7 @@
 import type { JSONRPCMessage } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { bindServer } from '@src/core'
-import { bridgeMessageTransport, WebSocketServerTransport } from '@src/server'
+import { createMessageTransportBridge, WebSocketServerTransport } from '@src/server'
 import {
 	createNodeWebSocket,
 	encodeWebSocketFrame,
@@ -197,7 +197,7 @@ describe('WebSocketServerTransport — a send the channel cannot carry rejects',
 		const [server] = duplexPair()
 		const ws = createNodeWebSocket({ socket: server, key: CLIENT_KEY })
 		const transport = new WebSocketServerTransport(ws)
-		const bridge = bridgeMessageTransport(transport)
+		const bridge = createMessageTransportBridge(transport)
 		await transport.start()
 		await flushSocket()
 		await transport.close()
@@ -223,7 +223,7 @@ describe('WebSocketServerTransport — the bound pump survives a peer that disco
 			escaped.push(reason)
 		}
 		mcp.emitter.on('error', (error) => faults.push(error))
-		bindServer(mcp, bridgeMessageTransport(transport))
+		bindServer(mcp, createMessageTransportBridge(transport))
 		await transport.start()
 		await flushSocket()
 
@@ -263,7 +263,7 @@ describe('WebSocketServerTransport — the bound pump survives a peer that disco
 		const ws = createNodeWebSocket({ socket: server, key: CLIENT_KEY })
 		const transport = new WebSocketServerTransport(ws)
 		const mcp = createCalculatorServer()
-		bindServer(mcp, bridgeMessageTransport(transport))
+		bindServer(mcp, createMessageTransportBridge(transport))
 		await transport.start()
 		await flushSocket()
 

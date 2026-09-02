@@ -1,6 +1,6 @@
 import type {
-	MCPClientTransportEventMap,
-	MCPClientTransportInterface,
+	MCPMessageTransportEventMap,
+	MCPMessageTransportInterface,
 	JSONRPCMessage,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
@@ -12,7 +12,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
 
 /**
  * The browser-face WebSocket CLIENT transport for the Model Context Protocol — a
- * {@link MCPClientTransportInterface} that drives a REMOTE MCP server over the native
+ * {@link MCPMessageTransportInterface} that drives a REMOTE MCP server over the native
  * `WebSocket` global, the browser sibling of the Node face's
  * {@link import('@orkestrel/mcp/server').WebSocketClientTransport}.
  *
@@ -46,7 +46,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  *   pre-open queue is DISCARDED — by `close()` and by the native `close` event alike — so a
  *   closed transport delivers nothing until a `start()` opens a new connection, and nothing
  *   the caller handed the abandoned connection rides that one.
- * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); every
+ * - **Observable.** Owns the `emitter` ({@link MCPMessageTransportEventMap}); every
  *   emit the emitter isolates a listener throw; `error` is a DOMAIN event (a
  *   transport-level fault).
  *
@@ -57,8 +57,8 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  * await client.connect() // the browser handshakes, then the MCP initialize runs over WS frames
  * ```
  */
-export class WebSocketClientTransport implements MCPClientTransportInterface {
-	readonly #emitter: Emitter<MCPClientTransportEventMap>
+export class WebSocketClientTransport implements MCPMessageTransportInterface {
+	readonly #emitter: Emitter<MCPMessageTransportEventMap>
 	readonly #url: string
 	readonly #protocols: string | string[] | undefined
 	// Bound once, as fields, so `close` can remove exactly the listeners `#bind` installed: an
@@ -76,7 +76,7 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 	#closed = false
 
 	constructor(options: WebSocketClientTransportOptions) {
-		this.#emitter = new Emitter<MCPClientTransportEventMap>()
+		this.#emitter = new Emitter<MCPMessageTransportEventMap>()
 		this.#url = options.url
 		const protocols = options.protocols
 		// Default to MCP_WEBSOCKET_SUBPROTOCOL when `protocols` is omitted; the server selects it
@@ -92,7 +92,7 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 						: [...protocols]
 	}
 
-	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
+	get emitter(): EmitterInterface<MCPMessageTransportEventMap> {
 		return this.#emitter
 	}
 

@@ -17,7 +17,7 @@
 // `Last-Event-ID` replays the missed events). The middleware sets the resolved session as the
 // `context.state.session` property (the `MCPSessionState` slice) so an in-request handler can
 // `push` to it. The request/response streaming surface is the spine's generic SSE seam
-// (`openStream`), reused
+// (`createStream`), reused
 // for a Streamable-HTTP SSE response when the client `Accept`s `text/event-stream` AND for the
 // long-lived resumable GET stream.
 //
@@ -25,12 +25,12 @@
 // spine's generic `upgrade` seam (D3): `createWebSocketServer` returns an `UpgradeHandler`
 // that claims an MCP WebSocket upgrade and pumps each decoded JSON-RPC request through
 // `mcp.dispatch`; `createWebSocketClientTransport` opens an upgrade `GET`, validates the
-// handshake accept, and bridges the masked client frames as a `MCPClientTransportInterface` an
+// handshake accept, and bridges the masked client frames as a `MCPMessageTransportInterface` an
 // `MCPClient` drives. Both transports speak the SAME transport-agnostic `MCPServerInterface`
-// / `MCPClientTransportInterface` the HTTP pair does — the wire framing differs, the dispatch
+// / `MCPMessageTransportInterface` the HTTP pair does — the wire framing differs, the dispatch
 // core does not.
 
-import type { JSONRPCMessage, MCPClientTransportInterface, MCPVersion } from '@src/core'
+import type { JSONRPCMessage, MCPMessageTransportInterface, MCPVersion } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { RouteContext } from '@orkestrel/router'
 import type { ServerEventMap, StreamInterface } from '@orkestrel/server'
@@ -148,6 +148,29 @@ export interface HTTPTransportOptions<TState = unknown> extends HTTPHandlerOptio
 }
 
 /**
+ * Options for the {@link MCPSession} entity — its folded replay log's capacity and per-event
+ * lifetime.
+ *
+ * @remarks
+ * - `capacity` — the maximum number of pushed server→client messages retained for replay
+ *   before the OLDEST is evicted. Omit it for the {@link
+ *   import('./constants.js').DEFAULT_MCP_SESSION_CAPACITY} default.
+ * - `ttl` — the PER-EVENT idle lifetime in milliseconds: a log entry older than `ttl` is
+ *   dropped by the lazy sweep `push` and `replay` run, which bounds how far a reconnecting
+ *   client may replay. Omit it for the {@link
+ *   import('./constants.js').DEFAULT_MCP_SESSION_TTL} default; a non-positive value means no
+ *   entry ever ages out by time.
+ *
+ * The middleware's own knobs — the owned path, the idle-SESSION sweep window, origin
+ * validation, and keepalive — live on {@link MCPSessionMiddlewareOptions}. The two `ttl`
+ * values measure different things, which is why they sit on different types.
+ */
+export interface MCPSessionOptions {
+	readonly capacity?: number
+	readonly ttl?: number
+}
+
+/**
  * Options for `createMCPSession` — the path the session middleware owns, the session idle
  * time-to-live, and the per-session resumable event-log bound.
  *
@@ -159,12 +182,13 @@ export interface HTTPTransportOptions<TState = unknown> extends HTTPHandlerOptio
  *   is treated as ABSENT and lazily evicted on the next access (no background timer — the
  *   `createRateLimiter` lazy-window idiom). Omit it for sessions that live until an explicit
  *   `DELETE`.
- * - `capacity` — the FOLDED event-log bound per session: the maximum number of pushed
- *   server→client messages retained for replay before the OLDEST is evicted, paired with a
- *   per-event idle lifetime ({@link import('./constants.js').DEFAULT_MCP_SESSION_TTL}) that
- *   bounds how far a reconnecting client may replay. Omit it for the {@link
- *   import('./constants.js').DEFAULT_MCP_SESSION_CAPACITY} default. (The session `ttl` bounds
- *   the session; this `capacity` bounds its replay log — independent knobs.)
+ * - `capacity` — the FOLDED event-log bound per session, forwarded to each minted {@link
+ *   MCPSession} as {@link MCPSessionOptions.capacity}: the maximum number of pushed
+ *   server→client messages retained for replay before the OLDEST is evicted. Omit it for the
+ *   {@link import('./constants.js').DEFAULT_MCP_SESSION_CAPACITY} default. This `ttl` bounds
+ *   the SESSION and that `capacity` bounds its replay log — independent knobs. The log's own
+ *   per-event lifetime stays at {@link import('./constants.js').DEFAULT_MCP_SESSION_TTL};
+ *   construct an {@link MCPSession} directly to set it.
  * - `clock` — the `() => number` epoch-ms clock {@link import('./middlewares.js').createMCPSession}
  *   uses directly for its own session-touch / TTL-sweep bookkeeping; defaults to `Date.now`. The
  *   deterministic clock a TTL test advances explicitly instead of racing a real idle window
@@ -177,7 +201,7 @@ export interface HTTPTransportOptions<TState = unknown> extends HTTPHandlerOptio
  * - `keepalive` — the SSE liveness options for the held-open resumable response. `interval`
  *   defaults to {@link import('./constants.js').DEFAULT_MCP_KEEPALIVE_INTERVAL}.
  */
-export interface MCPSessionOptions {
+export interface MCPSessionMiddlewareOptions {
 	readonly path?: string
 	readonly ttl?: number
 	readonly capacity?: number
@@ -213,7 +237,7 @@ export interface MCPSessionInterface {
 	attach(stream: StreamInterface): void
 	detach(stream: StreamInterface): void
 	push(message: JSONRPCMessage): string
-	replay(afterId: string): readonly EventStoreEntry[]
+	replay(afterId: string): readonly MCPSessionEvent[]
 }
 
 /**
@@ -246,7 +270,7 @@ export interface MCPSessionState {
  * A plain value record (no behavior) — the unit {@link MCPSessionInterface.replay}
  * returns.
  */
-export interface EventStoreEntry {
+export interface MCPSessionEvent {
 	readonly id: string
 	readonly message: JSONRPCMessage
 	readonly timestamp: number
@@ -270,34 +294,6 @@ export interface MCPSessionEntry {
 	readonly touched: number
 	/** The legacy revision negotiated when this session was minted. */
 	readonly version: MCPVersion
-}
-
-/**
- * Options for `createHTTPClientTransport` — the remote MCP server's URL and any extra
- * request headers.
- *
- * @remarks
- * - `url` — the absolute URL of the remote server's Streamable-HTTP endpoint (the
- *   `POST` target every JSON-RPC message is written to, for example,
- *   `http://localhost:3000/mcp`). REQUIRED.
- * - `headers` — extra request headers merged onto every `POST` (for example, an
- *   `Authorization` bearer for a guarded server). The transport always sets
- *   `content-type: application/json` and an `Accept` of both `application/json` and
- *   `text/event-stream` (so the server may answer with either framing); a key supplied
- *   here is merged on top.
- * - `fetch` — the `fetch` implementation to issue each `POST` with; defaults to
- *   `globalThis.fetch`. Injectable for a test double or a non-global `fetch`.
- * - `timeout` — an optional per-request timeout in milliseconds; when set, each
- *   `fetch` call composes that deadline with the transport's own close through
- *   `AbortSignal.any([close, AbortSignal.timeout(timeout)])`, so whichever fires first
- *   ends the request. Omit for no transport-level deadline; the close signal is passed
- *   either way.
- */
-export interface HTTPClientTransportOptions {
-	readonly url: string
-	readonly headers?: Readonly<Record<string, string>>
-	readonly fetch?: typeof fetch
-	readonly timeout?: number
 }
 
 /**
@@ -398,20 +394,20 @@ export interface StdioClientTransportOptions {
 }
 
 /**
- * The contract `createStdioClientTransport` returns — a {@link MCPClientTransportInterface}
+ * The contract `createStdioClientTransport` returns — a {@link MCPMessageTransportInterface}
  * that also reports the supervised child's stderr tail, the diagnostic a child that dies at
  * startup leaves behind.
  *
  * @remarks
  * This contract adds `evidence` and changes nothing else: `emitter`, `session`, `duplex`,
  * `start`, `send`, and `close` are the shared client-transport surface, unchanged. It sits here
- * rather than on {@link MCPClientTransportInterface} because a transport that supervises no child —
+ * rather than on {@link MCPMessageTransportInterface} because a transport that supervises no child —
  * Streamable HTTP, WebSocket, a `MessagePort` pair — has no such tail, and a member every one
  * of them answers `undefined` to forever is a stdio detail rather than a shared contract. A
- * consumer that widens this value back to {@link MCPClientTransportInterface}, including by
+ * consumer that widens this value back to {@link MCPMessageTransportInterface}, including by
  * reading `client.transport`, loses the reader and must keep the original reference.
  */
-export interface StdioClientTransportInterface extends MCPClientTransportInterface {
+export interface StdioClientTransportInterface extends MCPMessageTransportInterface {
 	/**
 	 * The supervised child's decoded stderr tail — live while a child is held, and the value
 	 * captured at that child's end afterwards.

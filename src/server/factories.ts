@@ -1,12 +1,13 @@
 import type {
-	MCPClientTransportInterface,
+	HTTPClientTransportOptions,
+	MCPMessageTransportInterface,
 	MCPContinuationInterface,
 	MCPDispatcherInterface,
+	MCPTransportInterface,
 } from '@src/core'
 import type { RouteInput } from '@orkestrel/router'
 import type { TokenSecret, UpgradeHandler } from '@orkestrel/server'
 import type {
-	HTTPClientTransportOptions,
 	HTTPTransportOptions,
 	StdioClientTransportInterface,
 	StdioClientTransportOptions,
@@ -17,14 +18,13 @@ import type {
 } from './types.js'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { bindServer } from '@src/core'
+import { bindServer, decodeEvent, HTTPClientTransport, isJSONRPCInvocation } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { signToken, verifyToken } from '@orkestrel/server'
 import { createNodeWebSocket, WEBSOCKET_VERSION } from '@orkestrel/websocket'
 import { DEFAULT_MCP_PATH, MCP_WEBSOCKET_SUBPROTOCOL } from './constants.js'
 import { createMCPPostHandler } from './handlers.js'
-import { bridgeMessageTransport, upgradeRequestPath } from './helpers.js'
-import { HTTPClientTransport } from './transports/HTTPClientTransport.js'
+import { upgradeRequestPath } from './helpers.js'
 import { StdioClientTransport } from './transports/StdioClientTransport.js'
 import { StdioServerTransport } from './transports/StdioServerTransport.js'
 import { WebSocketClientTransport } from './transports/WebSocketClientTransport.js'
@@ -43,6 +43,89 @@ export function createMCPContinuation(secret: TokenSecret): MCPContinuationInter
 		},
 		open(value) {
 			return verifyToken(value, secret)
+		},
+	}
+}
+
+/**
+ * Creates the adapter that bridges a message-channel {@link MCPMessageTransportInterface}
+ * (the shape the stdio and WebSocket SERVER transports already implement) onto the
+ * environment-agnostic {@link import('@orkestrel/mcp').MCPTransportInterface} port — what
+ * {@link createStdioServer} and {@link createWebSocketServer} pipe through `bindServer`, so
+ * the request/reply/error pump those factories used to hand-roll identically now lives ONCE
+ * in the core binder. The egress mirror is
+ * {@link import('@orkestrel/mcp').createDuplexClientTransport}, which adapts the same two
+ * contracts the other way.
+ *
+ * @remarks
+ * `send` decodes the already-serialized reply string back to a {@link JSONRPCMessage}
+ * and writes it through `transport.send` (the same `JSON.stringify` the underlying
+ * transport already performs, so the wire bytes are unchanged). `listen` filters
+ * `transport`'s `message` event to INVOCATIONS ONLY — requests and notifications, never a
+ * stray response, exactly as the prior hand-rolled pumps did — and re-serializes each one
+ * back to a string for `bindServer`. `closed` bridges `transport`'s `close` event. `close`
+ * closes the underlying `transport`.
+ *
+ * @remarks A message crossing this bridge is decoded and re-encoded TWICE, and that is
+ * ACCEPTED rather than accidental. Inbound: the carrier already parsed the frame into a
+ * {@link JSONRPCMessage}, and `listen` re-serializes it so `bindServer` can decode it again
+ * under the server's own `limit`. Outbound: `bindServer` serialized the reply, `send` parses
+ * it back, and the carrier stringifies it once more. The cost is two extra `JSON.parse` /
+ * `JSON.stringify` round trips per message, paid to keep ONE pump in the core binder instead
+ * of a hand-rolled one per carrier. It is BOUNDED rather than unbounded because the binder
+ * decodes within `server.limit.message`, so an oversized frame is refused before the second
+ * decode rather than after it. Removing the cost means giving `MCPTransportInterface` a
+ * message-shaped face beside its string one, which every transport would then carry.
+ *
+ * @remarks Per {@link import('@orkestrel/mcp').MCPTransportInterface}, `listen`/`closed`
+ * each hold THE SINGLE current handler (a second call REPLACES the first, never adds).
+ * Because the underlying `transport.emitter` is ADD-based (`on` subscribes, never
+ * replaces), this bridge installs ONE stable emitter listener per event on first use
+ * and re-routes it to whichever handler is active (`undefined` while
+ * none is), so rebinding never double-dispatches.
+ *
+ * @remarks A response whose `result` serializes away (for example, `undefined`) is dropped by
+ * the message validators on the wire's decode side — an asymmetry the stdio/WS carrier
+ * shares with the streamable-HTTP face, because both round-trip through `JSON.stringify`
+ * / `JSON.parse` before re-validation.
+ *
+ * @param transport - The message-channel transport to bridge (stdio or WebSocket)
+ * @returns An {@link import('@orkestrel/mcp').MCPTransportInterface} `bindServer` can drive
+ *
+ * @example
+ * ```ts
+ * import { bindServer } from '@orkestrel/mcp'
+ *
+ * const transport = new StdioServerTransport(process.stdin, process.stdout)
+ * bindServer(mcp, createMessageTransportBridge(transport))
+ * ```
+ */
+export function createMessageTransportBridge(
+	transport: MCPMessageTransportInterface,
+): MCPTransportInterface {
+	let onMessage: ((message: string) => void) | undefined
+	let onClosed: (() => void) | undefined
+	transport.emitter.on('message', (message) => {
+		if (!isJSONRPCInvocation(message)) return
+		onMessage?.(JSON.stringify(message))
+	})
+	transport.emitter.on('close', () => {
+		onClosed?.()
+	})
+	return {
+		async send(message) {
+			const decoded = decodeEvent(message)
+			if (decoded === undefined) return
+			await transport.send(decoded)
+		},
+		listen(handler) {
+			onMessage = handler
+		},
+		closed(handler) {
+			onClosed = handler
+		},
+		async close() {
+			await transport.close()
 		},
 	}
 }
@@ -73,7 +156,7 @@ export function createMCPContinuation(secret: TokenSecret): MCPContinuationInter
  * When `streaming` is enabled (the default) and the client `Accept`s `text/event-stream`,
  * the `200` reply is framed as a Streamable-HTTP SSE response (one `data:` event carrying
  * the JSON-RPC envelope, then the stream ends) through `@orkestrel/server`'s generic
- * {@link import('@orkestrel/server').openStream} seam; otherwise it is a plain JSON body.
+ * {@link import('@orkestrel/server').createStream} seam; otherwise it is a plain JSON body.
  *
  * **Sessions are a SEPARATE, plug-and-play middleware.** `createMCPRoutes` mints / reads no
  * session id. To make the transport STATEFUL, mount {@link
@@ -118,8 +201,13 @@ export function createMCPRoutes<TState = unknown>(
 
 /**
  * Creates the HTTP CLIENT transport for an {@link import('@orkestrel/mcp').MCPClientInterface}
- * — a {@link MCPClientTransportInterface} that drives a REMOTE Streamable-HTTP MCP server
+ * — a {@link MCPMessageTransportInterface} that drives a REMOTE Streamable-HTTP MCP server
  * over `fetch`. The egress mirror of {@link createMCPRoutes}.
+ *
+ * @remarks
+ * It returns the core {@link import('@orkestrel/mcp').HTTPClientTransport}, the same class the
+ * browser face's `createHTTPClientTransport` returns, because the class touches `fetch`,
+ * `Response`, `AbortController`, `AbortSignal`, and `WeakMap` alone.
  *
  * @remarks
  * Hand it to `createMCPClient({ transport })`: each JSON-RPC message the client sends is
@@ -137,7 +225,7 @@ export function createMCPRoutes<TState = unknown>(
  * @param options - `url` (the remote endpoint; REQUIRED), optional `headers` merged onto
  *   every request, optional `fetch` (default `globalThis.fetch`), and optional `timeout`
  *   (ms, applied with `AbortSignal.timeout`); see {@link HTTPClientTransportOptions}
- * @returns A working {@link MCPClientTransportInterface} over `fetch`
+ * @returns A working {@link MCPMessageTransportInterface} over `fetch`
  *
  * @example
  * ```ts
@@ -153,7 +241,7 @@ export function createMCPRoutes<TState = unknown>(
  */
 export function createHTTPClientTransport(
 	options: HTTPClientTransportOptions,
-): MCPClientTransportInterface {
+): MCPMessageTransportInterface {
 	return new HTTPClientTransport(options)
 }
 
@@ -177,7 +265,7 @@ export function createHTTPClientTransport(
  *   only when the client's offer contains it, and sends UNMASKED frames), wraps it in a
  *   {@link WebSocketServerTransport}, and pipes it through the core {@link
  *   import('@orkestrel/mcp').MCPTransportInterface} port through {@link
- *   import('./helpers.js').bridgeMessageTransport} + {@link import('@orkestrel/mcp').bindServer}:
+ *   createMessageTransportBridge} + {@link import('@orkestrel/mcp').bindServer}:
  *   each inbound REQUEST runs through `mcp.dispatch`, and a defined response is written back
  *   as a frame — a NOTIFICATION sends nothing, and a non-request message (a stray response) is
  *   ignored. A `dispatch` / `send` fault surfaces on `mcp.emitter`'s `error` event rather than
@@ -261,7 +349,7 @@ export function createWebSocketServer(
 		// The binder's detachment is this handler's to hold: the connection it belongs to is one
 		// this factory minted and nothing outside can reach, so a discarded `unbind` leaves the
 		// binding attached to a transport that has ended with no way left to detach it.
-		const unbind = bindServer(mcp, bridgeMessageTransport(transport))
+		const unbind = bindServer(mcp, createMessageTransportBridge(transport))
 		live.set(transport, unbind)
 		transport.emitter.on('close', () => {
 			live.delete(transport)
@@ -274,7 +362,7 @@ export function createWebSocketServer(
 
 /**
  * Creates the WebSocket CLIENT transport for an {@link import('@orkestrel/mcp').MCPClientInterface}
- * — a {@link MCPClientTransportInterface} that drives a REMOTE MCP server over a WebSocket. The
+ * — a {@link MCPMessageTransportInterface} that drives a REMOTE MCP server over a WebSocket. The
  * egress mirror of {@link createWebSocketServer} and the WebSocket sibling of {@link
  * createHTTPClientTransport}.
  *
@@ -290,7 +378,7 @@ export function createWebSocketServer(
  *
  * @param options - `url` (the remote WebSocket endpoint; REQUIRED) and optional `headers`
  *   merged onto the upgrade request; see {@link WebSocketClientTransportOptions}
- * @returns A working {@link MCPClientTransportInterface} over a WebSocket
+ * @returns A working {@link MCPMessageTransportInterface} over a WebSocket
  *
  * @example
  * ```ts
@@ -306,7 +394,7 @@ export function createWebSocketServer(
  */
 export function createWebSocketClientTransport(
 	options: WebSocketClientTransportOptions,
-): MCPClientTransportInterface {
+): MCPMessageTransportInterface {
 	return new WebSocketClientTransport(options)
 }
 
@@ -362,7 +450,7 @@ export function createStdioClientTransport(
  * Wraps `options.input` (default `process.stdin`) / `options.output` (default
  * `process.stdout`) in a {@link import('./transports/StdioServerTransport.js').StdioServerTransport}
  * and pipes it through the core {@link import('@orkestrel/mcp').MCPTransportInterface} port
- * through {@link import('./helpers.js').bridgeMessageTransport} + {@link
+ * through {@link createMessageTransportBridge} + {@link
  * import('@orkestrel/mcp').bindServer}: each inbound REQUEST runs through `mcp.dispatch`, and
  * a defined response is written back as a newline-terminated line — a NOTIFICATION
  * writes nothing, and a non-request message is ignored. A `dispatch` / `send` fault
@@ -393,7 +481,7 @@ export function createStdioServer(
 	const input = options?.input ?? process.stdin
 	const output = options?.output ?? process.stdout
 	const transport = new StdioServerTransport(input, output)
-	const unbind = bindServer(mcp, bridgeMessageTransport(transport))
+	const unbind = bindServer(mcp, createMessageTransportBridge(transport))
 	return {
 		start(): void {
 			void transport.start()

@@ -1,6 +1,6 @@
 import type {
-	MCPClientTransportEventMap,
-	MCPClientTransportInterface,
+	MCPMessageTransportEventMap,
+	MCPMessageTransportInterface,
 	JSONRPCMessage,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
@@ -24,9 +24,9 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
 
 /**
  * The WebSocket CLIENT transport for the Model Context Protocol — a
- * {@link MCPClientTransportInterface} that drives a REMOTE MCP server over a WebSocket, the
+ * {@link MCPMessageTransportInterface} that drives a REMOTE MCP server over a WebSocket, the
  * egress mirror of {@link import('./factories.js').createWebSocketServer} and the WebSocket
- * sibling of {@link import('./HTTPClientTransport.js').HTTPClientTransport}.
+ * sibling of {@link import('@orkestrel/mcp').HTTPClientTransport}.
  *
  * @remarks
  * - **Persistent bidirectional channel (unlike the HTTP transport).** `start()` performs the
@@ -63,7 +63,7 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  * - **URL scheme.** `options.url` accepts a `ws://` / `wss://` URL or an `http://` / `https://`
  *   one; a `ws(s)` scheme is converted to `http(s)` for the underlying upgrade request (`wss`
  *   → TLS through `node:https`). Either reaches the same endpoint.
- * - **Observable.** Owns the `emitter` ({@link MCPClientTransportEventMap}); every emit
+ * - **Observable.** Owns the `emitter` ({@link MCPMessageTransportEventMap}); every emit
  *   the emitter isolates a listener throw (a buggy observer never corrupts the transport);
  *   `error` is a DOMAIN event (a transport-level fault).
  *
@@ -74,8 +74,8 @@ import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
  * await client.connect() // start() handshakes, then the MCP initialize runs over WS frames
  * ```
  */
-export class WebSocketClientTransport implements MCPClientTransportInterface {
-	readonly #emitter: Emitter<MCPClientTransportEventMap>
+export class WebSocketClientTransport implements MCPMessageTransportInterface {
+	readonly #emitter: Emitter<MCPMessageTransportEventMap>
 	readonly #url: string
 	readonly #headers: Readonly<Record<string, string>>
 	// Bound once, as fields, so `close` can remove exactly the subscriptions `#bind` installed:
@@ -90,12 +90,12 @@ export class WebSocketClientTransport implements MCPClientTransportInterface {
 	#closed = false
 
 	constructor(options: WebSocketClientTransportOptions) {
-		this.#emitter = new Emitter<MCPClientTransportEventMap>()
+		this.#emitter = new Emitter<MCPMessageTransportEventMap>()
 		this.#url = options.url
 		this.#headers = options.headers ?? {}
 	}
 
-	get emitter(): EmitterInterface<MCPClientTransportEventMap> {
+	get emitter(): EmitterInterface<MCPMessageTransportEventMap> {
 		return this.#emitter
 	}
 

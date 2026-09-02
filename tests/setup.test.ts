@@ -19,11 +19,12 @@ import {
 	MCP_EXTENSION_TASKS,
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
+	MCP_METHOD_HEADER,
 	MCP_MODERN_VERSION,
+	MCP_PROTOCOL_VERSION_HEADER,
 	parseJSONRPCMessage,
 	parseRequestContext,
 } from '@src/core'
-import { MCP_METHOD_HEADER, MCP_PROTOCOL_VERSION_HEADER } from '@src/server'
 import { createToolManager } from '@orkestrel/tool'
 import { isRecord } from '@orkestrel/contract'
 import { createRecorder, waitForDelay } from '@orkestrel/test'

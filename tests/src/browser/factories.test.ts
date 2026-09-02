@@ -1,26 +1,37 @@
 import type { JSONRPCMessage } from '@src/core'
+import type { ScopeInterface } from '@src/browser'
+import type { ToolManagerInterface } from '@orkestrel/tool'
 import { describe, expect, inject, it, vi } from 'vitest'
 import {
 	bindClient,
 	bindServer,
 	createDuplexClientTransport,
 	createMCPClient,
+	createMCPServer,
+	DEFAULT_MCP_CACHE_TTL,
 	inferRequestVersion,
+	MCP_META_SERVER,
 	MCP_META_VERSION,
-	MCP_MODERN_VERSION,
-	parseRequestContext,
-} from '@src/core'
-import {
-	createHTTPClientTransport,
-	createMessagePortTransport,
-	createWebSocketClientTransport,
 	MCP_METHOD_HEADER,
+	MCP_MODERN_VERSION,
 	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
+	parseRequestContext,
+} from '@src/core'
+import {
+	DEFAULT_MCP_SERVER_NAME,
+	DEFAULT_MCP_SERVER_VERSION,
 	MCP_WEBSOCKET_SUBPROTOCOL,
+	createHTTPClientTransport,
+	createMessagePortTransport,
+	createScopeMessageListener,
+	createScopeServer,
+	createScopeTransport,
+	createWebSocketClientTransport,
 } from '@src/browser'
 import { isRecord } from '@orkestrel/contract'
+import { createTool, createToolManager } from '@orkestrel/tool'
 import { waitForDelay } from '@orkestrel/test'
 import {
 	createCalculatorServer,
@@ -28,6 +39,7 @@ import {
 	createHeaderProjectionRequest,
 	HEADER_PROJECTION_CONTEXTS,
 	MODERN_METADATA,
+	modernRequest,
 	postJSON,
 	probeDuplex,
 	readMethods,
@@ -429,14 +441,18 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 		})
 	})
 
-	it('a server error response surfaces on the error event rather than hanging', async () => {
+	// The non-success contract is the core class's, so it reads the same from a page as it does
+	// from Node: a peer that answered with a body carrying no JSON-RPC message REJECTS the send
+	// rather than resolving and leaving the caller's correlated request to its own deadline.
+	it('rejects a server error response carrying no JSON-RPC message', async () => {
 		const transport = createHTTPClientTransport({ url: `${serverURL}/broken` })
 		const errors: unknown[] = []
 		transport.emitter.on('error', (error) => errors.push(error))
 
-		await transport.send(createJSONRPCRequest())
-
-		expect(errors).toHaveLength(1)
+		await expect(transport.send(createJSONRPCRequest())).rejects.toThrow(
+			'HTTP 500 response contained an application/json body that was not a JSON-RPC message',
+		)
+		expect(errors).toEqual([])
 	})
 })
 
@@ -683,5 +699,458 @@ describe('duplex — driven per carrier, and observed at the peer', () => {
 		expect(readMethods(frames)).toEqual([])
 		// The proof the honest carriers pass, evaluated here: it is FALSE.
 		expect(readMethods(frames).includes('notifications/cancelled')).toBe(false)
+	})
+})
+
+// ── The scope server: createScopeServer over a scope double ─────────────────
+//
+// `createScopeServer` defaults its scope to `globalThis`; it is driven here with SCOPE
+// DOUBLES (a real object satisfying `ScopeInterface`'s structural shape, not a mock of this
+// package's own code) covering the shapes the unified design serves: a dedicated-worker-shaped
+// double (implicit portless channel) and a Service-Worker-shaped double (message events
+// carrying a real `MessagePort`, built from a real `new MessageChannel()`). Raw JSON-RPC
+// request/response strings prove the wiring without needing a full `MCPClient` for every
+// scenario.
+
+interface ScopeDoubleInterface {
+	readonly scope: ScopeInterface
+	readonly sent: readonly unknown[]
+	readonly listenerCount: number
+	dispatch(init: { data?: unknown; ports?: readonly MessagePort[] }): void
+}
+
+function createScopeDouble(): ScopeDoubleInterface {
+	const sent: unknown[] = []
+	const listeners = new Set<(event: MessageEvent) => void>()
+	const scope: ScopeInterface = {
+		postMessage(message: unknown): void {
+			sent.push(message)
+		},
+		addEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
+			listeners.add(listener)
+		},
+		removeEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
+			listeners.delete(listener)
+		},
+	}
+	return {
+		scope,
+		get sent() {
+			return sent
+		},
+		get listenerCount() {
+			return listeners.size
+		},
+		dispatch(init) {
+			const ports = init.ports === undefined ? [] : [...init.ports]
+			const event = new MessageEvent('message', { data: init.data, ports })
+			for (const listener of listeners) listener(event)
+		},
+	}
+}
+
+function createCalculatorTools(): ToolManagerInterface {
+	const tools = createToolManager()
+	tools.add(createTool({ name: 'add', execute: (a) => Number(a['x']) + Number(a['y']) }))
+	return tools
+}
+
+// The scope double hosts a bare modern server. Use `modernRequest` because a version-less
+// `createJSONRPCRequest` is correctly rejected by that server with JSON-RPC -32602, and drive
+// `server/discover` because it is the modern era's own required RPC — 2026-07-28 removes
+// `ping`, so a bare server answers that one -32601 and it cannot carry a transport canary.
+function expectModernReply(message: unknown, id: number): void {
+	expect(JSON.parse(String(message))).toEqual({
+		jsonrpc: '2.0',
+		id,
+		result: {
+			resultType: 'complete',
+			supportedVersions: [MCP_MODERN_VERSION],
+			capabilities: { tools: {} },
+			ttlMs: DEFAULT_MCP_CACHE_TTL,
+			cacheScope: 'private',
+			_meta: {
+				[MCP_META_SERVER]: {
+					name: DEFAULT_MCP_SERVER_NAME,
+					version: DEFAULT_MCP_SERVER_VERSION,
+				},
+			},
+		},
+	})
+}
+
+describe('createScopeServer — the default scope is the current one', () => {
+	it('wires the real global scope when no scope argument is supplied', async () => {
+		// Inside a worker this default IS that worker's `self`. The page's own `globalThis`
+		// satisfies the same structural shape, so the default path is driven here for real
+		// rather than through a double: a port-bearing `MessageEvent` dispatched on `window`
+		// reaches the listener the factory registered, and the reply comes back over the port.
+		const worker = createScopeServer({ tools: createCalculatorTools() })
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		try {
+			globalThis.dispatchEvent(new MessageEvent('message', { data: null, ports: [port1] }))
+			port2.postMessage(JSON.stringify(modernRequest('server/discover')))
+			await vi.waitFor(() => expect(replies).toHaveLength(1))
+
+			expectModernReply(replies[0], 1)
+		} finally {
+			worker.stop()
+		}
+	})
+
+	it('stops listening on the global scope, so a later event binds nothing', async () => {
+		const worker = createScopeServer({ tools: createCalculatorTools() })
+		worker.stop()
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		globalThis.dispatchEvent(new MessageEvent('message', { data: null, ports: [port1] }))
+		port2.postMessage(JSON.stringify(modernRequest('server/discover')))
+		await waitForDelay(30)
+
+		expect(replies).toEqual([])
+	})
+})
+
+describe('createScopeServer — dedicated-worker-shaped scope (implicit, portless channel)', () => {
+	it('a portless string-data message round-trips through the implicit scope channel', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer({ tools: createCalculatorTools() }, double.scope)
+
+		double.dispatch({ data: JSON.stringify(modernRequest('tools/list')) })
+
+		await vi.waitFor(() => expect(double.sent).toHaveLength(1))
+		const reply: { result: { tools: ReadonlyArray<{ name: string }> } } = JSON.parse(
+			String(double.sent[0]),
+		)
+		expect(reply.result.tools.map((tool) => tool.name)).toEqual(['add'])
+
+		worker.stop()
+	})
+
+	it('an event with a port on a dedicated-worker-shaped double STILL spawns a per-port binding (cross-case)', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer({ tools: createCalculatorTools() }, double.scope)
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		double.dispatch({ ports: [port1] })
+		port2.postMessage(JSON.stringify(modernRequest('server/discover')))
+
+		await vi.waitFor(() => expect(replies).toHaveLength(1))
+		expectModernReply(replies[0], 1)
+		expect(double.sent).toEqual([])
+
+		worker.stop()
+	})
+})
+
+describe('createScopeServer — Service-Worker-shaped scope (per-client MessagePort, no implicit postMessage)', () => {
+	it('a message event carrying a port spawns a per-port binding; the client round-trips over it', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer({ tools: createCalculatorTools() }, double.scope)
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		double.dispatch({ ports: [port1] })
+		port2.postMessage(
+			JSON.stringify(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					id: 1,
+					params: { name: 'add', arguments: {}, _meta: MODERN_METADATA },
+				}),
+			),
+		)
+
+		await vi.waitFor(() => expect(replies).toHaveLength(1))
+		const reply: { error: { code: number } } = JSON.parse(String(replies[0]))
+		expect(reply.error.code).toBe(-32603)
+
+		worker.stop()
+	})
+
+	it('two connecting clients (two channels) get ISOLATED sessions — a call on one never replies on the other', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer({ tools: createCalculatorTools() }, double.scope)
+		const channelA = new MessageChannel()
+		const channelB = new MessageChannel()
+		const repliesA: unknown[] = []
+		const repliesB: unknown[] = []
+		channelA.port2.addEventListener('message', (event: MessageEvent) => repliesA.push(event.data))
+		channelB.port2.addEventListener('message', (event: MessageEvent) => repliesB.push(event.data))
+		channelA.port2.start()
+		channelB.port2.start()
+
+		double.dispatch({ ports: [channelA.port1] })
+		double.dispatch({ ports: [channelB.port1] })
+		channelA.port2.postMessage(JSON.stringify(modernRequest('server/discover')))
+
+		await vi.waitFor(() => expect(repliesA).toHaveLength(1))
+		await waitForDelay(30)
+		expect(repliesB).toEqual([])
+
+		worker.stop()
+	})
+})
+
+describe('createScopeServer — stop', () => {
+	it('after stop, a new request on an already-accepted port gets NO reply', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer({ tools: createCalculatorTools() }, double.scope)
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		double.dispatch({ ports: [port1] })
+		port2.postMessage(JSON.stringify(modernRequest('server/discover')))
+		await vi.waitFor(() => expect(replies).toHaveLength(1))
+
+		worker.stop()
+		port2.postMessage(JSON.stringify(modernRequest('server/discover', 2)))
+		await waitForDelay(30)
+
+		expect(replies).toHaveLength(1)
+	})
+
+	it('after stop, the scope listener is removed — a new port-carrying event binds nothing', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer({ tools: createCalculatorTools() }, double.scope)
+		expect(double.listenerCount).toBe(1)
+
+		worker.stop()
+		expect(double.listenerCount).toBe(0)
+
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		double.dispatch({ ports: [port1] })
+		port2.postMessage(JSON.stringify(modernRequest('server/discover')))
+		await waitForDelay(30)
+
+		expect(replies).toEqual([])
+	})
+
+	it('a second worker.stop() is a no-op', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer({ tools: createCalculatorTools() }, double.scope)
+
+		worker.stop()
+		expect(() => worker.stop()).not.toThrow()
+		expect(double.listenerCount).toBe(0)
+	})
+})
+
+describe('createScopeServer — accept option', () => {
+	it('accept returning false drops the event: no binding, no reply', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer(
+			{ tools: createCalculatorTools(), accept: () => false },
+			double.scope,
+		)
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		double.dispatch({ ports: [port1] })
+		port2.postMessage(JSON.stringify(modernRequest('server/discover')))
+		await waitForDelay(30)
+
+		expect(replies).toEqual([])
+		worker.stop()
+	})
+
+	it('accept filtering by event.data token: only a matching token gets bound', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer(
+			{ tools: createCalculatorTools(), accept: (event) => event.data === 'allow' },
+			double.scope,
+		)
+		const allowed = new MessageChannel()
+		const denied = new MessageChannel()
+		const allowedReplies: unknown[] = []
+		const deniedReplies: unknown[] = []
+		allowed.port2.addEventListener('message', (event: MessageEvent) =>
+			allowedReplies.push(event.data),
+		)
+		denied.port2.addEventListener('message', (event: MessageEvent) =>
+			deniedReplies.push(event.data),
+		)
+		allowed.port2.start()
+		denied.port2.start()
+
+		double.dispatch({ data: 'deny', ports: [denied.port1] })
+		double.dispatch({ data: 'allow', ports: [allowed.port1] })
+		allowed.port2.postMessage(JSON.stringify(modernRequest('server/discover')))
+		await vi.waitFor(() => expect(allowedReplies).toHaveLength(1))
+
+		expectModernReply(allowedReplies[0], 1)
+		denied.port2.postMessage(JSON.stringify(modernRequest('server/discover', 2)))
+		await waitForDelay(30)
+		expect(deniedReplies).toEqual([])
+
+		worker.stop()
+	})
+})
+
+describe('createScopeServer — stop mid-flight', () => {
+	it('stop while a request is in flight: no unhandled rejection; no reply after stop', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer({ tools: createCalculatorTools() }, double.scope)
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		double.dispatch({ ports: [port1] })
+		port2.postMessage(JSON.stringify(modernRequest('tools/call')))
+		worker.stop()
+		await waitForDelay(50)
+
+		const replyCount = replies.length
+		port2.postMessage(JSON.stringify(modernRequest('server/discover', 2)))
+		await waitForDelay(30)
+
+		expect(replies.length).toBe(replyCount)
+	})
+})
+
+describe('createScopeServer — double-port-delivery dedup', () => {
+	it('the same port delivered twice is deduped: only one binding, only one reply per request', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer({ tools: createCalculatorTools() }, double.scope)
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		double.dispatch({ ports: [port1] })
+		double.dispatch({ ports: [port1] })
+		port2.postMessage(JSON.stringify(modernRequest('server/discover')))
+		await vi.waitFor(() => expect(replies).toHaveLength(1))
+
+		expect(replies).toHaveLength(1)
+		expectModernReply(replies[0], 1)
+		worker.stop()
+	})
+})
+
+describe('createScopeServer — hostile inbound', () => {
+	it('malformed JSON string on a bound port produces no unhandled throw (a -32700 reply)', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer({ tools: createCalculatorTools() }, double.scope)
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		double.dispatch({ ports: [port1] })
+		port2.postMessage('not valid json{{{')
+
+		await vi.waitFor(() => expect(replies).toHaveLength(1))
+		const reply: { error: { code: number } } = JSON.parse(String(replies[0]))
+		expect(reply.error.code).toBe(-32700)
+
+		worker.stop()
+	})
+
+	it('an oversized string on a bound port is handled without crashing', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer({ tools: createCalculatorTools() }, double.scope)
+		const { port1, port2 } = new MessageChannel()
+		const replies: unknown[] = []
+		port2.addEventListener('message', (event: MessageEvent) => replies.push(event.data))
+		port2.start()
+
+		double.dispatch({ ports: [port1] })
+		const oversized = 'x'.repeat(1_000_000)
+		port2.postMessage(
+			JSON.stringify(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					id: 1,
+					params: { name: 'add', arguments: { x: oversized }, _meta: MODERN_METADATA },
+				}),
+			),
+		)
+
+		await vi.waitFor(() => expect(replies).toHaveLength(1))
+		const reply: { error: { code: number } } = JSON.parse(String(replies[0]))
+		expect(reply.error.code).toBe(-32603)
+
+		worker.stop()
+	})
+
+	it('an object payload on a portless event is ignored — no reply, no crash', async () => {
+		const double = createScopeDouble()
+		const worker = createScopeServer({ tools: createCalculatorTools() }, double.scope)
+
+		double.dispatch({ data: { not: 'a string' } })
+		double.dispatch({ data: JSON.stringify(modernRequest('server/discover')) })
+
+		await vi.waitFor(() => expect(double.sent).toHaveLength(1))
+		expectModernReply(double.sent[0], 1)
+
+		worker.stop()
+	})
+})
+
+// ── createScopeMessageListener — the dedup state and the teardown state are ONE ────
+//
+// The dedup was right and its bookkeeping was not. The listener kept accepted ports in a `seen`
+// set private to its own closure, while the teardown callbacks went into the caller's
+// `teardowns`. `createScopeServer`'s `stop` could reach only the second one, so a Service Worker —
+// the shape the doc names, whose closure lives as long as the worker — retained every
+// `MessagePort` it had ever accepted, including ports already closed and unbound, for the
+// worker's life. Separate collections over one lifetime is what let one of them be forgotten.
+//
+// There is now one collection: the teardown map is KEYED by the port it tears down, so
+// membership answers "already bound?" and clearing the map drops both facts at once. The
+// rows below drive the exported listener with a caller-owned map, which is the only seam from
+// which either fact is observable at all.
+
+describe('createScopeMessageListener — one collection carries both the teardown and the dedup', () => {
+	it('keys each accepted port binding by the port, so no dedup state sits outside the caller-owned map', () => {
+		const double = createScopeDouble()
+		const server = createMCPServer({
+			tools: createCalculatorTools(),
+			identity: { name: DEFAULT_MCP_SERVER_NAME, version: DEFAULT_MCP_SERVER_VERSION },
+		})
+		const scopeTransport = createScopeTransport(double.scope)
+		const teardowns = new Map<MessagePort, () => void>()
+		const onMessage = createScopeMessageListener(server, scopeTransport, teardowns, {
+			tools: createCalculatorTools(),
+		})
+		const { port1 } = new MessageChannel()
+
+		onMessage(new MessageEvent('message', { ports: [port1] }))
+		expect([...teardowns.keys()]).toEqual([port1])
+
+		// The dedup reads that same map, so a repeat delivery adds nothing.
+		onMessage(new MessageEvent('message', { ports: [port1] }))
+		expect(teardowns.size).toBe(1)
+
+		// Clearing the map the way `stop` does drops the dedup state with it: the SAME port
+		// is accepted again afterwards. A private `seen` set would have refused this forever.
+		for (const teardown of teardowns.values()) teardown()
+		teardowns.clear()
+		onMessage(new MessageEvent('message', { ports: [port1] }))
+		expect([...teardowns.keys()]).toEqual([port1])
+
+		for (const teardown of teardowns.values()) teardown()
 	})
 })

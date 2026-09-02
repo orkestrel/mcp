@@ -2,22 +2,21 @@ import type { MCPTransportInterface } from '@src/core'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 
 // The MCP browser-transport surface — the source of truth. The CLIENT
-// transports for the Model Context Protocol both drive a REMOTE server from a page
+// transports for the Model Context Protocol drive a REMOTE server from a page
 // / Web Worker / Service Worker: the native `WebSocket` transport
-// (`transports/WebSocketClientTransport.ts`) and the `fetch` + `@orkestrel/sse`
-// streamable-HTTP transport (`transports/HTTPClientTransport.ts`) — the browser
-// siblings of the Node face's `WebSocketClientTransport` / `HTTPClientTransport`
-// (`src/server`), speaking the SAME `@src/core` `MCPClientTransportInterface` so
-// `createMCPClient` consumes either identically. The host performs the WebSocket
-// handshake and the HTTP request/response plumbing, so this face carries none of the
-// Node client's `node:crypto` / `node:http(s)` machinery.
+// (`transports/WebSocketClientTransport.ts`) and the host-independent `fetch` +
+// `@orkestrel/sse` streamable-HTTP transport `@src/core` publishes, which this face's
+// `createHTTPClientTransport` returns. Every one speaks the SAME `@src/core`
+// `MCPMessageTransportInterface`, so `createMCPClient` consumes them identically. The host
+// performs the WebSocket handshake, so this face carries none of the Node client's
+// `node:crypto` / `node:http(s)` machinery.
 //
 // `MessagePortTransport` (below) is the genuinely new capability: unlike the
 // CLIENT-only carriers above, a `MessagePort` is SYMMETRIC — the same class is handed
 // to EITHER `bindServer` or `bindClient` (`@src/core`), the role coming from which
-// binder it is given to. `ServeMCPOptions` / `ServeMCPScopeInterface` back the
-// bootstrap factories that wire a Web Worker's / Service Worker's own message
-// events (and any `MessagePort` they carry) to an `MCPServer`.
+// binder it is given to. `ScopeServerOptions`, `ScopeInterface`, and
+// `ScopeServerInterface` back `createScopeServer`, the factory that wires a Web Worker's /
+// Service Worker's own message events (and any `MessagePort` they carry) to an `MCPServer`.
 
 /**
  * Options for `createWebSocketClientTransport` (browser face) — the remote MCP
@@ -52,32 +51,6 @@ export interface WebSocketClientTransportOptions {
 }
 
 /**
- * Options for `createHTTPClientTransport` (browser face) — the remote MCP server's
- * URL and any extra request headers.
- *
- * @remarks
- * - `url` — the absolute URL of the remote server's Streamable-HTTP endpoint (the
- *   `POST` target every JSON-RPC message is written to). REQUIRED.
- * - `headers` — extra request headers merged onto every `POST` (for example, an
- *   `Authorization` bearer for a guarded server). The transport always sets
- *   `content-type: application/json` and an `Accept` of both `application/json` and
- *   `text/event-stream`; a key supplied here is merged on top.
- * - `fetch` — the `fetch` implementation to issue each `POST` with; defaults to
- *   `globalThis.fetch`. Injectable for a test double or a non-global `fetch`.
- * - `timeout` — an optional per-request timeout in milliseconds; when set, each
- *   `fetch` call composes that deadline with the transport's own close through
- *   `AbortSignal.any([close, AbortSignal.timeout(timeout)])`, so whichever fires first
- *   ends the request. Omit for no transport-level deadline; the close signal is passed
- *   either way.
- */
-export interface HTTPClientTransportOptions {
-	readonly url: string
-	readonly headers?: Readonly<Record<string, string>>
-	readonly fetch?: typeof fetch
-	readonly timeout?: number
-}
-
-/**
  * Options for `createMessagePortTransport` — the native `MessagePort` a
  * {@link MessagePortTransport} sends and listens on.
  *
@@ -94,10 +67,10 @@ export interface MessagePortTransportOptions {
 /**
  * A duplex {@link MCPTransportInterface} adapting a message-event-bearing SCOPE
  * (`self` in a dedicated Web Worker, or any object shaped the same way) — the
- * internal carrier `serveMCPScope` binds to route the implicit (portless) message
+ * internal carrier `createScopeServer` binds to route the implicit (portless) message
  * channel, plus the `deliver` entry point the scope's own `message` listener pushes
  * an inbound string through (the scope itself never registers `listen`'s handler
- * for the caller — `serveMCPScope`'s dispatcher does, through this `deliver`).
+ * for the caller — the scope server's dispatcher does, through this `deliver`).
  */
 export interface ScopeTransportInterface extends MCPTransportInterface {
 	/** Pushes one inbound message string into the active `listen` handler. */
@@ -105,28 +78,45 @@ export interface ScopeTransportInterface extends MCPTransportInterface {
 }
 
 /**
- * The structural shape `serveMCPScope` needs from a hostable scope — `self` in a
- * dedicated Web Worker or a Service Worker (or any double matching this shape).
+ * The structural shape {@link import('./factories.js').createScopeServer} needs from a
+ * hostable scope — `self` in a dedicated Web Worker or a Service Worker (or any double
+ * matching this shape).
  *
  * @remarks
- * Only the members `serveMCPScope` actually touches: `postMessage` (the
+ * Only the members the scope server actually touches: `postMessage` (the
  * dedicated-worker implicit reply channel), and `addEventListener` /
  * `removeEventListener` for `'message'` (every inbound event, portless or
- * port-bearing, arrives through the SAME listener — see {@link ServeMCPOptions}'s
- * doc and the bootstrap factories). A real `self` / `globalThis` inside a worker satisfies this
+ * port-bearing, arrives through the SAME listener — see {@link ScopeServerOptions}'s
+ * doc and the factory). A real `self` / `globalThis` inside a worker satisfies this
  * structurally (it exposes far more, which this narrower shape ignores).
  */
-export interface ServeMCPScopeInterface {
+export interface ScopeInterface {
 	postMessage(message: unknown): void
 	addEventListener(type: 'message', listener: (event: MessageEvent) => void): void
 	removeEventListener(type: 'message', listener: (event: MessageEvent) => void): void
 }
 
 /**
- * Options for `serveMCP` / `serveMCPScope` — the live {@link ToolManagerInterface} to
- * expose plus the optional server identity, mirroring `createMCPServer`'s
- * `MCPServerOptions` (`@orkestrel/mcp`) but with `name`/`version` OPTIONAL (defaulting to
- * {@link import('./constants.js').DEFAULT_MCP_SERVER_NAME} /
+ * One MCP server hosted inside a worker scope — what
+ * {@link import('./factories.js').createScopeServer} returns.
+ *
+ * @remarks
+ * The browser twin of the Node face's `StdioServerInterface`, and it publishes only the
+ * terminal: the factory arms the scope's `message` listener before it returns, because an
+ * event delivered between construction and an explicit `start` would reach nothing. `stop`
+ * removes that listener, unbinds the implicit scope channel, and tears down every accepted
+ * port binding; it is idempotent, and it ends this handle's lifetime permanently.
+ */
+export interface ScopeServerInterface {
+	/** Ends every binding this scope server owns — idempotent, and permanent for this handle. */
+	stop(): void
+}
+
+/**
+ * Options for {@link import('./factories.js').createScopeServer} — the live
+ * {@link ToolManagerInterface} to expose plus the optional server identity, mirroring
+ * `createMCPServer`'s `MCPServerOptions` (`@orkestrel/mcp`) but with `name`/`version`
+ * OPTIONAL (defaulting to {@link import('./constants.js').DEFAULT_MCP_SERVER_NAME} /
  * {@link import('./constants.js').DEFAULT_MCP_SERVER_VERSION}).
  *
  * @remarks
@@ -134,16 +124,16 @@ export interface ServeMCPScopeInterface {
  *   event is accepted; return `false` to drop the event (no binding, no reply).
  *   **`accept` gates ONLY port-bearing events** — portless messages bypass it and
  *   deliver directly to the implicit scope channel (the tool executes, blind; in a
- *   Service Worker the reply is silently dropped — see `serveMCPScope`'s portless note).
+ *   Service Worker the reply is silently dropped — see `createScopeServer`'s portless note).
  *   Prefer a handshake token in `event.data` as the primary pattern
  *   (for example, `(event) => event.data === token`) — for same-origin worker/MessagePort
  *   messages `event.origin` is frequently the empty string, making origin
  *   allow-listing unreliable; origin checks are meaningful for cross-origin
  *   `postMessage` only. When omitted, ALL port-bearing events are accepted — every
  *   same-origin context that can reach the scope gets full tool-call access.
- *   See `serveMCPScope`'s trust-boundary and portless-events notes.
+ *   See `createScopeServer`'s trust-boundary and portless-events notes.
  */
-export interface ServeMCPOptions {
+export interface ScopeServerOptions {
 	readonly tools: ToolManagerInterface
 	readonly name?: string
 	readonly version?: string

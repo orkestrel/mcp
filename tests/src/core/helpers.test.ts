@@ -8,7 +8,7 @@ import type {
 	MCPSubscriptionFilter,
 	MCPTransportInterface,
 } from '@src/core'
-import type { MCPHeaderParameter } from '@src/core'
+import type { JSONRPCMessage, MCPHeaderParameter } from '@src/core'
 import type { MemoryTransportInterface } from '../../setup.js'
 import {
 	bindClient,
@@ -53,6 +53,8 @@ import {
 	MCP_META_VERSION,
 	MCP_SENTINEL_PREFIX,
 	MCP_SENTINEL_SUFFIX,
+	buildResponseError,
+	decodeEvent,
 	legacyInvocationToModern,
 	legacyResultToModern,
 	matchesResultType,
@@ -61,7 +63,9 @@ import {
 	modernResultToLegacy,
 	MCPStreamController,
 	MCPTextStreamController,
+	parseJSONRPCMessage,
 	readCancelledId,
+	readEventStream,
 	sendStream,
 	serializeJSON,
 	stampSubscriptionNotification,
@@ -2117,5 +2121,132 @@ describe('extractToolSchema — the named tool inputSchema inside a tools/list a
 			extractToolSchema({ jsonrpc: '2.0', id: 1, error: { code: -32601, message: 'x' } }, 'first'),
 		).toBeUndefined()
 		expect(extractToolSchema(undefined, 'first')).toBeUndefined()
+	})
+})
+
+// ── The SSE decode leaf's own fixtures ──────────────────────────────────────
+//
+// One SSE `data:` event carrying `payload` as its JSON-serialized data, terminated by the
+// blank line that dispatches it — the exact wire framing a server's `createStream` seam
+// writes (`stream.write({ data: JSON.stringify(response) })`), so a body of these round-trips
+// back through `readEventStream`. A non-string `payload` (a raw token) frames an event whose
+// `data` is that literal, for the malformed-drop path.
+function dataEvent(payload: unknown): string {
+	return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`
+}
+
+// A `fetch`-style Response over an SSE `text/event-stream` body — the reply shape
+// `readEventStream` decodes. Its `body` is a real `ReadableStream`, so the helper reads it
+// to completion exactly as it would a live server's response.
+function sseResponse(body: string): Response {
+	return new Response(body, { headers: { 'content-type': 'text/event-stream' } })
+}
+
+// The well-formed JSON-RPC envelope (a `parseJSONRPCMessage`-valid message) used as the
+// expected value in the round-trip assertions — narrowed through the real parser so the
+// expectation is itself proven a message, never an `as`.
+function rpcMessage(overrides?: Parameters<typeof createJSONRPCRequest>[0]): JSONRPCMessage {
+	const message = parseJSONRPCMessage(createJSONRPCRequest(overrides))
+	if (message === undefined) throw new Error('unreachable: createJSONRPCRequest is a message')
+	return message
+}
+
+describe('decodeEvent — one SSE data payload → its JSON-RPC message', () => {
+	it('decodes a well-formed JSON-RPC envelope to the parsed message', () => {
+		const message = rpcMessage({ method: 'ping', id: 7 })
+		expect(decodeEvent(JSON.stringify(message))).toEqual(message)
+	})
+
+	it('is undefined for malformed JSON (a JSON.parse throw, caught not raised)', () => {
+		expect(decodeEvent('{ not json')).toBeUndefined()
+	})
+
+	it('is undefined for valid JSON that is not a JSON-RPC message', () => {
+		// Parses fine, but `parseJSONRPCMessage` rejects it (no `jsonrpc`) → dropped.
+		expect(decodeEvent(JSON.stringify({ method: 'ping', id: 1 }))).toBeUndefined()
+	})
+})
+
+describe('buildResponseError — non-success HTTP reply without a JSON-RPC message', () => {
+	it('names an event stream that yielded no message', () => {
+		const response = new Response('', {
+			status: 503,
+			headers: { 'content-type': 'text/event-stream' },
+		})
+
+		expect(buildResponseError(response, 'text/event-stream')).toEqual(
+			new Error('HTTP 503 response contained a text/event-stream body without a JSON-RPC message'),
+		)
+	})
+
+	it('names a JSON body that parsed to no message', () => {
+		const response = Response.json({ error: 'unavailable' }, { status: 502 })
+
+		expect(buildResponseError(response, 'application/json')).toEqual(
+			new Error(
+				'HTTP 502 response contained an application/json body that was not a JSON-RPC message',
+			),
+		)
+	})
+
+	it('distinguishes an absent content type from an unsupported one', () => {
+		expect(buildResponseError(new Response('', { status: 500 }), '')).toEqual(
+			new Error('HTTP 500 response contained a body without a content type'),
+		)
+		const response = new Response('', {
+			status: 415,
+			headers: { 'content-type': 'text/plain' },
+		})
+		expect(buildResponseError(response, 'text/plain')).toEqual(
+			new Error("HTTP 415 response contained an unsupported 'text/plain' body"),
+		)
+	})
+})
+
+describe('readEventStream — decode a Response SSE body into JSON-RPC messages', () => {
+	it('decodes two data events into both messages, in order', async () => {
+		const first = rpcMessage({ method: 'a', id: 1 })
+		const second = rpcMessage({ method: 'b', id: 2 })
+		const body = dataEvent(first) + dataEvent(second)
+		expect(await readEventStream(sseResponse(body))).toEqual([first, second])
+	})
+
+	it('reassembles across the parser: a fully-terminated event emits, an unterminated trailing event does not', async () => {
+		// The first event ends at its blank line (dispatched); the second `data:` line has NO
+		// terminating blank line, so the SSEParser holds it buffered (never flushed on stream
+		// end) — proving the parser-backed line/event reassembly, not a naive split.
+		const delivered = rpcMessage({ method: 'delivered', id: 1 })
+		const pending = rpcMessage({ method: 'pending', id: 2 })
+		const body = dataEvent(delivered) + `data: ${JSON.stringify(pending)}`
+		expect(await readEventStream(sseResponse(body))).toEqual([delivered])
+	})
+
+	it('drops a data event whose payload is not a JSON-RPC message, keeping the valid ones', async () => {
+		// A malformed-JSON event and a valid-JSON-but-not-a-message event are both dropped
+		// (no throw); the surrounding well-formed messages still decode.
+		const first = rpcMessage({ method: 'a', id: 1 })
+		const second = rpcMessage({ method: 'b', id: 2 })
+		const body =
+			dataEvent(first) + dataEvent('{ broken') + dataEvent({ method: 'x' }) + dataEvent(second)
+		expect(await readEventStream(sseResponse(body))).toEqual([first, second])
+	})
+
+	it('is [] for an empty body', async () => {
+		// An empty string is a real (empty) stream — read to completion, no events dispatched.
+		expect(await readEventStream(sseResponse(''))).toEqual([])
+	})
+
+	it('is [] for a null-body Response (no stream)', async () => {
+		// A 204 has a `null` body — `readEventStream` short-circuits to no messages.
+		expect(await readEventStream(new Response(null, { status: 204 }))).toEqual([])
+	})
+
+	it('is [] for a non-event-stream JSON body (no data: events to dispatch)', async () => {
+		// The helper reads the body through the SSEParser regardless of content-type; a plain
+		// JSON body carries no `data:` lines, so nothing dispatches.
+		const response = new Response(JSON.stringify(rpcMessage()), {
+			headers: { 'content-type': 'application/json' },
+		})
+		expect(await readEventStream(response)).toEqual([])
 	})
 })

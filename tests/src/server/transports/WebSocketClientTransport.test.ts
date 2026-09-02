@@ -32,7 +32,7 @@ import { startServer, startUpgradeServer } from '../../../setupServer.js'
 // tool failure → a local throw; a `ws://` and an `http://` url both reach the endpoint; an
 // upgrade declined by the server → `connect()` rejects; `session` is undefined for the stateless
 // v1; and `disconnect()` closes cleanly. The per-connection bridge + frame decode/drop are pinned
-// at the unit level in WebSocketServerTransport.test.ts (the same MCPClientTransportInterface).
+// at the unit level in WebSocketServerTransport.test.ts (the same MCPMessageTransportInterface).
 
 const teardown = createTeardown()
 afterEach(() => teardown.destroy())
@@ -464,7 +464,7 @@ describe('WebSocketClientTransport — close releases what the connect acquired'
 
 		await transport.close()
 
-		// `MCPClientTransportInterface.send` has a channel that cannot confirm a write answer a
+		// `MCPMessageTransportInterface.send` has a channel that cannot confirm a write answer a
 		// closed channel from its own state. This transport's state is the released socket and its
 		// answer is a REJECTION — not the browser face's silent drop, and not a queue that would
 		// hold the message for a connection this transport can no longer open.

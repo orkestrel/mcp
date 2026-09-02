@@ -87,7 +87,7 @@ const LEGACY_OWNERS = Object.freeze([
  * removable legacy ingress.
  */
 const LEGACY_OWNER_PATTERN =
-	/\b(?:export\s+class\s+(?:MCPLegacy|MCPSession)\b|export\s+function\s+(?:createMCPLegacy|createMCPSession)\b|export\s+interface\s+(?:MCPLegacyOptions|MCPSession(?:Options|Interface|State|Entry))\b|import(?:\s+type)?\s*\{[^}]*\b(?:MCPLegacy|MCPSession)\b[^}]*\}\s*from\s*['"][^'"]+['"]|export\s+\*\s+from\s*['"]\.\/(?:MCPLegacy|MCPSession)\.js['"])/u
+	/\b(?:export\s+class\s+(?:MCPLegacy|MCPSession)\b|export\s+function\s+(?:createMCPLegacy|createMCPSession)\b|export\s+interface\s+(?:MCPLegacyOptions|MCPSession(?:MiddlewareOptions|Options|Interface|State|Entry|Event))\b|import(?:\s+type)?\s*\{[^}]*\b(?:MCPLegacy|MCPSession)\b[^}]*\}\s*from\s*['"][^'"]+['"]|export\s+\*\s+from\s*['"]\.\/(?:MCPLegacy|MCPSession)\.js['"])/u
 
 /** Return the source modules carrying a removable legacy-ingress declaration or dependency. */
 function findLegacyOwners(population: Readonly<Record<string, string>>): readonly string[] {
@@ -187,7 +187,7 @@ describe('public package faces', () => {
 		).toEqual([])
 		expect(
 			findMissingNamedImports(
-				"import { serveMCP } from '@orkestrel/mcp/browser'",
+				"import { createScopeServer } from '@orkestrel/mcp/browser'",
 				SOURCES,
 				'@orkestrel/mcp',
 			),
@@ -395,7 +395,7 @@ describe('public package faces', () => {
 	it('reads no import out of a comment', () => {
 		const fence = [
 			"// import { createMCPRoutes } from '@orkestrel/mcp'",
-			"/* import { serveMCP } from '@orkestrel/mcp' */",
+			"/* import { createScopeServer } from '@orkestrel/mcp' */",
 		].join('\n')
 		expect(findMissingNamedImports(fence, SOURCES, '@orkestrel/mcp')).toEqual([])
 	})

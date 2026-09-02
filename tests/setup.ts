@@ -6,8 +6,8 @@ import type { SSEEvent } from '@orkestrel/sse'
 import type { RecorderInterface } from '@orkestrel/test'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 import type {
-	MCPClientTransportEventMap,
-	MCPClientTransportInterface,
+	MCPMessageTransportEventMap,
+	MCPMessageTransportInterface,
 	JSONRPCId,
 	JSONRPCInvocation,
 	JSONRPCMessage,
@@ -441,15 +441,16 @@ export const MODERN_METADATA: Readonly<Record<string, unknown>> = Object.freeze(
 
 // ── Header-projection table (ONE mechanism, proven on BOTH faces) ────────────
 //
-// The HTTP client transports each stamp `mcp-protocol-version` on a modern POST, and
-// they used to disagree about how to read it: the Node face read `_meta` raw while the
-// browser face routed through `parseRequestContext`, which additionally requires a valid
-// client-capability declaration. The server's own expectation (`inferHeaderIssue`) reads
-// raw, so the browser face withheld a header the server demanded and earned `-32602`.
+// The HTTP client transport stamps `mcp-protocol-version` on a modern POST by reading `_meta`
+// raw through `inferRequestVersion`, which is the same read the server's own expectation
+// (`inferHeaderIssue`) performs. Routing it through `parseRequestContext` instead withholds the
+// header on every context that is modern by key presence but carries no valid
+// client-capability declaration, and the server answers that request `-32602`.
 //
-// This table is shared BY BOTH projects so one row cannot pass on one face and fail on the
-// other, and some of its rows are contexts that parse on ONLY ONE path — a table
-// where every row agrees would prove nothing about the divergence it exists to catch.
+// This table is shared BY EVERY project that drives the transport, so one row cannot pass in
+// one runtime and fail in another, and some of its rows are contexts that parse on ONLY ONE
+// path — a table where every row agrees would prove nothing about the divergence it exists to
+// catch.
 
 /** One row of the protocol-version projection both HTTP client transports must answer alike. */
 export interface TestHeaderContext {
@@ -845,7 +846,7 @@ export function inspectOwnerOfLastResort(source: string): readonly string[] {
 
 // ── In-process loopback MCP client transport (env-agnostic scenario builder) ─
 //
-// the `MCPClientTransportInterface` doc for `@src/core` names "the in-process
+// the `MCPMessageTransportInterface` doc for `@src/core` names "the in-process
 // loopback transport in the tests" as one of its concrete forms — this is that shared,
 // general one. It dispatches straight to a REAL `MCPServerInterface` with no wire, no
 // network — a real transport, not a mock. A test needing gated / instrumented
@@ -920,16 +921,16 @@ export function readMethods(frames: readonly JSONRPCMessage[]): readonly string[
 }
 
 /**
- * Create an in-process {@link MCPClientTransportInterface} that dispatches directly against a
+ * Create an in-process {@link MCPMessageTransportInterface} that dispatches directly against a
  * given {@link MCPServerInterface} — no wire, no network. Each `send` dispatches its
  * request through `mcp.dispatch` and emits a DEFINED response (a
  * notification produces none) on the `message` event, mirroring how a real transport
  * surfaces replies.
  *
  * @param mcp - The MCP server to dispatch requests against in-process
- * @returns A working duplex {@link MCPClientTransportInterface} with no `session` (stateless)
+ * @returns A working duplex {@link MCPMessageTransportInterface} with no `session` (stateless)
  */
-export interface MCPTestLoopbackInterface extends MCPClientTransportInterface {
+export interface MCPTestLoopbackInterface extends MCPMessageTransportInterface {
 	/** The client invocations delivered to the real server, in wire order. */
 	readonly messages: readonly JSONRPCInvocation[]
 	/** Delivers one peer-originated frame through the transport's real message event. */
@@ -971,7 +972,7 @@ export function createSubscriptionServer(
 }
 
 export function createLoopbackTransport(mcp: MCPServerInterface): MCPTestLoopbackInterface {
-	const emitter = createEmitter<MCPClientTransportEventMap>()
+	const emitter = createEmitter<MCPMessageTransportEventMap>()
 	const messages: JSONRPCInvocation[] = []
 	return {
 		emitter,
@@ -1132,8 +1133,8 @@ export interface TestFrame {
 	readonly at: number
 }
 
-/** An {@link MCPClientTransportInterface} that records every outbound frame and when it left. */
-export interface TestTransportInterface extends MCPClientTransportInterface {
+/** An {@link MCPMessageTransportInterface} that records every outbound frame and when it left. */
+export interface TestTransportInterface extends MCPMessageTransportInterface {
 	/** Every frame written through `send`, in order, each stamped with its real instant. */
 	readonly frames: readonly TestFrame[]
 }
