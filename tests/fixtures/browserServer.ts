@@ -17,9 +17,9 @@ import { createNodeWebSocket } from '@orkestrel/websocket'
 import {
 	MCP_WEBSOCKET_SUBPROTOCOL,
 	WebSocketServerTransport,
+	createDuplexServerTransport,
 	createMCPRoutes,
 	createMCPSession,
-	createMessageTransportBridge,
 	createWebSocketServer,
 	upgradeRequestPath,
 } from '@src/server'
@@ -174,7 +174,7 @@ export function createRecordingWebSocketHandler(mcp: MCPServerInterface): Upgrad
 		})
 		webSocket.emitter.on('message', recordFrame)
 		const transport = new WebSocketServerTransport(webSocket)
-		bindServer(mcp, createMessageTransportBridge(transport))
+		bindServer(mcp, createDuplexServerTransport(transport))
 		void transport.start()
 		return true
 	}

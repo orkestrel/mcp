@@ -2663,14 +2663,14 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 
 #### Factories
 
-| API                            | Kind     | Summary                                                                                                                                                                                                                       |
-| ------------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createMCPContinuation`        | function | Adapt installed signed-token primitives and secret rotation to the host-neutral core continuation port.                                                                                                                       |
-| `createMCPRoutes`              | function | Mount an `MCPDispatcherInterface` on the router spine — returns the `RouteInput[]` for `router.add(...)`, passing the named transport options through to its single stateless POST handler.                                   |
-| `createMCPPostHandler`         | function | Create the stateless Streamable-HTTP POST handler directly, optionally extracting asserted caller context after validation.                                                                                                   |
-| `createHTTPClientTransport`    | function | Create a `MCPMessageTransportInterface` over `fetch` that drives a REMOTE Streamable-HTTP MCP server (the egress mirror).                                                                                                     |
-| `createMCPSession`             | function | Create the opt-in native session `MiddlewareHandler` — closure store + mint-on-`initialize` + require-404 + the resumable `GET` SSE stream; mount in front of `createMCPRoutes`.                                              |
-| `createMessageTransportBridge` | function | Adapt a message-channel `MCPMessageTransportInterface` (the stdio / WebSocket SERVER transports) onto the core `MCPTransportInterface` port — what `createStdioServer` and `createWebSocketServer` pipe through `bindServer`. |
+| API                           | Kind     | Summary                                                                                                                                                                                                                       |
+| ----------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createMCPContinuation`       | function | Adapt installed signed-token primitives and secret rotation to the host-neutral core continuation port.                                                                                                                       |
+| `createMCPRoutes`             | function | Mount an `MCPDispatcherInterface` on the router spine — returns the `RouteInput[]` for `router.add(...)`, passing the named transport options through to its single stateless POST handler.                                   |
+| `createMCPPostHandler`        | function | Create the stateless Streamable-HTTP POST handler directly, optionally extracting asserted caller context after validation.                                                                                                   |
+| `createHTTPClientTransport`   | function | Return the core `HTTPClientTransport` over the native `fetch` that drives a REMOTE Streamable-HTTP MCP server — the same class the browser face's factory returns.                                                            |
+| `createMCPSession`            | function | Create the opt-in native session `MiddlewareHandler` — closure store + mint-on-`initialize` + require-404 + the resumable `GET` SSE stream; mount in front of `createMCPRoutes`.                                              |
+| `createDuplexServerTransport` | function | Adapt a message-channel `MCPMessageTransportInterface` (the stdio / WebSocket SERVER transports) onto the core `MCPTransportInterface` port — what `createStdioServer` and `createWebSocketServer` pipe through `bindServer`. |
 
 #### Entities
 
@@ -2678,6 +2678,9 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | ---------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `HTTPDisconnect` | class | The one-response HTTP lifecycle bridge that composes request abort with response cancellation, forwards SSE bytes, and owns keepalive cleanup.                                                          |
 | `MCPSession`     | class | One MCP transport session — its `id` + attached SSE streams + the FOLDED bounded replay log (`Map` + capacity + lazy TTL); `push`/`attach`/`detach`/`replay` drive the resumable server→client channel. |
+
+_This face declares no `HTTPClientTransport`. It is host-independent and ships from
+`@orkestrel/mcp`; see [Core § Entities](#entities)._
 
 #### Constants
 
@@ -2712,6 +2715,10 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | `writeLine`               | function | Write one line to a Node writable and settle from its completion callback; a callback error or synchronous throw rejects.                                                                                             |
 | `dispatchLines`           | function | Decode and deliver each complete newline-framed line onto a `MCPMessageTransportEventMap` emitter (`message` / `error`).                                                                                              |
 
+_This face declares no `decodeEvent`, `readEventStream`, or `buildResponseError`. Those SSE
+decoders and the response-error builder are host-independent and ship from `@orkestrel/mcp`; see
+[Core § Helpers](#helpers)._
+
 #### Types
 
 | Type                          | Kind      | Shape                                                                                                                                                                                                      |
@@ -2728,6 +2735,9 @@ in-memory `Map` with capacity + lazy-TTL eviction.
 | `MCPSessionState`             | interface | `{ session?: MCPSessionInterface }` — the `context.state` slice a consumer's `TState` extends so `createMCPSession` can thread the resolved session through.                                               |
 | `MCPSessionEvent`             | interface | `{ id: string; message: JSONRPCMessage; timestamp: number }` — one logged pushed message (the unit `MCPSession.replay` returns).                                                                           |
 | `MCPSessionEntry`             | interface | `{ session: MCPSession; touched: number; version: MCPVersion }` — the closure store entry, including the pinned negotiated legacy revision.                                                                |
+
+_This face declares no `HTTPClientTransportOptions`. It is host-independent and ships from
+`@orkestrel/mcp`; see [Core § Types](#types)._
 
 ### WebSocket transport
 
@@ -2817,7 +2827,7 @@ await client.connect() // the RFC 6455 handshake, then modern `server/discover` 
 
 #### Helpers
 
-_`upgradeRequestPath` (used by `createWebSocketServer`) is documented under [HTTP transport § Helpers](#helpers-1), and `createMessageTransportBridge` (which `createWebSocketServer` pipes its transport through `bindServer` with) under that section's Factories._
+_`upgradeRequestPath` (used by `createWebSocketServer`) is documented under [HTTP transport § Helpers](#helpers-1), and `createDuplexServerTransport` (which `createWebSocketServer` pipes its transport through `bindServer` with) under that section's Factories._
 
 #### Types
 
@@ -2834,7 +2844,7 @@ server transport — newline-delimited JSON-RPC over a process's own
 (the client side). `createStdioServer` wraps `options.input` / `options.output`
 (defaulting to `process.stdin` / `process.stdout`, injectable for tests) as a
 `MCPMessageTransportInterface`, bridges it to the core `MCPTransportInterface` port
-through `createMessageTransportBridge`, and pipes it through `bindServer` — each inbound
+through `createDuplexServerTransport`, and pipes it through `bindServer` — each inbound
 JSON-RPC request runs through `mcp.dispatch`, writing a defined response back
 as one newline-terminated line (a notification writes nothing). The server transport awaits
 the output stream's completion callback as its backpressure boundary. A callback error or
@@ -3148,6 +3158,9 @@ host-independent and ship from `@orkestrel/mcp`; see [Core § Helpers](#helpers)
 | `ScopeTransportInterface`         | interface | `MCPTransportInterface & { deliver(message: string): void }` — the implicit scope channel `createScopeServer` binds, plus the internal push entry point its dispatcher drives it through.                                                                     |
 | `ScopeServerInterface`            | interface | `{ stop(): void }` — the handle `createScopeServer` returns. `stop` removes the scope listener, unbinds the implicit channel, and tears down every accepted port binding; idempotent, and permanent for that handle. Its method is under [Methods](#methods). |
 | `ScopeServerOptions`              | interface | `{ tools: ToolManagerInterface; name?: string; version?: string; accept?: (event: MessageEvent) => boolean }` — the registry to expose, optional server identity, and optional port-event gate for `createScopeServer`.                                       |
+
+_This face declares no `HTTPClientTransportOptions`. It is host-independent and ships from
+`@orkestrel/mcp`; see [Core § Types](#types)._
 
 ## Methods
 

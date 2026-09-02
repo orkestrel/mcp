@@ -512,9 +512,9 @@ describe('guides/mcp.md tools/list request metadata', () => {
 	})
 })
 
-// The server and browser faces declare the same class, and only the browser barrel re-exports
-// it: the server face strands `HTTPClientTransport`, and reading both faces as one scope hides
-// that.
+// A synthetic negative control: a `server/HTTPClientTransport.ts` no barrel re-exports, so the
+// instrument's scope guard can be proven against a real stranded declaration instead of only
+// the live faces, which never carry one. Reading both faces as one scope would hide the strand.
 const FIXTURE_FILES: Readonly<Record<string, string>> = Object.freeze({
 	'browser/index.ts': "export * from './HTTPClientTransport.js'\n",
 	'browser/HTTPClientTransport.ts': 'export class HTTPClientTransport {}\n',

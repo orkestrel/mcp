@@ -859,7 +859,7 @@ send({
 }
 
 // createStdioServer — the new seam: it now pipes its transport through the core
-// bindServer port (via createMessageTransportBridge) rather than a hand-rolled pump. Proven
+// bindServer port (through createDuplexServerTransport) rather than a hand-rolled pump. Proven
 // over REAL PassThrough streams + a REAL MCPServer — the request → reply
 // line round trip, a notification writing nothing, and a dispatch fault (an unknown
 // method reply, the in-band case; the transport-fault case is pinned at the core

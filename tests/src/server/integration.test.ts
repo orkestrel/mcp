@@ -39,8 +39,7 @@ import { startServer } from '../../setupServer.js'
 // (`streaming: true`, decoded via the core SSEParser inside the transport). Also: a
 // remote tool error → a local throw, and a token guard mounted IN FRONT (the transport's
 // `headers` carry the bearer). The in-process correlation / timeout / disconnect contract
-// is pinned in tests/src/core/mcp/MCPClient.test.ts; the LIVE model round-trip in
-// tests/src/ollama/mcp.test.ts.
+// is pinned in tests/src/core/MCPClient.test.ts.
 
 const teardown = createTeardown()
 afterEach(() => teardown.destroy())

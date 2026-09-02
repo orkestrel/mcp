@@ -53,8 +53,7 @@ function recordAbortTimeout(deadline: number): AbortSignal {
 // `send` dispatches each message through the server's `dispatch` and emits the response
 // back on its `message` event, so the full `initialize` / `tools/list` / `tools/call`
 // path runs in-process and deterministically. The OVER-FETCH JSON/SSE wire path is
-// pinned in tests/src/server/mcp/HTTPClientTransport.test.ts; the LIVE model round-trip
-// in tests/src/ollama/mcp.test.ts. Here: the handshake, tool discovery + local-tool
+// pinned in tests/src/server/integration.test.ts. Here: the handshake, tool discovery + local-tool
 // wrapping (the wrapped `execute` calls back over the loopback), the content round-trip
 // + a remote-error → local throw, id correlation, the per-request timeout, and
 // disconnect rejecting pending requests.

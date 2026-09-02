@@ -48,14 +48,15 @@ export function createMCPContinuation(secret: TokenSecret): MCPContinuationInter
 }
 
 /**
- * Creates the adapter that bridges a message-channel {@link MCPMessageTransportInterface}
+ * Creates the server-side mirror of
+ * {@link import('@orkestrel/mcp').createDuplexClientTransport}: the adapter that bridges a
+ * message-channel {@link MCPMessageTransportInterface}
  * (the shape the stdio and WebSocket SERVER transports already implement) onto the
  * environment-agnostic {@link import('@orkestrel/mcp').MCPTransportInterface} port — what
  * {@link createStdioServer} and {@link createWebSocketServer} pipe through `bindServer`, so
  * the request/reply/error pump those factories used to hand-roll identically now lives ONCE
- * in the core binder. The egress mirror is
- * {@link import('@orkestrel/mcp').createDuplexClientTransport}, which adapts the same two
- * contracts the other way.
+ * in the core binder. {@link import('@orkestrel/mcp').createDuplexClientTransport} adapts the
+ * same two contracts the other way.
  *
  * @remarks
  * `send` decodes the already-serialized reply string back to a {@link JSONRPCMessage}
@@ -97,10 +98,10 @@ export function createMCPContinuation(secret: TokenSecret): MCPContinuationInter
  * import { bindServer } from '@orkestrel/mcp'
  *
  * const transport = new StdioServerTransport(process.stdin, process.stdout)
- * bindServer(mcp, createMessageTransportBridge(transport))
+ * bindServer(mcp, createDuplexServerTransport(transport))
  * ```
  */
-export function createMessageTransportBridge(
+export function createDuplexServerTransport(
 	transport: MCPMessageTransportInterface,
 ): MCPTransportInterface {
 	let onMessage: ((message: string) => void) | undefined
@@ -265,7 +266,7 @@ export function createHTTPClientTransport(
  *   only when the client's offer contains it, and sends UNMASKED frames), wraps it in a
  *   {@link WebSocketServerTransport}, and pipes it through the core {@link
  *   import('@orkestrel/mcp').MCPTransportInterface} port through {@link
- *   createMessageTransportBridge} + {@link import('@orkestrel/mcp').bindServer}:
+ *   createDuplexServerTransport} + {@link import('@orkestrel/mcp').bindServer}:
  *   each inbound REQUEST runs through `mcp.dispatch`, and a defined response is written back
  *   as a frame — a NOTIFICATION sends nothing, and a non-request message (a stray response) is
  *   ignored. A `dispatch` / `send` fault surfaces on `mcp.emitter`'s `error` event rather than
@@ -349,7 +350,7 @@ export function createWebSocketServer(
 		// The binder's detachment is this handler's to hold: the connection it belongs to is one
 		// this factory minted and nothing outside can reach, so a discarded `unbind` leaves the
 		// binding attached to a transport that has ended with no way left to detach it.
-		const unbind = bindServer(mcp, createMessageTransportBridge(transport))
+		const unbind = bindServer(mcp, createDuplexServerTransport(transport))
 		live.set(transport, unbind)
 		transport.emitter.on('close', () => {
 			live.delete(transport)
@@ -450,7 +451,7 @@ export function createStdioClientTransport(
  * Wraps `options.input` (default `process.stdin`) / `options.output` (default
  * `process.stdout`) in a {@link import('./transports/StdioServerTransport.js').StdioServerTransport}
  * and pipes it through the core {@link import('@orkestrel/mcp').MCPTransportInterface} port
- * through {@link createMessageTransportBridge} + {@link
+ * through {@link createDuplexServerTransport} + {@link
  * import('@orkestrel/mcp').bindServer}: each inbound REQUEST runs through `mcp.dispatch`, and
  * a defined response is written back as a newline-terminated line — a NOTIFICATION
  * writes nothing, and a non-request message is ignored. A `dispatch` / `send` fault
@@ -481,7 +482,7 @@ export function createStdioServer(
 	const input = options?.input ?? process.stdin
 	const output = options?.output ?? process.stdout
 	const transport = new StdioServerTransport(input, output)
-	const unbind = bindServer(mcp, createMessageTransportBridge(transport))
+	const unbind = bindServer(mcp, createDuplexServerTransport(transport))
 	return {
 		start(): void {
 			void transport.start()
