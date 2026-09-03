@@ -161,6 +161,8 @@ export interface HTTPTransportOptions<TState = unknown> extends HTTPHandlerOptio
  *   client may replay. Omit it for the {@link
  *   import('./constants.js').DEFAULT_MCP_SESSION_TTL} default; a non-positive value means no
  *   entry ever ages out by time.
+ * - `clock` — the `() => number` epoch-ms clock the log's lazy TTL sweep reads; defaults to
+ *   `Date.now`.
  *
  * The middleware's own knobs — the owned path, the idle-SESSION sweep window, origin
  * validation, and keepalive — live on {@link MCPSessionMiddlewareOptions}. The two `ttl`
@@ -169,6 +171,7 @@ export interface HTTPTransportOptions<TState = unknown> extends HTTPHandlerOptio
 export interface MCPSessionOptions {
 	readonly capacity?: number
 	readonly ttl?: number
+	readonly clock?: () => number
 }
 
 /**
@@ -183,13 +186,11 @@ export interface MCPSessionOptions {
  *   is treated as ABSENT and lazily evicted on the next access (no background timer — the
  *   `createRateLimiter` lazy-window idiom). Omit it for sessions that live until an explicit
  *   `DELETE`.
- * - `capacity` — the FOLDED event-log bound per session, forwarded to each minted {@link
- *   MCPSession} as {@link MCPSessionOptions.capacity}: the maximum number of pushed
- *   server→client messages retained for replay before the OLDEST is evicted. Omit it for the
- *   {@link import('./constants.js').DEFAULT_MCP_SESSION_CAPACITY} default. This `ttl` bounds
- *   the SESSION and that `capacity` bounds its replay log — independent knobs. The log's own
- *   per-event lifetime stays at {@link import('./constants.js').DEFAULT_MCP_SESSION_TTL};
- *   construct an {@link MCPSession} directly to set it.
+ * - `session` — the knobs forwarded to each minted {@link MCPSession}: `capacity` bounds its
+ *   replay log and `ttl` is that log's per-event lifetime. This type's own `ttl` bounds the
+ *   SESSION instead. An omitted leaf takes its {@link MCPSessionOptions} default, and an
+ *   omitted `session.clock` inherits this type's own `clock`, so one injected clock governs
+ *   both the store sweep and the log sweep unless a caller names a different one.
  * - `clock` — the `() => number` epoch-ms clock {@link import('./middlewares.js').createMCPSession}
  *   uses directly for its own session-touch / TTL-sweep bookkeeping; defaults to `Date.now`. The
  *   deterministic clock a TTL test advances explicitly instead of racing a real idle window
@@ -205,7 +206,7 @@ export interface MCPSessionOptions {
 export interface MCPSessionMiddlewareOptions {
 	readonly path?: string
 	readonly ttl?: number
-	readonly capacity?: number
+	readonly session?: MCPSessionOptions
 	readonly clock?: () => number
 	/** Requires the route layer's value; `origins` is ignored when `enabled` is `false`. */
 	readonly origin?: MCPOriginOptions
@@ -313,7 +314,7 @@ export interface MCPSessionEntry {
  *   transport mounts at). A protocol-upgrade request to any OTHER path is DECLINED
  *   (the handler returns `false`, so the spine fans it to the next handler or destroys it).
  * - `subprotocol` — the WebSocket subprotocol selected in the `101` handshake's
- *   `Sec-WebSocket-Protocol`; defaults to {@link import('./constants.js').MCP_WEBSOCKET_SUBPROTOCOL}
+ *   `Sec-WebSocket-Protocol`; defaults to {@link import('@orkestrel/mcp').MCP_WEBSOCKET_SUBPROTOCOL}
  *   (`'mcp'`). It is sent only when the client's offer contains that token.
  *
  * Auth / origin policy is deliberately ABSENT: like the HTTP transport, the WebSocket

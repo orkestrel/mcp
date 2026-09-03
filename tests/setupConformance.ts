@@ -14,7 +14,7 @@
 import type { ToolManagerInterface } from '@orkestrel/tool'
 import type {
 	MCPCompletion,
-	MCPCompletionManagerInterface,
+	MCPCompletionInterface,
 	MCPContent,
 	MCPContinuationInterface,
 	MCPInputContext,
@@ -743,7 +743,7 @@ export const TASK_SCHEMA_ID_ROWS: readonly TaskSchemaRow[] = [
  *
  * @remarks
  * A plain `execute` return is an ordinary domain value, and the server normalizes one
- * into text plus `structuredContent` exactly as it should — so a fixture with no
+ * into text plus `structuredContent` exactly as its contract states — so a fixture with no
  * `execution` port cannot answer an image, an audio clip, an embedded resource, or a
  * mixed sequence, and its failures would measure the fixture rather than the library.
  * `MCPServerOptions.execution` is the shipped, documented port for precisely this.
@@ -1530,7 +1530,7 @@ export function buildConformanceOptions(): MCPServerOptions {
 			}
 		},
 	}
-	const completion: MCPCompletionManagerInterface = {
+	const completion: MCPCompletionInterface = {
 		complete: (params) => {
 			const ref = params.ref
 			if (ref.type === 'ref/prompt') {

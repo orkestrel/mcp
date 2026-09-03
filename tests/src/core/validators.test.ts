@@ -41,7 +41,6 @@ import {
 	isMCPElicitFieldSchema,
 	isMCPElicitResult,
 	isMCPElicitSchema,
-	isFormElicitationSupported,
 	isInitializeRequest,
 	isMCPInputRequestMap,
 	isMCPInputResponse,
@@ -107,8 +106,6 @@ import {
 	isRFC3339Date,
 	isRFC3339DateTime,
 	isStandardBase64,
-	isTaskSupported,
-	MCP_EXTENSION_TASKS,
 	MCP_HEADER_MISMATCH,
 	MCP_MISSING_CAPABILITY,
 	MCP_META_CAPABILITIES,
@@ -760,15 +757,6 @@ describe('isMCPSubscriptionResult', () => {
 })
 
 describe('multi-round-trip validators', () => {
-	it('recognizes implicit and explicit form capabilities but not URL-only support', () => {
-		expect(isFormElicitationSupported({ elicitation: {} })).toBe(true)
-		expect(isFormElicitationSupported({ elicitation: { form: {} } })).toBe(true)
-		expect(isFormElicitationSupported({ elicitation: { form: {}, url: {} } })).toBe(true)
-		expect(isFormElicitationSupported({ elicitation: { url: {} } })).toBe(false)
-		expect(isFormElicitationSupported({ elicitation: { extension: {} } })).toBe(false)
-		expect(isFormElicitationSupported({})).toBe(false)
-	})
-
 	it('names each capability a round needs and the client did not declare', () => {
 		const form: MCPInputRequest = {
 			method: 'elicitation/create',
@@ -809,7 +797,7 @@ describe('multi-round-trip validators', () => {
 		// The refusal names the ARM the round needs. Answering a URL round with the empty
 		// record names the declaration a URL-capable client already sent, so that client
 		// re-sends the identical declaration and is refused identically. `{ url: {} }` is the
-		// spelling `isFormElicitationSupported` reads as URL-only, so declaring it exits.
+		// spelling `supportsFormElicitation` reads as URL-only, so declaring it exits.
 		expect(computeMissingCapabilities({ approval: url }, { elicitation: {} })).toEqual({
 			elicitation: { url: {} },
 		})
@@ -1176,7 +1164,6 @@ describe('multi-round-trip validators', () => {
 
 		const { proxy, revoke } = Proxy.revocable({}, {})
 		revoke()
-		expect(isFormElicitationSupported(proxy)).toBe(false)
 		expect(isMCPInputRequestMap(proxy)).toBe(false)
 		expect(isMCPInputResult(proxy)).toBe(false)
 	})
@@ -1902,29 +1889,8 @@ describe('isModernRequest', () => {
 })
 
 describe('stable Tasks extension validators', () => {
-	it('reads the extension declaration as presence under the extensions record', () => {
-		expect(isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: {} } })).toBe(true)
-		// Re-ruled from `true`: the authority declares the capability EXACTLY empty
-		// (`TasksExtensionCapability = Record<string, never>`), so a member under the key is a
-		// peer declaring something this extension does not define, not a forward-compatible
-		// option this package must tolerate.
-		expect(isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: { later: {} } } })).toBe(false)
-		expect(isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: { enabled: true } } })).toBe(
-			false,
-		)
-		expect(isTaskSupported({ extensions: {} })).toBe(false)
-		expect(isTaskSupported({ [MCP_EXTENSION_TASKS]: {} })).toBe(false)
-		expect(isTaskSupported({ extensions: { 'io.modelcontextprotocol/task': {} } })).toBe(false)
-		// A non-record value is a client speaking a different protocol, not a shorthand.
-		expect(isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: true } })).toBe(false)
-		expect(isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: null } })).toBe(false)
-		expect(isTaskSupported({ elicitation: {} })).toBe(false)
-		expect(isTaskSupported({})).toBe(false)
-	})
-
 	it('answers every value in the shared adversarial corpus without throwing', () => {
 		for (const value of createHostileCorpus()) {
-			expect(isTaskSupported(value)).toBe(false)
 			expect(isMCPTaskResult(value)).toBe(false)
 			expect(isMCPTaskStatus(value)).toBe(false)
 			expect(isMCPTaskDetail(value)).toBe(false)
@@ -2203,7 +2169,6 @@ const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = 
 	isBoundedString: (value) => isBoundedString(value, 4_096),
 	isElicitContent: (value) => isElicitContent(value, TOTALITY_SCHEMA),
 	isFieldToken,
-	isFormElicitationSupported,
 	isInitializeRequest,
 	isJSONObject,
 	isJSONRPCError,
@@ -2278,7 +2243,6 @@ const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = 
 	isRFC3339Date,
 	isRFC3339DateTime,
 	isStandardBase64,
-	isTaskSupported,
 })
 
 // The sweep itself, so the guards and their control run the identical loop.

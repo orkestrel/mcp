@@ -94,11 +94,11 @@ import {
  *
  * @example
  * ```ts
- * isFormElicitationSupported({ elicitation: {} }) // true — implicit form mode
- * isFormElicitationSupported({ elicitation: { url: {} } }) // false
+ * supportsFormElicitation({ elicitation: {} }) // true — implicit form mode
+ * supportsFormElicitation({ elicitation: { url: {} } }) // false
  * ```
  */
-export function isFormElicitationSupported(value: unknown): boolean {
+export function supportsFormElicitation(value: unknown): boolean {
 	const owned = attempt(() => cloneJSONRecord(value))
 	if (!owned.success) return false
 	try {
@@ -122,7 +122,7 @@ export function isFormElicitationSupported(value: unknown): boolean {
  * `ClientCapabilities` shape the schema defines rather than as a list of names.
  *
  * Each kind maps to one declaration: `sampling/createMessage` to `sampling`, `roots/list` to
- * `roots`, a form elicitation to what {@link isFormElicitationSupported} accepts, and a
+ * `roots`, a form elicitation to what {@link supportsFormElicitation} accepts, and a
  * URL-mode elicitation to a record-valued `elicitation.url`. A request this package cannot
  * recognize needs nothing, because {@link import('./validators.js').isMCPInputRequestMap}
  * has already refused the round it would have travelled in. Total over hostile input.
@@ -166,7 +166,7 @@ export function computeMissingCapabilities(
 			if (!isRecord(elicitation) || !isRecord(elicitation['url'])) urlUndeclared = true
 			continue
 		}
-		if (!isFormElicitationSupported(declared)) formUndeclared = true
+		if (!supportsFormElicitation(declared)) formUndeclared = true
 	}
 	if (formUndeclared && !urlUndeclared) missing['elicitation'] = {}
 	if (urlUndeclared && !formUndeclared) missing['elicitation'] = { url: {} }
@@ -195,12 +195,12 @@ export function computeMissingCapabilities(
  *
  * @example
  * ```ts
- * isTaskSupported({ extensions: { 'io.modelcontextprotocol/tasks': {} } }) // true
- * isTaskSupported({ extensions: {} }) // false — the key is the declaration
- * isTaskSupported({ extensions: { 'io.modelcontextprotocol/tasks': { on: true } } }) // false
+ * supportsTask({ extensions: { 'io.modelcontextprotocol/tasks': {} } }) // true
+ * supportsTask({ extensions: {} }) // false — the key is the declaration
+ * supportsTask({ extensions: { 'io.modelcontextprotocol/tasks': { on: true } } }) // false
  * ```
  */
-export function isTaskSupported(value: unknown): boolean {
+export function supportsTask(value: unknown): boolean {
 	const owned = attempt(() => cloneJSONRecord(value))
 	if (!owned.success) return false
 	try {
@@ -1616,7 +1616,7 @@ export function renderHeaderValue(
  *
  * @remarks
  * The projection SEP-2243 requires of an HTTP client, and the same derivation a server runs
- * to know what the request should have carried. Each parameter's value is read at its exact
+ * to know what the request must carry. Each parameter's value is read at its exact
  * property path in the call's own `arguments`; an absent or `null` value omits its header
  * entirely, which is the protocol's distinction between "not supplied" and "supplied empty".
  * The rendered text then travels through {@link encodeSentinel}, so a value carrying

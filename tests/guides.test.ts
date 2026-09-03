@@ -6,12 +6,16 @@ import type {
 	JSONRPCId,
 	JSONRPCMessage,
 	JSONRPCNotification,
+	MCPCallOutcome,
 	MCPDispatcherInterface,
 	MCPSubscriptionResult,
 } from '@src/core'
 import type { ChildProcess } from 'node:child_process'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import {
+	bindClient,
+	bindServer,
+	createDuplexClientTransport,
 	createMCPClient,
 	createMCPLegacy,
 	createMCPLegacyClientTransport,
@@ -44,7 +48,12 @@ import {
 } from '@orkestrel/guide'
 import { requireValue, waitForCondition } from '@orkestrel/test'
 import { createScratch, readInventory } from '@orkestrel/test/server'
-import { createLoopbackTransport, createSubscriptionServer, waitForSettlement } from './setup.js'
+import {
+	createLoopbackTransport,
+	createMemoryTransport,
+	createSubscriptionServer,
+	waitForSettlement,
+} from './setup.js'
 import { findMissingNamedImports } from './setupServer.js'
 
 /** Every fence language this package's guides are allowed to use. */
@@ -638,7 +647,7 @@ for (const entry of manifest) {
 				.map((fence) => fence.code)
 			const names = guide
 				.surface()
-				.filter((symbol) => symbol.kind === 'function')
+				.filter((symbol) => symbol.keyword === 'function')
 				.map((symbol) => symbol.name)
 			expect(findUnexampled(names, fences, source.examples())).toEqual([])
 		})
@@ -1421,5 +1430,34 @@ describe('guides/mcp.md § Consume a subscription from a client — what the str
 		expect(reading.refusal).toMatchObject({ code: -32602 })
 		expect(isMCPError(reading.refusal)).toBe(true)
 		expect(reading.methods).toEqual(['server/discover'])
+	})
+})
+
+/** Drive the fence verbatim: bind both halves, connect, and read what `call` resolves to. */
+async function readGuideBoundCall(): Promise<MCPCallOutcome> {
+	const serverSide = createMemoryTransport()
+	const clientSide = createMemoryTransport()
+	serverSide.connect(clientSide)
+	clientSide.connect(serverSide)
+
+	const tools = createToolManager()
+	tools.add(createTool({ name: 'add', execute: (a) => Number(a['x']) + Number(a['y']) }))
+	const server = createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
+	bindServer(server, serverSide)
+
+	const client = createMCPClient({ transport: createDuplexClientTransport(clientSide) })
+	const unbind = bindClient(client, clientSide)
+	await client.connect()
+	const outcome = await client.call('add', { x: 2, y: 5 })
+	unbind()
+	return outcome
+}
+
+// The fence names the value its binding holds, and `call` resolves an MCPCallOutcome rather than
+// the bare result — so the comment is executed here instead of read, and it reddens the moment
+// the documented shape and the resolved shape disagree.
+describe('guides/mcp.md § Bind an `MCPServer` / `MCPClient` to any duplex transport', () => {
+	it('resolves the outcome the fence documents over the bound loopback pair', async () => {
+		expect(await readGuideBoundCall()).toEqual({ resultType: 'complete', value: 7 })
 	})
 })

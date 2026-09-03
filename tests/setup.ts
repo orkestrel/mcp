@@ -795,7 +795,7 @@ export async function probeOwnership(
 		identity: { name: 'ownership', version: '1.0.0' },
 		tools: createToolManager(),
 		limit: { subscriptions: 1 },
-		subscription: { notifications: { toolsListChanged: true }, listen: () => source.readable },
+		subscription: { notifications: { toolsListChanged: true }, producer: () => source.readable },
 	})
 	const opened = await mcp.dispatch(createSubscriptionRequest('probe-open'))
 	if (!(Symbol.asyncIterator in opened)) throw new Error('expected a controlled exchange')
@@ -948,13 +948,13 @@ export interface MCPTestLoopbackInterface extends MCPMessageTransportInterface {
  * identifier before the acknowledgement agrees to it, so the store a scenario seeds is what
  * decides the acknowledged set.
  *
- * @param listen - The real server subscription producer
+ * @param producer - The real server subscription producer
  * @param notifications - The notification families the server advertises
  * @param tasks - The durable store the server resolves requested task identifiers through
  * @returns A real in-process MCP server with the built-in subscription method registered
  */
 export function createSubscriptionServer(
-	listen: MCPSubscriptionHandler,
+	producer: MCPSubscriptionHandler,
 	notifications: MCPSubscriptionFilter = {
 		toolsListChanged: true,
 		promptsListChanged: true,
@@ -966,8 +966,8 @@ export function createSubscriptionServer(
 	return createMCPServer({
 		identity: { name: 'subscription-server', version: '1.0.0' },
 		tools: createToolManager(),
-		subscription: { notifications, listen },
-		...(tasks === undefined ? {} : { task: { tasks, defer: () => undefined } }),
+		subscription: { notifications, producer },
+		...(tasks === undefined ? {} : { task: { tasks, deferral: () => undefined } }),
 	})
 }
 
@@ -1098,10 +1098,10 @@ export interface ManualClockInterface {
 
 /**
  * Create a {@link ManualClockInterface} — a manual-time clock-reading seam.
- * Injected wherever a `clock: () => number` option is exposed (`createMCPSession`
- * threads a trailing `now`): the test advances the instant explicitly instead of
- * sleeping through a real TTL window, so idle-TTL eviction is deterministic under any
- * suite load.
+ * Injected wherever a `clock: () => number` option is exposed (`createMCPSession` for the
+ * store sweep, `MCPSessionOptions.clock` for the replay log's own sweep): the test advances
+ * the instant explicitly instead of sleeping through a real TTL window, so idle-TTL eviction
+ * is deterministic under any suite load.
  *
  * @param start - The initial manual instant (epoch ms); defaults to `0`
  * @returns A manual clock whose `now` is the injectable `() => number`
@@ -1172,7 +1172,7 @@ export function createRecordingTransport(mcp: MCPServerInterface): TestTransport
 
 /**
  * Create a real {@link MCPServerInterface} with the stable Tasks extension configured — one
- * `render` tool, and a `defer` that turns every call into a durable task.
+ * `render` tool, and a `deferral` that turns every call into a durable task.
  *
  * @remarks
  * The peer half of every client-side task scenario. Its negative control is
@@ -1189,7 +1189,7 @@ export function createTaskServer(tasks: MCPTaskManagerInterface): MCPServerInter
 	return createMCPServer({
 		identity: { name: 'task-server', version: '1.0.0' },
 		tools: registry,
-		task: { tasks, defer: () => 'operation-1' },
+		task: { tasks, deferral: () => 'operation-1' },
 	})
 }
 
@@ -1214,8 +1214,8 @@ export interface TestTaskOptions {
 	 * The `pollIntervalMs` hint each created task publishes; omitted publishes none.
 	 *
 	 * @remarks
-	 * A manager's SUGGESTION about how often a client should ask again, and nothing more —
-	 * opt-in here precisely because a manager that pushes notifications instead simply omits it,
+	 * A manager's SUGGESTION about how often a client must ask again, and nothing more —
+	 * opt-in here precisely because a manager that pushes notifications instead omits it,
 	 * and every existing snapshot assertion was written against a task that does.
 	 */
 	readonly poll?: number

@@ -1,8 +1,9 @@
 import type { MCPLegacyVersion, MCPModernVersion, MCPVersion } from './types.js'
 
-// MCP protocol revisions, reserved modern `_meta` keys, and protocol error codes.
-// Transport-level header names (session / version headers) belong to the HTTP
-// transport, not core.
+// MCP protocol revisions, reserved modern `_meta` keys, protocol error codes, and the wire
+// tokens both environment faces negotiate — the Streamable-HTTP header names and the WebSocket
+// subprotocol. A wire value lives here because the transport that writes it and the layer that
+// reads it back are one contract; a copy per environment face is the drift the faces carried.
 
 /**
  * Names the revision offered and defaulted to in the legacy `initialize` handshake.
@@ -151,6 +152,27 @@ export const MCP_NAME_HEADER = 'mcp-name'
  * invalid, which is what {@link import('@orkestrel/mcp').buildHeaderParameters} decides.
  */
 export const MCP_HEADER_ANNOTATION = 'x-mcp-header'
+
+// The WebSocket subprotocol token — one wire value both faces negotiate, so it lives here for
+// the same reason the Streamable-HTTP headers do: the browser client transport that offers it
+// and the Node server that echoes it are one wire contract.
+
+/**
+ * Names the WebSocket subprotocol `createWebSocketClientTransport` requests by default —
+ * `'mcp'`, which `createWebSocketServer` selects when the client offers it. Per RFC 6455
+ * §4.1 a client MUST fail the connection if the server returns
+ * a subprotocol it did not request; Node ≥ 22 (undici) enforces this strictly, so the
+ * default bakes the correct value in. Override `WebSocketClientTransportOptions.protocols`
+ * only when connecting to a foreign server that speaks a different subprotocol (or `[]`
+ * for no subprotocol negotiation at all).
+ *
+ * @remarks
+ * The client sends it in `Sec-WebSocket-Protocol` and the server echoes it in its `101`
+ * handshake, so an MCP WebSocket endpoint is distinguishable from any other WebSocket on the
+ * same path. The default WebSocket upgrade path is the same `'/mcp'` the HTTP transport mounts
+ * at — the upgrade is selected by the `Upgrade: websocket` header, not a separate path.
+ */
+export const MCP_WEBSOCKET_SUBPROTOCOL = 'mcp'
 
 /**
  * Bounds the `tools/list` pages one modern `tools/call` walks to reach its own annotations.

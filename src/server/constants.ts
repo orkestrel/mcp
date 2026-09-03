@@ -1,9 +1,10 @@
 // The MCP server-environment transport constants — the reverse-proxy buffering header, the
 // default mount path, the folded event-log bounds, and the stdio client transport's default
-// write-delivery bound. The Streamable-HTTP wire header names live in `@src/core` beside the
-// transport that stamps them: `createMCPSession` reads the session id from there and
-// `createMCPRoutes` validates a present protocol version on every POST against the same
-// spelling the client wrote.
+// write-delivery bound. The Streamable-HTTP wire header names and the WebSocket subprotocol
+// live in `@src/core` beside the transports that write them: `createMCPSession` reads the
+// session id from there, `createMCPRoutes` validates a present protocol version on every POST
+// against the same spelling the client wrote, and `createWebSocketServer` echoes the same
+// subprotocol token the browser face offers.
 
 /** Names the reverse-proxy response header controlling buffering of an SSE response. */
 export const SSE_BUFFERING_HEADER = 'x-accel-buffering'
@@ -28,19 +29,6 @@ export const DEFAULT_MCP_KEEPALIVE_INTERVAL = 15_000
 export const SSE_KEEPALIVE_COMMENT = 'keepalive'
 
 /**
- * Names the WebSocket subprotocol the MCP-over-WebSocket transports negotiate — sent by the
- * client in `Sec-WebSocket-Protocol`, echoed by the server in its `101` handshake.
- *
- * @remarks
- * `createWebSocketServer` echoes it in the upgrade response and `createWebSocketClientTransport`
- * requests it, so an MCP WebSocket endpoint is distinguishable from any other WebSocket on the
- * same path. The default WebSocket upgrade path is {@link DEFAULT_MCP_PATH} (the same `'/mcp'`
- * the HTTP transport mounts at) — the upgrade is selected by the `Upgrade: websocket` header,
- * not a separate path.
- */
-export const MCP_WEBSOCKET_SUBPROTOCOL = 'mcp'
-
-/**
  * Sets the default capacity of a session's FOLDED resumable event log (the per-{@link
  * import('./MCPSession.js').MCPSession} replay log) — the maximum number of pushed
  * server→client messages retained for replay before the OLDEST is evicted.
@@ -48,8 +36,8 @@ export const MCP_WEBSOCKET_SUBPROTOCOL = 'mcp'
  * @remarks
  * Bounds the replay log's memory: only the most-recent {@link DEFAULT_MCP_SESSION_CAPACITY}
  * pushes are retained, so a client reconnecting with a `Last-Event-ID` older than that window
- * replays nothing (its cursor fell off the back). Override per `createMCPSession`'s `capacity`
- * for a deeper / shallower window.
+ * replays nothing (its cursor fell off the back). Override through the `session` group of
+ * `createMCPSession`'s options (`session.capacity`) for a deeper / shallower window.
  */
 export const DEFAULT_MCP_SESSION_CAPACITY = 1024
 

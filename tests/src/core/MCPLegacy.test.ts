@@ -355,7 +355,7 @@ describe('MCPLegacy collapse boundaries', () => {
 			createMCPServer({
 				identity: { name: 'task', version: '1.0.0' },
 				tools: registry,
-				task: { tasks, defer: () => 'legacy-task' },
+				task: { tasks, deferral: () => 'legacy-task' },
 			}),
 		)
 

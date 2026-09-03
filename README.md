@@ -57,7 +57,7 @@ const client = createMCPClient({
 })
 await client.connect()
 const tools = await client.tools()
-const value = await client.call('add', { x: 2, y: 5 })
+const outcome = await client.call('add', { x: 2, y: 5 })
 ```
 
 The SAME `MCPClient` drives a `createWebSocketClientTransport` or

@@ -18,11 +18,17 @@ import type {
 } from './types.js'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { bindServer, decodeEvent, HTTPClientTransport, isJSONRPCInvocation } from '@src/core'
+import {
+	bindServer,
+	decodeEvent,
+	HTTPClientTransport,
+	isJSONRPCInvocation,
+	MCP_WEBSOCKET_SUBPROTOCOL,
+} from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { signToken, verifyToken } from '@orkestrel/server'
 import { createNodeWebSocket, WEBSOCKET_VERSION } from '@orkestrel/websocket'
-import { DEFAULT_MCP_PATH, MCP_WEBSOCKET_SUBPROTOCOL } from './constants.js'
+import { DEFAULT_MCP_PATH } from './constants.js'
 import { createMCPPostHandler } from './handlers.js'
 import { upgradeRequestPath } from './helpers.js'
 import { StdioClientTransport } from './transports/StdioClientTransport.js'

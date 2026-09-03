@@ -27,7 +27,7 @@ import type { ToolManagerInterface } from '@orkestrel/tool'
  *   the native `WebSocket` constructor the same way) URL of the remote server's
  *   WebSocket endpoint. REQUIRED.
  * - `protocols` — the WebSocket subprotocol(s) to request. **Defaults to
- *   {@link import('./constants.js').MCP_WEBSOCKET_SUBPROTOCOL} (`'mcp'`)**, which
+ *   {@link import('@orkestrel/mcp').MCP_WEBSOCKET_SUBPROTOCOL} (`'mcp'`)**, which
  *   `createWebSocketServer` selects when the offer contains it. Per
  *   RFC 6455 §4.1 a client must fail the connection if the server returns a subprotocol
  *   it did not request; Node ≥ 22 (undici) enforces this strictly, so the default saves

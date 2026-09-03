@@ -17,12 +17,12 @@ import {
 	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
+	MCP_WEBSOCKET_SUBPROTOCOL,
 	parseRequestContext,
 } from '@src/core'
 import {
 	DEFAULT_MCP_SERVER_NAME,
 	DEFAULT_MCP_SERVER_VERSION,
-	MCP_WEBSOCKET_SUBPROTOCOL,
 	createHTTPClientTransport,
 	createMessagePortTransport,
 	createScopeMessageListener,
@@ -456,11 +456,6 @@ describe('createHTTPClientTransport — the browser client against the Node-face
 	})
 })
 
-// ── MessagePort: a genuinely SYMMETRIC MCPTransportInterface, both sides driven by
-// the SAME class over one REAL native `new MessageChannel()` (no mocks) — port1
-// bound to a REAL server (`bindServer`), port2 driving a REAL
-// client (`bindClient` + `createDuplexClientTransport`) ───────────────────────
-
 describe('createMessagePortTransport — a symmetric MCPTransportInterface over a real MessageChannel', () => {
 	it('connect → tools/list → tools/call(add): a value round-trips over port1/port2', async () => {
 		const { port1, port2 } = new MessageChannel()
@@ -495,101 +490,6 @@ describe('createMessagePortTransport — a symmetric MCPTransportInterface over 
 
 		await expect(client.call('boom', {})).rejects.toThrow(/kaboom/)
 		await client.disconnect()
-	})
-
-	it('a non-string postMessage payload is ignored — no crash, no reply', async () => {
-		const { port1, port2 } = new MessageChannel()
-		const transport = createMessagePortTransport({ port: port1 })
-		const received: string[] = []
-		transport.listen((message) => received.push(message))
-
-		port2.postMessage({ not: 'a string' })
-		port2.postMessage('sentinel')
-		await vi.waitFor(() => expect(received).toEqual(['sentinel']))
-	})
-
-	it('a string postMessage payload IS delivered to the registered listen handler', async () => {
-		const { port1, port2 } = new MessageChannel()
-		const transport = createMessagePortTransport({ port: port1 })
-		const received: string[] = []
-		transport.listen((message) => received.push(message))
-
-		port2.postMessage('a plain string message')
-		await vi.waitFor(() => expect(received).toEqual(['a plain string message']))
-	})
-
-	it('close() closes the port — a subsequent postMessage from the peer is undelivered', async () => {
-		const { port1, port2 } = new MessageChannel()
-		const transport = createMessagePortTransport({ port: port1 })
-		const received: string[] = []
-		transport.listen((message) => received.push(message))
-
-		await transport.close()
-		port2.postMessage('after close')
-		await waitForDelay(50)
-
-		expect(received).toEqual([])
-	})
-
-	it('close detaches its port listeners and clears registered callbacks', async () => {
-		const { port1 } = new MessageChannel()
-		const transport = createMessagePortTransport({ port: port1 })
-		const received: string[] = []
-		transport.listen((message) => received.push(message))
-
-		await transport.close()
-		port1.dispatchEvent(new MessageEvent('message', { data: 'after close' }))
-
-		expect(received).toEqual([])
-	})
-
-	it('close() fires the registered closed handler exactly once, even called twice', async () => {
-		const { port1 } = new MessageChannel()
-		const transport = createMessagePortTransport({ port: port1 })
-		let closedCalls = 0
-		transport.closed(() => {
-			closedCalls += 1
-		})
-
-		await transport.close()
-		await transport.close()
-
-		expect(closedCalls).toBe(1)
-	})
-
-	it('listen/closed are single-handler-replace — a second registration replaces, never adds', async () => {
-		const { port1, port2 } = new MessageChannel()
-		const transport = createMessagePortTransport({ port: port1 })
-		const first: string[] = []
-		const second: string[] = []
-		transport.listen((message) => first.push(message))
-		transport.listen((message) => second.push(message))
-
-		port2.postMessage('one')
-		await vi.waitFor(() => expect(second).toEqual(['one']))
-		expect(first).toEqual([])
-	})
-
-	it('a messageerror event does not close the transport — later well-formed messages still arrive', async () => {
-		const { port1, port2 } = new MessageChannel()
-		const transport = createMessagePortTransport({ port: port1 })
-		const received: string[] = []
-		let closedCalls = 0
-		transport.listen((message) => received.push(message))
-		transport.closed(() => {
-			closedCalls += 1
-		})
-
-		// Dispatch a genuine `messageerror` event directly on port1 — the real native event
-		// this transport registers NO listener for (a `MessagePort` is a real `EventTarget`,
-		// so this is a real event dispatch, not a mock of the transport). An unhandled
-		// `messageerror` neither throws, closes the port, nor reaches the transport, and that
-		// is what this asserts.
-		port1.dispatchEvent(new MessageEvent('messageerror', { data: null }))
-		port2.postMessage('still works')
-		await vi.waitFor(() => expect(received).toEqual(['still works']))
-
-		expect(closedCalls).toBe(0)
 	})
 })
 

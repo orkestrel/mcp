@@ -21,7 +21,7 @@ import { MCPServer } from './MCPServer.js'
  * {@link import('@orkestrel/tool').ToolManagerInterface} and an optional
  * {@link import('./types.js').MCPResourceManagerInterface},
  * {@link import('./types.js').MCPPromptManagerInterface}, and
- * {@link import('./types.js').MCPCompletionManagerInterface} over JSON-RPC 2.0.
+ * {@link import('./types.js').MCPCompletionInterface} over JSON-RPC 2.0.
  *
  * @remarks
  * Pump raw message strings through `handle` (parse → dispatch → serialize) from a
@@ -103,7 +103,7 @@ export function createMCPLegacy(server: MCPServerInterface): MCPDispatcherInterf
  * })
  * await client.connect()
  * agent.context.tools.add(await client.tools()) // give the agent the remote tools
- * const value = await client.call('search', { query: 'mcp' })
+ * const outcome = await client.call('search', { query: 'mcp' })
  * ```
  */
 export function createMCPClient(options: MCPClientOptions): MCPClientInterface {

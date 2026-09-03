@@ -11,7 +11,7 @@ import type { Duplex } from 'node:stream'
 import { randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
-import { deliverMessage } from '@src/core'
+import { deliverMessage, MCP_WEBSOCKET_SUBPROTOCOL } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import {
@@ -20,7 +20,6 @@ import {
 	WEBSOCKET_READY_OPEN,
 	WEBSOCKET_VERSION,
 } from '@orkestrel/websocket'
-import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
 
 /**
  * Drives a REMOTE MCP server over a WebSocket — a CLIENT

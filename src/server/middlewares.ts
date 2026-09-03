@@ -42,8 +42,9 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  *   can re-read it from a freshly-built forwarded `Request`). Resolves a session through {@link
  *   readSessionHeader}: a VALID id touches the entry and sets `context.state.session`; an
  *   ABSENT / unknown id whose (guarded) body parses to an `initialize` request ({@link
- *   isInitializeRequest}) MINTS a fresh {@link MCPSession} (`crypto.randomUUID()`, `capacity`)
- *   and sets `context.state.session`; neither → {@link rejectUnknownSession} (`404`). The
+ *   isInitializeRequest}) MINTS a fresh {@link MCPSession} (`crypto.randomUUID()`, the `session`
+ *   options group) and sets `context.state.session`; neither → {@link rejectUnknownSession}
+ *   (`404`). The
  *   minted entry pins the negotiated legacy revision, which is supplied to a later headerless
  *   live-session request. It then
  *   FORWARDS a fresh `Request` carrying the buffered `text` (`next(forwarded)`) — never the
@@ -69,10 +70,11 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  * @typeParam TState - The consumer's `TState`, which MUST extend {@link MCPSessionState} so
  *   the resolved session can be threaded through `context.state.session`
  * @param options - Optional `path` (default {@link DEFAULT_MCP_PATH}), `ttl` (idle-session
- *   sweep window, ms — omit for sessions that live until an explicit `DELETE`), `capacity`
- *   (the folded per-session replay-log bound), and `clock` (the deterministic epoch-ms clock;
- *   defaults to `Date.now`), plus the shared `origin` validation options; see
- *   {@link MCPSessionMiddlewareOptions}
+ *   sweep window, ms — omit for sessions that live until an explicit `DELETE`), `session`
+ *   (the knobs each minted {@link MCPSession} takes — `capacity`, the log's own `ttl`, and its
+ *   `clock`), and `clock` (the deterministic epoch-ms clock this middleware keeps its own
+ *   bookkeeping on and hands down to a session that names none; defaults to `Date.now`), plus
+ *   the shared `origin` validation options; see {@link MCPSessionMiddlewareOptions}
  * @returns A {@link MiddlewareHandler} that mints / validates sessions + serves the resumable
  *   `GET` / `DELETE`
  *
@@ -92,7 +94,7 @@ export function createMCPSession<TState extends MCPSessionState>(
 	options?: MCPSessionMiddlewareOptions,
 ): MiddlewareHandler<TState> {
 	const path = options?.path ?? DEFAULT_MCP_PATH
-	const capacity = options?.capacity
+	const sessionOptions = options?.session ?? {}
 	const ttl = options?.ttl
 	const clock = options?.clock ?? Date.now
 	const origin = options?.origin
@@ -176,10 +178,13 @@ export function createMCPSession<TState extends MCPSessionState>(
 		let created: MCPSessionEntry | undefined
 		if (entry === undefined) {
 			if (parsed !== undefined && isInitializeRequest(parsed)) {
-				const session = new MCPSession(
-					crypto.randomUUID(),
-					capacity !== undefined ? { capacity } : {},
-				)
+				// The minted session inherits this middleware's own clock unless the caller named a
+				// different one under `session`, so a deterministic clock reaches the log's lazy
+				// sweep instead of leaving it on wall-clock time.
+				const session = new MCPSession(crypto.randomUUID(), {
+					...sessionOptions,
+					clock: sessionOptions.clock ?? clock,
+				})
 				created = { session, touched: clock(), version: inferLegacyVersion(parsed) }
 				entry = created
 			} else {

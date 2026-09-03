@@ -5,10 +5,9 @@ import type {
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { WebSocketClientTransportOptions } from '../types.js'
-import { deliverMessage } from '@src/core'
+import { deliverMessage, MCP_WEBSOCKET_SUBPROTOCOL } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
-import { MCP_WEBSOCKET_SUBPROTOCOL } from '../constants.js'
 
 /**
  * Drives a REMOTE MCP server over the native `WebSocket` global from the browser face — a

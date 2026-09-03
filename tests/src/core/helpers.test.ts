@@ -69,15 +69,20 @@ import {
 	sendStream,
 	serializeJSON,
 	stampSubscriptionNotification,
+	supportsFormElicitation,
+	supportsTask,
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import * as MCP from '@src/core'
 import { waitForAbort, waitForDelay } from '@orkestrel/test'
 import {
+	createHostileCorpus,
 	createJSONRPCNotification,
 	createJSONRPCRequest,
 	createMemoryTransport,
+	createThrowingKeys,
+	GUARD_KEY_NAMES,
 	modernRequest,
 	probeOwnership,
 	TestTaskManager,
@@ -107,6 +112,14 @@ const PROGRESS: JSONRPCNotification = Object.freeze({
 })
 const TERMINAL: JSONRPCResponse = Object.freeze({ jsonrpc: '2.0', id: 1, result: { done: true } })
 
+// Every published CAPABILITY predicate as a unary call. A `supports*` predicate reads a
+// declaration and narrows nothing, so it is no `Guard<T>` — but it takes the same `unknown`
+// from the same wire, so it owes the same totality.
+const PUBLISHED_PREDICATES: Readonly<Record<string, (value: unknown) => boolean>> = Object.freeze({
+	supportsFormElicitation,
+	supportsTask,
+})
+
 async function* replay(
 	messages: readonly JSONRPCNotification[],
 	response: JSONRPCResponse,
@@ -132,6 +145,64 @@ async function* parked(options: MCPMethodOptions, ended: string[]): MCPStream {
 		ended.push('demo/parked')
 	}
 }
+
+describe('capability predicates', () => {
+	it('recognizes implicit and explicit form capabilities but not URL-only support', () => {
+		expect(supportsFormElicitation({ elicitation: {} })).toBe(true)
+		expect(supportsFormElicitation({ elicitation: { form: {} } })).toBe(true)
+		expect(supportsFormElicitation({ elicitation: { form: {}, url: {} } })).toBe(true)
+		expect(supportsFormElicitation({ elicitation: { url: {} } })).toBe(false)
+		expect(supportsFormElicitation({ elicitation: { extension: {} } })).toBe(false)
+		expect(supportsFormElicitation({})).toBe(false)
+		const { proxy, revoke } = Proxy.revocable({}, {})
+		revoke()
+		expect(supportsFormElicitation(proxy)).toBe(false)
+	})
+
+	it('reads the Tasks extension declaration under the extensions record', () => {
+		expect(supportsTask({ extensions: { [MCP_EXTENSION_TASKS]: {} } })).toBe(true)
+		// The authority declares the capability EXACTLY empty
+		// (`TasksExtensionCapability = Record<string, never>`), so a member under the key is a
+		// peer declaring something this extension does not define, not a forward-compatible
+		// option this package must tolerate.
+		expect(supportsTask({ extensions: { [MCP_EXTENSION_TASKS]: { later: {} } } })).toBe(false)
+		expect(supportsTask({ extensions: { [MCP_EXTENSION_TASKS]: { enabled: true } } })).toBe(false)
+		expect(supportsTask({ extensions: {} })).toBe(false)
+		expect(supportsTask({ [MCP_EXTENSION_TASKS]: {} })).toBe(false)
+		expect(supportsTask({ extensions: { 'io.modelcontextprotocol/task': {} } })).toBe(false)
+		// A non-record value is a client speaking a different protocol, not a shorthand.
+		expect(supportsTask({ extensions: { [MCP_EXTENSION_TASKS]: true } })).toBe(false)
+		expect(supportsTask({ extensions: { [MCP_EXTENSION_TASKS]: null } })).toBe(false)
+		expect(supportsTask({ elicitation: {} })).toBe(false)
+		expect(supportsTask({})).toBe(false)
+		for (const value of createHostileCorpus()) expect(supportsTask(value)).toBe(false)
+	})
+
+	it('covers every capability predicate the barrel publishes', () => {
+		const published = Object.keys(MCP).filter((name) => name.startsWith('supports'))
+
+		expect(published.filter((name) => !Object.hasOwn(PUBLISHED_PREDICATES, name))).toEqual([])
+		expect(Object.keys(PUBLISHED_PREDICATES).filter((name) => !published.includes(name))).toEqual(
+			[],
+		)
+	})
+
+	it('answers false rather than throwing for every hostile value a capability predicate reads', () => {
+		const battery = [...createHostileCorpus(), ...createThrowingKeys(GUARD_KEY_NAMES)]
+		const escaped: string[] = []
+		for (const [name, predicate] of Object.entries(PUBLISHED_PREDICATES)) {
+			for (const [index, value] of battery.entries()) {
+				try {
+					predicate(value)
+				} catch {
+					escaped.push(`${name}#${String(index)}`)
+				}
+			}
+		}
+
+		expect(escaped).toEqual([])
+	})
+})
 
 // A modern request — the reserved metadata key is what selects the modern era.
 // The pure dispatch builders (exported, independently testable). Each
@@ -742,7 +813,7 @@ describe('buildDiscoverResult', () => {
 			tools: createToolManager(),
 			task: {
 				tasks: new TestTaskManager(),
-				defer: () => undefined,
+				deferral: () => undefined,
 			},
 		})
 

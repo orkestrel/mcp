@@ -1,7 +1,7 @@
 import type { JSONRPCMessage } from '@src/core'
 import type { SSEEvent } from '@orkestrel/sse'
 import type { MiddlewareHandler } from '@orkestrel/server'
-import type { MCPOriginOptions, MCPSessionState } from '@src/server'
+import type { MCPOriginOptions, MCPSessionOptions, MCPSessionState } from '@src/server'
 import type { ManualClockInterface } from '../../setup.js'
 import type { StartedServerInterface } from '../../setupServer.js'
 import { request } from 'node:http'
@@ -49,7 +49,7 @@ import { createClockMiddleware, createDelayMiddleware, startServer } from '../..
 // `createMCPSession` for a validated request) and `.push`es, so the test exercises push AND
 // demonstrates the in-request push pattern. The `MCPClient` round-trip proves the client
 // ECHOES the captured session end to end. (The folded replay-log mechanics — append / replay /
-// capacity / TTL — are unit-tested on the `MCPSession` entity in MCPSession.test.ts.)
+// `session.capacity` / TTL — are unit-tested on the `MCPSession` entity in MCPSession.test.ts.)
 
 // The consumer TState this suite threads through the spine — extends MCPSessionState so
 // createMCPSession can set `context.state.session`.
@@ -87,12 +87,12 @@ function authenticateCaller(caller: unknown): MiddlewareHandler<AppState> {
 }
 
 // Stand up a STATEFUL MCP server: `createMCPSession` in front of a session-agnostic
-// `createMCPRoutes`, plus (optionally) the in-request push-trigger app middleware. `ttl` /
-// `capacity` / `clock` flow to the session middleware (`clock` is the deterministic manual
-// clock the TTL specs advance explicitly).
+// `createMCPRoutes`, plus (optionally) the in-request push-trigger app middleware. `ttl`, `clock`,
+// and the `session` group flow to the middleware (`clock` is the deterministic manual clock the
+// TTL specs advance explicitly).
 async function startSession(options?: {
 	readonly ttl?: number
-	readonly capacity?: number
+	readonly session?: MCPSessionOptions
 	readonly push?: JSONRPCMessage
 	readonly clock?: () => number
 	readonly origin?: MCPOriginOptions
@@ -110,7 +110,7 @@ async function startSession(options?: {
 	server.use(
 		createMCPSession<AppState>({
 			...(options?.ttl !== undefined ? { ttl: options.ttl } : {}),
-			...(options?.capacity !== undefined ? { capacity: options.capacity } : {}),
+			...(options?.session !== undefined ? { session: options.session } : {}),
 			...(options?.clock !== undefined ? { clock: options.clock } : {}),
 			...(origin !== undefined ? { origin } : {}),
 		}),
@@ -624,6 +624,58 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 		expect(replayed.map((event) => JSON.parse(event.data))).toEqual([pushed, pushed])
 		// The replayed events keep their original ids (so the client can re-resume from them).
 		expect(replayed.map((event) => event.id)).toEqual([seen[1]?.id, seen[2]?.id])
+	})
+
+	it('forwards the session capacity to each session it mints', async () => {
+		const pushed = createJSONRPCRequest({ method: 'notifications/message', id: 'srv' })
+		const handle = await startSession({ push: pushed, session: { capacity: 2 } })
+		const init = await postJSON(handle.base, createJSONRPCRequest())
+		const id = init.headers.get(MCP_SESSION_HEADER)
+		expect(id).not.toBeNull()
+		if (id === null) return
+
+		const first = await openSessionStream(handle.base, id)
+		await triggerPush(handle.base, id)
+		await triggerPush(handle.base, id)
+		await triggerPush(handle.base, id)
+		const seen = await takeEvents(first.response, 3)
+		first.controller.abort()
+
+		const cursor = seen[0]?.id
+		expect(cursor).toBeDefined()
+		const second = await openSessionStream(handle.base, id, cursor)
+		await triggerPush(handle.base, id)
+		const received = await takeEvents(second.response, 1)
+		second.controller.abort()
+		expect(received[0]?.id).not.toBe(seen[1]?.id)
+	})
+
+	// The middleware's `clock` is the deterministic seam a TTL test advances, and the log the
+	// minted session carries runs its own lazy sweep. The fresh push keeps a reverted session's
+	// stream readable after its wall-clock sweep drops the replay, so the control fails on the
+	// replayed id rather than waiting for an event that never arrives.
+	it('forwards its own clock to the session it mints, so the replay log sweeps on that clock', async () => {
+		const pushed = createJSONRPCRequest({ method: 'notifications/message', id: 'srv' })
+		const clock = createManualClock()
+		const handle = await startSession({ push: pushed, clock: clock.now, session: { ttl: 1 } })
+		const init = await postJSON(handle.base, createJSONRPCRequest())
+		const id = init.headers.get(MCP_SESSION_HEADER)
+		expect(id).not.toBeNull()
+		if (id === null) return
+
+		const first = await openSessionStream(handle.base, id)
+		await triggerPush(handle.base, id)
+		await triggerPush(handle.base, id)
+		const seen = await takeEvents(first.response, 2)
+		first.controller.abort()
+
+		const cursor = seen[0]?.id
+		expect(cursor).toBeDefined()
+		const second = await openSessionStream(handle.base, id, cursor)
+		await triggerPush(handle.base, id)
+		const received = await takeEvents(second.response, 1)
+		second.controller.abort()
+		expect(received[0]?.id).toBe(seen[1]?.id)
 	})
 
 	it('GET with a MISSING session id → 404 + a JSON-RPC error body', async () => {

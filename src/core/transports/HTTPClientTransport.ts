@@ -150,6 +150,19 @@ export class HTTPClientTransport implements MCPMessageTransportInterface {
 		}
 	}
 
+	// Abort every request still on the wire, then clear the captured protocol before emitting
+	// `close`, so a reconnect's `initialize` POST carries no `mcp-protocol-version` header (the
+	// captured `session` is untouched). Idempotent: a second `close` on a transport this one
+	// already ended releases nothing and emits nothing.
+	async close(): Promise<void> {
+		if (this.#closed) return
+		this.#closed = true
+		for (const request of this.#pending) request.abort()
+		this.#pending.clear()
+		this.#protocol = undefined
+		this.#emitter.emit('close')
+	}
+
 	// Stamp a `tools/list` send with the listing lineage its answer may cache into, at SEND time:
 	// a cursorless listing starts the next lineage, and a continuation joins whichever one was
 	// current when it went out. Nothing else is stamped, because nothing else reaches the table.
@@ -193,19 +206,6 @@ export class HTTPClientTransport implements MCPMessageTransportInterface {
 		const session = response.headers.get(MCP_SESSION_HEADER)
 		if (session !== null) this.#session = session
 		await this.#deliver(response, message)
-	}
-
-	// Abort every request still on the wire, then clear the captured protocol before emitting
-	// `close`, so a reconnect's `initialize` POST carries no `mcp-protocol-version` header (the
-	// captured `session` is untouched). Idempotent: a second `close` on a transport this one
-	// already ended releases nothing and emits nothing.
-	async close(): Promise<void> {
-		if (this.#closed) return
-		this.#closed = true
-		for (const request of this.#pending) request.abort()
-		this.#pending.clear()
-		this.#protocol = undefined
-		this.#emitter.emit('close')
 	}
 
 	// Modern requests announce their own protocol version, so the header is projected from the

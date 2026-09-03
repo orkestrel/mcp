@@ -563,11 +563,11 @@ already obeys: **MCP owns no storage.** The host builds and owns the registry; t
 package projects it onto the wire, bounds and validates what comes back, and stamps
 the result.
 
-| Option       | Port                            | Methods it registers                                           | Capability advertised |
-| ------------ | ------------------------------- | -------------------------------------------------------------- | --------------------- |
-| `resources`  | `MCPResourceManagerInterface`   | `resources/list`, `resources/read`, `resources/templates/list` | `resources`           |
-| `prompts`    | `MCPPromptManagerInterface`     | `prompts/list`, `prompts/get`                                  | `prompts`             |
-| `completion` | `MCPCompletionManagerInterface` | `completion/complete`                                          | `completions`         |
+| Option       | Port                          | Methods it registers                                           | Capability advertised |
+| ------------ | ----------------------------- | -------------------------------------------------------------- | --------------------- |
+| `resources`  | `MCPResourceManagerInterface` | `resources/list`, `resources/read`, `resources/templates/list` | `resources`           |
+| `prompts`    | `MCPPromptManagerInterface`   | `prompts/list`, `prompts/get`                                  | `prompts`             |
+| `completion` | `MCPCompletionInterface`      | `completion/complete`                                          | `completions`         |
 
 **A capability registers only when its port is configured**, which is the `tasks/*`
 precedent applied to `resources`, `prompts`, and `completion` too. A server built without `resources` registers no
@@ -647,7 +647,7 @@ flag rather than as an over-long list a client must defend against.
 
 ```ts
 import {
-	type MCPCompletionManagerInterface,
+	type MCPCompletionInterface,
 	type MCPPromptManagerInterface,
 	type MCPResourceManagerInterface,
 	createMCPServer,
@@ -702,7 +702,7 @@ const prompts: MCPPromptManagerInterface = {
 			: undefined, // → -32602, naming the prompt
 }
 
-const completion: MCPCompletionManagerInterface = {
+const completion: MCPCompletionInterface = {
 	// Both reference arms land here; `ref/resource` arrives verbatim, template and all.
 	complete: (params) =>
 		params.ref.type === 'ref/prompt'
@@ -889,7 +889,7 @@ resemblance to one.
 ### Configure modern subscriptions
 
 `subscription.notifications` declares what the server can actually honour;
-`subscription.listen` opens the event-driven source for the intersected filter.
+`subscription.producer` opens the event-driven source for the intersected filter.
 The built-in owns wire acknowledgement, filtering, id stamping, and graceful
 closure. A producer only yields project notifications and ends its iterable when
 the source closes; while idle it parks on its own events and may observe the
@@ -947,7 +947,7 @@ const server = createMCPServer({
 	tools: createToolManager(),
 	subscription: {
 		notifications: supported,
-		listen: (_notifications, options) => {
+		producer: (_notifications, options) => {
 			options.signal.throwIfAborted()
 			return changes()
 		},
@@ -957,8 +957,8 @@ server.methods.method('subscriptions/listen') // registered on the same modern s
 ```
 
 **`taskIds` carries the stable Tasks extension's transitions down this same stream.** A
-`notifications/tasks` frame reaches the built-in through the ordinary `subscription.listen`
-producer every other family travels through, and the built-in admits it, filters it against
+`notifications/tasks` frame reaches the built-in through the ordinary `subscription.producer`
+every other family travels through, and the built-in admits it, filters it against
 the agreed identifiers, and stamps it with the subscription id. The server honours the member
 only when a consumer configured BOTH `task` and `subscription`: the manager is what resolves
 an identifier and the producer is what a transition arrives through, so either one missing
@@ -1351,7 +1351,6 @@ import {
 	computeMissingCapabilities,
 	createMCPServer,
 	isElicitContent,
-	isFormElicitationSupported,
 	isMCPElicitFieldSchema,
 	isMCPElicitForm,
 	isMCPElicitRequest,
@@ -1366,6 +1365,7 @@ import {
 	isMCPRootResult,
 	isMCPSampleContent,
 	isMCPSampleResult,
+	supportsFormElicitation,
 } from '@orkestrel/mcp'
 import { createMCPContinuation } from '@orkestrel/mcp/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -1403,8 +1403,8 @@ const server = createMCPServer({
 	},
 })
 
-isFormElicitationSupported({ elicitation: {} }) // true: empty means form-only
-isFormElicitationSupported({ elicitation: { url: {} } }) // false
+supportsFormElicitation({ elicitation: {} }) // true: empty means form-only
+supportsFormElicitation({ elicitation: { url: {} } }) // false
 computeMissingCapabilities({ workspace: { method: 'roots/list' } }, {}) // { roots: {} }
 computeMissingCapabilities({ workspace: { method: 'roots/list' } }, { roots: {} }) // undefined
 computeMissingCapabilities(
@@ -1596,14 +1596,14 @@ revision arrives as its own dated snapshot rather than as a change to this one.
 A **task** is a durable operation that OUTLIVES the request that created it. The server
 answers a modern `tools/call` immediately with `resultType: 'task'` and a `taskId`, and the
 client comes back later for the outcome. Everything between those two moments belongs to the
-consumer: supply an `MCPTaskOptions` with a durable `tasks` store and a `defer` policy, and
+consumer: supply an `MCPTaskOptions` with a durable `tasks` store and a `deferral` policy, and
 this package supplies the protocol and nothing else. It holds **no task state, no timer, and
 no status logic**, because a durable operation outlives the process that answered the request
 and MCP has no durable place to keep one.
 
 **Deferral is the SERVER's decision.** The extension gives a client no flag and no parameter
 to ask for a task — a client only declares, per request, that it can cope with one. So
-`defer` is where the policy lives (long-running tool, queue depth, caller tier), it is
+`deferral` is where the policy lives (long-running tool, queue depth, caller tier), it is
 consulted only for a client that declared the capability on the request in hand, and it
 returns the **stable operation key** the store deduplicates on, or `undefined` to run the
 call inline. The decision sits between the input mechanism and progress: **MRTR first**,
@@ -1628,8 +1628,8 @@ import {
 	isMCPTaskDetail,
 	isMCPTaskResult,
 	isMCPTaskStatus,
-	isTaskSupported,
 	MCP_EXTENSION_TASKS,
+	supportsTask,
 } from '@orkestrel/mcp'
 import { createTool, createToolManager } from '@orkestrel/tool'
 
@@ -1649,14 +1649,14 @@ const server = createMCPServer({
 		},
 		// The stable operation key, or `undefined` to run this call inline. Minted from the
 		// PRINCIPAL and the canonical arguments — never from `call.id`.
-		defer: async ({ call }, { caller }) =>
+		deferral: async ({ call }, { caller }) =>
 			call.name === 'render'
 				? `render:${String(caller)}:${String(await digestJSON(call.arguments, DEFAULT_MCP_LIMITS))}`
 				: undefined,
 	},
 })
 
-isTaskSupported({ extensions: { [MCP_EXTENSION_TASKS]: {} } }) // true: presence is the declaration
+supportsTask({ extensions: { [MCP_EXTENSION_TASKS]: {} } }) // true: presence is the declaration
 isMCPTaskStatus('working') // true; 'done' is not a state the extension defines
 isMCPTaskResult({
 	resultType: 'task',
@@ -1683,7 +1683,7 @@ server.methods.method('tasks/get') // registered only because `task` was configu
 both key obligations at once: a client that retries one logical call sends a fresh id and mints
 a second durable task, which is dedup never firing; and two principals whose clients both start
 counting at `1` produce the SAME key, which is one principal handed a `taskId` over the other's
-work. Mint from the caller and the canonical arguments, as above. `defer` returning `undefined`
+work. Mint from the caller and the canonical arguments, as above. `deferral` returning `undefined`
 is the only way to say "run this inline"; an empty string cannot identify an operation and is
 refused as `-32603` rather than quietly taking the inline path.
 
@@ -1726,7 +1726,7 @@ that RETURNS badly — a snapshot outside the content bound, or one off the publ
 is refused as `-32603` too, but **silently**: nothing was thrown, so there is no caught value
 to report and nothing reaches `error`. A consumer watching `error` to detect a faulty store
 therefore sees its exceptions and is **blind to its contract violations**; watch the `-32603`
-rate on the wire for the contract-violation class. A `defer` that returns a key which is
+rate on the wire for the contract-violation class. A `deferral` that returns a key which is
 neither `undefined` nor a non-empty string is another `-32603`, and it is silent for the same
 reason.
 Do not generalize from the elicitation path, which discloses the opposite way: a continuation
@@ -1778,17 +1778,17 @@ reachable only through a store this package never sees, so each is stated here a
 port's own TSDoc rather than defended with coordination machinery — and each is proved by a
 fixture that violates it and demonstrates exactly this consequence.
 
-| Obligation                               | The consequence of violating it                                                                                                                                                                                                                                                      |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Durability before return**             | `start` must resolve only once the task is retrievable by `task`. This package awaits `start` before it builds the answer, which is its whole half; a store that resolves first hands the client a `taskId` a prompt `tasks/get` answers `-32602` for, and the window is silent.     |
-| **`taskId` entropy**                     | It is a bearer handle over a durable operation. Mint it from a cryptographic source; a handle derived from the key, a counter, or anything else predictable is a handle a stranger can guess.                                                                                        |
-| **Key uniqueness and non-reuse**         | The same logical call must produce the same key and two different calls must not. This package forwards whatever `defer` returned, unchanged, however many times it sees it.                                                                                                         |
-| **Dedup keys scoped to their principal** | Returning the existing task for a repeated key is what makes a retried call idempotent — but an unscoped key means two principals submitting the same key receive the SAME task, one reading the other's work. This package has no principal to scope by; the store or `defer` must. |
-| **Terminal immutability**                | `completed`, `failed`, and `cancelled` never move again. This package holds no cache, so a store that mutates a terminal task has both snapshots reported faithfully and its clients see a task travel backwards.                                                                    |
-| **TTL purge**                            | A task with a finite `ttlMs` is the store's to expire; `ttlMs: null` means no expiry and must never be swept. After a purge the handle answers the same `-32602` an unknown one does, which is intended — and indistinguishable.                                                     |
+| Obligation                               | The consequence of violating it                                                                                                                                                                                                                                                         |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Durability before return**             | `start` must resolve only once the task is retrievable by `task`. This package awaits `start` before it builds the answer, which is its whole half; a store that resolves first hands the client a `taskId` a prompt `tasks/get` answers `-32602` for, and the window is silent.        |
+| **`taskId` entropy**                     | It is a bearer handle over a durable operation. Mint it from a cryptographic source; a handle derived from the key, a counter, or anything else predictable is a handle a stranger can guess.                                                                                           |
+| **Key uniqueness and non-reuse**         | The same logical call must produce the same key and two different calls must not. This package forwards whatever `deferral` returned, unchanged, however many times it sees it.                                                                                                         |
+| **Dedup keys scoped to their principal** | Returning the existing task for a repeated key is what makes a retried call idempotent — but an unscoped key means two principals submitting the same key receive the SAME task, one reading the other's work. This package has no principal to scope by; the store or `deferral` must. |
+| **Terminal immutability**                | `completed`, `failed`, and `cancelled` never move again. This package holds no cache, so a store that mutates a terminal task has both snapshots reported faithfully and its clients see a task travel backwards.                                                                       |
+| **TTL purge**                            | A task with a finite `ttlMs` is the store's to expire; `ttlMs: null` means no expiry and must never be swept. After a purge the handle answers the same `-32602` an unknown one does, which is intended — and indistinguishable.                                                        |
 
 **A task transition reaches a subscribed client through `subscriptions/listen`.** The
-extension's `notifications/tasks` frame is produced by the same `subscription.listen` producer
+extension's `notifications/tasks` frame is produced by the same `subscription.producer`
 every other family travels through, and the built-in filters it against the `taskIds` the
 acknowledgement agreed to and stamps it with the subscription id — see
 [Configure modern subscriptions](#configure-modern-subscriptions) for the server half and
@@ -1910,8 +1910,8 @@ bindServer(server, serverSide)
 const client = createMCPClient({ transport: createDuplexClientTransport(clientSide) })
 const unbind = bindClient(client, clientSide)
 await client.connect()
-const value = await client.call('add', { x: 2, y: 5 })
-// value → 7
+const outcome = await client.call('add', { x: 2, y: 5 })
+// outcome → { resultType: 'complete', value: 7 }
 unbind() // detaches without closing either side of the loopback
 ```
 
@@ -2147,45 +2147,46 @@ Passing a legacy revision to
 
 ### Constants
 
-| Constant                             | Kind  | Value                                                                                                                |
-| ------------------------------------ | ----- | -------------------------------------------------------------------------------------------------------------------- |
-| `MCP_HANDSHAKE_VERSION`              | const | `'2025-11-25'` — the newest legacy initialize revision.                                                              |
-| `MCP_FALLBACK_VERSION`               | const | `'2025-06-18'` — the older supported legacy revision.                                                                |
-| `MCP_MODERN_VERSION`                 | const | `'2026-07-28'` — the modern discovery revision.                                                                      |
-| `SUPPORTED_MODERN_PROTOCOL_VERSIONS` | const | Frozen bare-server discovery set: `2026-07-28`.                                                                      |
-| `SUPPORTED_LEGACY_PROTOCOL_VERSIONS` | const | Frozen decorator handshake set: `2025-11-25`, `2025-06-18`.                                                          |
-| `SUPPORTED_MCP_VERSIONS`             | const | Frozen version-guard set spanning the modern and legacy eras.                                                        |
-| `MCP_META_VERSION`                   | const | `'io.modelcontextprotocol/protocolVersion'` — reserved request-version metadata key.                                 |
-| `MCP_META_CAPABILITIES`              | const | `'io.modelcontextprotocol/clientCapabilities'` — reserved capability metadata key.                                   |
-| `MCP_META_CLIENT`                    | const | `'io.modelcontextprotocol/clientInfo'` — reserved client-identity metadata key.                                      |
-| `MCP_META_SERVER`                    | const | `'io.modelcontextprotocol/serverInfo'` — reserved server-identity metadata key.                                      |
-| `MCP_META_SUBSCRIPTION`              | const | `'io.modelcontextprotocol/subscriptionId'` — reserved subscription-id metadata key.                                  |
-| `MCP_EXTENSION_TASKS`                | const | `'io.modelcontextprotocol/tasks'` — the stable Tasks extension id, dated 2026-07-28 and advertised by presence.      |
-| `MCP_SENTINEL_PREFIX`                | const | `'=?base64?'` — the sentinel's opening marker, and the one spelling both codec directions read.                      |
-| `MCP_SENTINEL_SUFFIX`                | const | `'?='` — the sentinel's closing marker.                                                                              |
-| `MCP_PARAM_PREFIX`                   | const | `'Mcp-Param-'` — the field-name prefix an `x-mcp-header` annotation projects a tool argument onto.                   |
-| `MCP_HEADER_ANNOTATION`              | const | `'x-mcp-header'` — the tool-schema key naming the header one parameter projects into.                                |
-| `MCP_LOOKUP_PAGES`                   | const | `8` — the `tools/list` pages one modern `tools/call` walks to reach its own annotations.                             |
-| `MCP_HEADER_MISMATCH`                | const | `-32020` — required HTTP metadata does not match the request body.                                                   |
-| `MCP_MISSING_CAPABILITY`             | const | `-32021` — the GENERIC undeclared-client-capability code; `data.requiredCapabilities` names which one.               |
-| `MCP_UNSUPPORTED_VERSION`            | const | `-32022` — the request names an unsupported protocol revision.                                                       |
-| `DEFAULT_MCP_CACHE_TTL`              | const | `60000` — default modern cache freshness lifetime in milliseconds.                                                   |
-| `DEFAULT_MCP_LIMITS`                 | const | Frozen secure defaults for message, metadata, keys, state, content, subscriptions, and depth.                        |
-| `EMPTY_MCP_ARGUMENTS`                | const | The one frozen null-prototype record every argument-less modern `tools/call` runs with.                              |
-| `JSONRPC_PARSE_ERROR`                | const | `-32700` — invalid JSON was received (the message did not parse).                                                    |
-| `JSONRPC_INVALID_REQUEST`            | const | `-32600` — the payload was not a valid Request object.                                                               |
-| `JSONRPC_METHOD_NOT_FOUND`           | const | `-32601` — the requested method does not exist.                                                                      |
-| `JSONRPC_INVALID_PARAMS`             | const | `-32602` — the method's parameters were invalid.                                                                     |
-| `JSONRPC_INTERNAL_ERROR`             | const | `-32603` — every contained MODERN fault: provider, handler, continuation, capacity, stream source, or serialization. |
-| `JSONRPC_SERVER_ERROR`               | const | `-32000` — the code `MCPLegacy` alone uses, for a modern result the dated revision cannot represent.                 |
-| `DEFAULT_MCP_CLIENT_NAME`            | const | `'@orkestrel/mcp'` — the default client name reported in modern metadata or the adapter handshake.                   |
-| `DEFAULT_MCP_CLIENT_VERSION`         | const | `'1.0.0'` — the default client version reported in modern metadata or the adapter handshake.                         |
-| `DEFAULT_MCP_REQUEST_TIMEOUT`        | const | `30000` — the default per-request deadline (ms) an `MCPClient` applies.                                              |
-| `DEFAULT_MCP_SUBSCRIPTION_CAPACITY`  | const | `64` — the default number of subscription frames `listen` retains while no read is parked.                           |
-| `MCP_SESSION_HEADER`                 | const | `'mcp-session-id'` — the Streamable-HTTP session header a stateful server mints and the client echoes.               |
-| `MCP_PROTOCOL_VERSION_HEADER`        | const | `'mcp-protocol-version'` — required after initialization; the client sends it and the POST route validates it.       |
-| `MCP_METHOD_HEADER`                  | const | `'mcp-method'` — the modern request method, required to equal the JSON-RPC body method.                              |
-| `MCP_NAME_HEADER`                    | const | `'mcp-name'` — the modern named target, required for `tools/call`, `prompts/get`, and `resources/read`.              |
+| Constant                             | Kind  | Value                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MCP_HANDSHAKE_VERSION`              | const | `'2025-11-25'` — the newest legacy initialize revision.                                                                                                                                                                                                                                                |
+| `MCP_FALLBACK_VERSION`               | const | `'2025-06-18'` — the older supported legacy revision.                                                                                                                                                                                                                                                  |
+| `MCP_MODERN_VERSION`                 | const | `'2026-07-28'` — the modern discovery revision.                                                                                                                                                                                                                                                        |
+| `SUPPORTED_MODERN_PROTOCOL_VERSIONS` | const | Frozen bare-server discovery set: `2026-07-28`.                                                                                                                                                                                                                                                        |
+| `SUPPORTED_LEGACY_PROTOCOL_VERSIONS` | const | Frozen decorator handshake set: `2025-11-25`, `2025-06-18`.                                                                                                                                                                                                                                            |
+| `SUPPORTED_MCP_VERSIONS`             | const | Frozen version-guard set spanning the modern and legacy eras.                                                                                                                                                                                                                                          |
+| `MCP_META_VERSION`                   | const | `'io.modelcontextprotocol/protocolVersion'` — reserved request-version metadata key.                                                                                                                                                                                                                   |
+| `MCP_META_CAPABILITIES`              | const | `'io.modelcontextprotocol/clientCapabilities'` — reserved capability metadata key.                                                                                                                                                                                                                     |
+| `MCP_META_CLIENT`                    | const | `'io.modelcontextprotocol/clientInfo'` — reserved client-identity metadata key.                                                                                                                                                                                                                        |
+| `MCP_META_SERVER`                    | const | `'io.modelcontextprotocol/serverInfo'` — reserved server-identity metadata key.                                                                                                                                                                                                                        |
+| `MCP_META_SUBSCRIPTION`              | const | `'io.modelcontextprotocol/subscriptionId'` — reserved subscription-id metadata key.                                                                                                                                                                                                                    |
+| `MCP_EXTENSION_TASKS`                | const | `'io.modelcontextprotocol/tasks'` — the stable Tasks extension id, dated 2026-07-28 and advertised by presence.                                                                                                                                                                                        |
+| `MCP_SENTINEL_PREFIX`                | const | `'=?base64?'` — the sentinel's opening marker, and the one spelling both codec directions read.                                                                                                                                                                                                        |
+| `MCP_SENTINEL_SUFFIX`                | const | `'?='` — the sentinel's closing marker.                                                                                                                                                                                                                                                                |
+| `MCP_PARAM_PREFIX`                   | const | `'Mcp-Param-'` — the field-name prefix an `x-mcp-header` annotation projects a tool argument onto.                                                                                                                                                                                                     |
+| `MCP_HEADER_ANNOTATION`              | const | `'x-mcp-header'` — the tool-schema key naming the header one parameter projects into.                                                                                                                                                                                                                  |
+| `MCP_LOOKUP_PAGES`                   | const | `8` — the `tools/list` pages one modern `tools/call` walks to reach its own annotations.                                                                                                                                                                                                               |
+| `MCP_HEADER_MISMATCH`                | const | `-32020` — required HTTP metadata does not match the request body.                                                                                                                                                                                                                                     |
+| `MCP_MISSING_CAPABILITY`             | const | `-32021` — the GENERIC undeclared-client-capability code; `data.requiredCapabilities` names which one.                                                                                                                                                                                                 |
+| `MCP_UNSUPPORTED_VERSION`            | const | `-32022` — the request names an unsupported protocol revision.                                                                                                                                                                                                                                         |
+| `DEFAULT_MCP_CACHE_TTL`              | const | `60000` — default modern cache freshness lifetime in milliseconds.                                                                                                                                                                                                                                     |
+| `DEFAULT_MCP_LIMITS`                 | const | Frozen secure defaults for message, metadata, keys, state, content, subscriptions, and depth.                                                                                                                                                                                                          |
+| `EMPTY_MCP_ARGUMENTS`                | const | The one frozen null-prototype record every argument-less modern `tools/call` runs with.                                                                                                                                                                                                                |
+| `JSONRPC_PARSE_ERROR`                | const | `-32700` — invalid JSON was received (the message did not parse).                                                                                                                                                                                                                                      |
+| `JSONRPC_INVALID_REQUEST`            | const | `-32600` — the payload was not a valid Request object.                                                                                                                                                                                                                                                 |
+| `JSONRPC_METHOD_NOT_FOUND`           | const | `-32601` — the requested method does not exist.                                                                                                                                                                                                                                                        |
+| `JSONRPC_INVALID_PARAMS`             | const | `-32602` — the method's parameters were invalid.                                                                                                                                                                                                                                                       |
+| `JSONRPC_INTERNAL_ERROR`             | const | `-32603` — every contained MODERN fault: provider, handler, continuation, capacity, stream source, or serialization.                                                                                                                                                                                   |
+| `JSONRPC_SERVER_ERROR`               | const | `-32000` — the code `MCPLegacy` alone uses, for a modern result the dated revision cannot represent.                                                                                                                                                                                                   |
+| `DEFAULT_MCP_CLIENT_NAME`            | const | `'@orkestrel/mcp'` — the default client name reported in modern metadata or the adapter handshake.                                                                                                                                                                                                     |
+| `DEFAULT_MCP_CLIENT_VERSION`         | const | `'1.0.0'` — the default client version reported in modern metadata or the adapter handshake.                                                                                                                                                                                                           |
+| `DEFAULT_MCP_REQUEST_TIMEOUT`        | const | `30000` — the default per-request deadline (ms) an `MCPClient` applies.                                                                                                                                                                                                                                |
+| `DEFAULT_MCP_SUBSCRIPTION_CAPACITY`  | const | `64` — the default number of subscription frames `listen` retains while no read is parked.                                                                                                                                                                                                             |
+| `MCP_SESSION_HEADER`                 | const | `'mcp-session-id'` — the Streamable-HTTP session header a stateful server mints and the client echoes.                                                                                                                                                                                                 |
+| `MCP_PROTOCOL_VERSION_HEADER`        | const | `'mcp-protocol-version'` — required after initialization; the client sends it and the POST route validates it.                                                                                                                                                                                         |
+| `MCP_METHOD_HEADER`                  | const | `'mcp-method'` — the modern request method, required to equal the JSON-RPC body method.                                                                                                                                                                                                                |
+| `MCP_NAME_HEADER`                    | const | `'mcp-name'` — the modern named target, required for `tools/call`, `prompts/get`, and `resources/read`.                                                                                                                                                                                                |
+| `MCP_WEBSOCKET_SUBPROTOCOL`          | const | `'mcp'` — the WebSocket subprotocol `createWebSocketClientTransport` requests by default and `createWebSocketServer` selects only when offered. Per RFC 6455 §4.1 a client must fail the connection if the server returns a subprotocol it did not request; Node ≥ 22 (undici) enforces this strictly. |
 
 ### Helpers
 
@@ -2244,7 +2245,7 @@ Passing a legacy revision to
 | `isMCPVersion`                     | function | Total guard — narrows a string to a supported `MCPVersion`.                                                                                                                                                                                                                                                             |
 | `isMCPSubscriptionFilter`          | function | Total guard — validates the recognized wire fields of an open modern subscription filter.                                                                                                                                                                                                                               |
 | `isMCPSubscriptionResult`          | function | Total guard — a complete result carrying a valid reserved subscription id; the graceful terminal `listen` returns.                                                                                                                                                                                                      |
-| `isFormElicitationSupported`       | function | Determines whether client capabilities authorize form elicitation; an empty `elicitation` object means form-only.                                                                                                                                                                                                       |
+| `supportsFormElicitation`          | function | Determines whether client capabilities authorize form elicitation; an empty `elicitation` object means form-only.                                                                                                                                                                                                       |
 | `isMCPElicitFieldSchema`           | function | Total guard for one restricted single-field form-elicitation schema.                                                                                                                                                                                                                                                    |
 | `isMCPElicitSchema`                | function | Total guard for the restricted issued object schema, open to unrecognized annotations.                                                                                                                                                                                                                                  |
 | `isMCPElicitForm`                  | function | Total guard for restricted form-mode elicitation parameters.                                                                                                                                                                                                                                                            |
@@ -2261,7 +2262,7 @@ Passing a legacy revision to
 | `isMCPInputResponse`               | function | Total guard checking one client answer against the EXACT request that was issued under its key; an unrecognized request admits nothing.                                                                                                                                                                                 |
 | `isMCPInputResult`                 | function | Total guard for `input_required`, including the runtime at-least-one-of rule.                                                                                                                                                                                                                                           |
 | `computeMissingCapabilities`       | function | Compute the `requiredCapabilities` record naming what a round needs and the client did not declare, or `undefined` when it declared every kind.                                                                                                                                                                         |
-| `isTaskSupported`                  | function | Determines whether client capabilities declare the stable Tasks extension; the extension id under `extensions` must carry the schema's exactly-empty object.                                                                                                                                                            |
+| `supportsTask`                     | function | Determines whether client capabilities declare the stable Tasks extension; the extension id under `extensions` must carry the schema's exactly-empty object.                                                                                                                                                            |
 | `isMCPTaskStatus`                  | function | Total guard for the extension's task lifecycle states.                                                                                                                                                                                                                                                                  |
 | `isMCPTaskResult`                  | function | Total guard for the flat `resultType: 'task'` creation answer, `ttlMs: null` included.                                                                                                                                                                                                                                  |
 | `isMCPTaskDetail`                  | function | Total guard for one task snapshot, enforcing the payload its `status` owes; unrecognized members stay valid.                                                                                                                                                                                                            |
@@ -2390,7 +2391,7 @@ Passing a legacy revision to
 | `MCPCompletionParams`              | interface | `{ ref; argument; context? }` — the parameters of one `completion/complete` request.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `MCPCompletion`                    | interface | `{ values; total?; hasMore? }` — the host's candidate set, BEFORE the protocol's 100-value projection.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `MCPCompletionResult`              | interface | `{ resultType: 'complete'; completion; _meta? }` — the stamped answer, capped at 100 values with `hasMore: true` when the cap truncated.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `MCPCompletionManagerInterface`    | interface | The consumer-supplied completion port — the single `complete` method. Independent of the `resources` and `prompts` ports, because `completions` is a top-level capability.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `MCPCompletionInterface`           | interface | The consumer-supplied completion port — the single `complete` method. Independent of the `resources` and `prompts` ports, because `completions` is a top-level capability.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `MCPElicitValue`                   | type      | Primitive form-response value: string, number, boolean, or a readonly string list.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `MCPElicitChoice`                  | interface | `{ const; title }` — one titled value in a form single- or multi-select schema.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `MCPElicitFieldSchema`             | type      | Restricted boolean, numeric, string, single-select, or multi-select schema for ONE form field.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -2425,10 +2426,10 @@ Passing a legacy revision to
 | `MCPTaskNotificationParams`        | type      | `MCPTaskDetail & { _meta?: MCPNotificationMetaObject; [key: string]: unknown }` — the FLAT params of a `notifications/tasks` frame. No `task` wrapper member exists, so narrow on `status` exactly as with a detail.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `MCPTaskNotification`              | type      | `JSONRPCNotification & { method: 'notifications/tasks'; params: MCPTaskNotificationParams }` — one well-formed `notifications/tasks` frame, the name of what `isMCPTaskNotification` proves.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `MCPTaskResult`                    | type      | `MCPTask & { resultType: 'task'; _meta? }` — the FLAT creation answer, and the only result in this package whose `resultType` is `'task'`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `MCPTaskContext`                   | interface | `{ request; call; tools }` — the call in hand given to `defer` and to `start`. It carries NO cancellation signal, deliberately: `options.signal` is the request's lifetime, which ends when the handle is written.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `MCPTaskContext`                   | interface | `{ request; call; tools }` — the call in hand given to `deferral` and to `start`. It carries NO cancellation signal, deliberately: `options.signal` is the request's lifetime, which ends when the handle is written.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `MCPTaskManagerInterface`          | interface | The consumer-owned durable store — the `start` / `task` / `update` / `abort` methods. There is deliberately no plural accessor, because the extension defines no `tasks/list`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `MCPTaskHandler`                   | type      | `(context, options) => string \| undefined` (or a promise) — the server-decided deferral policy, answering the stable operation key or `undefined` to run the call inline.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `MCPTaskOptions`                   | interface | `{ tasks; defer }` — consumer policy for the stable Tasks extension; supplying it is what registers `tasks/get` / `tasks/update` / `tasks/cancel`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `MCPTaskOptions`                   | interface | `{ tasks; deferral }` — consumer policy for the stable Tasks extension; supplying it is what registers `tasks/get` / `tasks/update` / `tasks/cancel`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `MCPProgress`                      | interface | Official `{ progress; total?; message? }` request progress payload.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `MCPProgressInterface`             | interface | Backpressured reporter exposing `report(progress)`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `MCPProgressOwnerInterface`        | interface | The OWNING half — `MCPProgressInterface` plus `take()` and `stop()`, held by the MCP-owned response stream that created the slot while the executor holds only the narrow producer port.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -2449,7 +2450,7 @@ Passing a legacy revision to
 | `MCPDispatchOptions`               | interface | `{ signal?: AbortSignal; caller?: unknown }` — the CALLER-facing per-request options; `caller` is consumer-asserted and never protocol-verified, inspected, validated, or serialized by this package.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `MCPMethodOptions`                 | interface | `{ signal: AbortSignal; caller?: unknown }` — the RESOLVED mirror a dispatched method receives; `signal` is required because dispatch resolves one at the single ingress.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `MCPSubscriptionHandler`           | type      | `(notifications, options) => AsyncIterable<JSONRPCNotification>` (or a promise of one) — an event-driven notification producer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `MCPSubscriptionOptions`           | interface | `{ notifications; listen }` — the supported filter and producer for the built-in subscription method.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `MCPSubscriptionOptions`           | interface | `{ notifications; producer }` — the supported filter and producer for the built-in subscription method.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `MCPStream`                        | type      | `AsyncGenerator<JSONRPCNotification, JSONRPCResponse, unknown>` — a held-open result: each `yield` is a notification (the yield type forbids an `id`), the `return` value is the terminating response.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `MCPTextStream`                    | type      | `AsyncGenerator<string, string, unknown>` — the string-boundary mirror of `MCPStream`, the same sequence already serialized.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `MCPStreamControllerInterface`     | interface | `MCPStream` plus `stop()` and `[Symbol.asyncDispose]` — a held-open answer whose cancellation ONE owner arbitrates, settling its consumer without waiting on the producer; what every stream leaving `dispatch` is. Ending it is the obligation of whoever is handed it, on EVERY exit, and there is no owner of last resort.                                                                                                                                                                                                                                                                                                                                                                            |
@@ -2721,20 +2722,20 @@ decoders and the response-error builder are host-independent and ship from `@ork
 
 #### Types
 
-| Type                          | Kind      | Shape                                                                                                                                                                                                      |
-| ----------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MCPHeaderIssue`              | interface | `{ header; reason; message }` — a safely-worded `missing` or `mismatched` required-header diagnosis that never echoes the client-supplied value.                                                           |
-| `MCPOriginOptions`            | interface | `{ enabled?: boolean; origins?: readonly string[] }` — shared default-on validation with a loopback-literal default; `enabled: false` delegates upstream and ignores `origins`.                            |
-| `MCPKeepaliveOptions`         | interface | `{ interval?: number }` — the held-open SSE comment interval; any value that is not a positive integer falls back to `DEFAULT_MCP_KEEPALIVE_INTERVAL`.                                                     |
-| `MCPCallerHandler`            | type      | Synchronous `(request, context?) => unknown` extractor for front-middleware-resolved caller context; `undefined` omits it and a throw propagates.                                                          |
-| `HTTPHandlerOptions`          | interface | `{ streaming?; origin?; keepalive?; caller? }` — the named options shared by `createMCPPostHandler` and `createMCPRoutes`.                                                                                 |
-| `HTTPTransportOptions`        | interface | `HTTPHandlerOptions<TState> & { path? }` — the shared handler options plus the route mount path for `createMCPRoutes`.                                                                                     |
-| `MCPSessionOptions`           | interface | `{ capacity?; ttl? }` — the `MCPSession` entity's own folded replay log: its retained-event bound and its per-event idle lifetime.                                                                         |
-| `MCPSessionMiddlewareOptions` | interface | `{ path?; ttl?; capacity?; clock?; origin?; keepalive? }` — the owned path, session TTL, replay bound, deterministic clock, shared origin options, and held-open keepalive options for `createMCPSession`. |
-| `MCPSessionInterface`         | interface | `id` data member + `attach` / `detach` / `push` / `replay` methods — one session + its resumable server→client push channel (the `MCPSession` entity).                                                     |
-| `MCPSessionState`             | interface | `{ session?: MCPSessionInterface }` — the `context.state` slice a consumer's `TState` extends so `createMCPSession` can thread the resolved session through.                                               |
-| `MCPSessionEvent`             | interface | `{ id: string; message: JSONRPCMessage; timestamp: number }` — one logged pushed message (the unit `MCPSession.replay` returns).                                                                           |
-| `MCPSessionEntry`             | interface | `{ session: MCPSession; touched: number; version: MCPVersion }` — the closure store entry, including the pinned negotiated legacy revision.                                                                |
+| Type                          | Kind      | Shape                                                                                                                                                                                                                            |
+| ----------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MCPHeaderIssue`              | interface | `{ header; reason; message }` — a safely-worded `missing` or `mismatched` required-header diagnosis that never echoes the client-supplied value.                                                                                 |
+| `MCPOriginOptions`            | interface | `{ enabled?: boolean; origins?: readonly string[] }` — shared default-on validation with a loopback-literal default; `enabled: false` delegates upstream and ignores `origins`.                                                  |
+| `MCPKeepaliveOptions`         | interface | `{ interval?: number }` — the held-open SSE comment interval; any value that is not a positive integer falls back to `DEFAULT_MCP_KEEPALIVE_INTERVAL`.                                                                           |
+| `MCPCallerHandler`            | type      | Synchronous `(request, context?) => unknown` extractor for front-middleware-resolved caller context; `undefined` omits it and a throw propagates.                                                                                |
+| `HTTPHandlerOptions`          | interface | `{ streaming?; origin?; keepalive?; caller? }` — the named options shared by `createMCPPostHandler` and `createMCPRoutes`.                                                                                                       |
+| `HTTPTransportOptions`        | interface | `HTTPHandlerOptions<TState> & { path? }` — the shared handler options plus the route mount path for `createMCPRoutes`.                                                                                                           |
+| `MCPSessionOptions`           | interface | `{ capacity?; ttl?; clock? }` — the `MCPSession` entity's own folded replay log: its retained-event bound, its per-event idle lifetime, and the clock its lazy sweep reads.                                                      |
+| `MCPSessionMiddlewareOptions` | interface | `{ path?; ttl?; session?; clock?; origin?; keepalive? }` — the owned path, session TTL, the knobs each minted session takes, deterministic clock, shared origin options, and held-open keepalive options for `createMCPSession`. |
+| `MCPSessionInterface`         | interface | `id` data member + `attach` / `detach` / `push` / `replay` methods — one session + its resumable server→client push channel (the `MCPSession` entity).                                                                           |
+| `MCPSessionState`             | interface | `{ session?: MCPSessionInterface }` — the `context.state` slice a consumer's `TState` extends so `createMCPSession` can thread the resolved session through.                                                                     |
+| `MCPSessionEvent`             | interface | `{ id: string; message: JSONRPCMessage; timestamp: number }` — one logged pushed message (the unit `MCPSession.replay` returns).                                                                                                 |
+| `MCPSessionEntry`             | interface | `{ session: MCPSession; touched: number; version: MCPVersion }` — the closure store entry, including the pinned negotiated legacy revision.                                                                                      |
 
 _This face declares no `HTTPClientTransportOptions`. It is host-independent and ships from
 `@orkestrel/mcp`; see [Core § Types](#types)._
@@ -2821,9 +2822,9 @@ await client.connect() // the RFC 6455 handshake, then modern `server/discover` 
 
 #### Constants
 
-| Constant                    | Kind  | Value                                                                                                                            |
-| --------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `MCP_WEBSOCKET_SUBPROTOCOL` | const | `'mcp'` — the WebSocket subprotocol the transports negotiate (`Sec-WebSocket-Protocol`); the default path is `DEFAULT_MCP_PATH`. |
+_This face declares none. `MCP_WEBSOCKET_SUBPROTOCOL` — the token this transport echoes in its
+`101` handshake — is one wire value both faces negotiate and ships from `@orkestrel/mcp`; see
+[Core § Constants](#constants). The upgrade path defaults to `DEFAULT_MCP_PATH`._
 
 #### Helpers
 
@@ -3137,11 +3138,10 @@ const tools = await http.tools()
 
 #### Constants
 
-| Constant                     | Kind  | Value                                                                                                                                                                                                                                                                                                  |
-| ---------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `MCP_WEBSOCKET_SUBPROTOCOL`  | const | `'mcp'` — the WebSocket subprotocol `createWebSocketClientTransport` requests by default and `createWebSocketServer` selects only when offered. Per RFC 6455 §4.1 a client must fail the connection if the server returns a subprotocol it did not request; Node ≥ 22 (undici) enforces this strictly. |
-| `DEFAULT_MCP_SERVER_NAME`    | const | `'@orkestrel/mcp'` — `createScopeServer`'s default `serverInfo.name` when `options.name` is omitted.                                                                                                                                                                                                   |
-| `DEFAULT_MCP_SERVER_VERSION` | const | `'1.0.0'` — `createScopeServer`'s default `serverInfo.version` when `options.version` is omitted.                                                                                                                                                                                                      |
+| Constant                     | Kind  | Value                                                                                                |
+| ---------------------------- | ----- | ---------------------------------------------------------------------------------------------------- |
+| `DEFAULT_MCP_SERVER_NAME`    | const | `'@orkestrel/mcp'` — `createScopeServer`'s default `serverInfo.name` when `options.name` is omitted. |
+| `DEFAULT_MCP_SERVER_VERSION` | const | `'1.0.0'` — `createScopeServer`'s default `serverInfo.version` when `options.version` is omitted.    |
 
 #### Helpers
 
@@ -3430,7 +3430,7 @@ family that is not cacheable, so it carries no `ttlMs` / `cacheScope` where
 | `prompts` | `MCPPromptPage` (or a promise of one)                              | Answer ONE page under the same shared cursor contract the resource port uses — there is no second cursor shape to learn.                                                                                                                              |
 | `prompt`  | `MCPPromptGetResult \| MCPInputResult \| undefined` (or a promise) | Resolve one named prompt to its messages. Argument VALUES are strings by contract and arrive validated; filling the prompt with them is the manager's own substitution. `undefined` is not found → `-32602`; an `MCPInputResult` asks for more input. |
 
-#### `MCPCompletionManagerInterface`
+#### `MCPCompletionInterface`
 
 The completion port, configured independently of the `resources` and `prompts` ports because
 `completions` is a top-level capability rather than a sub-flag of either.
@@ -3484,7 +3484,7 @@ await client.connect()
 client.version // '2026-07-28' for a modern peer
 const discovery = await client.discover()
 const tools = await client.tools()
-const value = await client.call('add', { x: 2, y: 5 })
+const outcome = await client.call('add', { x: 2, y: 5 })
 await client.disconnect()
 ```
 
@@ -4874,7 +4874,7 @@ event)`, NOT a domain event) — so a buggy observer can never corrupt a
     `MCPMessageTransportInterface`, and `MCPSessionInterface`, plus the
     consumer-supplied PORTS this package defines and does not implement
     (`MCPTaskManagerInterface`, `MCPResourceManagerInterface`,
-    `MCPPromptManagerInterface`, `MCPCompletionManagerInterface`, which have tables
+    `MCPPromptManagerInterface`, `MCPCompletionInterface`, which have tables
     but no implementing class here, exactly because the host writes the class) —
     exhaustive, both
     directions, so the client's table carries `discover` alongside `connect` /
@@ -5174,7 +5174,7 @@ socket, key, head, protocol })` (SERVER mode → writes the `101` handshake,
     `ws(s)` scheme is converted to `http(s)` for the underlying request;
     `wss` → TLS through `node:https`).
 18. **Sessions are an opt-in native middleware on the HTTP transport
-    (`src/server`).** `createMCPSession({ path?, ttl?, capacity?, clock?, origin?, keepalive? })`
+    (`src/server`).** `createMCPSession({ path?, ttl?, session?, clock?, origin?, keepalive? })`
     returns a `MiddlewareHandler<TState>` (`TState extends MCPSessionState`)
     that owns its own closure `Map<string, { session: MCPSession; touched:
 number; version: MCPVersion }>` — NO dependency on `@orkestrel/middleware` and no shared
@@ -5193,7 +5193,7 @@ number; version: MCPVersion }>` — NO dependency on `@orkestrel/middleware` and
     `readSessionHeader`; a VALID id touches the entry and sets
     `context.state.session`; an ABSENT / unknown id whose (guarded) body
     parses to an `initialize` request (`isInitializeRequest`) MINTS a fresh
-    `MCPSession` (`crypto.randomUUID()`, `capacity`), pins the negotiated legacy
+    `MCPSession` (`crypto.randomUUID()`, the `session` knobs), pins the negotiated legacy
     revision, and sets
     `context.state.session`; neither → `rejectUnknownSession()` (`404`). It
     then FORWARDS a fresh `Request` carrying the buffered text
@@ -5213,9 +5213,11 @@ number; version: MCPVersion }>` — NO dependency on `@orkestrel/middleware` and
 19. **Resumable server→client push is the GET-SSE channel, folded into
     `MCPSession` (`src/server`).** Each `MCPSession` FOLDS IN its own bounded
     replay log — a plain in-memory `Map` + capacity + lazy-TTL eviction,
-    PRIVATE to the entity — built with `createMCPSession`'s `capacity`
-    (default `DEFAULT_MCP_SESSION_CAPACITY`) and a per-event
-    `DEFAULT_MCP_SESSION_TTL`. `session.push(message)` APPENDS the message to
+    PRIVATE to the entity — built with `createMCPSession`'s `session.capacity`
+    (default `DEFAULT_MCP_SESSION_CAPACITY`) and `session.ttl` (default
+    `DEFAULT_MCP_SESSION_TTL`). The lazy sweep reads `session.clock`, which
+    defaults to the middleware's own `clock`, so one injected clock governs the
+    store sweep and the log sweep alike. `session.push(message)` APPENDS the message to
     the log under a MONOTONE base36 event id (RETURNED), evicting the OLDEST
     past `capacity` + any entry older than the per-event TTL, AND fans the
     message out to every `attach`ed open stream as `stream.write({ id, data:
@@ -5427,7 +5429,7 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     implementation anywhere in `src/`, so the package has no feature level to state and
     the question of which level to support does not arise. The same division governs
     `completion/complete`: an `MCPResourceTemplateReference` is forwarded to
-    `MCPCompletionManagerInterface.complete` verbatim, template and all, because
+    `MCPCompletionInterface.complete` verbatim, template and all, because
     completing a template's arguments requires knowing that template's variables and
     the party that owns expansion is the party that knows them.
 26. **One pagination shape, and every cursor is the manager's.** `resources/list`,
@@ -5440,7 +5442,7 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     the final page, and there is no sentinel spelling of "no more pages".
 27. **Not found is `undefined` at the port and `-32602` on the wire.**
     `MCPResourceManagerInterface.resource`, `MCPPromptManagerInterface.prompt`, and
-    `MCPCompletionManagerInterface.complete` each answer `undefined` for something they
+    `MCPCompletionInterface.complete` each answer `undefined` for something they
     do not resolve, and the server maps that to `JSONRPC_INVALID_PARAMS` naming the
     unresolved URI or prompt. `-32002` is the pre-`2026-07-28` spelling a client SHOULD
     still accept from an older peer and this server never produces. `resource` and

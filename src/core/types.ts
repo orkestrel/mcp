@@ -847,7 +847,7 @@ export interface MCPExecutionContext {
 	readonly progress?: MCPProgressInterface
 }
 
-/** Executes one canonical tool call or return a fully formed complete MCP result. */
+/** Executes one canonical tool call or returns a fully formed complete MCP result. */
 export type MCPExecutionHandler = (
 	context: MCPExecutionContext,
 ) => ToolResult | MCPCallResult | Promise<ToolResult | MCPCallResult>
@@ -1063,7 +1063,7 @@ export interface MCPTaskContext {
  */
 export interface MCPTaskManagerInterface {
 	/**
-	 * Creates — or return the existing — durable task for one stable operation key.
+	 * Creates — or returns the existing — durable task for one stable operation key.
 	 *
 	 * @remarks
 	 * The obligations this package cannot enforce, and one consequence that is easy
@@ -1186,7 +1186,7 @@ export interface MCPTaskOptions {
 	/** Holds the durable store the server creates tasks in and reads them back from. */
 	readonly tasks: MCPTaskManagerInterface
 	/** Decides whether the call in hand is deferred, and under which stable key. */
-	readonly defer: MCPTaskHandler
+	readonly deferral: MCPTaskHandler
 }
 
 /**
@@ -1458,8 +1458,11 @@ export interface MCPCompletionResult {
  * The host owns reference lookup and template-variable knowledge. MCP forwards the reference
  * verbatim and performs no template parsing or expansion. Returning `undefined` means the
  * referenced prompt or resource template does not exist.
+ *
+ * This is the PORT that produces a {@link MCPCompletion}, not the behavioural face of one: the
+ * candidate set is the data type, and this contract is the single method a host answers it from.
  */
-export interface MCPCompletionManagerInterface {
+export interface MCPCompletionInterface {
 	/**
 	 * Completes one argument against its host-owned reference.
 	 *
@@ -1697,7 +1700,7 @@ export interface MCPSubscriptionOptions {
 	/** Holds the notification filter this server can actually honour. */
 	readonly notifications: MCPSubscriptionFilter
 	/** Opens the producer for one honoured filter. */
-	readonly listen: MCPSubscriptionHandler
+	readonly producer: MCPSubscriptionHandler
 }
 
 /**
@@ -2083,7 +2086,7 @@ export interface MCPServerOptions {
 	/** Holds the optional consumer-owned prompt registry exposed over the modern prompt methods. */
 	readonly prompts?: MCPPromptManagerInterface
 	/** Holds the optional host-owned prompt and resource-template completion provider. */
-	readonly completion?: MCPCompletionManagerInterface
+	readonly completion?: MCPCompletionInterface
 	/**
 	 * Holds the optional explicit execution policy above the canonical live tool registry.
 	 *

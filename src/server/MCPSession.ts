@@ -46,9 +46,10 @@ import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constan
  *   The middleware opens the stream (the spine seam) and registers it here; this class only
  *   serializes a message onto the already-open streams.
  *
- * - **Injected clock.** `push` / `replay` accept an optional `now` (epoch ms), defaulting to
- *   `Date.now()` — so a test drives TTL eviction with an elapsed clock rather than a real
- *   timer.
+ * - **Injected clock.** {@link import('./types.js').MCPSessionOptions.clock} supplies the
+ *   epoch-ms clock the lazy TTL sweep reads, defaulting to `Date.now` — so a test drives TTL
+ *   eviction with an elapsed clock rather than a real timer, and the middleware that mints a
+ *   session hands its own clock down instead of leaving the log on wall-clock time.
  *
  * @example
  * ```ts
@@ -64,12 +65,14 @@ export class MCPSession implements MCPSessionInterface {
 	readonly #streams = new Set<StreamInterface>()
 	readonly #capacity: number
 	readonly #ttl: number
+	readonly #clock: () => number
 	#counter = 0
 
 	constructor(id: string, options?: MCPSessionOptions) {
 		this.#id = id
 		this.#capacity = options?.capacity ?? DEFAULT_MCP_SESSION_CAPACITY
 		this.#ttl = options?.ttl ?? DEFAULT_MCP_SESSION_TTL
+		this.#clock = options?.clock ?? Date.now
 	}
 
 	get id(): string {
@@ -84,17 +87,17 @@ export class MCPSession implements MCPSessionInterface {
 		this.#streams.delete(stream)
 	}
 
-	push(message: JSONRPCMessage, now = Date.now()): string {
+	push(message: JSONRPCMessage): string {
 		// Append to the log first (assigning the monotone event id), then fan the SAME id out to
 		// every open stream — so a replayed event and a live one carry the identical id.
-		const id = this.#append(message, now)
+		const id = this.#append(message)
 		const data = JSON.stringify(message)
 		for (const stream of this.#streams) stream.write({ id, data })
 		return id
 	}
 
-	replay(afterId: string, now = Date.now()): readonly MCPSessionEvent[] {
-		this.#evict(now)
+	replay(afterId: string): readonly MCPSessionEvent[] {
+		this.#evict(this.#clock())
 		const out: MCPSessionEvent[] = []
 		let found = false
 		for (const entry of this.#events.values()) {
@@ -109,7 +112,10 @@ export class MCPSession implements MCPSessionInterface {
 
 	// Append a message to the bounded replay log under a fresh monotone id, evicting stale +
 	// over-capacity entries — the folded log's append, private to the session.
-	#append(message: JSONRPCMessage, now: number): string {
+	#append(message: JSONRPCMessage): string {
+		// One clock read per append, so the sweep's cutoff and the entry's own timestamp cannot
+		// disagree about when this append happened.
+		const now = this.#clock()
 		// Lazy TTL sweep BEFORE appending so an idle log shrinks as it is written.
 		this.#evict(now)
 		this.#counter += 1

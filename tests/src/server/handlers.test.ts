@@ -450,7 +450,7 @@ describe('createMCPPostHandler', () => {
 			tools: createToolManager(),
 			subscription: {
 				notifications: { toolsListChanged: true },
-				listen: () => subscriptionEvents(),
+				producer: () => subscriptionEvents(),
 			},
 		})
 		const handler = createMCPPostHandler(mcp, { streaming: false })
@@ -574,7 +574,7 @@ describe('createMCPPostHandler', () => {
 			tools: createToolManager(),
 			subscription: {
 				notifications: { toolsListChanged: true },
-				listen: (_notifications, options) => {
+				producer: (_notifications, options) => {
 					if (options.signal === undefined) throw new Error('expected HTTP disconnect signal')
 					observed = options.signal
 					return disconnectEvents(options.signal, () => abortedResolve?.())

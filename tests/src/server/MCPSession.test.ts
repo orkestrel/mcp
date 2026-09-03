@@ -2,8 +2,8 @@ import type { JSONRPCMessage } from '@src/core'
 import type { SSEMessage, StreamInterface } from '@orkestrel/server'
 import { describe, expect, it } from 'vitest'
 import { MCPSession } from '@src/server'
-import { createRecorder } from '@orkestrel/test'
-import { createJSONRPCRequest } from '../../setup.js'
+import { createRecorder, waitForDelay } from '@orkestrel/test'
+import { createJSONRPCRequest, createManualClock } from '../../setup.js'
 
 // src/server/MCPSession.ts — one MCP transport session, the per-session entity a
 // `createMCPSession` middleware owns, with its bounded resumable replay log FOLDED IN — one
@@ -12,8 +12,8 @@ import { createJSONRPCRequest } from '../../setup.js'
 // to every `attach`ed (and not-yet-`detach`ed) SSE stream; `replay(afterId)` returns the entries
 // STRICTLY AFTER `afterId` in order (and NOTHING for an unknown / evicted cursor — the spec-sane
 // resume); capacity evicts the OLDEST past the bound; and the OPTIONAL per-event TTL evicts a
-// stale entry lazily. The time-reading methods accept an explicit `now` (default `Date.now()`),
-// so the TTL path is driven with an elapsed clock deterministically. The over-the-
+// stale entry lazily. The lazy sweep reads `MCPSessionOptions.clock` (default `Date.now`), so the
+// TTL path is driven with a manual clock deterministically. The over-the-
 // wire mint / validate / push / replay flow is proven through a real server in middlewares.test.ts.
 
 // A distinct JSON-RPC message per ordinal, so a replayed sequence is identifiable by content.
@@ -175,35 +175,52 @@ describe('MCPSession — lazy TTL eviction (injected clock)', () => {
 	it('an entry older than the ttl is evicted on the next push', () => {
 		// ttl = 1000ms. Push at t=0; at t=1000 (>= ttl idle) the first is stale and is swept on the
 		// next push, leaving only the fresh one — so replay from the stale id finds nothing.
-		const session = new MCPSession('s', { ttl: 1_000 })
-		const stale = session.push(message(1), 0)
-		session.push(message(2), 1_000) // the push's sweep drops the t=0 entry
-		expect(session.replay(stale, 1_000)).toEqual([])
+		const clock = createManualClock()
+		const session = new MCPSession('s', { ttl: 1_000, clock: clock.now })
+		const stale = session.push(message(1))
+		clock.advance(1_000)
+		session.push(message(2)) // the push's sweep drops the t=0 entry
+		expect(session.replay(stale)).toEqual([])
 	})
 
 	it('replay sweeps stale entries first, so an expired entry is never replayed', () => {
-		const session = new MCPSession('s', { ttl: 1_000 })
-		const first = session.push(message(1), 0)
-		session.push(message(2), 0)
+		const clock = createManualClock()
+		const session = new MCPSession('s', { ttl: 1_000, clock: clock.now })
+		const first = session.push(message(1))
+		session.push(message(2))
 		// Read at t=2000: both t=0 entries are stale and swept → replay finds neither.
-		expect(session.replay(first, 2_000)).toEqual([])
+		clock.advance(2_000)
+		expect(session.replay(first)).toEqual([])
 	})
 
 	it('an entry within the ttl window is retained', () => {
-		const session = new MCPSession('s', { ttl: 1_000 })
-		const first = session.push(message(1), 0)
-		session.push(message(2), 999) // within the window — both retained
+		const clock = createManualClock()
+		const session = new MCPSession('s', { ttl: 1_000, clock: clock.now })
+		const first = session.push(message(1))
+		clock.advance(999)
+		session.push(message(2)) // within the window — both retained
 		// At t=999 (< ttl) the first is still live, so the cursor at it replays the second.
-		expect(session.replay(first, 999).map((entry) => entry.message)).toEqual([message(2)])
+		expect(session.replay(first).map((entry) => entry.message)).toEqual([message(2)])
 	})
 
 	it('with ttl disabled (0) an entry never ages out, however far the clock advances', () => {
-		const session = new MCPSession('s', { ttl: 0 })
-		const first = session.push(message(1), 0)
-		session.push(message(2), Number.MAX_SAFE_INTEGER)
-		expect(session.replay(first, Number.MAX_SAFE_INTEGER).map((entry) => entry.message)).toEqual([
-			message(2),
-		])
+		const clock = createManualClock()
+		const session = new MCPSession('s', { ttl: 0, clock: clock.now })
+		const first = session.push(message(1))
+		clock.advance(Number.MAX_SAFE_INTEGER)
+		session.push(message(2))
+		expect(session.replay(first).map((entry) => entry.message)).toEqual([message(2)])
+	})
+
+	it('an unset clock leaves the sweep on the host clock rather than a frozen instant', async () => {
+		// The default is `Date.now`, so a live session's log ages against real time. A ttl of one
+		// millisecond and a real elapsed wait is the smallest reading that distinguishes a wired
+		// default from a clock stuck at construction.
+		const session = new MCPSession('s', { ttl: 1 })
+		const stale = session.push(message(1))
+		await waitForDelay(5)
+		session.push(message(2))
+		expect(session.replay(stale)).toEqual([])
 	})
 })
 
@@ -226,12 +243,14 @@ describe('MCPSession — push return id round-trips with the fanned-out event', 
 // A tiny compile-time guard that `MCPSessionEvent` is the unit `replay` yields (the kept type).
 describe('MCPSession — replay entries carry id + message + timestamp', () => {
 	it('each replayed entry exposes its id, message, and timestamp', () => {
-		const session = new MCPSession('s')
-		const first = session.push(message(1), 1_000)
-		session.push(message(2), 2_000)
+		const clock = createManualClock(1_000)
+		const session = new MCPSession('s', { clock: clock.now })
+		const first = session.push(message(1))
+		clock.advance(1_000)
+		session.push(message(2))
 		// Read at t=2000 (within the per-event TTL of both timestamps) so neither is TTL-swept; the
 		// strictly-after entry carries its id / message / appended timestamp.
-		const [entry] = session.replay(first, 2_000)
+		const [entry] = session.replay(first)
 		expect(entry?.id).toBeDefined()
 		expect(entry?.message).toEqual(message(2))
 		expect(entry?.timestamp).toBe(2_000)

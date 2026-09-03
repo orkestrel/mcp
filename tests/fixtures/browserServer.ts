@@ -10,12 +10,12 @@ import {
 	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
+	MCP_WEBSOCKET_SUBPROTOCOL,
 } from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer, mergeVary, resolveOrigin } from '@orkestrel/server'
 import { createNodeWebSocket } from '@orkestrel/websocket'
 import {
-	MCP_WEBSOCKET_SUBPROTOCOL,
 	WebSocketServerTransport,
 	createDuplexServerTransport,
 	createMCPRoutes,

@@ -6,7 +6,7 @@ import type {
 	JSONRPCResponse,
 	MCPCallResult,
 	MCPCompletion,
-	MCPCompletionManagerInterface,
+	MCPCompletionInterface,
 	MCPCompletionParams,
 	MCPContinuationInterface,
 	MCPDispatcherInterface,
@@ -215,7 +215,7 @@ class MemoryPromptManager implements MCPPromptManagerInterface {
 	}
 }
 
-class MemoryCompletionManager implements MCPCompletionManagerInterface {
+class MemoryCompletion implements MCPCompletionInterface {
 	readonly #requests: MCPCompletionParams[] = []
 
 	get requests(): readonly MCPCompletionParams[] {
@@ -653,7 +653,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 			limit: { subscriptions: 1 },
 			subscription: {
 				notifications: { toolsListChanged: true },
-				listen: () => source.readable,
+				producer: () => source.readable,
 			},
 		})
 		const peer = createHostilePeer(mcp)
@@ -726,7 +726,7 @@ describe('MCPServer — graceful subscription closure', () => {
 		const writer = source.writable.getWriter()
 		const mcp = server(undefined, {
 			notifications: { toolsListChanged: true },
-			listen: () => source.readable,
+			producer: () => source.readable,
 		})
 		const stream = streamOf(
 			await mcp.dispatch(
@@ -2607,7 +2607,7 @@ describe('MCPServer — modern subscriptions/listen', () => {
 				resourcesListChanged: true,
 				resourceSubscriptions: ['resource://kept'],
 			},
-			listen(filter, dispatch) {
+			producer(filter, dispatch) {
 				notifications.push(filter)
 				options.push(dispatch)
 				return source.readable
@@ -3172,7 +3172,7 @@ function throwingHandlerServer(): MCPServerInterface {
 function throwingSourceServer(): MCPServerInterface {
 	return server(undefined, {
 		notifications: { toolsListChanged: true },
-		listen: () => {
+		producer: () => {
 			throw new Error('subscription source detail')
 		},
 	})
@@ -3286,7 +3286,7 @@ function modernFaults(): readonly FaultScenario[] {
 				limit: { subscriptions: 0 },
 				subscription: {
 					notifications: { toolsListChanged: true },
-					listen: () => new TransformStream<JSONRPCNotification, JSONRPCNotification>().readable,
+					producer: () => new TransformStream<JSONRPCNotification, JSONRPCNotification>().readable,
 				},
 			}),
 			request: listen,
@@ -3590,7 +3590,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 			identity: { name: 'bounded', version: '1.0.0' },
 			tools: tools(),
 			limit: { subscriptions: 1 },
-			subscription: { notifications: { toolsListChanged: true }, listen: () => source.readable },
+			subscription: { notifications: { toolsListChanged: true }, producer: () => source.readable },
 		})
 		const params = { notifications: { toolsListChanged: true }, _meta: MODERN_METADATA }
 		const first = streamOf(
@@ -3637,7 +3637,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 		const writer = source.writable.getWriter()
 		const mcp = server(undefined, {
 			notifications: { resourceSubscriptions: ['resource://kept'] },
-			listen: () => source.readable,
+			producer: () => source.readable,
 		})
 		const stream = streamOf(
 			await mcp.dispatch(
@@ -3668,7 +3668,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 		const writer = source.writable.getWriter()
 		const mcp = server(undefined, {
 			notifications: { resourceSubscriptions: ['resource://kept'] },
-			listen: () => source.readable,
+			producer: () => source.readable,
 		})
 		const stream = streamOf(
 			await mcp.dispatch(
@@ -3707,7 +3707,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 			identity: { name: 'bounded', version: '1.0.0' },
 			tools: tools(),
 			limit: { subscriptions: 1 },
-			subscription: { notifications: { toolsListChanged: true }, listen: () => parkingSource() },
+			subscription: { notifications: { toolsListChanged: true }, producer: () => parkingSource() },
 		})
 		const params = { notifications: { toolsListChanged: true }, _meta: MODERN_METADATA }
 		const abandoned = streamOf(
@@ -3742,7 +3742,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 			identity: { name: 'bounded', version: '1.0.0' },
 			tools: tools(),
 			limit: { subscriptions: 1 },
-			subscription: { notifications: { toolsListChanged: true }, listen: () => parkingSource() },
+			subscription: { notifications: { toolsListChanged: true }, producer: () => parkingSource() },
 		})
 		const params = { notifications: { toolsListChanged: true }, _meta: MODERN_METADATA }
 		const stopped = streamOf(
@@ -3779,7 +3779,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 			limit: { subscriptions: 1 },
 			subscription: {
 				notifications: { toolsListChanged: true },
-				listen: () => source.readable,
+				producer: () => source.readable,
 			},
 		})
 		const params = { notifications: { toolsListChanged: true }, _meta: MODERN_METADATA }
@@ -3806,7 +3806,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const mcp = server(undefined, {
 			notifications: { toolsListChanged: true },
-			listen: () => source.readable,
+			producer: () => source.readable,
 		})
 		const stream = streamOf(
 			await mcp.dispatch(
@@ -4930,7 +4930,7 @@ describe('MCPServer — W02-B: custom carriers and the resolved-option seam', ()
 			tools: tools(),
 			subscription: {
 				notifications: {},
-				listen: (_notifications, options) => {
+				producer: (_notifications, options) => {
 					listened.push(options)
 					return silent()
 				},
@@ -5037,7 +5037,7 @@ function fixedTaskManager(created: MCPTask): MCPTaskManagerInterface {
 describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	it('defers a declared call and answers the manager task as a flat modern result', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
 
 		const answer = resultOf(
 			responseOf(await mcp.dispatch(taskCall({ name: 'echo', arguments: { a: 1 } }, 'defer-1'))),
@@ -5066,7 +5066,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 		const deferrals: MCPTaskContext[] = []
 		const mcp = taskServer({
 			tasks,
-			defer: (context) => {
+			deferral: (context) => {
 				deferrals.push(context)
 				return 'operation-1'
 			},
@@ -5085,7 +5085,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// wrongly accept — the capability declared during `initialize` and absent from the call.
 	it('does not reuse a capability declared at connect time for a later request', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
 
 		await mcp.dispatch(
 			createJSONRPCRequest({
@@ -5102,7 +5102,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 
 	it('runs the call inline when the deferral policy declines', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, defer: () => undefined })
+		const mcp = taskServer({ tasks, deferral: () => undefined })
 
 		const answer = resultOf(
 			responseOf(await mcp.dispatch(taskCall({ name: 'echo', arguments: { a: 1 } }, 'decline-1'))),
@@ -5117,7 +5117,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// whatever the policy minted travels to the manager unchanged, twice.
 	it('forwards a repeated operation key to the manager unchanged', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, defer: () => ' Operation/One ' })
+		const mcp = taskServer({ tasks, deferral: () => ' Operation/One ' })
 
 		const first = resultOf(responseOf(await mcp.dispatch(taskCall({ name: 'echo' }, 'reuse-1'))))
 		const second = resultOf(responseOf(await mcp.dispatch(taskCall({ name: 'echo' }, 'reuse-2'))))
@@ -5135,7 +5135,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 		const mcp = taskServer(
 			{
 				tasks,
-				defer: (context) => {
+				deferral: (context) => {
 					deferrals.push(context)
 					return 'operation-1'
 				},
@@ -5179,7 +5179,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 		const tasks = new TestTaskManager()
 		const reported: MCPProgressInterface[] = []
 		const mcp = taskServer(
-			{ tasks, defer: () => 'operation-1' },
+			{ tasks, deferral: () => 'operation-1' },
 			{
 				execution: (context) => {
 					if (context.progress !== undefined) reported.push(context.progress)
@@ -5208,7 +5208,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 		const deferrals: MCPTaskContext[] = []
 		const mcp = taskServer({
 			tasks,
-			defer: (context) => {
+			deferral: (context) => {
 				deferrals.push(context)
 				return 'operation-1'
 			},
@@ -5236,10 +5236,10 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// THE FIXTURE PAIR the port's TSDoc obligation closes on. The managers differ in one
 	// flag and are driven identically, including the abort every transport performs the
 	// instant the answer is written. A `completed` in the first case would mean the hazard
-	// the TSDoc names does not exist and the paragraph should be deleted.
+	// the TSDoc names does not exist and the paragraph must be deleted.
 	it('loses the task when the manager binds the request signal to the work', async () => {
 		const tasks = new TestTaskManager({ bind: true, work: 30 })
-		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
 		const lifetime = new AbortController()
 
 		const answer = resultOf(
@@ -5260,7 +5260,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 
 	it('keeps the task when the manager gives the work a lifetime it owns', async () => {
 		const tasks = new TestTaskManager({ bind: false, work: 30 })
-		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
 		const lifetime = new AbortController()
 
 		const answer = resultOf(
@@ -5282,7 +5282,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// status from the result rather than from a protocol error.
 	it('answers a successful task result for a task the manager started as input_required', async () => {
 		const tasks = new TestTaskManager({ asking: true })
-		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
 
 		const response = responseOf(await mcp.dispatch(taskCall({ name: 'echo' }, 'asking-1')))
 		const answer = resultOf(response)
@@ -5298,7 +5298,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 		const tasks = new TestTaskManager()
 		const mcp = taskServer({
 			tasks,
-			defer: () => {
+			deferral: () => {
 				throw new Error('deferral policy detail')
 			},
 		})
@@ -5321,7 +5321,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 			update: () => Promise.resolve(),
 			abort: () => Promise.resolve(),
 		}
-		const mcp = taskServer({ tasks: failing, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks: failing, deferral: () => 'operation-1' })
 		const faults: unknown[] = []
 		mcp.emitter.on('error', (error) => void faults.push(error))
 
@@ -5342,7 +5342,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 			ttlMs: null,
 		})
 		const mcp = taskServer(
-			{ tasks: oversized, defer: () => 'operation-1' },
+			{ tasks: oversized, deferral: () => 'operation-1' },
 			{ limit: { content: 512 } },
 		)
 
@@ -5365,7 +5365,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 			ttlMs: 60_000,
 			pollIntervalMs: 2_500,
 		})
-		const mcp = taskServer({ tasks: hinted, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks: hinted, deferral: () => 'operation-1' })
 
 		const hintedAnswer = resultOf(
 			responseOf(await mcp.dispatch(taskCall({ name: 'echo' }, 'optional-1'))),
@@ -5374,7 +5374,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 			responseOf(
 				await taskServer({
 					tasks: new TestTaskManager(),
-					defer: () => 'operation-1',
+					deferral: () => 'operation-1',
 				}).dispatch(taskCall({ name: 'echo' }, 'optional-2')),
 			),
 		)
@@ -5392,8 +5392,8 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// hear about, not a second spelling of absence quietly routed down the inline path.
 	it('refuses an empty deferral key rather than silently running the call inline', async () => {
 		const tasks = new TestTaskManager()
-		const inline = taskServer({ tasks: new TestTaskManager(), defer: () => undefined })
-		const faulty = taskServer({ tasks, defer: () => '' })
+		const inline = taskServer({ tasks: new TestTaskManager(), deferral: () => undefined })
+		const faulty = taskServer({ tasks, deferral: () => '' })
 
 		const declined = resultOf(
 			responseOf(await inline.dispatch(taskCall({ name: 'echo' }, 'empty-1'))),
@@ -5411,7 +5411,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// extension — the era boundary keeps the whole mechanism off the old wire.
 	it('refuses a selected task at the legacy revision boundary', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = createMCPLegacy(taskServer({ tasks, defer: () => 'operation-1' }))
+		const mcp = createMCPLegacy(taskServer({ tasks, deferral: () => 'operation-1' }))
 
 		const answer = responseOf(
 			await mcp.dispatch(
@@ -5428,7 +5428,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	})
 
 	it('advertises the extension through discovery only when it is configured', async () => {
-		const configured = taskServer({ tasks: new TestTaskManager(), defer: () => undefined })
+		const configured = taskServer({ tasks: new TestTaskManager(), deferral: () => undefined })
 
 		const advertised = resultOf(
 			responseOf(await configured.dispatch(modernRequest('server/discover', 'discover-1'))),
@@ -5450,7 +5450,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// it, a registration that never happened at all would pass this test unremarked.
 	it('leaves an unconfigured server answering exactly what it answered before', async () => {
 		const mcp = server()
-		const configured = taskServer({ tasks: new TestTaskManager(), defer: () => undefined })
+		const configured = taskServer({ tasks: new TestTaskManager(), deferral: () => undefined })
 
 		const called = resultOf(
 			responseOf(await mcp.dispatch(modernCall({ name: 'echo', arguments: { a: 1 } }, 'inert-1'))),
@@ -5561,7 +5561,7 @@ function guessableTaskManager(): MCPTaskManagerInterface {
 describe('MCPServer — W03-B: reading one durable task', () => {
 	it('answers a task snapshot as a complete result, never a task result', async () => {
 		const tasks = new TestTaskManager({ asking: true })
-		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
 		const taskId = await createdTask(mcp)
 
 		const answer = resultOf(
@@ -5610,7 +5610,7 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 				{ taskId: 'stopped', status: 'cancelled', createdAt: 'a', lastUpdatedAt: 'b', ttlMs: null },
 			],
 		])
-		const mcp = taskServer({ tasks: mutableTaskManager(details), defer: () => undefined })
+		const mcp = taskServer({ tasks: mutableTaskManager(details), deferral: () => undefined })
 
 		const answers = await Promise.all(
 			[...details.keys()].map(async (taskId) =>
@@ -5639,9 +5639,9 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 	it('answers never-existed, purged, and unauthorized with one byte-identical refusal', async () => {
 		const purged = new TestTaskManager({ ttl: 60_000 })
 		const guarded = new TestTaskManager({ owner: 'owner-1' })
-		const absent = taskServer({ tasks: new TestTaskManager(), defer: () => 'operation-1' })
-		const expiring = taskServer({ tasks: purged, defer: () => 'operation-1' })
-		const owned = taskServer({ tasks: guarded, defer: () => 'operation-1' })
+		const absent = taskServer({ tasks: new TestTaskManager(), deferral: () => 'operation-1' })
+		const expiring = taskServer({ tasks: purged, deferral: () => 'operation-1' })
+		const owned = taskServer({ tasks: guarded, deferral: () => 'operation-1' })
 		const expired = await createdTask(expiring, 'purge-seed')
 		const theirs = await createdTask(owned, 'owner-seed')
 		purged.purge()
@@ -5669,7 +5669,7 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 	// against: `null` is the extension's spelling for "no expiry", not a zero-length one.
 	it('keeps reading a task whose ttlMs is null through a purge that removes the rest', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
 		const taskId = await createdTask(mcp, 'eternal-seed')
 
 		tasks.purge()
@@ -5683,7 +5683,7 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 
 	it('refuses an absent, non-string, empty, or over-bound taskId with invalid params', async () => {
 		const mcp = taskServer(
-			{ tasks: new TestTaskManager(), defer: () => undefined },
+			{ tasks: new TestTaskManager(), deferral: () => undefined },
 			{ limit: { state: 32 } },
 		)
 
@@ -5738,10 +5738,10 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 			],
 		])
 		const bounded = taskServer(
-			{ tasks: mutableTaskManager(oversized), defer: () => undefined },
+			{ tasks: mutableTaskManager(oversized), deferral: () => undefined },
 			{ limit: { content: 512 } },
 		)
-		const lying = taskServer({ tasks: mutableTaskManager(malformed), defer: () => undefined })
+		const lying = taskServer({ tasks: mutableTaskManager(malformed), deferral: () => undefined })
 
 		const large = responseOf(
 			await bounded.dispatch(taskRequest('tasks/get', { taskId: 'big' }, 'big-1')),
@@ -5772,7 +5772,7 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 				},
 			],
 		])
-		const mcp = taskServer({ tasks: mutableTaskManager(details), defer: () => undefined })
+		const mcp = taskServer({ tasks: mutableTaskManager(details), deferral: () => undefined })
 
 		const response = responseOf(
 			await mcp.dispatch(taskRequest('tasks/get', { taskId: 'broke' }, 'fail-1')),
@@ -5801,7 +5801,7 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 				},
 			],
 		])
-		const mcp = taskServer({ tasks: mutableTaskManager(details), defer: () => undefined })
+		const mcp = taskServer({ tasks: mutableTaskManager(details), deferral: () => undefined })
 
 		const before = resultOf(
 			responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId: 'settled' }, 'mutate-1'))),
@@ -5840,7 +5840,7 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 				{ taskId: 'bare', status: 'working', createdAt: 'a', lastUpdatedAt: 'b', ttlMs: null },
 			],
 		])
-		const mcp = taskServer({ tasks: mutableTaskManager(details), defer: () => undefined })
+		const mcp = taskServer({ tasks: mutableTaskManager(details), deferral: () => undefined })
 
 		const hinted = resultOf(
 			responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId: 'hinted' }, 'hint-1'))),
@@ -5900,7 +5900,7 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 				},
 				abort: (id, options) => tasks.abort(id, options),
 			},
-			defer: () => 'operation-1',
+			deferral: () => 'operation-1',
 		})
 		const taskId = await createdTask(mcp, 'update-seed')
 
@@ -5933,7 +5933,7 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 	// the task holds.
 	it('forwards an already-satisfied key again and still answers success', async () => {
 		const tasks = new TestTaskManager({ asking: true })
-		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
 		const taskId = await createdTask(mcp, 'repeat-seed')
 		const responses = { taskId, inputResponses: { approval: { action: 'accept' } } }
 
@@ -5949,7 +5949,7 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 
 	it('refuses an update whose inputResponses are absent or not an object', async () => {
 		const tasks = new TestTaskManager({ asking: true })
-		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
 		const taskId = await createdTask(mcp, 'shape-seed')
 
 		const refusals = await Promise.all(
@@ -5997,7 +5997,7 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 				return Promise.resolve()
 			},
 		}
-		const mcp = taskServer({ tasks: stubborn, defer: () => undefined })
+		const mcp = taskServer({ tasks: stubborn, deferral: () => undefined })
 
 		const answer = resultOf(
 			responseOf(await mcp.dispatch(taskRequest('tasks/cancel', { taskId: 'stubborn' }, 'stop-1'))),
@@ -6018,7 +6018,7 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 
 	it('stops a cooperating task and reports the cancelled snapshot afterwards', async () => {
 		const tasks = new TestTaskManager({ work: 200 })
-		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
 		const taskId = await createdTask(mcp, 'cancel-seed')
 
 		await mcp.dispatch(taskRequest('tasks/cancel', { taskId }, 'cancel-1'))
@@ -6035,7 +6035,7 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 	// the one `tasks/get` answers — byte-identical across every method.
 	it('refuses an update and a cancellation of an unresolved task identically to a read', async () => {
 		const guarded = new TestTaskManager({ owner: 'owner-1' })
-		const mcp = taskServer({ tasks: guarded, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks: guarded, deferral: () => 'operation-1' })
 		const theirs = await createdTask(mcp, 'reject-seed')
 
 		const refusals = await Promise.all(
@@ -6080,8 +6080,8 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 				}),
 			invoked,
 		)
-		const ghosted = taskServer({ tasks: foreign, defer: () => undefined })
-		const unproven = taskServer({ tasks: lying, defer: () => undefined })
+		const ghosted = taskServer({ tasks: foreign, deferral: () => undefined })
+		const unproven = taskServer({ tasks: lying, deferral: () => undefined })
 
 		const refusals = await Promise.all([
 			ghosted.dispatch(taskRequest('tasks/update', { taskId: 'x', inputResponses: {} }, 'same')),
@@ -6103,7 +6103,7 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 	// The `-32021` payload, and the reason there is ONE code rather than a separate one: the
 	// elicitation refusal and this one are instances of the same condition, told apart by their data.
 	it('refuses a non-declaring client with the generic capability code and the tasks payload', async () => {
-		const mcp = taskServer({ tasks: new TestTaskManager(), defer: () => undefined })
+		const mcp = taskServer({ tasks: new TestTaskManager(), deferral: () => undefined })
 
 		const refusals = await Promise.all(
 			TASK_METHODS.map(
@@ -6136,7 +6136,7 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 				selector: () => createRound(),
 			},
 		})
-		const deferred = taskServer({ tasks: new TestTaskManager(), defer: () => undefined })
+		const deferred = taskServer({ tasks: new TestTaskManager(), deferral: () => undefined })
 
 		const forInput = responseOf(
 			await elicited.dispatch(modernCall({ name: 'echo' }, 'instance-1')),
@@ -6158,7 +6158,7 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 	// this client never asked for one. Same omission, opposite outcome.
 	it('refuses that same undeclared client when deployment policy selects a task', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
 
 		const refused = responseOf(await mcp.dispatch(modernRequest('tasks/get', 'contrast-1')))?.error
 		const called = responseOf(
@@ -6174,7 +6174,7 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 	// accept — declared once at connect time and absent from the `tasks/*` request itself.
 	it('ignores a capability declared at connect time but not on the tasks request', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
 		const taskId = await createdTask(mcp, 'session-seed')
 
 		await mcp.dispatch(
@@ -6201,7 +6201,7 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 	// METHOD: a client that never declared it is refused before its `taskId` is read at all, so
 	// a request that is BOTH undeclared and malformed answers the capability code.
 	it('refuses a non-declaring client before it inspects the parameters', async () => {
-		const mcp = taskServer({ tasks: new TestTaskManager(), defer: () => undefined })
+		const mcp = taskServer({ tasks: new TestTaskManager(), deferral: () => undefined })
 
 		const response = responseOf(
 			await mcp.dispatch(
@@ -6222,7 +6222,7 @@ describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () 
 	// `taskId` this server just handed out is not yet retrievable. MCP's own half of the rule —
 	// awaiting `start` before it builds the answer — is intact and is not enough on its own.
 	it('hands out a taskId a prompt read cannot find when the manager resolves before it persists', async () => {
-		const mcp = taskServer({ tasks: deferredWriteTaskManager(), defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks: deferredWriteTaskManager(), deferral: () => 'operation-1' })
 
 		const taskId = await createdTask(mcp, 'durable-1')
 		const prompt = responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId }, 'durable-2')))
@@ -6239,7 +6239,7 @@ describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () 
 	// a stranger can GUESS, and a key that is not scoped to its principal hands a second
 	// principal the first's task without any guessing at all.
 	it('lets a second principal reach the first principal task when the manager derives the handle from the key', async () => {
-		const mcp = taskServer({ tasks: guessableTaskManager(), defer: () => 'shared-operation' })
+		const mcp = taskServer({ tasks: guessableTaskManager(), deferral: () => 'shared-operation' })
 
 		const mine = resultOf(
 			responseOf(
@@ -6272,7 +6272,7 @@ describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () 
 	// store that answers `undefined` to a caller the task does not belong to.
 	it('keeps a second principal out when the manager mints an opaque handle and scopes it', async () => {
 		const tasks = new TestTaskManager({ owner: 'principal-one' })
-		const mcp = taskServer({ tasks, defer: () => 'shared-operation' })
+		const mcp = taskServer({ tasks, deferral: () => 'shared-operation' })
 
 		const mine = resultOf(
 			responseOf(
@@ -6312,7 +6312,7 @@ describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () 
 			update: () => Promise.resolve(),
 			abort: () => Promise.resolve(),
 		}
-		const mcp = taskServer({ tasks: failing, defer: () => undefined })
+		const mcp = taskServer({ tasks: failing, deferral: () => undefined })
 		const faults: unknown[] = []
 		mcp.emitter.on('error', (error) => void faults.push(error))
 
@@ -6353,7 +6353,7 @@ describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () 
 				return tasks.abort(id, options)
 			},
 		}
-		const mcp = taskServer({ tasks: recording, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks: recording, deferral: () => 'operation-1' })
 		const taskId = await createdTask(mcp, 'options-seed')
 
 		await mcp.dispatch(taskRequest('tasks/get', { taskId }, 'options-1'), { caller: 'asserted' })
@@ -6372,7 +6372,7 @@ describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () 
 	// the same narrowing every other built-in does rather than a second dispatch rule.
 	it('answers a tasks notification with nothing at all', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, defer: () => 'operation-1' })
+		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
 
 		const answers = await Promise.all(
 			TASK_METHODS.map(async (method) =>
@@ -6407,8 +6407,8 @@ describe('MCPServer — W03-B: the tasks family on a subscriptions/listen stream
 			const closed = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 			await closed.writable.close()
 			const mcp = taskServer(
-				{ tasks, defer: () => undefined },
-				{ subscription: { notifications: {}, listen: () => closed.readable } },
+				{ tasks, deferral: () => undefined },
+				{ subscription: { notifications: {}, producer: () => closed.readable } },
 			)
 			const [messages, response] = await drainStream(
 				streamOf(await mcp.dispatch(request, { caller: 'owner-2' })),
@@ -6443,8 +6443,8 @@ describe('MCPServer — W03-B: the tasks family on a subscriptions/listen stream
 		const closed = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		await closed.writable.close()
 		const mcp = taskServer(
-			{ tasks, defer: () => undefined },
-			{ subscription: { notifications: {}, listen: () => closed.readable } },
+			{ tasks, deferral: () => undefined },
+			{ subscription: { notifications: {}, producer: () => closed.readable } },
 		)
 
 		const [messages] = await drainStream(
@@ -6475,9 +6475,9 @@ describe('MCPServer — W03-B: the tasks family on a subscriptions/listen stream
 		const closed = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		await closed.writable.close()
 		// A producer with no manager: nothing can authorize an identifier.
-		const unmanaged = server(undefined, { notifications: {}, listen: () => closed.readable })
+		const unmanaged = server(undefined, { notifications: {}, producer: () => closed.readable })
 		// A manager with no producer: nothing can carry a transition.
-		const unproduced = taskServer({ tasks, defer: () => undefined })
+		const unproduced = taskServer({ tasks, deferral: () => undefined })
 		const request = createSubscriptionRequest('listen-off', { taskIds: ['task-a'] })
 
 		const [fromUnmanaged] = await drainStream(streamOf(await unmanaged.dispatch(request)))
@@ -6498,8 +6498,8 @@ describe('MCPServer — W03-B: the tasks family on a subscriptions/listen stream
 		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const writer = source.writable.getWriter()
 		const mcp = taskServer(
-			{ tasks, defer: () => undefined },
-			{ subscription: { notifications: {}, listen: () => source.readable } },
+			{ tasks, deferral: () => undefined },
+			{ subscription: { notifications: {}, producer: () => source.readable } },
 		)
 		const stream = streamOf(
 			await mcp.dispatch(createSubscriptionRequest('listen-live', { taskIds: ['task-live'] })),
@@ -6544,8 +6544,8 @@ describe('MCPServer — W03-B: the tasks family on a subscriptions/listen stream
 		const closed = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		await closed.writable.close()
 		const mcp = taskServer(
-			{ tasks, defer: () => undefined },
-			{ subscription: { notifications: {}, listen: () => closed.readable } },
+			{ tasks, deferral: () => undefined },
+			{ subscription: { notifications: {}, producer: () => closed.readable } },
 		)
 
 		const refusals = await Promise.all(
@@ -6839,7 +6839,7 @@ describe('MCP resource capability and registration', () => {
 					resourcesListChanged: true,
 					resourceSubscriptions: ['memory://resource/one'],
 				},
-				listen: () => new TransformStream<JSONRPCNotification, JSONRPCNotification>().readable,
+				producer: () => new TransformStream<JSONRPCNotification, JSONRPCNotification>().readable,
 			},
 		})
 		const discovery = await configured.dispatch(
@@ -6900,7 +6900,7 @@ describe('MCP resource notifications', () => {
 					resourcesListChanged: true,
 					resourceSubscriptions: ['memory://resource/one'],
 				},
-				listen: () => source.readable,
+				producer: () => source.readable,
 			},
 		})
 		const stream = await mcp.dispatch(
@@ -7160,7 +7160,7 @@ describe('MCP prompts/get', () => {
 
 describe('MCP completion/complete', () => {
 	it('discriminates prompt and resource references and refuses a missing reference', async () => {
-		const completion = new MemoryCompletionManager()
+		const completion = new MemoryCompletion()
 		const mcp = createMCPServer({
 			identity: { name: 'completion', version: '1.0.0' },
 			tools: createToolManager(),
@@ -7220,7 +7220,7 @@ describe('MCP completion/complete', () => {
 		const mcp = createMCPServer({
 			identity: { name: 'completion', version: '1.0.0' },
 			tools: createToolManager(),
-			completion: new MemoryCompletionManager(),
+			completion: new MemoryCompletion(),
 		})
 		const answer = await mcp.dispatch(
 			createJSONRPCRequest({
@@ -7249,13 +7249,13 @@ describe('MCP prompt and completion capability gating', () => {
 			prompts: new MemoryPromptManager(),
 			subscription: {
 				notifications: { promptsListChanged: true },
-				listen: () => new TransformStream().readable,
+				producer: () => new TransformStream().readable,
 			},
 		})
 		const completion = createMCPServer({
 			identity: { name: 'completion', version: '1.0.0' },
 			tools: createToolManager(),
-			completion: new MemoryCompletionManager(),
+			completion: new MemoryCompletion(),
 		})
 		const listed = responseOf(
 			await prompts.dispatch(

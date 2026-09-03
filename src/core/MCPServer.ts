@@ -10,7 +10,7 @@ import type {
 	JSONRPCResponse,
 	MCPCallResult,
 	MCPCompletion,
-	MCPCompletionManagerInterface,
+	MCPCompletionInterface,
 	MCPCompletionParams,
 	MCPDispatchOptions,
 	MCPIdentity,
@@ -83,10 +83,10 @@ import {
 	buildToolDescriptors,
 	computeMissingCapabilities,
 	digestJSON,
-	isTaskSupported,
 	matchesSubscriptionNotification,
 	serializeJSON,
 	stampSubscriptionNotification,
+	supportsTask,
 } from './helpers.js'
 import { MCPMethodManager } from './MCPMethodManager.js'
 import { MCPProgressReporter } from './MCPProgressReporter.js'
@@ -222,6 +222,36 @@ export class MCPServer implements MCPServerInterface {
 		return this.#dispatch(decoded, options)
 	}
 
+	async handle(
+		message: string,
+		options?: MCPDispatchOptions,
+	): Promise<string | MCPTextStreamControllerInterface | undefined> {
+		if (!isBoundedString(message, this.#limits.message)) {
+			return JSON.stringify(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'))
+		}
+		const parsed = parseJSON(message)
+		if (parsed === undefined) {
+			return JSON.stringify(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'))
+		}
+		const decoded = parseJSONRPCMessage(parsed, {
+			bytes: this.#limits.message,
+			depth: this.#limits.depth,
+		})
+		// Only an INVOCATION is dispatchable — a response (or any non-message) is invalid input.
+		if (decoded === undefined || !('method' in decoded)) {
+			return JSON.stringify(
+				buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Invalid Request'),
+			)
+		}
+		const answer = await this.#dispatch(decoded, options ?? {})
+		if (answer === undefined) return undefined
+		// The ONE narrowing point: a held-open answer becomes the string mirror of
+		// itself, so the string boundary stays a mirror of the typed core.
+		return Symbol.asyncIterator in answer
+			? new MCPTextStreamController(answer)
+			: JSON.stringify(answer)
+	}
+
 	// The ONE ingress. It resolves the caller's options into the options every method,
 	// input, principal, and subscription producer downstream observes, so the
 	// request's cancellation signal is decided here and nowhere else — and it is the ONE
@@ -271,36 +301,6 @@ export class MCPServer implements MCPServerInterface {
 		} catch (error) {
 			return this.#contain(error, id)
 		}
-	}
-
-	async handle(
-		message: string,
-		options?: MCPDispatchOptions,
-	): Promise<string | MCPTextStreamControllerInterface | undefined> {
-		if (!isBoundedString(message, this.#limits.message)) {
-			return JSON.stringify(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'))
-		}
-		const parsed = parseJSON(message)
-		if (parsed === undefined) {
-			return JSON.stringify(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'))
-		}
-		const decoded = parseJSONRPCMessage(parsed, {
-			bytes: this.#limits.message,
-			depth: this.#limits.depth,
-		})
-		// Only an INVOCATION is dispatchable — a response (or any non-message) is invalid input.
-		if (decoded === undefined || !('method' in decoded)) {
-			return JSON.stringify(
-				buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Invalid Request'),
-			)
-		}
-		const answer = await this.#dispatch(decoded, options ?? {})
-		if (answer === undefined) return undefined
-		// The ONE narrowing point: a held-open answer becomes the string mirror of
-		// itself, so the string boundary stays a mirror of the typed core.
-		return Symbol.asyncIterator in answer
-			? new MCPTextStreamController(answer)
-			: JSON.stringify(answer)
 	}
 
 	// Register the built-in modern methods on the seam `#modern` resolves from — the
@@ -711,7 +711,7 @@ export class MCPServer implements MCPServerInterface {
 
 	async #suggest(
 		request: JSONRPCRequest,
-		manager: MCPCompletionManagerInterface,
+		manager: MCPCompletionInterface,
 		options: MCPMethodOptions,
 	): Promise<JSONRPCResponse> {
 		const input = request.params ?? {}
@@ -837,8 +837,8 @@ export class MCPServer implements MCPServerInterface {
 	): Promise<JSONRPCResponse | undefined> {
 		const configured = this.#options.task
 		if (configured === undefined) return undefined
-		const deferral: MCPTaskContext = { request, call, tools: this.#options.tools }
-		const key = await configured.defer(deferral, options)
+		const deferred: MCPTaskContext = { request, call, tools: this.#options.tools }
+		const key = await configured.deferral(deferred, options)
 		// `undefined` is the policy saying "run this inline", and it is the ONLY spelling of that.
 		// An empty key cannot identify an operation, and a manager asked to deduplicate on one
 		// collapses every deferred call onto a single task — so it is a FAULTY policy the
@@ -856,7 +856,7 @@ export class MCPServer implements MCPServerInterface {
 			bytes: this.#limits.message,
 			depth: this.#limits.depth,
 		})
-		if (context === undefined || !isTaskSupported(context.capabilities)) {
+		if (context === undefined || !supportsTask(context.capabilities)) {
 			return buildJSONRPCError(
 				request.id,
 				MCP_MISSING_CAPABILITY,
@@ -867,7 +867,7 @@ export class MCPServer implements MCPServerInterface {
 		// AWAITED before the answer is built, which is this server's entire half of the
 		// durability rule: whatever the manager must do to make the task retrievable, it has
 		// done by the time a `taskId` exists to hand out.
-		const created = await configured.tasks.start(key, deferral, options)
+		const created = await configured.tasks.start(key, deferred, options)
 		// Each declared member is read EXACTLY ONCE and nothing else is copied. That is the
 		// ownership seam for this answer, and it is narrower than a JSON snapshot: a manager
 		// that mutates the object it returned, answers differently on a second read, or hangs
@@ -1416,7 +1416,7 @@ export class MCPServer implements MCPServerInterface {
 			}
 			yield buildSubscriptionAcknowledgement(notifications, id)
 			if (configured !== undefined) {
-				const source = await configured.listen(notifications, options)
+				const source = await configured.producer(notifications, options)
 				const iterator = source[Symbol.asyncIterator]()
 				// The iterator is held rather than hidden inside `for await` because ending the
 				// ITERATOR is the only cleanup this loop can still ask of a producer parked on its
@@ -1475,7 +1475,7 @@ export class MCPServer implements MCPServerInterface {
 			bytes: this.#limits.message,
 			depth: this.#limits.depth,
 		})
-		if (context === undefined || !isTaskSupported(context.capabilities)) {
+		if (context === undefined || !supportsTask(context.capabilities)) {
 			return buildJSONRPCError(
 				id,
 				MCP_MISSING_CAPABILITY,
