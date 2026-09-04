@@ -66,15 +66,16 @@ The one-shot and fire-and-forget spawns, from `@orkestrel/process/server`.
 
 ### Entities
 
-The classes each factory constructs, from `@orkestrel/process/server`, and the error type from
-`@orkestrel/process`.
+The classes a factory constructs and the `Supervisor` engine a consumer constructs directly, from
+`@orkestrel/process/server`, and the error type from `@orkestrel/process`.
 
-| API              | Kind  | Summary                                                                 |
-| ---------------- | ----- | ----------------------------------------------------------------------- |
-| `Process`        | class | The supervised child engine — framed lines under a bounded backlog.     |
-| `Session`        | class | The same supervised child read as raw bytes over an open stdin channel. |
-| `ProcessManager` | class | The keyed registry of live children with auto-eviction on exit.         |
-| `ProcessError`   | class | A child-process failure with a stable machine-readable `code`.          |
+| API              | Kind  | Summary                                                                                                                                    |
+| ---------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Process`        | class | The supervised child engine — framed lines under a bounded backlog.                                                                        |
+| `Session`        | class | The same supervised child read as raw bytes over an open stdin channel.                                                                    |
+| `Supervisor`     | class | The spawn, capture, channel, and termination engine a face composes; its readonly members are named under [Surface notes](#surface-notes). |
+| `ProcessManager` | class | The keyed registry of live children with auto-eviction on exit.                                                                            |
+| `ProcessError`   | class | A child-process failure with a stable machine-readable `code`.                                                                             |
 
 ### Guards
 
@@ -200,27 +201,43 @@ The contracts and options, all from `@orkestrel/process`.
 
 ### Server contracts
 
-The Node-side contracts, from `@orkestrel/process/server`. They type the Node child boundary, so
-they stay out of the host-independent face.
+The Node-side contracts, from `@orkestrel/process/server`. Each sits in this face rather than
+the host-independent one for its own reason: `ProcessChildInterface` names `NodeJS.Signals`, which
+a host-independent contract cannot, and `SupervisorFace` names no Node type but its consumer is the
+Node-only `Supervisor` engine, so the contract sits with the face that constructs one.
 
-| API            | Kind      | Summary                                                                                                    |
-| -------------- | --------- | ---------------------------------------------------------------------------------------------------------- |
-| `ProcessChild` | interface | The child boundary the termination helpers drive — `pid`, `exitCode`, `signalCode`, `kill`, `once`, `off`. |
+| API                     | Kind      | Summary                                                                                                                                                                            |
+| ----------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ProcessChildInterface` | interface | The child boundary the termination helpers drive — the readonly `pid`, `exitCode`, and `signalCode`.                                                                               |
+| `SupervisorFace`        | interface | The callback record a face hands `Supervisor` at construction — `chunk`, `fault`, `relieve`, `close`, `terminal`, `teardown`; see [Vocabulary](#vocabulary) for the `Face` suffix. |
 
 ### Surface notes
 
 The `pid`, `code`, `signal`, `emitter`, `lines`, `evidence`, `truncated`, `settled`, `stopping`, and
 `exit` members of `ProcessInterface`, the `pid`, `code`, `signal`, `emitter`, `evidence`, `settled`,
-`stopping`, `ending`, and `exit` members of `SessionInterface`, and the `emitter` and `count` members
-of `ProcessManagerInterface`, are readonly data properties, so they stay Surface rows. `ending` and
-`exit` are among them: a promise you await is a value the entity holds, not a call you make. Their
-call-signature methods are documented under [Methods](#methods).
+`stopping`, `ending`, and `exit` members of `SessionInterface`, the `emitter` and `count` members
+of `ProcessManagerInterface`, the `pid`, `exitCode`, and `signalCode` members of
+`ProcessChildInterface`, and every member of `SupervisorFace`, are readonly data properties, so they
+stay Surface rows. `ending` and `exit` are among them: a promise you await is a value the entity
+holds, not a call you make. A `SupervisorFace` member is among them too: it holds a function the
+caller supplies rather than declaring one the contract implements. Their call-signature methods are
+documented under [Methods](#methods).
+
+The `Supervisor` class publishes readonly data members of its own: `stdout`, `pid`, `code`, `signal`,
+`evidence`, `settled`, `stopping`, `ending`, and `exit`. It declares no interface, so they are named
+here rather than in a Surface row. `stdout` holds the child's standard-output stream, and it is the
+stream a composing face attaches its own consumer to, because the engine frames no output and owns
+no observation surface. `pid`, `code`, and `signal` read the host child directly and `ending` settles
+with it, while `evidence`, `settled`, and `exit` reach
+[the terminal moment](#the-terminal-moment) after the read channels close or the `drain` window cuts
+them off.
 
 ## Methods
 
-The public methods of each behavioral interface. `Process` implements `ProcessInterface` exactly,
-`Session` implements `SessionInterface` exactly, and `ProcessManager` implements
-`ProcessManagerInterface` exactly, so each table doubles as the class's instance-method surface.
+The public methods of each behavioral interface, and of the `Supervisor` class that publishes its
+own. `Process` implements `ProcessInterface` exactly, `Session` implements `SessionInterface`
+exactly, and `ProcessManager` implements `ProcessManagerInterface` exactly, so each table doubles as
+the class's instance-method surface.
 
 #### `ProcessInterface`
 
@@ -265,6 +282,32 @@ name ids and `void` when you stop every child.
 | `stop`      | `Promise<boolean>`              | Terminate one named id, or every id in an array, and await their exit.                   |
 | `stop`      | `Promise<void>`                 | With no argument, terminate every live child and await their exit.                       |
 | `destroy`   | `Promise<void>`                 | Stop every child, then destroy the registry emitter last; the barrier every call shares. |
+
+#### `ProcessChildInterface`
+
+`kill` delivers one signal, and `once` and `off` register and release the one-shot `exit` or `close`
+listener each bounded wait needs. A `ChildProcess` satisfies all three structurally, so a caller can
+drive `stopChild`, `waitForExit`, and `waitForClose` over a child it spawned itself.
+
+| Method | Returns   | Behavior                                                                              |
+| ------ | --------- | ------------------------------------------------------------------------------------- |
+| `kill` | `boolean` | Deliver one signal to the process; true when the host accepted it.                    |
+| `once` | `unknown` | Register a one-shot `exit` or `close` listener; the emitter's own return, ignored.    |
+| `off`  | `unknown` | Release one registered `exit` or `close` listener; the emitter's own return, ignored. |
+
+#### `Supervisor`
+
+`deliver` writes raw bytes to the open stdin channel and `end` closes that channel; `stop` and
+`destroy` are the lifecycle verbs. None of them rejects. `Process` and `Session` each forward their
+own member to one of these, so the engine's contract is the one both faces publish under their own
+names.
+
+| Method    | Returns            | Behavior                                                                                        |
+| --------- | ------------------ | ----------------------------------------------------------------------------------------------- |
+| `deliver` | `Promise<boolean>` | Write raw bytes to the open stdin channel, appending nothing; true when the host accepted them. |
+| `end`     | `Promise<void>`    | Close the stdin channel and leave the child running; the barrier every call shares.             |
+| `stop`    | `Promise<boolean>` | Terminate the child tree and reach the terminal moment; true when the native exit was observed. |
+| `destroy` | `Promise<void>`    | Stop the child and release the composing face; the barrier every call shares.                   |
 
 ## Supervised children
 
@@ -618,8 +661,8 @@ No bounded wait leaks a listener. `destroy` removes the abort listener it regist
 terminal moment, which is where every other observation surface is released, rather than at the
 `destroy` call. `waitForExit` releases its own `exit` listener when its deadline elapses before the
 exit, and `waitForClose` releases its own `close` listener the same way, so a child driven through
-several bounded waits accumulates none either. `ProcessChild` declares the `off` that release needs,
-so a caller composing a stop of its own from the published contract releases it too.
+several bounded waits accumulates none either. `ProcessChildInterface` declares the `off` that
+release needs, so a caller composing a stop of its own from the published contract releases it too.
 
 `PROCESS_CONFIRMATION` bounds each awaited step of a stop rather than the stop as a whole, so a
 worst-case termination spends more than one of them. On a POSIX host the cooperative wait after
@@ -1379,25 +1422,26 @@ isExited(reporter) // whether the native exit arrived
 
 Each name on this surface that reads against a house rule is settled here rather than rediscovered.
 
-| Name                     | Ruling                                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `execute`, `executeSync` | Use the fixed lifecycle verb for primary work to completion. `executeSync` keeps the ecosystem `Sync` suffix.                                                                                                                                                                                                                                                                 |
-| `detach`                 | Retained as a bare verb where the standalone-helper default reads `{verb}{Noun}`. The call site is unmistakable without the noun: `detach` takes a `ProcessCommand` and its own `DetachOptions`, and it is the one word for the spawn that is not awaited. `detachProcess` was refused for repeating the type the argument already carries.                                   |
-| `process`, `processes`   | Retained. A registry exposes its contents as accessors named for what they hold, so the manager reads `manager.process(id)` and `manager.processes()`.                                                                                                                                                                                                                        |
-| `strict`                 | Replaces `reject`. A boolean reads as an adjective asserting a state, and `reject` named the reaction rather than the mode. `strict: false` resolves with the failed result.                                                                                                                                                                                                  |
-| `evidence`, `backlog`    | Byte bounds are named for their subject where an entity has several, so a `Process` carries `evidence` and `backlog` rather than flavours of `limit`. A run has one bound, so it is named for the bound: `limit`.                                                                                                                                                             |
-| `truncated`              | One name on both surfaces, because it reports one fact: the surface omitted output. Each entity names its own bound — a `Process` omits `lines` past a retention bound, and an `ExecuteResult` omits captured text past `limit`.                                                                                                                                              |
-| `run`                    | Kept as the English noun for one invocation — a terminated run, a run that stays pending. It never names a function; `execute` and `executeSync` are named by their identifiers, so the concept carries one term.                                                                                                                                                             |
-| `settled`                | Derives literally: it is `true` exactly when `exit` has settled. `closed` was refused because it borrows a Node event name into `ProcessInterface`, which is host-independent enough to type `signal` as a `string`.                                                                                                                                                          |
-| `stopping`               | A present participle for a latched fact, documented as monotonic rather than renamed. It reports that a termination was initiated, not that one is in flight, because the initiation is what a consumer acts on: a child that was asked to end is not a child to send new work to.                                                                                            |
-| `drain`, `drained`       | The option names the window and the result names its outcome, so one concept carries one term across the two surfaces. `drain: 0` is an immediate cutoff rather than a disabled bound, unlike the sibling `delivery`, because an unbounded drain is the defect the option prevents.                                                                                           |
-| `Session`                | A second entity rather than a byte mode on `Process`, because a mode would falsify `lines`, `truncated`, and `backlog` on half the instances of one class. `Child` collides with the published `ProcessChild` contract, `Channel` is this package's word for the stdin pipe, and `Stream` and `Duplex` borrow Node class names into contracts typed to stay host-independent. |
-| `Supervisor`             | The spawn, capture, channel, and termination engine both faces compose. It stays out of the barrel and is named in the parity `INTERNAL` list: its constructor takes the composing face's own callbacks, which no consumer holds, so no consumer can construct one.                                                                                                           |
-| `ending`, `exit`         | Two endings, named apart, because a transport acts on each differently. `ending` is the child's own exit and resolves no value, because `code` and `signal` already carry the facts and a second copy could only drift. `exit` stays on the terminal moment, so `exit`, `settled`, and the `exit` event name one moment on both faces.                                        |
-| `end`                    | The consistency class of `destroy`: an idempotent lifecycle member returning the barrier every call shares. `close` was refused for borrowing a Node event name, the reason `settled` already records. It resolves `void` because every fact a result could carry is derivable — a later `write` reports `false`, and `ending` reports the exit.                              |
-| `write`, `send`          | Different verbs because they promise different things. `send` frames a line and appends the terminator; `write` puts the exact bytes on the channel and appends nothing. One name over both would hide the terminator at the call site, which is the defect the split prevents.                                                                                               |
-| `stdout`, `stderr`       | One face decodes one stream and not the other, because they are read differently. Standard output is a payload a parser consumes, so it stays bytes; standard error is a diagnostic a person reads, so it is decoded, and `evidence` bounds those same bytes.                                                                                                                 |
-| `backlog`, `writable`    | Omitted from `SessionOptions` rather than falsified on it. A session retains no lines, so no backlog bound applies; its channel is open until `end` closes it, so no switch selects whether one exists. An option that could only ever hold one value is a member a consumer must learn and can never use.                                                                    |
+| Name                     | Ruling                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `execute`, `executeSync` | Use the fixed lifecycle verb for primary work to completion. `executeSync` keeps the ecosystem `Sync` suffix.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `detach`                 | Retained as a bare verb where the standalone-helper default reads `{verb}{Noun}`. The call site is unmistakable without the noun: `detach` takes a `ProcessCommand` and its own `DetachOptions`, and it is the one word for the spawn that is not awaited. `detachProcess` was refused for repeating the type the argument already carries.                                                                                                                                                                                                                                  |
+| `process`, `processes`   | Retained. A registry exposes its contents as accessors named for what they hold, so the manager reads `manager.process(id)` and `manager.processes()`.                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `strict`                 | Replaces `reject`. A boolean reads as an adjective asserting a state, and `reject` named the reaction rather than the mode. `strict: false` resolves with the failed result.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `evidence`, `backlog`    | Byte bounds are named for their subject where an entity has several, so a `Process` carries `evidence` and `backlog` rather than flavours of `limit`. A run has one bound, so it is named for the bound: `limit`.                                                                                                                                                                                                                                                                                                                                                            |
+| `truncated`              | One name on both surfaces, because it reports one fact: the surface omitted output. Each entity names its own bound — a `Process` omits `lines` past a retention bound, and an `ExecuteResult` omits captured text past `limit`.                                                                                                                                                                                                                                                                                                                                             |
+| `run`                    | Kept as the English noun for one invocation — a terminated run, a run that stays pending. It never names a function; `execute` and `executeSync` are named by their identifiers, so the concept carries one term.                                                                                                                                                                                                                                                                                                                                                            |
+| `settled`                | Derives literally: it is `true` exactly when `exit` has settled. `closed` was refused because it borrows a Node event name into `ProcessInterface`, which is host-independent enough to type `signal` as a `string`.                                                                                                                                                                                                                                                                                                                                                         |
+| `stopping`               | A present participle for a latched fact, documented as monotonic rather than renamed. It reports that a termination was initiated, not that one is in flight, because the initiation is what a consumer acts on: a child that was asked to end is not a child to send new work to.                                                                                                                                                                                                                                                                                           |
+| `drain`, `drained`       | The option names the window and the result names its outcome, so one concept carries one term across the two surfaces. `drain: 0` is an immediate cutoff rather than a disabled bound, unlike the sibling `delivery`, because an unbounded drain is the defect the option prevents.                                                                                                                                                                                                                                                                                          |
+| `Session`                | A second entity rather than a byte mode on `Process`, because a mode would falsify `lines`, `truncated`, and `backlog` on half the instances of one class. `Child` collides with the published `ProcessChildInterface` contract, `Channel` is this package's word for the stdin pipe, and `Stream` and `Duplex` borrow Node class names into contracts typed to stay host-independent.                                                                                                                                                                                       |
+| `Supervisor`             | The spawn, capture, channel, and termination engine `Process` and `Session` compose. It is barrelled because its constructor takes a `ProcessOptions` and a `SupervisorFace`, and a consumer holds both, so a consumer composing a third face of its own reaches the same engine `Process` and `Session` do.                                                                                                                                                                                                                                                                 |
+| `SupervisorFace`         | The callback record a face hands the engine at construction, not a face and not the `Supervisor`'s own face. It carries `Face` rather than the `{Entity}Hooks` form `EmitterHooks` uses, because hooks are optional listeners on an entity that runs without them, while every callback here is a moment the engine must deliver. `{Entity}Interface` was refused because the type declares no behavior of its own: each member holds a function the composing face supplies. It is published because `types.ts` declares it and the server barrel star-exports that module. |
+| `ending`, `exit`         | Two endings, named apart, because a transport acts on each differently. `ending` is the child's own exit and resolves no value, because `code` and `signal` already carry the facts and a second copy could only drift. `exit` stays on the terminal moment, so `exit`, `settled`, and the `exit` event name one moment on both faces.                                                                                                                                                                                                                                       |
+| `end`                    | The consistency class of `destroy`: an idempotent lifecycle member returning the barrier every call shares. `close` was refused for borrowing a Node event name, the reason `settled` already records. It resolves `void` because every fact a result could carry is derivable — a later `write` reports `false`, and `ending` reports the exit.                                                                                                                                                                                                                             |
+| `write`, `send`          | Different verbs because they promise different things. `send` frames a line and appends the terminator; `write` puts the exact bytes on the channel and appends nothing. One name over both would hide the terminator at the call site, which is the defect the split prevents.                                                                                                                                                                                                                                                                                              |
+| `stdout`, `stderr`       | One face decodes one stream and not the other, because they are read differently. Standard output is a payload a parser consumes, so it stays bytes; standard error is a diagnostic a person reads, so it is decoded, and `evidence` bounds those same bytes.                                                                                                                                                                                                                                                                                                                |
+| `backlog`, `writable`    | Omitted from `SessionOptions` rather than falsified on it. A session retains no lines, so no backlog bound applies; its channel is open until `end` closes it, so no switch selects whether one exists. An option that could only ever hold one value is a member a consumer must learn and can never use.                                                                                                                                                                                                                                                                   |
 
 ## Tests
 
@@ -1412,7 +1456,8 @@ Size every budget in a spawning suite — a case timeout, a termination wait, a 
 from a full contended run rather than from an isolated one. Those suites start real children
 concurrently, so each case pays for the children every other file starts beside it. On Linux with
 Node v22.22.2 on 2026-08-25, `npm run test:src` reported a 6.94s wall duration over 12.86s of
-aggregate test time, while the `tests/src/server/ProcessManager.test.ts` file alone reported 1.97s.
+aggregate test time, while the `tests/src/server/processes/ProcessManager.test.ts` file alone
+reported 1.97s.
 A budget sized from the isolated cost turns that contention into a red gate reporting a timeout, and
 a timeout carries no diagnostic about the code.
 
@@ -1446,7 +1491,8 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   `isProcessError` narrowing its own error and refusing a plain `Error`, the codes the guard admits
   compared against the declared `PROCESS_ERROR_CODES` tuple with a refusal control drawn from
   outside it, and recognition of an error constructed by another source copy of the module.
-- [`tests/src/server/Process.test.ts`](../tests/src/server/Process.test.ts) — the supervised child:
+- [`tests/src/server/processes/Process.test.ts`](../tests/src/server/processes/Process.test.ts) —
+  the supervised child:
   line framing across every terminator, a split CRLF pair, a carriage-return redraw, and a trailing
   partial line, the bounded backlog under each consumer policy and under a flood of empty lines, the
   byte-bounded `evidence` tail and live `stderr` event, `send` over an open and a closed channel, the
@@ -1460,8 +1506,8 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   and above a descendant release, `stop` alone reaching the moment with no `destroy` call, the
   latched `stopping` refusing a `send`, the released abort listener, the spawn-fault path, and the
   `drain` refusals at each end of its range.
-- [`tests/src/server/Session.test.ts`](../tests/src/server/Session.test.ts) — the byte face: a binary
-  payload carrying NUL bytes, an invalid UTF-8 sequence, a lone carriage return, and an embedded line
+- [`tests/src/server/processes/Session.test.ts`](../tests/src/server/processes/Session.test.ts) —
+  the byte face: a binary payload carrying NUL bytes, an invalid UTF-8 sequence, a lone carriage return, and an embedded line
   feed arriving byte-identical in one event, a half-megabyte stream reassembled byte for byte, and
   each emitted chunk read as a plain owned array against a raw spawn of the same child as the
   control. `write` echoing its exact bytes with no terminator added, refused after `end`, inside a
@@ -1473,12 +1519,28 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   nothing after a `stop`. The endings pulled apart by a descendant holding the pipe, the `exit` event
   and promise agreeing once, the pid and the frozen `evidence` tail beside the live `stderr` chunks,
   the spawn-fault path, and the `invalid` refusals.
-- [`tests/src/server/ProcessManager.test.ts`](../tests/src/server/ProcessManager.test.ts) — the
-  registry: `launch` registration and its `duplicate`, `protocol`, and `invalid` refusals, including
+- [`tests/src/server/processes/Supervisor.test.ts`](../tests/src/server/processes/Supervisor.test.ts)
+  — the engine driven through a literal face: the moment order that ends the face's read pipeline, freezes the
+  terminal state, and only then releases the face; the backpressure release reaching a face holding
+  a paused stdout before the termination sequence rather than after it; `ending` settling at the
+  native exit while `exit` waits out the drain a descendant holds open; a `deliver` refused once a
+  termination has begun; and the one barrier every `end` call shares, with the child ending itself
+  because its input ended.
+- [`tests/src/server/factories.test.ts`](../tests/src/server/factories.test.ts) — the
+  interface-oriented constructors: each `create*` return carrying every member its interface
+  declares, the construction options reaching the entity's own command and emitter rather than
+  stopping at the factory, and the `backlog` refusal proven to precede the spawn against a control
+  child whose marker dates one.
+- [`tests/src/server/processes/ProcessManager.test.ts`](../tests/src/server/processes/ProcessManager.test.ts)
+  — the registry: `launch` registration and its `duplicate`, `protocol`, and `invalid` refusals, including
   a teardown started from inside the caller's own option getter, the terminal moment of the child
   that refusal spawned arriving before the barrier resolves, the eviction of a child whose
   descendant holds the pipe at the drain cutoff, the unforgeable eviction and its ordering, the
   query surface, the `stop` overloads, and emitter-last `destroy`.
+- [`tests/src/server/cloners.test.ts`](../tests/src/server/cloners.test.ts) — the command
+  snapshot: each property read exactly once through a caller's own getter, the frozen argument
+  vector and environment record a later mutation cannot reach, and the absent optional that stays
+  absent rather than becoming an explicit `undefined`.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the building blocks
   and the spawns that compose them: the resolver under `PATHEXT` and an extension-bearing name, each
   platform input to the quoted batch builder and its percent-sign refusal, the environment merge

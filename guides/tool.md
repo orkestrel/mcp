@@ -25,17 +25,18 @@
 > consumer's execution context, one layer up — the @orkestrel/mcp package's execution context
 > carries a progress reporter — never of the tool contract itself.
 
-Two nouns carry the runtime. A `Tool` is inert — a definition plus a handler, with no lifecycle
-and no failure handling of its own. A `ToolManager` is the live surface a caller holds: it hands
-`definitions()` outward, takes a `ToolCall` back, and answers with a `ToolResult` that is always
-a result and never a throw. Everything else in this module is the plain data those two exchange.
+`Tool` and `ToolManager` carry the runtime. A `Tool` is inert — a definition plus a handler, with
+no lifecycle and no failure handling of its own. A `ToolManager` is the live surface a caller
+holds: it hands `definitions()` outward, takes a `ToolCall` back, and answers with a `ToolResult`,
+a result rather than a throw for a call whose members are plain values. Everything else in this
+module is the plain data those two exchange.
 
 ## Surface
 
 ### Contracts
 
 The data shapes, from [`types.ts`](../src/core/types.ts). Every property is readonly, and an
-absent optional field is simply absent.
+optional field the caller did not supply is absent from the value.
 
 | Name                   | Kind      | Shape / Purpose                                                                                                                     |
 | ---------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------- |
@@ -55,6 +56,14 @@ The call-envelope guard, from [`validators.ts`](../src/core/validators.ts).
 | Name         | Kind     | Signature                               | Behavior                                                                                                                                                              |
 | ------------ | -------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `isToolCall` | function | `(value: unknown) => value is ToolCall` | Total guard for the envelope: a plain record with string `id` and `name` and a plain-record `arguments`. Malformed or hostile input returns `false`; it never throws. |
+
+### Helpers
+
+The advertised-definition projection, from [`helpers.ts`](../src/core/helpers.ts).
+
+| Name               | Kind     | Signature                                 | Behavior                                                                                                                                  |
+| ------------------ | -------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `toolToDefinition` | function | `(tool: ToolInterface) => ToolDefinition` | Projects one tool onto a fresh definition, advertising its summary in place of its full description and carrying its schema by reference. |
 
 ### Factories
 
@@ -97,15 +106,15 @@ The public call-signature members of each behavioral interface, one table per in
 
 #### `ToolManagerInterface`
 
-| Method        | Returns                                        | Behavior                                                                                    |
-| ------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `add`         | `void`                                         | Registers one tool or a readonly batch; a repeated name overwrites in place.                |
-| `tool`        | `ToolInterface \| undefined`                   | Finds one registered tool by name, returning the exact registered instance.                 |
-| `tools`       | `readonly ToolInterface[]`                     | Lists the registered tools in insertion order.                                              |
-| `definitions` | `readonly ToolDefinition[]`                    | Lists the advertised definitions, preferring each tool's summary over its full description. |
-| `execute`     | `Promise<ToolResult \| readonly ToolResult[]>` | Executes one call or a readonly batch with per-call error isolation.                        |
-| `remove`      | `boolean`                                      | Removes one name or a readonly batch of names and reports whether any tool was present.     |
-| `clear`       | `void`                                         | Removes every registered tool.                                                              |
+| Method        | Returns                                        | Behavior                                                                                        |
+| ------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `add`         | `void`                                         | Registers one tool or a readonly batch; a repeated name overwrites in place.                    |
+| `tool`        | `ToolInterface \| undefined`                   | Finds one registered tool by name, returning the exact registered instance.                     |
+| `tools`       | `readonly ToolInterface[]`                     | Lists the registered tools in insertion order.                                                  |
+| `definitions` | `readonly ToolDefinition[]`                    | Lists the advertised definitions, preferring each tool's summary over its full description.     |
+| `execute`     | `Promise<ToolResult \| readonly ToolResult[]>` | Executes one call or a readonly batch with per-call error isolation.                            |
+| `remove`      | `boolean`                                      | Removes one name or a readonly batch of names and reports whether every named tool was present. |
+| `clear`       | `void`                                         | Removes every registered tool.                                                                  |
 
 ## Anatomy of a tool
 
@@ -131,8 +140,8 @@ const add = createTool({
 })
 ```
 
-`new Tool({ … })` builds the same thing; `createTool` is the form to reach for when a call site
-should not name a class.
+`new Tool({ … })` builds the same thing; reach for `createTool` where a call site must not name
+a class.
 
 The schema is descriptive runtime data, forwarded by reference and never interpreted here. A
 handler always receives the open `Readonly<Record<string, unknown>>` the caller sent and narrows
@@ -140,8 +149,9 @@ the fields it consumes — declaring `required` tells the caller what to send, n
 what to reject. Its optional second parameter is the call's `caller` value verbatim. That value
 is asserted by the invoking consumer and is never verified here; a handler or policy layer must
 make every authorization and trust decision. Handlers may be synchronous or asynchronous; the
-registry awaits either. Existing zero-argument and one-argument handlers remain valid, and when
-caller context is absent the handler receives `undefined`.
+registry awaits either. A handler can declare no parameter, one, or two. When the call carries
+no caller context the registry invokes the handler with the arguments record alone, so a handler
+that reads its own arity sees one argument and a handler that declares `caller` sees `undefined`.
 
 When one was authored, `definitions()` projects the tool's `summary` as `description`, advertising
 it in place of the full description. The full text stays on the tool for direct lookup through
@@ -156,7 +166,7 @@ caller is allowed to reach, and hand out its definitions:
 import { Tool, createToolManager } from '@orkestrel/tool'
 
 const tools = createToolManager()
-tools.add(add) // the tool defined above
+tools.add(add) // the tool defined earlier
 tools.add([
 	new Tool({ name: 'echo', execute: (args) => args.value }),
 	new Tool({ name: 'now', description: 'Current epoch milliseconds.', execute: () => Date.now() }),
@@ -168,7 +178,7 @@ tools.tools() // a fresh readonly array, in insertion order
 tools.definitions() // the same order, projected to plain ToolDefinition values
 
 tools.remove('echo') // true — the tool was present
-tools.remove(['now', 'ghost']) // true — any one removal counts
+tools.remove(['now', 'ghost']) // false — 'ghost' was never registered, so not every name succeeded
 tools.clear() // back to empty
 ```
 
@@ -219,22 +229,27 @@ the handler, which is exactly where the domain knowledge to reject it lives.
 
 Caller context exists only on the call and in the tool execution chain. This package never adds
 it to advertised definitions, schemas, results, or logs. When present it is forwarded by
-identity; when absent its value is `undefined`.
+identity; when absent it is not passed at all.
 
-Execution always resolves. An unknown name becomes `tool not found: <name>`; a synchronous throw
-and an asynchronous rejection are both contained; an `Error` contributes its `message` and any
-other thrown value is converted with `String`. Success and failure never mix in one result: a
-successful call carries `value` even when that value is `undefined`, `null`, `0`, `''`, or
-`false`, and a failed call carries `error`. Narrow on `success` to distinguish the two; a present
-success value is not necessarily meaningful or truthy.
+Execution always resolves for a call whose members are plain values; a call whose `id` or `name`
+accessor throws when read makes `execute` reject, because no correlated result can be built
+without them. An unknown name becomes `tool not found: <name>`; a synchronous throw and an
+asynchronous rejection are both contained; an `Error` contributes its `message`, and any other
+thrown value is converted with `String`; a value whose conversion itself throws — a hostile
+`toString`, a throwing `message` getter, a null-prototype object — becomes the fixed message
+`Unknown thrown value`. Success and failure never mix in one result: a successful call carries
+`value` even when that value is `undefined`, `null`, `0`, `''`, or `false`, and a failed call
+carries `error`. Narrow on `success` to distinguish the two; a present success value is not
+necessarily meaningful or truthy.
 
 An in-process caller needing a typed error can call `tools.tool(name)`, then
 `tool.execute(args)` inside its own `try`/`catch`.
 
-A batch is dispatched concurrently and answered in input order, with each call isolated from its
-siblings — one failure never voids the batch, and duplicate ids stay distinct positional calls
-rather than collapsing into one. That guarantee is what lets a caller feed every result back to
-whatever produced the calls and let it react to the failures itself.
+A batch is dispatched concurrently and answered in input order, with each call whose members are
+plain values isolated from its siblings — a handler failure never voids the batch, a call whose
+`id` or `name` accessor throws when read rejects it, and duplicate ids stay distinct positional
+calls rather than collapsing into one. That isolation is what lets a caller feed every result back
+to whatever produced the calls and let it react to the failures itself.
 
 ## Callers
 
@@ -258,6 +273,7 @@ registers here unchanged.
 - [`Tool.test.ts`](../tests/src/core/tools/Tool.test.ts) — definition binding, optional-field omission, argument identity, return values, and the deliberate absence of handler isolation.
 - [`ToolManager.test.ts`](../tests/src/core/tools/ToolManager.test.ts) — insertion order, overwrite and removal lifecycle, definition projection, and isolated single and batch execution.
 - [`factories.test.ts`](../tests/src/core/factories.test.ts) — factory construction and working instances.
+- [`helpers.test.ts`](../tests/src/core/helpers.test.ts) — definition projection: summary preference, omitted optional keys, projected key order, schema identity, and a fresh object per call.
 - [`validators.test.ts`](../tests/src/core/validators.test.ts) — tool-call envelope boundaries: incomplete calls, wrong field types, and non-record arguments.
 
 ## See also
