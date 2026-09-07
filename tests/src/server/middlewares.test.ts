@@ -38,12 +38,12 @@ import { createClockMiddleware, createDelayMiddleware, startServer } from '../..
 // dependency on `@orkestrel/middleware`): a closure `Map` mints a session on `initialize`,
 // validates the `mcp-session-id` header on every other `POST`, serves the resumable `GET
 // {path}` SSE channel and the `DELETE {path}` session-end, with a lazy idle-TTL sweep.
-// Composed via `server.use(createMCPSession())` IN FRONT of a session-AGNOSTIC
-// `createMCPRoutes(mcp)` and proven over a REAL `@orkestrel/server` + a REAL `MCPServer` via
+// Composed through `server.use(createMCPSession())` IN FRONT of a session-AGNOSTIC
+// `createMCPRoutes(mcp)` and proven over a REAL `@orkestrel/server` + a REAL `MCPServer` through
 // `fetch` (no live model): an `initialize` POST MINTS a session id returned in the
 // `mcp-session-id` header; a NON-initialize POST must echo a VALID id (missing / unknown → a
 // 404 + a JSON-RPC error body); a `DELETE {path}` → 204 then the session is gone (a later echo
-// → 404); and the resumable `GET {path}` SSE channel (a server-side push ARRIVES decoded via
+// → 404); and the resumable `GET {path}` SSE channel (a server-side push ARRIVES decoded through
 // the core `SSEParser`, a reconnect echoing `Last-Event-ID` REPLAYS). The push is driven the
 // REAL way — an in-request app middleware reads `context.state.session` (set by
 // `createMCPSession` for a validated request) and `.push`es, so the test exercises push AND
@@ -529,7 +529,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 // ── Resumable server→client SSE stream (the GET-SSE push tier) ───────────────
 //
 // `createMCPSession` registers the resumable `GET {path}` SSE channel: a server-side push ARRIVES
-// on the open stream decoded via the core `SSEParser` (`readSSEStream`) carrying a monotone id, and
+// on the open stream decoded through the core `SSEParser` (`readSSEStream`) carrying a monotone id, and
 // a reconnect echoing `Last-Event-ID` REPLAYS the missed events in order. The push is driven the
 // REAL way — the in-request `pushTrigger` app middleware reads `context.state.session` and
 // `.push`es. The long-lived stream is read with a BOUNDED reader (take N then abort, so the test
@@ -758,7 +758,7 @@ describe('createMCPSession — `touched` is the instant of the last access', () 
 	// The MINT path. `createMCPSession` stamps `touched` when it mints, suspends across
 	// the whole `initialize` round trip, then inserts that PRE-suspension instant. A handshake
 	// that takes longer than the ttl is therefore inserted ALREADY EXPIRED, and the very next
-	// request for the id the server just advertised is swept before it is resolved → 404.
+	// request for the id the server advertised is swept before it is resolved → 404.
 	it('a session whose initialize round trip outlasts the ttl is live for the id it advertised', async () => {
 		const clock = createManualClock()
 		const handle = await startSession({ ttl: 50, clock: clock.now, elapse: { clock, ms: 60 } })
@@ -850,7 +850,7 @@ describe('createMCPSession — `touched` is the instant of the last access', () 
 		)
 		expect(echoed.status).toBe(404)
 
-		// Gone from the STORE, not just refused by resolution: a DELETE for the same id has
+		// Gone from the STORE, not merely refused by resolution: a DELETE for the same id has
 		// nothing to remove either.
 		const deleted = await fetch(`${handle.base}/mcp`, {
 			method: 'DELETE',

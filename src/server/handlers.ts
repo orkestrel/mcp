@@ -103,7 +103,7 @@ export function createMCPPostHandler<TState = unknown>(
 		// server implements, so the request is held to that revision's own rule whatever shape
 		// its body arrived in: SEP-2575 requires a parsable `_meta`, and a body without one is
 		// `-32602`. Routing such a body through the legacy door instead would answer `-32022`,
-		// which claims this server does not implement the revision it just answered `_meta` for.
+		// which claims this server does not implement the revision it answered `_meta` for.
 		if (era === 'modern' || isMCPModernVersion(protocol)) {
 			if (parseRequestContext(invocation) === undefined) {
 				return Response.json(

@@ -92,7 +92,7 @@ function buildSchemaRecord(schema: unknown): Record<string, MCPElicitValue> {
  * A free-form object argument declares no shape the driver could compose, so the only object
  * it can supply without inventing one is an object the peer itself delivered: another listed
  * tool's `inputSchema`. The tool being called is skipped, because handing a peer back the
- * schema it just sent under that same name reports nothing about what the client preserved.
+ * schema it sent under that same name reports nothing about what the client preserved.
  *
  * @param tools - Every tool the client listed
  * @param name - The tool being called

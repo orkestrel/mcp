@@ -11,19 +11,19 @@ declare module 'vitest' {
 	}
 }
 
-/** The runnable export loaded into the fixture's isolated Node-side Vite graph. */
+/** Describes the runnable export loaded into the fixture's isolated Node-side Vite graph. */
 export interface BrowserFixtureModuleInterface {
 	/** Start the external fixture. */
 	start(): Promise<BrowserFixtureInterface>
 }
 
-/** Narrow the isolated fixture module before invoking its setup export. */
+/** Narrows the isolated fixture module before invoking its setup export. */
 export function isBrowserFixtureModule(value: unknown): value is BrowserFixtureModuleInterface {
 	return isRecord(value) && typeof value['start'] === 'function'
 }
 
 /**
- * Start the external Node fixture before Chromium receives the browser test graph.
+ * Starts the external Node fixture before Chromium receives the browser test graph.
  *
  * @param project - The Vitest browser project receiving the fixture URL
  * @returns A teardown that stops both the fixture and its isolated module runner

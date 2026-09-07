@@ -79,7 +79,7 @@ import {
  *   remote `tools/call` and reports the arm the peer answered with — a value, a durable
  *   task, or a request for more input (a remote `isError: true` throws locally, so an
  *   agent's {@link import('@orkestrel/tool').ToolManagerInterface} isolates it into a
- *   `success: false` result just like a local throw). A wrapped tool cannot hand an agent
+ *   `success: false` result exactly like a local throw). A wrapped tool cannot hand an agent
  *   a deferred answer, so a non-`'complete'` arm throws there.
  * - **Request↔response correlation.** Each request is tagged with a monotonic numeric
  *   `id` ({@link #nextId}); a single transport `message` subscription resolves / rejects
@@ -488,7 +488,7 @@ export class MCPClient implements MCPClientInterface {
 		// then drives the object the map holds, read back ONCE — `#settle` deletes the entry
 		// before it writes `waiter` / `terminal` / `failure` onto that same object, so a later
 		// read of the map would find nothing and a second literal would be a second shape to
-		// drift. The refusal answers the map's `get` type, which cannot know what was just set.
+		// drift. The refusal answers the map's `get` type, which cannot know what the preceding statement set.
 		const subscription = this.#pending.get(id)?.subscription
 		if (subscription === undefined) throw new Error('MCP subscription state is missing')
 		this.#transport.send(request).catch((error: unknown) => this.#settle(id, error, true))
@@ -1075,7 +1075,7 @@ export class MCPClient implements MCPClientInterface {
 		}
 		// The caller's signal is the CALLER's and outlives this request — one controller may be
 		// driving several calls — so its listener is removed rather than left to `once`. The
-		// progress handler needs no line here: it lives on the entry that was just dropped.
+		// progress handler needs no line here: it lives on the entry this call already dropped.
 		if (pending.signal !== undefined && pending.abort !== undefined) {
 			pending.signal.removeEventListener('abort', pending.abort)
 		}

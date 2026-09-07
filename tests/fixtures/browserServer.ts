@@ -32,7 +32,7 @@ import { createCalculatorServer } from '../setup.js'
 // read so each scenario starts from an empty log.
 const RECORDED: string[] = []
 
-/** The running Node fixture exposed to the browser project's global setup. */
+/** Describes the running Node fixture exposed to the browser project's global setup. */
 export interface BrowserFixtureInterface {
 	/** The fixture's loopback HTTP origin. */
 	readonly base: string
@@ -40,7 +40,7 @@ export interface BrowserFixtureInterface {
 	stop(): Promise<void>
 }
 
-/** Create the intentionally malformed JSON response used by the HTTP error-path test. */
+/** Creates the intentionally malformed JSON response used by the HTTP error-path test. */
 export function createBrokenResponse(): Response {
 	return new Response('not valid json', {
 		status: 500,
@@ -48,7 +48,7 @@ export function createBrokenResponse(): Response {
 	})
 }
 
-/** Let the real browser page reach the external HTTP fixture, including session requests. */
+/** Lets the real browser page reach the external HTTP fixture, including session requests. */
 export async function applyBrowserCORS(
 	request: Request,
 	_context: MiddlewareContext<MCPSessionState>,
@@ -83,7 +83,7 @@ export async function applyBrowserCORS(
 }
 
 /**
- * Record one raw frame a fixture peer received.
+ * Records one raw frame a fixture peer received.
  *
  * @param text - The frame exactly as it arrived on the wire
  */
@@ -92,7 +92,7 @@ export function recordFrame(text: string): void {
 }
 
 /**
- * Answer with every recorded frame and clear the log.
+ * Answers with every recorded frame and clears the log.
  *
  * @returns The recorded frames as a JSON array, leaving the log empty
  */
@@ -101,7 +101,7 @@ export function drainRecorded(): Response {
 }
 
 /**
- * Answer a POST with the MCP headers it actually carried across the wire.
+ * Answers a POST with the MCP headers it actually carried across the wire.
  *
  * @remarks
  * A protocol-faithful peer for ONE claim: what the far end received. The answer is a real
@@ -128,7 +128,7 @@ export async function echoHeaders(request: Request): Promise<Response> {
 }
 
 /**
- * Record every JSON-RPC body POSTed to the fixture before the route handles it.
+ * Records every JSON-RPC body POSTed to the fixture before the route handles it.
  *
  * @param request - The inbound request (cloned, so the route still reads its body)
  * @param _context - The unused per-request middleware context
@@ -145,7 +145,7 @@ export async function recordInbound(
 }
 
 /**
- * Create the recording WebSocket peer — the REAL server on a REAL socket, with the
+ * Creates the recording WebSocket peer — the REAL server on a REAL socket, with the
  * inbound wire tapped.
  *
  * @remarks
@@ -180,7 +180,7 @@ export function createRecordingWebSocketHandler(mcp: MCPServerInterface): Upgrad
 	}
 }
 
-/** Create raw WebSocket endpoints for peer-close and malformed-frame browser tests. */
+/** Creates raw WebSocket endpoints for peer-close and malformed-frame browser tests. */
 export function createRawWebSocketHandler(): UpgradeHandler {
 	return (request, socket, head) => {
 		const path = upgradeRequestPath(request)
@@ -201,7 +201,7 @@ export function createRawWebSocketHandler(): UpgradeHandler {
 }
 
 /**
- * Start the real MCP HTTP/session/WebSocket fixture on an ephemeral loopback port.
+ * Starts the real MCP HTTP/session/WebSocket fixture on an ephemeral loopback port.
  *
  * @returns The fixture base URL and its complete teardown
  */

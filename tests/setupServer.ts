@@ -21,7 +21,7 @@ import {
 } from '@orkestrel/websocket'
 
 /**
- * Find the imports Guide surfaces from a projected fence that are absent from their exact public
+ * Finds the imports Guide surfaces from a projected fence that are absent from their exact public
  * face.
  *
  * The fence is read through Guide's own comment-aware source projection — `extractSourceLines`
@@ -129,7 +129,7 @@ export function findMissingNamedImports(
 // crossed into the parameter through a structural guard (never an `as`).
 
 /**
- * A structural guard narrowing an `unknown` stub to {@link
+ * Narrows an `unknown` stub structurally to {@link
  * import('node:http').IncomingMessage} — the readers only read `url` / `method` /
  * `headers` (and, for the peer IP, `socket`), so a partial shape carrying `headers`
  * crosses the boundary through this guard with no assertion.
@@ -142,7 +142,7 @@ export function isIncomingMessage(value: unknown): value is IncomingMessage {
 }
 
 /**
- * Build a minimal `node:http`-shaped request stub for the pure request readers — only the
+ * Builds a minimal `node:http`-shaped request stub for the pure request readers — only the
  * fields each reader touches, defaulting `headers` / `socket` to empty
  * so `upgradeRequestPath` and a peer-IP read both have something to read. Crosses into
  * the `IncomingMessage` parameter through {@link isIncomingMessage} (no `as`).
@@ -175,7 +175,7 @@ export function createRequestStub(fields?: {
 // raises while it is being forwarded. This is a minimal real implementation of the same
 // interface with those faults as data (an inert, customizable stub).
 
-/** Which fault a {@link createStreamStub} stream raises, if any. */
+/** Selects which fault a {@link createStreamStub} stream raises, if any. */
 export interface TestStreamOptions {
 	/** Thrown by `write` on every event. */
 	readonly write?: Error
@@ -192,7 +192,7 @@ export interface TestStreamOptions {
 	readonly pending?: boolean
 }
 
-/** A real {@link StreamInterface} that also reports what was written and whether it ended. */
+/** Reports what was written to a real {@link StreamInterface} and whether it ended. */
 export interface TestStreamInterface extends StreamInterface {
 	/** Each event's `data`, in write order. */
 	readonly events: readonly string[]
@@ -203,7 +203,7 @@ export interface TestStreamInterface extends StreamInterface {
 }
 
 /**
- * Build a real SSE {@link StreamInterface} whose write or body fault is supplied as data.
+ * Builds a real SSE {@link StreamInterface} whose write or body fault is supplied as data.
  *
  * @param options - The fault to raise or the `pending` body; omit for an inert recording stream
  * @returns The stream, plus the events and comments it accepted and whether it ended
@@ -303,7 +303,7 @@ class DuplexEnd extends Duplex {
 }
 
 /**
- * Create a cross-wired in-memory `node:stream` Duplex PAIR — a real bidirectional
+ * Creates a cross-wired in-memory `node:stream` Duplex PAIR — a real bidirectional
  * socket for the WebSocket transport tests. The server end gets `[0]`,
  * the client end `[1]`, sharing two `PassThrough` channels (one per direction); bytes
  * written to one arrive as `data` on the other. No socket, no mock — genuine Node
@@ -322,7 +322,7 @@ export function duplexPair(): readonly [Duplex, Duplex] {
 }
 
 /**
- * Resolve on the socket pair's next tick or two — long enough for synchronous frame
+ * Resolves on the socket pair's next tick or two — long enough for synchronous frame
  * writes to propagate through the {@link duplexPair} PassThroughs.
  * Deterministic (no real timer dependence on load), so a WebSocket test awaits it after
  * a `send` rather than polling.
@@ -334,7 +334,7 @@ export function flushSocket(): Promise<void> {
 }
 
 /**
- * Collect a {@link duplexPair} client end's incoming frames — FIRST stripping the
+ * Collects a {@link duplexPair} client end's incoming frames — FIRST stripping the
  * server's HTTP `101` handshake response (the leading text up to `\r\n\r\n`), THEN
  * decoding every complete frame off the running buffer with `@orkestrel/websocket`'s
  * `parseWebSocketFrame`. The real client reader: the inverse of what a
@@ -367,7 +367,7 @@ export function readClientFrames(peer: Duplex): { readonly frames: readonly WebS
 	return { frames }
 }
 
-/** A raw client socket held open against a real server's WebSocket endpoint. */
+/** Holds a raw client socket open against a real server's WebSocket endpoint. */
 export interface ClientSocketInterface {
 	/** Every frame the server has sent since the `101`, decoded as it arrives. */
 	readonly frames: readonly WebSocketFrame[]
@@ -378,7 +378,7 @@ export interface ClientSocketInterface {
 }
 
 /**
- * Open a raw RFC 6455 client socket against a real server and decode what it sends back —
+ * Opens a raw RFC 6455 client socket against a real server and decodes what it sends back —
  * a genuine TCP peer, no wrapper and no mock.
  *
  * @remarks
@@ -389,8 +389,8 @@ export interface ClientSocketInterface {
  * socket destroy (no frame at all). `closed` resolves on the socket's `close` event, after
  * node has dispatched every `data` event, so an assertion over `frames` never races the wire.
  *
- * @param base - The server's bound base URL (e.g. `http://127.0.0.1:<port>`)
- * @param path - The endpoint path to upgrade (e.g. `/mcp`)
+ * @param base - The server's bound base URL (for example `http://127.0.0.1:<port>`)
+ * @param path - The endpoint path to upgrade (for example `/mcp`)
  * @returns The connected {@link ClientSocketInterface}
  */
 export async function openClientSocket(base: string, path: string): Promise<ClientSocketInterface> {
@@ -424,7 +424,7 @@ export async function openClientSocket(base: string, path: string): Promise<Clie
 // carries the bound base URL plus a `stop` thunk every test calls in `afterEach` so no
 // listener leaks across files.
 
-/** A started test server — its bound `base` URL plus the `ServerInterface`. */
+/** Pairs a started test server's bound `base` URL with its `ServerInterface`. */
 export interface StartedServerInterface<TState = unknown> {
 	readonly server: ServerInterface<TState>
 	readonly port: number
@@ -433,7 +433,7 @@ export interface StartedServerInterface<TState = unknown> {
 }
 
 /**
- * Start a `ServerInterface` on an ephemeral port and resolve its bound base URL — the
+ * Starts a `ServerInterface` on an ephemeral port and resolves its bound base URL — the
  * shared harness for the real-`@orkestrel/server` MCP spine tests.
  *
  * @remarks
@@ -460,7 +460,7 @@ export async function startServer<TState>(
 }
 
 /**
- * A test resource released through {@link closeResource}: a started server, an MCP client, or a
+ * Names a test resource released through {@link closeResource}: a started server, an MCP client, or a
  * bare client transport driven without one.
  */
 export type TestResource =
@@ -469,7 +469,7 @@ export type TestResource =
 	| MCPMessageTransportInterface
 
 /**
- * Release one {@link TestResource} from a suite that opens clients as well as servers.
+ * Releases one {@link TestResource} from a suite that opens clients as well as servers.
  *
  * @remarks
  * Each member is identified by the one release method it declares (`stop` / `disconnect` /
@@ -501,7 +501,7 @@ export function closeResource(resource: TestResource): Promise<void> {
 // — and observe whether the server CLAIMED the socket (it answered `101` and the
 // client's `'upgrade'` event fired) or DECLINED it. A real socket exchange, no mock.
 
-/** The outcome of an {@link upgradeRequest} — whether the server claimed the upgrade. */
+/** Reports the outcome of an {@link upgradeRequest} — whether the server claimed the upgrade. */
 export interface UpgradeOutcome {
 	/** `true` when the server answered `101 Switching Protocols` (a handler claimed the socket). */
 	readonly claimed: boolean
@@ -524,7 +524,7 @@ export interface UpgradeOutcome {
  * socket closes) → `{ claimed: false }`. It is TOTAL — the declined path is an expected
  * outcome, never a rejection.
  *
- * @param base - The server's bound base URL (e.g. `http://127.0.0.1:<port>`)
+ * @param base - The server's bound base URL (for example `http://127.0.0.1:<port>`)
  * @param path - The request path to upgrade (defaults to `'/'`)
  * @param headers - Extra request headers merged over the upgrade headers
  * @returns The {@link UpgradeOutcome}
@@ -545,7 +545,7 @@ export function upgradeRequest(
 			headers: { Connection: 'Upgrade', Upgrade: 'websocket', ...headers },
 		})
 		// The server claimed it: it sent `101` and the socket is now the handler's. Read
-		// nothing — just free the client end and report the claim.
+		// nothing — free the client end and report the claim.
 		request.on('upgrade', (response, socket) => {
 			socket.destroy()
 			const protocol = response.headers['sec-websocket-protocol']
@@ -577,7 +577,7 @@ export function upgradeRequest(
 // across a measurable span. The host clock is never replaced.
 
 /**
- * Create a middleware that advances a manual clock before delegating downstream.
+ * Creates a middleware that advances a manual clock before delegating downstream.
  *
  * @typeParam TState - The consumer's route state type
  * @param clock - The manual clock this request consumes time from
@@ -601,7 +601,7 @@ export function createClockMiddleware<TState>(
 }
 
 /**
- * Create a middleware that holds every request open for `ms` of REAL time before delegating.
+ * Creates a middleware that holds every request open for `ms` of REAL time before delegating.
  *
  * @remarks
  * The seam for interleaving: while one request is parked here, the middleware in front of it
@@ -630,7 +630,7 @@ export function createDelayMiddleware<TState>(ms: number): MiddlewareHandler<TSt
 // one unmasked text frame appended, and it counts the sockets it upgraded against the
 // sockets that are still open.
 
-/** A raw upgrade peer — how many sockets it accepted, and how many are still open. */
+/** Counts a raw upgrade peer's sockets — how many it accepted, and how many are still open. */
 export interface TestUpgradeInterface {
 	/** The bound `http://…` base URL. */
 	readonly base: string
@@ -641,7 +641,7 @@ export interface TestUpgradeInterface {
 	stop(): Promise<void>
 }
 
-/** How a {@link startUpgradeServer} peer answers each upgrade. */
+/** Decides how a {@link startUpgradeServer} peer answers each upgrade. */
 export interface TestUpgradeOptions {
 	/** Milliseconds the handshake is held open before the `101` is written. */
 	readonly delay?: number
@@ -650,7 +650,7 @@ export interface TestUpgradeOptions {
 }
 
 /**
- * Start a raw `node:http` peer that completes real WebSocket handshakes and records them.
+ * Starts a raw `node:http` peer that completes real WebSocket handshakes and records them.
  *
  * @remarks
  * Each upgrade is answered with a structurally valid `101` whose `Sec-WebSocket-Accept` is

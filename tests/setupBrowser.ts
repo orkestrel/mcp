@@ -16,7 +16,7 @@ import { isArray, isString } from '@orkestrel/contract'
 // frames a real Node peer recorded off a real socket.
 
 /**
- * Tap a live `MessagePort` and return a drain over the JSON-RPC frames it has received.
+ * Taps a live `MessagePort` and returns a drain over the JSON-RPC frames it has received.
  *
  * @remarks
  * A `MessagePort` is a real `EventTarget`, so this adds a second listener beside the
@@ -41,7 +41,7 @@ export function recordPort(port: MessagePort): () => readonly JSONRPCMessage[] {
 	return () => frames.splice(0, frames.length)
 }
 
-/** A wired pair of real `createScopeTransport` halves, plus what the SERVER half received. */
+/** Wires a pair of real `createScopeTransport` halves, plus what the SERVER half received. */
 export interface TestScopeCarrierInterface {
 	/** The client half — hand it to `createDuplexClientTransport` and `bindClient`. */
 	readonly client: ScopeTransportInterface
@@ -52,7 +52,7 @@ export interface TestScopeCarrierInterface {
 }
 
 /**
- * Wire real {@link createScopeTransport} halves into one in-page duplex carrier.
+ * Wires real {@link createScopeTransport} halves into one in-page duplex carrier.
  *
  * @remarks
  * Each half is the shipped factory over a minimal {@link ScopeInterface} whose
@@ -101,7 +101,7 @@ export function createScopeCarrier(): TestScopeCarrierInterface {
 }
 
 /**
- * Read (and clear) every frame the Node fixture's recording peers received.
+ * Reads (and clears) every frame the Node fixture's recording peers received.
  *
  * @remarks
  * The browser project cannot see inside the fixture process, so what the PEER received is

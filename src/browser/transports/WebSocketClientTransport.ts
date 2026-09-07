@@ -10,9 +10,9 @@ import { isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 
 /**
- * Drives a REMOTE MCP server over the native `WebSocket` global from the browser face — a
- * CLIENT {@link MCPMessageTransportInterface}, the browser sibling of the Node face's
- * {@link import('@orkestrel/mcp/server').WebSocketClientTransport}.
+ * Drives a REMOTE MCP server over the native `WebSocket` global from the browser face, as a
+ * CLIENT {@link MCPMessageTransportInterface}. This class is the browser sibling of the Node
+ * face's {@link import('@orkestrel/mcp/server').WebSocketClientTransport}.
  *
  * @remarks
  * - **Host-performed handshake.** `start()` opens `new WebSocket(url, protocols)` and

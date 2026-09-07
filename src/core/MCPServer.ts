@@ -1331,7 +1331,7 @@ export class MCPServer implements MCPServerInterface {
 				'Invalid params: request state exceeds the configured limit',
 			)
 		}
-		// Around the seal await, both windows: the one just minted, and the one this round is
+		// Around the seal await, both windows: the one minted here, and the one this round is
 		// extending. A port that took longer to protect the state than the state was good for
 		// must not hand the client a round already dead on arrival. The windows are also
 		// different things to say: a FIRST round has no retry to refuse, and telling that caller

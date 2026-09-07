@@ -36,7 +36,7 @@ import { startServer } from '../../setupServer.js'
 // `MCPClient` driving `createHTTPClientTransport` connects, discovers, and calls the
 // remote tools over `fetch`, exercising BOTH reply framings the server can choose: the
 // plain JSON body (`streaming: false`) and the Streamable-HTTP SSE `data:` event
-// (`streaming: true`, decoded via the core SSEParser inside the transport). Also: a
+// (`streaming: true`, decoded through the core SSEParser inside the transport). Also: a
 // remote tool error → a local throw, and a token guard mounted IN FRONT (the transport's
 // `headers` carry the bearer). The in-process correlation / timeout / disconnect contract
 // is pinned in tests/src/core/MCPClient.test.ts.
@@ -72,11 +72,11 @@ function mcpServer(): MCPServerInterface {
 }
 
 // Stand up the shipped MCP HTTP transport over a real server, then build an MCPClient
-// pointed at it via the HTTP client transport. `streaming` picks the server's reply
+// pointed at it through the HTTP client transport. `streaming` picks the server's reply
 // framing (SSE vs JSON); `guardSecret` mounts a token guard in front (the client sends
 // the bearer through the transport's `headers`).
 // A minimal bearer-token check middleware, hand-rolled locally (no @orkestrel/middleware
-// dependency) — just enough to prove the transport composes auth IN FRONT rather than
+// dependency) — enough to prove the transport composes auth IN FRONT rather than
 // baking it in.
 function createBearerGuard(secret: string): MiddlewareHandler<unknown> {
 	return (request, _context, next) => {
@@ -142,7 +142,7 @@ describe('HTTPClientTransport — JSON reply path (streaming: false)', () => {
 describe('HTTPClientTransport — SSE reply path (streaming: true)', () => {
 	it('connect → tools() → call() round-trips over a decoded SSE data: event', async () => {
 		// The server `Accept`s the transport's `text/event-stream` and frames each reply as a
-		// Streamable-HTTP SSE event; the transport decodes it via the core SSEParser. The
+		// Streamable-HTTP SSE event; the transport decodes it through the core SSEParser. The
 		// JSON-RPC envelope — and thus the client's behavior — is identical to the JSON path.
 		const { client } = await connectClient({ streaming: true })
 

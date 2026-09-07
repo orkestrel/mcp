@@ -716,7 +716,7 @@ describe('MCPServer — published limits', () => {
 // The cancellation page and the subscriptions page of the dated revision disagree about how a
 // server ends a `subscriptions/listen` exchange: the cancellation page says it MUST send `notifications/cancelled` naming the
 // listen request, while the subscriptions page it cites as its authority says the server
-// SHOULD send the empty `subscriptions/listen` RESULT and attributes the notification to the
+// `SHOULD` send the empty `subscriptions/listen` RESULT and attributes the notification to the
 // client alone. The schema carries no subscription-specific variant, so it corroborates
 // neither. This server implements the page that owns the mechanism, and this test is what
 // keeps a later reader from "fixing" it toward the other one.
@@ -1660,7 +1660,7 @@ describe('MCPServer — multi-round-trip input', () => {
 	// the client's: a port that throws and a port that opens onto a value outside the state
 	// bound each answer detail-free `-32603`, because the client never authored either
 	// outcome and cannot act on being told it was at fault. The client-side arm — a carrier
-	// the port simply cannot recover — is `-32602`, and lives in the W02-B taxonomy row.
+	// the port cannot recover — is `-32602`, and lives in the W02-B taxonomy row.
 	it('contains continuation open rejection and an out-of-bound opened value', async () => {
 		let sealed = ''
 		let mode: 'reject' | 'oversize' = 'reject'
@@ -3411,7 +3411,7 @@ function modernFaults(): readonly FaultScenario[] {
 }
 
 // The positive control the sweeps above cannot do without. An assertion that `-32000` is
-// ABSENT passes just as loudly when the branch that would emit it never ran, so the same
+// ABSENT passes as loudly when the branch that would emit it never ran, so the same
 // assertion is aimed at the legacy branch, where it must find `-32000` every time.
 function legacyFaults(): readonly FaultScenario[] {
 	const cycle: Record<string, unknown> = {}
@@ -3534,7 +3534,7 @@ describe('MCPServer — W02-A: the broadened error event', () => {
 
 	// NEGATIVE CONTROL for the containment claim: one unique string, asserted ABSENT from
 	// the serialized answer and PRESENT on the observation channel. An assertion that only
-	// read the code would pass just as well with the whole thrown value on the wire.
+	// read the code would pass as well with the whole thrown value on the wire.
 	it('carries the caught value to the observer and never to the wire', async () => {
 		const detail = 'unique-detail-8f3a2c'
 		const thrown = new Error(detail)
@@ -6219,7 +6219,7 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 
 describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () => {
 	// Durability before return, violated: `start` resolves before the write lands, so the
-	// `taskId` this server just handed out is not yet retrievable. MCP's own half of the rule —
+	// `taskId` this server handed out is not yet retrievable. MCP's own half of the rule —
 	// awaiting `start` before it builds the answer — is intact and is not enough on its own.
 	it('hands out a taskId a prompt read cannot find when the manager resolves before it persists', async () => {
 		const mcp = taskServer({ tasks: deferredWriteTaskManager(), deferral: () => 'operation-1' })

@@ -904,7 +904,7 @@ export type MCPTaskStatus = 'working' | 'input_required' | 'completed' | 'failed
  * described as ISO 8601 instants, though the generated schema validates only a
  * string, so this package carries whatever the manager produced without reformatting
  * it. `pollIntervalMs` is the manager's hint about how often the client can ask
- * again; a manager that pushes notifications instead simply omits it.
+ * again; a manager that pushes notifications instead omits it.
  */
 export type MCPTask = {
 	/** Holds the durable handle a later `tasks/get` / `tasks/update` / `tasks/cancel` names. */
@@ -1008,7 +1008,7 @@ export type MCPTaskNotification = JSONRPCNotification & {
  * @remarks
  * The only result in this package whose `resultType` is `'task'`. It is FLAT — the
  * task's fields sit beside the discriminator rather than under a `task` member — and
- * it carries no terminal payload, because a task that has just been created has no
+ * it carries no terminal payload, because a task at creation has no
  * outcome yet. The outcome arrives through {@link MCPTaskDetail}.
  */
 export type MCPTaskResult = MCPTask & {
@@ -1066,7 +1066,7 @@ export interface MCPTaskManagerInterface {
 	 * Creates — or returns the existing — durable task for one stable operation key.
 	 *
 	 * @remarks
-	 * The obligations this package cannot enforce, and one consequence that is easy
+	 * The obligations this package cannot enforce, and one consequence a reader can
 	 * to miss:
 	 *
 	 * - **Durability before return.** The returned task MUST already be retrievable by
@@ -1746,7 +1746,7 @@ export type MCPTextStream = AsyncGenerator<string, string, unknown>
  * **Ending a controlled exchange is the obligation of whoever is handed it, on EVERY exit —
  * including the exits where nothing was cancelled.** One of these holds a producer, a request
  * lifetime, and (for the built-in `subscriptions/listen`) one of a finite number of live
- * server slots, and a consumer that simply walks away releases none of them: no signal fires
+ * server slots, and a consumer that walks away releases none of them: no signal fires
  * when nobody aborts anything. So an owner releases through {@link stop} or
  * {@link MCPStreamControllerInterface.[Symbol.asyncDispose] | asyncDispose} on the normal
  * return, on a mid-loop throw, and on a transport that closed underneath the pump alike —
@@ -2248,7 +2248,7 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 	 * narrow a stream from a response with `Symbol.asyncIterator in answer`. Whatever the method
 	 * produced, what leaves here is an {@link MCPStreamControllerInterface} — dispatch is
 	 * the one wrapping seam — so a caller may end the exchange promptly without waiting on
-	 * the producer. `options` is optional, so a caller that cannot abort simply never
+	 * the producer. `options` is optional, so a caller that cannot abort never
 	 * supplies one; dispatch resolves the signal every method observes.
 	 *
 	 * @param request - The parsed JSON-RPC request to dispatch
@@ -2629,7 +2629,7 @@ export interface MCPClientOptions {
  * - `signal` cancels THAT request and nothing else. It never closes the connection, never
  *   reaches a durable task the call may have become, and never asks the peer to undo work
  *   already done — cancellation is advisory in MCP, so the peer may finish anyway and the
- *   caller simply stops waiting. A signal that is ALREADY aborted refuses the call before
+ *   caller stops waiting. A signal that is ALREADY aborted refuses the call before
  *   anything is written, so no request the peer would have to be told about is ever issued.
  * - `progress` receives each `notifications/progress` frame the peer publishes for this
  *   request. Supplying it is what stamps the request's progress token, so a peer only
@@ -2843,7 +2843,7 @@ export interface MCPTaskClientInterface {
  *   calls back through `call`; `call(name, args)` runs a remote `tools/call` and reports
  *   the arm the peer answered with — a value, a durable task, or a request for more input
  *   (a remote tool FAILURE — `isError: true` — throws locally, so the agent's
- *   {@link ToolManagerInterface} isolates it into a `success: false` result just like a
+ *   {@link ToolManagerInterface} isolates it into a `success: false` result exactly like a
  *   local throw). A wrapped tool has no way to hand an agent a deferred answer, so a
  *   non-`'complete'` arm throws there instead.
  * - **Per-request cancellation.** `call`'s `options.signal` cancels ONE in-flight request:

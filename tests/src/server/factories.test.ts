@@ -49,10 +49,10 @@ import { closeResource, openClientSocket, startServer, upgradeRequest } from '..
 // (malformed JSON / a non-request) is HTTP 400 + a JSON-RPC error body; a DISPATCH
 // result (success OR an in-band JSON-RPC error like method-not-found) is HTTP 200 +
 // the envelope; a notification (no `id`) is 202 + empty; `Accept: text/event-stream`
-// frames the 200 as an SSE `data:` event (decoded with the core SSEParser via
+// frames the 200 as an SSE `data:` event (decoded with the core SSEParser through
 // collectSSE); GET to the path is the spine's automatic 405; and a token-check
 // middleware mounted IN FRONT 401s an unauthenticated POST (proving the transport is
-// mechanism — policy composes ahead of it, via the spine's OWN `use`, no
+// mechanism — policy composes ahead of it, through the spine's OWN `use`, no
 // @orkestrel/middleware dependency). The STATEFUL session layer (`createMCPSession`)
 // is a separate plug-and-play middleware, proven in middlewares.test.ts; here
 // `createMCPRoutes` is stateless-only.
@@ -131,7 +131,7 @@ describe('createMCPContinuation', () => {
 })
 
 // A minimal bearer-token check middleware, hand-rolled locally (no @orkestrel/middleware
-// dependency) — just enough to prove the transport composes auth IN FRONT rather than
+// dependency) — enough to prove the transport composes auth IN FRONT rather than
 // baking it in.
 function createBearerGuard(secret: string): MiddlewareHandler<unknown> {
 	return (request, _context, next) => {

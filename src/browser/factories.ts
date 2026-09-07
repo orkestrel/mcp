@@ -21,8 +21,8 @@ import { WebSocketClientTransport } from './transports/WebSocketClientTransport.
 /**
  * Creates the browser-face WebSocket CLIENT transport for an
  * {@link import('@orkestrel/mcp').MCPClientInterface} — a {@link MCPMessageTransportInterface}
- * that drives a REMOTE MCP server over the native `WebSocket` global, the browser
- * sibling of the Node face's `createWebSocketClientTransport` (`@orkestrel/mcp/server`).
+ * that drives a REMOTE MCP server over the native `WebSocket` global. This factory is the
+ * browser sibling of the Node face's `createWebSocketClientTransport` (`@orkestrel/mcp/server`).
  *
  * @remarks
  * Hand it to `createMCPClient({ transport })`: `start()` (run by `client.connect()`)

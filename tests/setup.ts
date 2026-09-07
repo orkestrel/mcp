@@ -50,7 +50,7 @@ import { createSSEParser } from '@orkestrel/sse'
 import { createRecorder, waitForDelay } from '@orkestrel/test'
 
 /**
- * Narrow an untyped value to an {@link MCPMethodHandler} the way a DYNAMIC registration must.
+ * Narrows an untyped value to an {@link MCPMethodHandler} the way a DYNAMIC registration must.
  *
  * @remarks
  * The seam's contract — answer a request with a response or a stream, never with nothing — is
@@ -73,7 +73,7 @@ export function isMCPMethodHandler(value: unknown): value is MCPMethodHandler {
 // ── Async wait ───────────────────────────────────────────────────────────────
 
 /**
- * Await one promise within a bounded interval and clear the watchdog on every settlement path.
+ * Awaits one promise within a bounded interval and clear the watchdog on every settlement path.
  *
  * @typeParam T - The resolved value type
  * @param promise - The promise whose settlement to await
@@ -107,7 +107,7 @@ export async function waitForSettlement<T>(
 // of the transport.
 
 /**
- * Build a well-formed {@link JSONRPCRequest} — the default `{ jsonrpc: '2.0', method:
+ * Builds a well-formed {@link JSONRPCRequest} — the default `{ jsonrpc: '2.0', method:
  * 'initialize', id: 1 }` merged with per-call overrides (a different `method` / `id`, or a
  * `params` payload), so the MCP dispatch / transport tests name only the field that
  * matters instead of re-typing the envelope.
@@ -120,7 +120,7 @@ export function createJSONRPCRequest(overrides?: Partial<JSONRPCRequest>): JSONR
 }
 
 /**
- * Build a JSON-RPC notification whose absent `id` means no response is produced.
+ * Builds a JSON-RPC notification whose absent `id` means no response is produced.
  *
  * @param method - The notification method
  * @param params - Optional notification parameters
@@ -146,7 +146,7 @@ export function createJSONRPCNotification(
  * @returns A freshly built nested record
  */
 /**
- * Build one adversarial corpus every total guard must survive without throwing.
+ * Builds one adversarial corpus every total guard must survive without throwing.
  *
  * @remarks
  * A guard over JSON-RPC envelopes has one membership rule — an exact-JSON RECORD of the
@@ -220,7 +220,7 @@ export function createHostileCorpus(): readonly unknown[] {
 	])
 }
 
-/** Every key name the published guards read off an untrusted value by name. */
+/** Lists every key name the published guards read off an untrusted value by name. */
 export const GUARD_KEY_NAMES: readonly string[] = Object.freeze([
 	'_meta',
 	'action',
@@ -303,13 +303,13 @@ export const GUARD_KEY_NAMES: readonly string[] = Object.freeze([
 	'websiteUrl',
 ])
 
-/** The accessor body every throwing-key row installs. */
+/** Throws as the accessor body every throwing-key row installs. */
 export function throwOnRead(): never {
 	throw new Error('must not escape')
 }
 
 /**
- * Build one record per key, each defining that key as an enumerable accessor that throws.
+ * Builds one record per key, each defining that key as an enumerable accessor that throws.
  *
  * @remarks
  * The companion to {@link createHostileCorpus}, and the control it structurally could not
@@ -348,7 +348,7 @@ export function buildNestedRecord(depth: number): Record<string, unknown> {
 // ── Canonical MCP server fixture (the calculator over a ToolManager) ─────────
 
 /**
- * Build the canonical calculator {@link MCPServerInterface} the MCP transport tests
+ * Builds the canonical calculator {@link MCPServerInterface} the MCP transport tests
  * share — a real server over a real `ToolManager` carrying an `add` tool plus a `boom`
  * tool that throws, so every transport proves both the value and error paths.
  *
@@ -369,7 +369,7 @@ export function createCalculatorServer(): MCPServerInterface {
 }
 
 /**
- * Build an {@link MCPServerInterface} whose every first-round `tools/call` asks for a form
+ * Builds an {@link MCPServerInterface} whose every first-round `tools/call` asks for a form
  * elicitation, so a client-side scenario can drive the input continuation end to end.
  *
  * @remarks
@@ -433,7 +433,7 @@ export function createInputServer(tools: ToolManagerInterface): MCPServerInterfa
 // It must be reported as leaking, or the instrument cannot tell a released exchange from an
 // unreleased one.
 
-/** The reserved `_meta` a modern request carries — the protocol version plus empty capabilities. */
+/** Supplies the reserved `_meta` a modern request carries — the protocol version plus empty capabilities. */
 export const MODERN_METADATA: Readonly<Record<string, unknown>> = Object.freeze({
 	[MCP_META_VERSION]: MCP_MODERN_VERSION,
 	[MCP_META_CAPABILITIES]: Object.freeze({}),
@@ -452,7 +452,7 @@ export const MODERN_METADATA: Readonly<Record<string, unknown>> = Object.freeze(
 // path — a table where every row agrees would prove nothing about the divergence it exists to
 // catch.
 
-/** One row of the protocol-version projection both HTTP client transports must answer alike. */
+/** Describes one row of the protocol-version projection both HTTP client transports must answer alike. */
 export interface TestHeaderContext {
 	/** What the row is about, used as the failure label. */
 	readonly label: string
@@ -464,7 +464,7 @@ export interface TestHeaderContext {
 	readonly version: string | undefined
 }
 
-/** The shared modern-context table both HTTP client transports are driven over. */
+/** Supplies the shared modern-context table both HTTP client transports are driven over. */
 export const HEADER_PROJECTION_CONTEXTS: readonly TestHeaderContext[] = Object.freeze([
 	{
 		label: 'a complete modern context',
@@ -506,7 +506,7 @@ export const HEADER_PROJECTION_CONTEXTS: readonly TestHeaderContext[] = Object.f
 ])
 
 /**
- * Build one `tools/list` request for the header-projection table.
+ * Builds one `tools/list` request for the header-projection table.
  *
  * @remarks
  * The table deliberately includes metadata that is modern by key presence but not well formed.
@@ -521,7 +521,7 @@ export function createHeaderProjectionRequest(
 }
 
 /**
- * Build a modern request carrying the shared protocol metadata.
+ * Builds a modern request carrying the shared protocol metadata.
  *
  * @param method - The method to invoke
  * @param id - The request identifier
@@ -531,7 +531,7 @@ export function modernRequest(method: string, id: string | number = 1): JSONRPCR
 	return createJSONRPCRequest({ method, id, params: { _meta: MODERN_METADATA } })
 }
 
-/** In-memory resource manager shared by server and legacy dispatch tests. */
+/** Serves resources from memory for the server and legacy dispatch tests. */
 export class MemoryResourceManager implements MCPResourceManagerInterface {
 	readonly #cursors: Array<string | undefined> = []
 	readonly #reads: MCPResourceReadParams[] = []
@@ -600,7 +600,7 @@ export class MemoryResourceManager implements MCPResourceManagerInterface {
 	}
 }
 
-/** A peerable in-memory transport with outbound recording. */
+/** Describes a peerable in-memory transport with outbound recording. */
 export interface MemoryTransportInterface extends MCPTransportInterface {
 	readonly sent: readonly string[]
 	readonly closedCalls: number
@@ -611,7 +611,7 @@ export interface MemoryTransportInterface extends MCPTransportInterface {
 }
 
 /**
- * Create a peerable in-memory MCP transport.
+ * Creates a peerable in-memory MCP transport.
  *
  * @returns A transport that can record, connect to a peer, and receive messages
  */
@@ -660,7 +660,7 @@ export function createMemoryTransport(): MemoryTransportInterface {
 	return transport
 }
 
-/** A minimal protocol peer that exchanges serialized JSON-RPC over the real duplex port. */
+/** Describes a minimal protocol peer that exchanges serialized JSON-RPC over the real duplex port. */
 export interface HostilePeerInterface {
 	readonly messages: readonly string[]
 	send(message: string): Promise<void>
@@ -671,7 +671,7 @@ export interface HostilePeerInterface {
 }
 
 /**
- * Bind an MCP server to a minimal serialized-message peer.
+ * Binds an MCP server to a minimal serialized-message peer.
  *
  * @param server - The real MCP server under test
  * @returns A protocol peer for sending hostile wire messages and reading protocol answers
@@ -739,7 +739,7 @@ export function createHostilePeer(server: MCPServerInterface): HostilePeerInterf
 }
 
 /**
- * Build one modern `subscriptions/listen` request — the held-open method every ownership
+ * Builds one modern `subscriptions/listen` request — the held-open method every ownership
  * scenario opens its exchange with.
  *
  * @param id - The request id the exchange is correlated by
@@ -757,7 +757,7 @@ export function createSubscriptionRequest(
 	})
 }
 
-/** What one consumer did with the controlled exchange it was handed. */
+/** Reports what one consumer did with the controlled exchange it was handed. */
 export interface TestOwnershipInterface {
 	/** Whether the exchange had ENDED by the time the consumer returned. */
 	readonly released: boolean
@@ -766,7 +766,7 @@ export interface TestOwnershipInterface {
 }
 
 /**
- * Hand one controlled exchange to a consumer and report whether that consumer ENDED it.
+ * Hands one controlled exchange to a consumer and reports whether that consumer ENDED it.
  *
  * @remarks
  * The observable is the live-subscription SLOT, because that is the resource an abandoned
@@ -814,7 +814,7 @@ export async function probeOwnership(
 	return { released: first.done !== true, failure }
 }
 
-/** The owner-of-last-resort spellings a controlled exchange must never grow. */
+/** Lists the owner-of-last-resort spellings a controlled exchange must never grow. */
 export const OWNER_OF_LAST_RESORT_SPELLINGS: readonly string[] = Object.freeze([
 	'FinalizationRegistry',
 	'WeakRef',
@@ -825,12 +825,12 @@ export const OWNER_OF_LAST_RESORT_SPELLINGS: readonly string[] = Object.freeze([
 ])
 
 /**
- * Report every owner-of-last-resort construct a source declares.
+ * Reports every owner-of-last-resort construct a source declares.
  *
  * @remarks
  * A finalizer or a timer that ends an exchange nobody released converts a missing obligation
  * into a nondeterministic one, so the controllers carry none. Supply COMMENT-STRIPPED source:
- * the prose above these classes names the constructs in order to forbid them.
+ * the prose above these classes names the constructs to forbid them.
  *
  * @param source - The comment-stripped source text to sweep
  * @returns Each forbidden spelling the source contains, in declaration order
@@ -867,7 +867,7 @@ export function inspectOwnerOfLastResort(source: string): readonly string[] {
 // closed, still declaring `duplex: true`. The instrument must come back empty for it.
 
 /**
- * Drive one client-initiated notification through a live carrier and report what the peer got.
+ * Drives one client-initiated notification through a live carrier and reports what the peer got.
  *
  * @remarks
  * The request is aborted in the SAME synchronous turn it was issued in — the pending entry
@@ -902,7 +902,7 @@ export async function probeDuplex(
 }
 
 /**
- * Read the `method` of every invocation among a peer's received frames, in order.
+ * Reads the `method` of every invocation among a peer's received frames, in order.
  *
  * @param frames - The messages a peer received
  * @returns One method name per invocation; responses contribute nothing
@@ -921,8 +921,8 @@ export function readMethods(frames: readonly JSONRPCMessage[]): readonly string[
 }
 
 /**
- * Create an in-process {@link MCPMessageTransportInterface} that dispatches directly against a
- * given {@link MCPServerInterface} — no wire, no network. Each `send` dispatches its
+ * Dispatches directly against a given {@link MCPServerInterface} from an in-process
+ * {@link MCPMessageTransportInterface} — no wire, no network. Each `send` dispatches its
  * request through `mcp.dispatch` and emits a DEFINED response (a
  * notification produces none) on the `message` event, mirroring how a real transport
  * surfaces replies.
@@ -1010,7 +1010,7 @@ export function createLoopbackTransport(mcp: MCPServerInterface): MCPTestLoopbac
 }
 
 /**
- * POST a JSON value to a real HTTP fixture endpoint.
+ * Posts a JSON value to a real HTTP fixture endpoint.
  *
  * @param base - The fixture server's base URL
  * @param body - The JSON value to serialize
@@ -1039,7 +1039,7 @@ export function postJSON(
 // runners.
 
 /**
- * Drain a `fetch` Response's SSE body to completion, returning every dispatched
+ * Drains a `fetch` Response's SSE body to completion, returning every dispatched
  * {@link SSEEvent} (decoded by `@orkestrel/sse`'s parser).
  *
  * @remarks
@@ -1057,8 +1057,8 @@ export async function collectSSE(response: Response): Promise<readonly SSEEvent[
 }
 
 /**
- * Stream a `fetch` Response's SSE body as decoded {@link SSEEvent}s, yielding each as its
- * blank line arrives — so a consumer can react (e.g. abort the `fetch`) mid-stream.
+ * Streams a `fetch` Response's SSE body as decoded {@link SSEEvent}s, yielding each as its
+ * blank line arrives — so a consumer can react (for example abort the `fetch`) mid-stream.
  *
  * @remarks
  * Pulls the `response.body` reader chunk-by-chunk through a `TextDecoder({ stream: true
@@ -1088,7 +1088,7 @@ export async function* readSSEStream(response: Response): AsyncGenerator<SSEEven
 
 // ── Deterministic clock (session TTL batteries) ──────────────────────────────
 
-/** A manually-driven epoch-ms clock plus the control to advance it explicitly. */
+/** Describes a manually-driven epoch-ms clock plus the control to advance it explicitly. */
 export interface ManualClockInterface {
 	/** The injectable `() => number` clock — returns the current manual instant; never moves on its own. */
 	readonly now: () => number
@@ -1097,7 +1097,7 @@ export interface ManualClockInterface {
 }
 
 /**
- * Create a {@link ManualClockInterface} — a manual-time clock-reading seam.
+ * Creates a {@link ManualClockInterface} — a manual-time clock-reading seam.
  * Injected wherever a `clock: () => number` option is exposed (`createMCPSession` for the
  * store sweep, `MCPSessionOptions.clock` for the replay log's own sweep): the test advances
  * the instant explicitly instead of sleeping through a real TTL window, so idle-TTL eviction
@@ -1125,7 +1125,7 @@ export function createManualClock(start = 0): ManualClockInterface {
 // about — a manager that hands the request's cancellation signal to the task's work —
 // so the same fixture drives both halves of that proof.
 
-/** One outbound frame, with the real instant it left the client. */
+/** Describes one outbound frame, with the real instant it left the client. */
 export interface TestFrame {
 	/** The JSON-RPC method the frame carried. */
 	readonly method: string
@@ -1133,14 +1133,14 @@ export interface TestFrame {
 	readonly at: number
 }
 
-/** An {@link MCPMessageTransportInterface} that records every outbound frame and when it left. */
+/** Records every outbound frame and when it left, as an {@link MCPMessageTransportInterface}. */
 export interface TestTransportInterface extends MCPMessageTransportInterface {
 	/** Every frame written through `send`, in order, each stamped with its real instant. */
 	readonly frames: readonly TestFrame[]
 }
 
 /**
- * Create an in-process {@link TestTransportInterface} over a real {@link MCPServerInterface} —
+ * Creates an in-process {@link TestTransportInterface} over a real {@link MCPServerInterface} —
  * {@link createLoopbackTransport} plus a timestamped record of everything the client wrote.
  *
  * @remarks
@@ -1171,7 +1171,7 @@ export function createRecordingTransport(mcp: MCPServerInterface): TestTransport
 }
 
 /**
- * Create a real {@link MCPServerInterface} with the stable Tasks extension configured — one
+ * Creates a real {@link MCPServerInterface} with the stable Tasks extension configured — one
  * `render` tool, and a `deferral` that turns every call into a durable task.
  *
  * @remarks
@@ -1193,12 +1193,12 @@ export function createTaskServer(tasks: MCPTaskManagerInterface): MCPServerInter
 	})
 }
 
-/** The client capabilities that declare the stable Tasks extension — the whole declaration. */
+/** Declares the stable Tasks extension in the client capabilities — the whole declaration. */
 export const TASK_CAPABILITIES: MCPClientCapabilities = Object.freeze({
 	extensions: Object.freeze({ [MCP_EXTENSION_TASKS]: Object.freeze({}) }),
 })
 
-/** How one {@link TestTaskManager} runs a task's work. */
+/** Decides how one {@link TestTaskManager} runs a task's work. */
 export interface TestTaskOptions {
 	/** Bind the REQUEST's `options.signal` to the task's work — the hazard the port's TSDoc names. */
 	readonly bind?: boolean
@@ -1222,7 +1222,7 @@ export interface TestTaskOptions {
 }
 
 /**
- * A real in-memory {@link MCPTaskManagerInterface} — a durable store, a worker per task,
+ * Runs durable tasks in memory as a real {@link MCPTaskManagerInterface} — a durable store, a worker per task,
  * and the deduplication the port asks managers for.
  *
  * @remarks

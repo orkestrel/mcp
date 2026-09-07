@@ -48,38 +48,38 @@ import { startServer } from './setupServer.js'
 
 // ── The pinned runner ────────────────────────────────────────────────────────
 
-/** The conformance runner package, pinned as a development dependency and resolved from disk. */
+/** Names the conformance runner package, pinned as a development dependency and resolved from disk. */
 export const CONFORMANCE_PACKAGE = '@modelcontextprotocol/conformance'
 
-/** The runner's entry module inside its installed package. */
+/** Names the runner's entry module inside its installed package. */
 export const CONFORMANCE_ENTRY = `${CONFORMANCE_PACKAGE}/dist/index.js`
 
-/** The dated protocol revision the runner drives the server at. */
+/** Names the dated protocol revision the runner drives the server at. */
 export const CONFORMANCE_SPEC = '2026-07-28'
 
-/** The identity the fixture server answers `initialize` with. */
+/** Supplies the identity the fixture server answers `initialize` with. */
 export const CONFORMANCE_IDENTITY = Object.freeze({
 	name: 'orkestrel-conformance',
 	version: '0.0.9',
 })
 
-/** One `✓ <scenario>: N passed, M failed` line in the runner's summary block. */
+/** Matches one `✓ <scenario>: N passed, M failed` line in the runner's summary block. */
 export const CONFORMANCE_TALLY = /^\S+ ([a-z0-9-]+): (\d+) passed, (\d+) failed$/
 
-/** The runner's closing `Total: N passed, M failed` line. */
+/** Matches the runner's closing `Total: N passed, M failed` line. */
 export const CONFORMANCE_TOTAL = /^Total: (\d+) passed, (\d+) failed$/
 
-/** The scenario-name prefix marking the runner's OAuth family. */
+/** Names the scenario-name prefix marking the runner's OAuth family. */
 export const CONFORMANCE_AUTH = 'auth/'
 
-/** The `list` heading that opens the runner's client-scenario section. */
+/** Matches the `list` heading that opens the runner's client-scenario section. */
 export const CONFORMANCE_CLIENTS = /^Client scenarios/
 
-/** One `  - <scenario> [<revisions>]` entry inside a `list` section. */
+/** Matches one `  - <scenario> [<revisions>]` entry inside a `list` section. */
 export const CONFORMANCE_LISTED = /^ {2}- (\S+) \[/
 
 /**
- * Every client scenario the runner's own `list` reports as applicable at
+ * Lists every client scenario the runner's own `list` reports as applicable at
  * {@link CONFORMANCE_SPEC}, except the {@link CONFORMANCE_AUTH} family.
  *
  * @remarks
@@ -105,12 +105,12 @@ export const CONFORMANCE_CLIENT_SCENARIOS: readonly string[] = Object.freeze([
 	'json-schema-2020-12-preservation',
 ])
 
-/** The runner's per-scenario `Passed: N/D, M failed, W warnings` result line in client mode. */
+/** Matches the runner's per-scenario `Passed: N/D, M failed, W warnings` result line in client mode. */
 export const CONFORMANCE_OUTCOME = /^Passed: (\d+)\/\d+, (\d+) failed, (\d+) warnings$/
 
 // ── The runner's reported shape ──────────────────────────────────────────────
 
-/** One conformance scenario's tally, exactly as the runner's summary reports it. */
+/** Describes one conformance scenario's tally, exactly as the runner's summary reports it. */
 export interface ConformanceScenario {
 	/** The scenario identifier, such as `dns-rebinding-protection`. */
 	readonly name: string
@@ -121,12 +121,12 @@ export interface ConformanceScenario {
 }
 
 /**
- * One client scenario's outcome, exactly as the runner's per-scenario result block reports it.
+ * Describes one client scenario's outcome, exactly as the runner's per-scenario result block reports it.
  *
  * @remarks
  * `warnings` has no counterpart in {@link ConformanceScenario} because the two modes report
  * differently. The server-mode summary collapses each scenario to passed and failed, so a
- * SHOULD-level check that reported WARNING is invisible there and shows up only as a row
+ * `SHOULD`-level check that reported WARNING is invisible there and shows up only as a row
  * tallying neither. Client mode prints the warning count beside them, so this shape keeps it:
  * the runner treats a warning as an overall failure, and a baseline that dropped the count
  * would hide a check moving between WARNING and SUCCESS.
@@ -138,11 +138,11 @@ export interface ConformanceOutcome {
 	readonly passed: number
 	/** Checks the scenario failed. */
 	readonly failed: number
-	/** Checks the scenario reported at SHOULD level. */
+	/** Checks the scenario reported at `SHOULD` level. */
 	readonly warnings: number
 }
 
-/** The parsed outcome of one whole conformance run. */
+/** Describes the parsed outcome of one whole conformance run. */
 export interface ConformanceResult {
 	/** Every scenario tally in the order the runner reported it. */
 	readonly scenarios: readonly ConformanceScenario[]
@@ -173,14 +173,14 @@ export const TASK_SCHEMA_PATH = fileURLToPath(
 	new URL('./mirrors/ext-tasks-2026-07-28-schema.json', import.meta.url),
 )
 
-/** The JSON Schema spelling of an integer millisecond value in the Tasks extension. */
+/** Supplies the JSON Schema spelling of an integer millisecond value in the Tasks extension. */
 export const TASK_INTEGER_SCHEMA = Object.freeze({
 	type: 'integer',
 	minimum: -9007199254740991,
 	maximum: 9007199254740991,
 })
 
-/** The properties every task variant shares. */
+/** Lists the properties every task variant shares. */
 export const TASK_PROPERTIES: readonly string[] = [
 	'taskId',
 	'status',
@@ -191,7 +191,7 @@ export const TASK_PROPERTIES: readonly string[] = [
 	'pollIntervalMs',
 ]
 
-/** The properties every task owes. */
+/** Lists the properties every task owes. */
 export const TASK_REQUIRED: readonly string[] = [
 	'taskId',
 	'status',
@@ -739,7 +739,7 @@ export const TASK_SCHEMA_ID_ROWS: readonly TaskSchemaRow[] = [
 // ── The tool fixture ─────────────────────────────────────────────────────────
 
 /**
- * The rich content the content-block scenarios ask for VERBATIM.
+ * Supplies the rich content the content-block scenarios ask for VERBATIM.
  *
  * @remarks
  * A plain `execute` return is an ordinary domain value, and the server normalizes one
@@ -776,7 +776,7 @@ export const CONFORMANCE_CONTENT: Readonly<Record<string, readonly MCPContent[]>
 })
 
 /**
- * The JSON Schema 2020-12 document `json-schema-2020-12` reads back out of `tools/list`.
+ * Supplies the JSON Schema 2020-12 document `json-schema-2020-12` reads back out of `tools/list`.
  *
  * @remarks
  * The scenario checks PRESERVATION, so this is the schema verbatim as the runner declares it:
@@ -816,7 +816,7 @@ export const CONFORMANCE_SCHEMA: Readonly<Record<string, unknown>> = Object.free
 })
 
 /**
- * The text each input-driven tool answers with once its rounds are answered.
+ * Supplies the text each input-driven tool answers with after its rounds are answered.
  *
  * @remarks
  * The keys are also the REGISTRATION list for that tool family, so a scenario's tool name
@@ -843,7 +843,7 @@ export const CONFORMANCE_ANSWERS: Readonly<Record<string, string>> = Object.free
 })
 
 /**
- * Build the live tool registry the conformance scenarios call.
+ * Builds the live tool registry the conformance scenarios call.
  *
  * @returns A fresh `ToolManagerInterface` holding every `test_*` tool
  */
@@ -962,21 +962,21 @@ export function buildConformanceTools(): ToolManagerInterface {
 // `@orkestrel/server`'s HMAC token primitives. That is what makes `input-required-result-
 // tampered-state` a real proof: the rejection comes from a signature that does not verify.
 
-/** The signing secret the fixture's continuation port protects its request state with. */
+/** Supplies the signing secret the fixture's continuation port protects its request state with. */
 export const CONFORMANCE_SECRET = 'orkestrel-conformance-continuation-secret'
 
-/** The principal the fixture binds into protected state; this host authenticates nobody. */
+/** Names the principal the fixture binds into protected state; this host authenticates nobody. */
 export const CONFORMANCE_PRINCIPAL = 'conformance-client'
 
-/** How long one protected continuation round stays valid, in milliseconds. */
+/** Bounds how long one protected continuation round stays valid, in milliseconds. */
 export const CONFORMANCE_TTL = 60_000
 
-/** The integrity-protected continuation port both the tool and prompt rounds seal state with. */
+/** Supplies the integrity-protected continuation port both the tool and prompt rounds seal state with. */
 export const CONFORMANCE_CONTINUATION: MCPContinuationInterface =
 	createMCPContinuation(CONFORMANCE_SECRET)
 
 /**
- * The rounds each input-driven tool asks for, in the order the scenario drives them.
+ * Lists the rounds each input-driven tool asks for, in the order the scenario drives them.
  *
  * @remarks
  * A tool absent from this table needs no input, so its call runs straight into the registry.
@@ -1128,7 +1128,7 @@ export const CONFORMANCE_ROUNDS: Readonly<Record<string, readonly MCPInputReques
 	})
 
 /**
- * Decide whether the call in hand still owes this host an answer.
+ * Decides whether the call in hand still owes this host an answer.
  *
  * @remarks
  * The selector is the WHOLE of the consumer's half of a round trip. It sees every verified
@@ -1149,7 +1149,7 @@ export function buildConformanceInput(context: MCPInputContext): MCPInputRound |
 }
 
 /**
- * Project the accepted string answers a verified retry carried.
+ * Projects the accepted string answers a verified retry carried.
  *
  * @remarks
  * The server has already verified the response against the schema it issued by the time this
@@ -1181,7 +1181,7 @@ export function readConformanceAnswers(
 // engine — because the ports are ports: what backs them is the host's decision and this
 // file is one host's answer.
 
-/** The static resources the fixture advertises over `resources/list`. */
+/** Lists the static resources the fixture advertises over `resources/list`. */
 export const CONFORMANCE_RESOURCES: readonly MCPResource[] = Object.freeze([
 	{
 		uri: 'test://static-text',
@@ -1197,7 +1197,7 @@ export const CONFORMANCE_RESOURCES: readonly MCPResource[] = Object.freeze([
 	},
 ])
 
-/** The contents each static resource URI resolves to. */
+/** Maps each static resource URI to the contents it resolves to. */
 export const CONFORMANCE_CONTENTS: Readonly<Record<string, readonly MCPResourceContents[]>> =
 	Object.freeze({
 		'test://static-text': [
@@ -1217,7 +1217,7 @@ export const CONFORMANCE_CONTENTS: Readonly<Record<string, readonly MCPResourceC
 	})
 
 /**
- * The already-substituted form of the fixture's one resource template.
+ * Matches the already-substituted form of the fixture's one resource template.
  *
  * @remarks
  * The template is published as a DESCRIPTOR and matched HERE. MCP expands nothing: it
@@ -1228,11 +1228,11 @@ export const CONFORMANCE_CONTENTS: Readonly<Record<string, readonly MCPResourceC
  */
 export const CONFORMANCE_TEMPLATE = /^test:\/\/template\/([^/]+)\/data$/
 
-/** The descriptor form of {@link CONFORMANCE_TEMPLATE}, as `resources/templates/list` advertises it. */
+/** Supplies the descriptor form of {@link CONFORMANCE_TEMPLATE}, as `resources/templates/list` advertises it. */
 export const CONFORMANCE_DESCRIPTOR = 'test://template/{id}/data'
 
 /**
- * Resolve one already-substituted template URI to its JSON document.
+ * Resolves one already-substituted template URI to its JSON document.
  *
  * @param uri - The concrete URI the client sent
  * @returns The document contents, or `undefined` when the URI is not this template's
@@ -1257,7 +1257,7 @@ export function readConformanceTemplate(uri: string): readonly MCPResourceConten
 
 // ── The prompt fixture ───────────────────────────────────────────────────────
 
-/** The prompts the fixture advertises over `prompts/list`. */
+/** Lists the prompts the fixture advertises over `prompts/list`. */
 export const CONFORMANCE_PROMPTS: readonly MCPPrompt[] = Object.freeze([
 	{
 		name: 'test_simple_prompt',
@@ -1301,7 +1301,7 @@ export const CONFORMANCE_PROMPTS: readonly MCPPrompt[] = Object.freeze([
 ])
 
 /**
- * The input request the multi-round prompt asks for before it can be filled.
+ * Supplies the input request the multi-round prompt asks for before it can be filled.
  *
  * @remarks
  * `prompts/get` is the arm of SEP-2322 the library places on the HOST: the prompt port may
@@ -1324,11 +1324,11 @@ export const CONFORMANCE_REQUESTS: MCPInputRequestMap = Object.freeze({
 	},
 })
 
-/** The canonical state the multi-round prompt seals into its opaque `requestState`. */
+/** Supplies the canonical state the multi-round prompt seals into its opaque `requestState`. */
 export const CONFORMANCE_STATE = 'test_input_required_result_prompt/user_context'
 
 /**
- * Issue the multi-round prompt's round, or let a verified retry through.
+ * Issues the multi-round prompt's round, or lets a verified retry through.
  *
  * @remarks
  * The carrier is protected by the same shipped continuation port the tool rounds use, so a
@@ -1353,7 +1353,7 @@ export async function buildConformanceRound(
 }
 
 /**
- * Fill one named prompt with the caller's arguments.
+ * Fills one named prompt with the caller's arguments.
  *
  * @remarks
  * `arguments` are strings by contract, so filling a prompt is the host's own
@@ -1452,7 +1452,7 @@ export function buildConformanceMessages(
 // that knows its variables. A reference this host does not recognize answers `undefined`,
 // which MCP maps to `-32602` rather than inventing an empty candidate list.
 
-/** The candidate values each prompt argument completes to. */
+/** Lists the candidate values each prompt argument completes to. */
 export const CONFORMANCE_CANDIDATES: Readonly<
 	Record<string, Readonly<Record<string, readonly string[]>>>
 > = Object.freeze({
@@ -1465,11 +1465,11 @@ export const CONFORMANCE_CANDIDATES: Readonly<
 	},
 })
 
-/** The candidate identifiers the fixture's resource template completes to. */
+/** Lists the candidate identifiers the fixture's resource template completes to. */
 export const CONFORMANCE_IDENTIFIERS: readonly string[] = Object.freeze(['123', '456', '789'])
 
 /**
- * Project one candidate list onto the fragment the client has typed so far.
+ * Projects one candidate list onto the fragment the client has typed so far.
  *
  * @param candidates - Every value the reference could complete to
  * @param value - The fragment already typed
@@ -1488,7 +1488,7 @@ export function buildConformanceCompletion(
 // ── The assembled host ───────────────────────────────────────────────────────
 
 /**
- * Build the whole conformance host — every port `MCPServerOptions` publishes, backed by
+ * Builds the whole conformance host — every port `MCPServerOptions` publishes, backed by
  * the plain objects above.
  *
  * @returns The server options one `createMCPServer` call away from a live fixture
@@ -1575,7 +1575,7 @@ export function buildConformanceOptions(): MCPServerOptions {
 }
 
 /**
- * Start the conformance fixture on an ephemeral loopback port.
+ * Starts the conformance fixture on an ephemeral loopback port.
  *
  * @remarks
  * The whole spine is real: `createMCPServer` behind `createMCPRoutes` behind a real
@@ -1594,7 +1594,7 @@ export async function startConformance(): Promise<StartedServerInterface<undefin
 // ── The foreign runner ───────────────────────────────────────────────────────
 
 /**
- * Read the runner build the package manifest pins.
+ * Reads the runner build the package manifest pins.
  *
  * @remarks
  * The manifest is the SINGLE authority for the version. It is what `npm install` puts on
@@ -1620,7 +1620,7 @@ export function readConformanceRelease(): string {
 }
 
 /**
- * Resolve the installed runner's entry module.
+ * Resolves the installed runner's entry module.
  *
  * @remarks
  * The runner is a development dependency, so its entry is already on disk when the suite
@@ -1642,7 +1642,7 @@ export function resolveConformanceRunner(): string {
 }
 
 /**
- * Invoke the installed conformance runner and collect everything it wrote.
+ * Invokes the installed conformance runner and collects everything it wrote.
  *
  * @remarks
  * Node runs the runner's entry file directly. A file path needs no shell on any host, so
@@ -1665,7 +1665,7 @@ export async function executeRunner(command: readonly string[]): Promise<string>
 }
 
 /**
- * Parse the runner's `=== SUMMARY ===` block.
+ * Parses the runner's `=== SUMMARY ===` block.
  *
  * @param output - Everything the runner wrote
  * @returns The scenario tallies and totals, or `undefined` when it printed no summary
@@ -1700,7 +1700,7 @@ export function parseConformance(output: string): ConformanceResult | undefined 
 }
 
 /**
- * Drive the pinned runner's whole `server` scenario set at {@link CONFORMANCE_SPEC} against
+ * Drives the pinned runner's whole `server` scenario set at {@link CONFORMANCE_SPEC} against
  * a live MCP endpoint.
  *
  * @remarks
@@ -1736,7 +1736,7 @@ export async function executeConformance(url: string): Promise<ConformanceResult
 // ── The client under test ────────────────────────────────────────────────────
 
 /**
- * Compose the command the runner spawns as the client under test.
+ * Composes the command the runner spawns as the client under test.
  *
  * @remarks
  * The runner splits `--command` on spaces and appends the scenario URL, so every token here
@@ -1769,7 +1769,7 @@ export function resolveConformanceDriver(): string {
 }
 
 /**
- * Read every client scenario name out of the runner's own `list` output.
+ * Reads every client scenario name out of the runner's own `list` output.
  *
  * @remarks
  * `list` prints one section per scenario family, each opening with its own heading and
@@ -1797,7 +1797,7 @@ export function parseConformanceClients(output: string): readonly string[] {
 }
 
 /**
- * Parse the runner's per-scenario result block from one client-mode run.
+ * Parses the runner's per-scenario result block from one client-mode run.
  *
  * @remarks
  * Client mode prints no `=== SUMMARY ===` block for a single scenario. Its verdict is the
@@ -1830,7 +1830,7 @@ export function parseConformanceOutcome(
 }
 
 /**
- * Drive this package's own client through every scenario in
+ * Drives this package's own client through every scenario in
  * {@link CONFORMANCE_CLIENT_SCENARIOS}.
  *
  * @remarks

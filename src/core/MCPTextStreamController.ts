@@ -107,7 +107,7 @@ export class MCPTextStreamController implements MCPTextStreamControllerInterface
 	 *
 	 * @remarks
 	 * Delegates downward exactly as {@link stop} does — disposing the serialized arm is
-	 * disposing the exchange, never just this adapter.
+	 * disposing the exchange, never this adapter alone.
 	 *
 	 * @returns Resolves once the typed exchange has ended
 	 */

@@ -13,7 +13,7 @@ import { DEFAULT_MCP_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_COMMENT } from './constan
  * the composition — a client that vanishes mid-stream aborts nothing by itself, so unless this
  * object raises the signal on its own failure paths, the handler, the controlled stream, and
  * the producer behind them all keep running for a response that can no longer be written.
- * Graceful upstream completion is the one terminal that does NOT abort: the body simply closes,
+ * Graceful upstream completion is the one terminal that does NOT abort: the body closes,
  * because the exchange finished rather than ended.
  *
  * {@link bridge} preserves the source response status and headers, forwards its body bytes, and

@@ -454,7 +454,7 @@ describe('parseMCPInputState', () => {
 	})
 
 	// Every row is a COMPLETE payload with exactly one binding removed or mistyped, so each
-	// isolates the binding it names. A row that simply omitted several would pass for want of
+	// isolates the binding it names. A row that omitted several would pass for want of
 	// a member nobody was testing, and the requests rows below are exactly where that would bite:
 	// a payload with no round has nothing to enforce an accepted response against.
 	it('rejects malformed JSON and every missing or mistyped binding', () => {

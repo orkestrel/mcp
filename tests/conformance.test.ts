@@ -45,7 +45,7 @@ import {
 // comment above each such row is the gap. Every row a fixture could answer has been answered,
 // so a new nonzero row is a regression rather than an unfinished host.
 //
-// A SHOULD-level check is neither: the runner reports WARNING and tallies nothing either way,
+// A `SHOULD`-level check is neither: the runner reports WARNING and tallies nothing either way,
 // so a row records only the MUST-level checks beside it.
 //
 // Every row also carries the runner's own `wire-schema-valid` check, which reads every JSON-RPC
@@ -105,7 +105,7 @@ const EXPECTED: readonly ConformanceScenario[] = [
 	{ name: 'input-required-result-request-state', passed: 3, failed: 0 },
 	{ name: 'input-required-result-multiple-input-requests', passed: 3, failed: 0 },
 	{ name: 'input-required-result-multi-round', passed: 4, failed: 0 },
-	// Passes at 1/0: the scenario's own check is a SHOULD, so a retry carrying `inputResponses`
+	// Passes at 1/0: the scenario's own check is a `SHOULD`, so a retry carrying `inputResponses`
 	// without a `requestState` — which this server refuses with -32602 — reports WARNING and
 	// the runner tallies neither a pass nor a fail. The recorded pass is the wire-schema check.
 	{ name: 'input-required-result-missing-input-response', passed: 1, failed: 0 },
@@ -114,7 +114,7 @@ const EXPECTED: readonly ConformanceScenario[] = [
 	{ name: 'input-required-result-unsupported-methods', passed: 2, failed: 0 },
 	{ name: 'input-required-result-tampered-state', passed: 2, failed: 0 },
 	{ name: 'input-required-result-capability-check', passed: 2, failed: 0 },
-	// Passes at 1/0 for the same SHOULD reason as `-missing-input-response`.
+	// Passes at 1/0 for the same `SHOULD` reason as `-missing-input-response`.
 	{ name: 'input-required-result-ignore-extra-params', passed: 1, failed: 0 },
 	{ name: 'input-required-result-validate-input', passed: 3, failed: 0 },
 ]
@@ -132,7 +132,7 @@ const EXPECTED_RED = EXPECTED.filter((scenario) => scenario.failed > 0).map(
 //
 // Every row with `failed: 0` is a check the shipped client passes. Each row with a nonzero
 // `failed` is a named LIBRARY gap this suite carries on purpose, and the comment above it
-// is the gap. A check the runner reports at SHOULD level tallies as a warning instead, so
+// is the gap. A check the runner reports at `SHOULD` level tallies as a warning instead, so
 // `warnings` is recorded beside the counts rather than folded into them.
 //
 // A SKIPPED check tallies as neither. `http-standard-headers` declares its Mcp-Method and

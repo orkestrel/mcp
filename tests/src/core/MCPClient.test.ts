@@ -76,9 +76,9 @@ interface LoopbackInterface extends MCPMessageTransportInterface {
 }
 
 // A fixture peer additionally exposes `release()`, which drains every suspended lifecycle step
-// the peer is currently parking — a `close.hold`-suspended `close()`, a `send.park`-suspended
+// the peer is parking — a `close.hold`-suspended `close()`, a `send.park`-suspended
 // `send()`, a `start.hold`-suspended `start()`, or any of them — and `live`: how many connections
-// it currently has OPEN. `live` is the instrument the attempt counters cannot be. `closed` counts
+// it has OPEN. `live` is the instrument the attempt counters cannot be. `closed` counts
 // close ATTEMPTS, so `{ started: 2, closed: 2 }` reads identically whether both connections closed
 // or one close FAILED and left its connection open with no path back to it; `lifecycle` records the
 // same attempts in order and cannot separate them either. `live` rises when a `start()` completes
@@ -2215,7 +2215,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 
 	it('closes a connection a faulted attempt-side close still owes before the next connect opens', async () => {
 		// The attempt-side twin: the failing close belongs to a negotiation's own unwind rather than
-		// to a teardown, and the claim it restores is owed just the same. Same rule, second door.
+		// to a teardown, and the claim it restores is owed equally. Same rule, second door.
 		const peer = createFixturePeer({
 			reply: (request, count) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
@@ -2942,7 +2942,7 @@ describe('MCPClient — per-request cancellation', () => {
 	})
 
 	it('discards a response that arrives after the abort, silently', async () => {
-		// Cancellation is ADVISORY: every receiver obligation is SHOULD/MAY and the spec says
+		// Cancellation is ADVISORY: every receiver obligation is `SHOULD`/`MAY` and the spec says
 		// to IGNORE a late answer. It is not a fault, and it is not a notification either.
 		const peer = callPeer(() => undefined)
 		const client = createMCPClient({ transport: peer })

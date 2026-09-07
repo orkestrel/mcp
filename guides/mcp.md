@@ -602,7 +602,7 @@ protocol's own spellings and this package never renames a wire name.
 becomes `-32602` with the unresolved value named. That is the dated revision's
 spelling: `resources/subscribe` and `resources/unsubscribe` were removed at
 `2026-07-28` and so was the dedicated `-32002` resource-not-found code, which a client
-SHOULD still accept from an older peer. Resource subscription lives on
+`SHOULD` still accept from an older peer. Resource subscription lives on
 [`subscriptions/listen`](#configure-modern-subscriptions)'s `resourceSubscriptions`
 filter instead.
 
@@ -1129,7 +1129,7 @@ The normalization path builds its answer through `buildModernResult`, which stam
 `io.modelcontextprotocol/serverInfo` identity into `_meta`. A handler that returns a complete
 `MCPCallResult` instead is taken at its word: the server bounds it, re-proves its shape, and
 sends what the handler composed, so nothing adds the identity the other path adds. The dated
-revision says a server SHOULD carry its identity in a result's `_meta`, and this is the one
+revision says a server `SHOULD` carry its identity in a result's `_meta`, and this is the one
 result shape that does not. **What it costs:** a peer reading `serverInfo` off a `tools/call`
 result finds it on every normalized result and on no custom-execution one, so a consumer using
 `execution` for rich content stamps the key itself — through `buildModernResult`, which is
@@ -1290,7 +1290,7 @@ An unbracketed digit-and-dot host that is not an RFC IPv4 address remains a lega
 an authority may have an empty host.
 
 `isRFC3339Date` and `isRFC3339DateTime` are the `date` / `date-time` elicitation formats, and
-they check the CALENDAR, not just the shape: RFC 3339 §5.6 defines `date-mday` by the month and
+they check the CALENDAR, not the shape alone: RFC 3339 §5.6 defines `date-mday` by the month and
 year, so `2026-02-30`, `2026-04-31`, and `2025-02-29` are refused even though every field is in
 range. Neither guard constructs a `Date` — `Date` is what rolls `2026-02-30` silently onto 2
 March, which is the acceptance they exist to prevent — so a non-RFC-3339 spelling of a real
@@ -4449,12 +4449,12 @@ that intermediary exactly. **What it costs:** nothing against a peer this client
 directly. **Closer:** none needed unless a reachable path is exhibited where a refresh
 changes the derived headers; that would make the retry meaningful and this half wrong.
 
-**Re-listing and retrying once after a `Mcp-Param-*` `HeaderMismatch` — a declared SHOULD
+**Re-listing and retrying once after a `Mcp-Param-*` `HeaderMismatch` — a declared `SHOULD`
 departure.** The `Mcp-Param-*` half is different, and this is the honest reason it is stated
 here rather than built. A `tools/call`'s projected headers come from the annotations the
 transport cached from the `tools/list` result it delivered, so a server that changed a tool's
 annotations after that listing can refuse a call whose headers a FRESH listing would have
-made correct. SEP-2243 says a client receiving `HeaderMismatch` SHOULD re-list and retry
+made correct. SEP-2243 says a client receiving `HeaderMismatch` `SHOULD` re-list and retry
 once. This package does not: retrying inside the transport would re-issue a `tools/call` the
 caller has already been told failed, under a table the caller never saw, and the transport
 is the wrong layer to decide that a second invocation of somebody's tool is safe. **What it
@@ -4466,19 +4466,19 @@ and projects nothing for one it no longer advertises. **Closer:** a retry policy
 `MCPClient` rather than by a transport, with the caller able to decline it — not scheduled,
 and it needs the per-request options seam the entries above name.
 
-**A retry the server cannot verify is refused, not re-requested — a declared SHOULD departure.**
-The MRTR page says a server that finds requested information missing on a retry SHOULD answer a
+**A retry the server cannot verify is refused, not re-requested — a declared `SHOULD` departure.**
+The MRTR page says a server that finds requested information missing on a retry `SHOULD` answer a
 NEW `input_required` round re-requesting it rather than an error. This server answers `-32602`
 to every verification failure, an omitted issued key and an absent `requestState` included. It
 fails closed on purpose: the round the server would re-issue is the one sealed inside the
-carrier it just declined to trust, and minting a fresh round from an unverifiable retry hands a
+carrier it declined to trust, and minting a fresh round from an unverifiable retry hands a
 client that failed verification a new sealed state to try again with. The other half of that
 clause is satisfied — unrecognized extra `inputResponses` keys are ignored, because the server
 reads exactly the keys it issued. **What it costs:** a client that drops the carrier or omits an
 issued key starts the call again from its first round instead of receiving the missing question
 a second time. The conformance runner records the cost exactly: its
 `input-required-result-missing-input-response` and `input-required-result-ignore-extra-params`
-scenarios check a SHOULD, so a refusal reports WARNING and both scenarios are recorded at
+scenarios check a `SHOULD`, so a refusal reports WARNING and both scenarios are recorded at
 0 passed / 0 failed rather than green. **Closer:** one unit separating the omitted-key case from
 the unverifiable-carrier case and re-issuing the round for the first alone; it is not scheduled,
 and it needs a reading of how a re-issued round binds to state the client already returned.
@@ -4505,8 +4505,8 @@ listing keeps projecting. Arrival order cannot merge two listings into one table
 another cursorless `tools/list` supersedes before its answer arrives is still delivered to
 the caller, exclusions and all, and caches nothing.
 
-**The stdio client shuts a child down signal-first, not stdin-first — a declared SHOULD
-departure owned by another package.** The stdio page says a client SHOULD close the child's
+**The stdio client shuts a child down signal-first, not stdin-first — a declared `SHOULD`
+departure owned by another package.** The stdio page says a client `SHOULD` close the child's
 `stdin`, wait for it to exit, and terminate it only if it does not. `StdioClientTransport.close`
 runs `@orkestrel/process`'s bounded teardown, whose ladder is the other way round: the
 supervisor signals the child (`SIGTERM`, then `SIGKILL` after the grace window; on Windows a
@@ -4590,7 +4590,7 @@ send `notifications/cancelled` referencing a `subscriptions/listen` request id w
 that stream down, and MUST NOT send the notification for any other purpose. The subscriptions
 page it cites as its authority describes its end conditions and their mechanisms, and none
 of them is a server-sent `notifications/cancelled`: for unilateral server teardown it says the
-server SHOULD send the EMPTY `subscriptions/listen` result to signal a graceful end, and it
+server `SHOULD` send the EMPTY `subscriptions/listen` result to signal a graceful end, and it
 attributes the notification to the CLIENT alone. The schema carries only the generic
 `CancelledNotification` with `requestId` and an optional `reason` — no subscription-specific
 field or variant — so it corroborates neither page. This server sends the empty result,
@@ -5444,7 +5444,7 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     `MCPResourceManagerInterface.resource`, `MCPPromptManagerInterface.prompt`, and
     `MCPCompletionInterface.complete` each answer `undefined` for something they
     do not resolve, and the server maps that to `JSONRPC_INVALID_PARAMS` naming the
-    unresolved URI or prompt. `-32002` is the pre-`2026-07-28` spelling a client SHOULD
+    unresolved URI or prompt. `-32002` is the pre-`2026-07-28` spelling a client `SHOULD`
     still accept from an older peer and this server never produces. `resource` and
     `prompt` may instead answer an `MCPInputResult`, which is stamped and returned as the
     `input_required` arm; a manager answer that is neither a valid result nor
