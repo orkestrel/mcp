@@ -29,9 +29,9 @@ export const DEFAULT_MCP_KEEPALIVE_INTERVAL = 15_000
 export const SSE_KEEPALIVE_COMMENT = 'keepalive'
 
 /**
- * Sets the default capacity of a session's FOLDED resumable event log (the per-{@link
+ * Sets the default capacity of a session's folded resumable event log (the per-{@link
  * import('./MCPSession.js').MCPSession} replay log) — the maximum number of pushed
- * server→client messages retained for replay before the OLDEST is evicted.
+ * server→client messages retained for replay before the oldest is evicted.
  *
  * @remarks
  * Bounds the replay log's memory: only the most-recent {@link DEFAULT_MCP_SESSION_CAPACITY}
@@ -59,7 +59,7 @@ export const DEFAULT_MCP_SESSION_TTL = 300_000
  *
  * @remarks
  * Ten seconds. The load-bearing property is the ordering, not the magnitude: this bound stays
- * BELOW {@link import('@orkestrel/mcp').DEFAULT_MCP_REQUEST_TIMEOUT}, so a write the child never
+ * below {@link import('@orkestrel/mcp').DEFAULT_MCP_REQUEST_TIMEOUT}, so a write the child never
  * reads fails as an undeliverable message while the request that carried it is still open,
  * rather than being masked by that request's own deadline expiring first. Override per
  * transport with `delivery`; an explicit `0` there removes the bound.

@@ -1,15 +1,14 @@
 # @orkestrel/mcp
 
-A typed [Model Context Protocol](https://modelcontextprotocol.io) client/server
-for the `@orkestrel` line, bridging the `@orkestrel/tool` registry to MCP with
-pluggable HTTP, WebSocket, and stdio transports. `createMCPServer` exposes a
-live `ToolManagerInterface`; `createMCPClient` drives a remote MCP server and
-surfaces its tools as local `ToolInterface`s. No agent runtime is required.
-The dispatch core is transport- and provider-agnostic
-(`src/core` — JSON-RPC 2.0, no HTTP, no `as`); every transport (Streamable
-HTTP over `@orkestrel/router` / `@orkestrel/server`, WebSocket over
-`@orkestrel/websocket`, and stdio over `@orkestrel/process`) lives one layer
-out (`src/server`), each mechanism, not policy. Part of the `@orkestrel` line.
+> The Model Context Protocol layer: a typed JSON-RPC 2.0 client/server pair with pluggable
+> HTTP, WebSocket, stdio, and browser transports.
+
+Bridge the `@orkestrel/tool` registry to MCP: `createMCPServer` exposes a live
+`ToolManagerInterface` to any MCP client, and `createMCPClient` drives a remote MCP server
+and surfaces its tools as local `ToolInterface`s. No agent runtime is required. The dispatch
+core in `src/core` speaks JSON-RPC 2.0 and nothing else; each transport lives one layer out,
+in `src/server` for Node and `src/browser` for the page, and each is mechanism rather than
+policy. Part of the `@orkestrel` line.
 
 ## Install
 
@@ -60,7 +59,7 @@ const tools = await client.tools()
 const outcome = await client.call('add', { x: 2, y: 5 })
 ```
 
-The SAME `MCPClient` drives a `createWebSocketClientTransport` or
+The same `MCPClient` drives a `createWebSocketClientTransport` or
 `createStdioClientTransport` instead — only the injected transport changes.
 
 ## Guide

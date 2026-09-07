@@ -7,22 +7,22 @@ import { DEFAULT_MCP_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_COMMENT } from './constan
  * Composes one incoming HTTP request lifetime with one MCP-owned SSE response lifetime.
  *
  * @remarks
- * The composed {@link signal} observes request abort and EVERY way this response can end
+ * The composed {@link signal} observes request abort and every way this response can end
  * without one: consumer cancellation of the bridged body, a forwarding failure mid-pump, and a
  * keepalive tick that finds the SSE stream already closed. That last pair is the whole point of
  * the composition — a client that vanishes mid-stream aborts nothing by itself, so unless this
  * object raises the signal on its own failure paths, the handler, the controlled stream, and
  * the producer behind them all keep running for a response that can no longer be written.
- * Graceful upstream completion is the one terminal that does NOT abort: the body closes,
+ * Graceful upstream completion is the one terminal that does not abort: the body closes,
  * because the exchange finished rather than ended.
  *
  * {@link bridge} preserves the source response status and headers, forwards its body bytes, and
  * owns keepalive comments plus listener/timer cleanup until upstream completion, request abort,
  * or consumer cancellation. This is a single-response lifecycle object, not a reusable bridge:
- * a second {@link bridge} call THROWS rather than arming a second keepalive over one lifecycle.
+ * a second {@link bridge} call throws rather than arming a second keepalive over one lifecycle.
  * It supplies no handler or session policy.
  *
- * The keepalive interval is a BUDGET, sanitized like every other numeric knob in this package:
+ * The keepalive interval is a budget, sanitized like every other numeric knob in this package:
  * anything that is not a positive integer — `0`, a negative, a fractional value, `NaN`,
  * `Infinity` — falls back to {@link DEFAULT_MCP_KEEPALIVE_INTERVAL}, and a larger value clamps
  * to Node's `2_147_483_647` ms timer maximum. None may reach the platform's timer floor, where

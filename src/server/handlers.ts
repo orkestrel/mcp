@@ -34,7 +34,7 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  * method carrying a named target — `tools/call` and `prompts/get` against `params.name`,
  * `resources/read` against `params.uri` — with a Base64-sentinel value decoded before the
  * comparison; a missing, mismatched, or invalidly encoded value returns HTTP `400` + `-32020`.
- * A protocol header naming a MODERN revision holds the request to that revision whatever shape
+ * A protocol header naming a modern revision holds the request to that revision whatever shape
  * its body arrived in, so a body with no parsable modern `_meta` returns HTTP `400` + `-32602`.
  * Headerless `initialize` is accepted, while every other headerless request needs a live legacy
  * session to supply its pinned version. A legacy-shaped request carrying a protocol header is

@@ -120,7 +120,7 @@ import {
 } from './validators.js'
 
 /**
- * Dispatches JSON-RPC 2.0 requests over a live {@link ToolManagerInterface}, with NO
+ * Dispatches JSON-RPC 2.0 requests over a live {@link ToolManagerInterface}, with no
  * transport coupling.
  *
  * @remarks
@@ -130,7 +130,7 @@ import {
  *   `handle(message)` is the string boundary: it
  *   `JSON.parse`s the raw message (a failure → a `-32700` response), narrows it to
  *   an invocation (a non-invocation → a `-32600` response, with the unreadable `id`
- *   OMITTED rather than nulled), dispatches, and serializes the
+ *   omitted rather than nulled), dispatches, and serializes the
  *   response back to a string (`undefined` for a notification).
  * - **One modern seam.** `server/discover`, `tools/list`, `tools/call`, and
  *   `subscriptions/listen` are always registered; `resources/*`, `prompts/*`, and

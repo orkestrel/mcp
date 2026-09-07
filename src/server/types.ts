@@ -105,11 +105,11 @@ export type MCPCallerHandler<TState = unknown> = (
  * Options shared by the MCP Streamable-HTTP POST handler and route factory.
  *
  * @remarks
- * - `streaming` — when `true` (the DEFAULT) the transport MAY answer with a
+ * - `streaming` — when `true` (the default) the transport MAY answer with a
  *   Server-Sent-Events response (one `data:` event carrying the JSON-RPC reply, then
  *   the stream ends) whenever the client's `Accept` header includes
  *   `text/event-stream`; when `false` it always answers with a plain JSON body. Either
- *   mode carries the SAME JSON-RPC response envelope — the choice is purely the wire
+ *   mode carries the same JSON-RPC response envelope — the choice is purely the wire
  *   framing the Streamable-HTTP spec lets the client negotiate.
  * - `origin` — the shared origin-validation options passed to both the route and session
  *   enforcement sites. Validation is enabled by default: requests without `Origin` pass,
@@ -134,7 +134,7 @@ export interface HTTPHandlerOptions<TState = unknown> {
 
 /**
  * Options for `createMCPRoutes` — the mount path plus the shared POST-handler options.
- * `createMCPRoutes` is STATELESS; sessions are a separate middleware ({@link
+ * `createMCPRoutes` is stateless; sessions are a separate middleware ({@link
  * import('./middlewares.js').createMCPSession}), composed with `server.use`.
  *
  * @remarks
@@ -154,7 +154,7 @@ export interface HTTPTransportOptions<TState = unknown> extends HTTPHandlerOptio
  *
  * @remarks
  * - `capacity` — the maximum number of pushed server→client messages retained for replay
- *   before the OLDEST is evicted. Omit it for the {@link
+ *   before the oldest is evicted. Omit it for the {@link
  *   import('./constants.js').DEFAULT_MCP_SESSION_CAPACITY} default.
  * - `ttl` — the PER-EVENT idle lifetime in milliseconds: a log entry older than `ttl` is
  *   dropped by the lazy sweep `push` and `replay` run, which bounds how far a reconnecting
@@ -165,8 +165,8 @@ export interface HTTPTransportOptions<TState = unknown> extends HTTPHandlerOptio
  *   `Date.now`.
  *
  * The middleware's own knobs — the owned path, the idle-SESSION sweep window, origin
- * validation, and keepalive — live on {@link MCPSessionMiddlewareOptions}. The two `ttl`
- * values measure different things, which is why they sit on different types.
+ * validation, and keepalive — live on {@link MCPSessionMiddlewareOptions}. This type's `ttl`
+ * and that one's measure different things, which is why they sit on different types.
  */
 export interface MCPSessionOptions {
 	readonly capacity?: number
@@ -179,16 +179,16 @@ export interface MCPSessionOptions {
  * time-to-live, and the per-session resumable event-log bound.
  *
  * @remarks
- * - `path` — the request path the session middleware OWNS (must match the `createMCPRoutes`
+ * - `path` — the request path the session middleware owns (must match the `createMCPRoutes`
  *   `path` it fronts); a request to any other path passes straight through. Defaults to
  *   {@link import('./constants.js').DEFAULT_MCP_PATH} (`'/mcp'`).
  * - `ttl` — the session idle lifetime in milliseconds: a session not accessed within `ttl`
- *   is treated as ABSENT and lazily evicted on the next access (no background timer — the
+ *   is treated as absent and lazily evicted on the next access (no background timer — the
  *   `createRateLimiter` lazy-window idiom). Omit it for sessions that live until an explicit
  *   `DELETE`.
  * - `session` — the knobs forwarded to each minted {@link MCPSession}: `capacity` bounds its
  *   replay log and `ttl` is that log's per-event lifetime. This type's own `ttl` bounds the
- *   SESSION instead. An omitted leaf takes its {@link MCPSessionOptions} default, and an
+ *   session instead. An omitted leaf takes its {@link MCPSessionOptions} default, and an
  *   omitted `session.clock` inherits this type's own `clock`, so one injected clock governs
  *   both the store sweep and the log sweep unless a caller names a different one.
  * - `clock` — the `() => number` epoch-ms clock {@link import('./middlewares.js').createMCPSession}
@@ -217,28 +217,34 @@ export interface MCPSessionMiddlewareOptions {
  * Represents one MCP transport session — the per-session entity a {@link
  * import('./middlewares.js').createMCPSession} middleware owns (the {@link
  * import('./MCPSession.js').MCPSession} entity), carrying the resumable server→client push
- * channel with its bounded replay log FOLDED IN.
+ * channel with its bounded replay log folded in.
  *
  * @remarks
- * - `id` — the opaque session id (a `crypto.randomUUID()`), echoed in the `mcp-session-id`
- *   header. The app reads it off `context.state.session` (the {@link MCPSessionState} slice
- *   {@link import('./middlewares.js').createMCPSession} sets) to address a push.
- * - `attach(stream)` — register an OPEN server→client SSE stream (a resumable `GET {path}`)
- *   so future {@link push}es reach it; `detach(stream)` unregisters it (the middleware calls
- *   it when the client disconnects).
- * - `push(message)` — APPEND `message` to the session's folded replay log (assigning a
- *   monotone event id, RETURNED) and FAN it out to every attached stream as one `id:`-tagged
- *   SSE event — the server-initiated push primitive an in-request handler calls. A push with
- *   no attached stream is still logged, so a later-connecting / reconnecting client replays it.
- * - `replay(afterId)` — the missed-events list (every retained log entry STRICTLY AFTER
- *   `afterId`, in append order) the resumable `GET {path}` handler writes ahead of live pushes;
- *   an unknown / evicted cursor replays NOTHING (the spec-sane resume).
+ * The application addresses a session through `context.state.session`, the {@link
+ * MCPSessionState} slice {@link import('./middlewares.js').createMCPSession} sets. A pushed
+ * message with no attached stream is still logged, so a client that connects or reconnects
+ * later replays it, and the resumable `GET {path}` handler writes a replay ahead of live
+ * pushes.
  */
 export interface MCPSessionInterface {
+	/** Holds the opaque session id, a `crypto.randomUUID()` value echoed in the `mcp-session-id` header. */
 	readonly id: string
+	/**
+	 * Registers an open server→client SSE stream, a resumable `GET {path}`, so a later pushed
+	 * message reaches it.
+	 */
 	attach(stream: StreamInterface): void
+	/** Unregisters a stream — the middleware calls it when the client disconnects. */
 	detach(stream: StreamInterface): void
+	/**
+	 * Appends a message to the folded replay log under a fresh monotone event id, returns that id,
+	 * and fans the message out to every attached stream as one `id:`-tagged SSE event.
+	 */
 	push(message: JSONRPCMessage): string
+	/**
+	 * Returns every retained log entry strictly after a cursor, in append order; an unknown or
+	 * evicted cursor replays nothing.
+	 */
 	replay(afterId: string): readonly MCPSessionEvent[]
 }
 
@@ -304,21 +310,21 @@ export interface MCPSessionEntry {
  *
  * @remarks
  * - `emitter` — the emitter of the `@orkestrel/server` spine this handler is registered on
- *   (`server.emitter`). REQUIRED: on its `stop` event the handler closes every socket it
+ *   (`server.emitter`). Required: on its `stop` event the handler closes every socket it
  *   still owns with the RFC 6455 close handshake, so the spine's drain settles at once. An
  *   upgraded socket is detached from the connection set the spine's own close walks, so
  *   nothing but the claimant can end it — leave it open and `stop()` spends its whole
  *   `drain` budget and then cuts the connection mid-protocol.
- * - `path` — the request path the upgrade handler CLAIMS; defaults to
+ * - `path` — the request path the upgrade handler claims; defaults to
  *   {@link import('./constants.js').DEFAULT_MCP_PATH} (`'/mcp'`, the same path the HTTP
- *   transport mounts at). A protocol-upgrade request to any OTHER path is DECLINED
+ *   transport mounts at). A protocol-upgrade request to any other path is declined
  *   (the handler returns `false`, so the spine fans it to the next handler or destroys it).
  * - `subprotocol` — the WebSocket subprotocol selected in the `101` handshake's
  *   `Sec-WebSocket-Protocol`; defaults to {@link import('@orkestrel/mcp').MCP_WEBSOCKET_SUBPROTOCOL}
  *   (`'mcp'`). It is sent only when the client's offer contains that token.
  *
- * Auth / origin policy is deliberately ABSENT: like the HTTP transport, the WebSocket
- * transport is MECHANISM — compose a guard IN FRONT (a `Server.upgrade` handler registered
+ * Auth / origin policy is deliberately absent: like the HTTP transport, the WebSocket
+ * transport is mechanism — compose a guard in front (a `Server.upgrade` handler registered
  * before this one can decline an unauthenticated upgrade).
  */
 export interface WebSocketServerOptions {
@@ -333,15 +339,15 @@ export interface WebSocketServerOptions {
  *
  * @remarks
  * - `url` — the absolute URL of the remote server's WebSocket endpoint. Accepts a `ws://` /
- *   `wss://` URL OR an `http://` / `https://` one (a `ws(s)` scheme is converted to `http(s)`
+ *   `wss://` URL or an `http://` / `https://` one (a `ws(s)` scheme is converted to `http(s)`
  *   for the underlying `node:http(s)` upgrade request; either reaches the same endpoint).
- *   REQUIRED.
+ *   Required.
  * - `headers` — extra request headers merged onto the upgrade `GET` (for example, an `Authorization`
  *   bearer for a guarded server). The transport always sets `Connection: Upgrade`,
  *   `Upgrade: websocket`, a random `Sec-WebSocket-Key`, `Sec-WebSocket-Version: 13`, and
  *   `Sec-WebSocket-Protocol: mcp`; a header supplied here is merged on top.
  *
- * **`headers` exists HERE and not on the browser face's `{ url, protocols }`, and that
+ * **`headers` exists here and not on the browser face's `{ url, protocols }`, and that
  * divergence is deliberate rather than a lag: the host performs the WebSocket handshake.**
  * This face owns its own `node:http(s)` upgrade request, so it can set any header on it. A
  * page cannot — the native `WebSocket` constructor takes a URL and subprotocols and nothing
@@ -358,13 +364,13 @@ export interface WebSocketClientTransportOptions {
  * stdio-framed MCP server (newline-delimited JSON-RPC over `stdin`/`stdout`).
  *
  * @remarks
- * - `command` — the executable to spawn (for example, `'node'`, `'./my-mcp-server'`). REQUIRED.
+ * - `command` — the executable to spawn (for example, `'node'`, `'./my-mcp-server'`). Required.
  * - `args` — the command-line arguments passed to `command`; defaults to none.
- * - `env` — environment variable overrides MERGED over the parent `process.env` for the
+ * - `env` — environment variable overrides merged over the parent `process.env` for the
  *   spawned child (the composed `@orkestrel/process` supervisor's merge semantics): when
- *   OMITTED the child inherits the full `process.env`, when PROVIDED each named key overrides
+ *   omitted the child inherits the full `process.env`, when provided each named key overrides
  *   the inherited value while every unlisted key is still inherited. This transport cannot
- *   REPLACE the inherited environment entirely — the supervisor always merges over the parent.
+ *   replace the inherited environment entirely — the supervisor always merges over the parent.
  * - `delivery` — the bound in milliseconds on one unconfirmed write to the child's `stdin`;
  *   an explicit `0` opts out. Defaults to {@link import('./constants.js').DEFAULT_MCP_DELIVERY}.
  */
@@ -383,10 +389,10 @@ export interface StdioClientTransportOptions {
 	 * that will never read it. Default: {@link import('./constants.js').DEFAULT_MCP_DELIVERY}.
 	 *
 	 * An explicit `0` opts out: the bound is off, and an unconfirmed write stays pending until
-	 * the channel faults or teardown settles it. Omission does NOT opt out here, which is where
+	 * the channel faults or teardown settles it. Omission does not opt out here, which is where
 	 * this option diverges from the supervisor's own `delivery` on {@link
-	 * import('@orkestrel/process').ProcessOptions} — omitted THERE disables the bound, omitted
-	 * HERE selects the default.
+	 * import('@orkestrel/process').ProcessOptions} — omitted there disables the bound, omitted
+	 * here selects the default.
 	 *
 	 * An out-of-range value surfaces at `start()` rather than at construction. This transport
 	 * forwards the value verbatim and adds no validator of its own, so the supervisor's own timer
@@ -421,7 +427,7 @@ export interface StdioClientTransportInterface extends MCPMessageTransportInterf
 	 *   it exited on its own or `close()` terminated it, and `''` there for a child that ran and
 	 *   wrote nothing — an empty tail is a real reading of a silent child, distinct from the
 	 *   absent one.
-	 * - **Lifetime.** The tail follows the child that produced it. The supervisor FREEZES it at
+	 * - **Lifetime.** The tail follows the child that produced it. The supervisor freezes it at
 	 *   that child's terminal moment — the moment `close()`'s teardown resolves past, and the
 	 *   moment the exit that fires this transport's `close` settles at — and this transport keeps
 	 *   reading that same child afterwards. The frozen value never moves again, which is what
@@ -436,18 +442,18 @@ export interface StdioClientTransportInterface extends MCPMessageTransportInterf
 	 *   its teardown barrier while those listeners run, so a `start()` one of them calls parks
 	 *   behind it and every later listener reads the ended child's frozen tail. A natural exit
 	 *   holds that barrier only across the `error` it reports at that end, so a restart begun
-	 *   THERE parks until `close` has been delivered, while a `close` listener that calls
+	 *   there parks until `close` has been delivered, while a `close` listener that calls
 	 *   `start()` opens the next lifetime itself and replaces the value every listener after it
 	 *   would have read.
 	 * - **What the close path carries.** The frozen value is what the supervisor had received by
 	 *   that terminal moment, not the child's complete output.
 	 *   Windows ends the tree with `taskkill /F /T`, which nothing in the child can intercept: a
 	 *   `SIGTERM` handler never runs there, so the bytes it would have written never exist. A
-	 *   child that ends on its own closes its stderr first, and THAT tail is complete.
+	 *   child that ends on its own closes its stderr first, and that tail is complete.
 	 *   Where that moment arrived at the supervisor's `drain` bound rather than at the child's
 	 *   own stream close, the tail stops at the cutoff and later diagnostics may have existed;
 	 *   the transport emits an `error` naming that lifetime, so a partial tail reads as partial.
-	 * - **Bound.** The supervisor keeps the END of the child's raw stderr bytes, at most
+	 * - **Bound.** The supervisor keeps the end of the child's raw stderr bytes, at most
 	 *   `@orkestrel/process`'s {@link import('@orkestrel/process').PROCESS_EVIDENCE} (2048
 	 *   bytes under 0.0.6). A child that writes more than the bound loses its earliest output
 	 *   and keeps its last, which is the half that names why it died. The bound counts raw
@@ -480,31 +486,34 @@ export interface StdioServerOptions {
 
 /**
  * Arms and tears down the newline-delimited JSON-RPC pump over the {@link StdioServerOptions}
- * stream pair — the stdio INGRESS handle {@link import('./factories.js').createStdioServer}
+ * stream pair — the stdio ingress handle {@link import('./factories.js').createStdioServer}
  * returns.
  *
  * @remarks
- * - `start()` — arm the pump: subscribe to `input`, and dispatch every complete line through
- *   the bound {@link import('@src/core').MCPDispatcherInterface}, writing each defined
- *   response back to `output`. The subscriptions are attached by the time the call returns.
- *   The pump arms ONCE, so a repeated `start()` attaches nothing further and an inbound
- *   request still draws exactly one reply.
- * - `stop()` — unbind the pump and close the transport: the listeners `start()` put on
- *   `input` / `output` are removed, every pending `send` rejects, and `input` is released so
- *   the process can exit. The release is complete by the time the call returns, and a
- *   repeated `stop()` does nothing.
- * - **One lifetime per handle.** `stop()` ends it permanently: a `start()` issued afterwards
- *   arms nothing, and serving again takes a fresh
- *   {@link import('./factories.js').createStdioServer} over a live stream pair.
+ * The subscriptions are attached, and the release complete, by the time each call returns. One
+ * lifetime per handle: the `stop` method ends it permanently, a `start` call issued afterwards
+ * arms nothing, and serving again takes a fresh
+ * {@link import('./factories.js').createStdioServer} over a live stream pair.
  */
 export interface StdioServerInterface {
+	/**
+	 * Arms the pump: subscribes to `input` and dispatches every complete line through the bound
+	 * {@link import('@src/core').MCPDispatcherInterface}, writing each defined response back to
+	 * `output`. The pump arms once, so a repeated call attaches nothing further and an inbound
+	 * request still draws exactly one reply.
+	 */
 	start(): void
+	/**
+	 * Unbinds the pump and closes the transport: removes the listeners the `start` method put on
+	 * `input` and `output`, rejects every pending write, and releases `input` so the process can
+	 * exit. A repeated call does nothing.
+	 */
 	stop(): void
 }
 
 /**
  * Represents the result of folding one more chunk of raw stdio bytes into a newline-framed
- * buffer — every COMPLETE line extracted (newline-terminated in the wire bytes) plus
+ * buffer — every complete line extracted (newline-terminated in the wire bytes) plus
  * the trailing partial line carried forward as the new `remainder`.
  *
  * @remarks

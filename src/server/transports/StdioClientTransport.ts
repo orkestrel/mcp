@@ -9,7 +9,7 @@ import { DEFAULT_MCP_DELIVERY } from '../constants.js'
 import { dispatchLines } from '../helpers.js'
 
 /**
- * Drives a CHILD PROCESS MCP server over newline-delimited JSON-RPC on `stdin`/`stdout` —
+ * Drives a child process MCP server over newline-delimited JSON-RPC on `stdin`/`stdout` —
  * a {@link StdioClientTransportInterface}, the stdio sibling of {@link
  * import('@orkestrel/mcp').HTTPClientTransport} and {@link
  * import('./WebSocketClientTransport.js').WebSocketClientTransport}.
@@ -25,14 +25,14 @@ import { dispatchLines } from '../helpers.js'
  *   line is decoded and delivered through the shared {@link dispatchLines} helper — a well-formed
  *   {@link JSONRPCMessage} emits `message`, a malformed line emits `error` (never throws).
  * - **Outbound (`send`).** `send(message)` writes one newline-terminated `JSON.stringify`d line
- *   through the supervisor's `send` and AWAITS its answer, so this promise settles only after the
+ *   through the supervisor's `send` and awaits its answer, so this promise settles only after the
  *   host reports the line handled rather than the moment the write is queued. The supervisor never
  *   rejects — it answers `false` for a channel that was closed, destroyed, or ended, for a write
  *   that failed, or for one that remained unconfirmed through `delivery`. A call made without a
  *   live child rejects as not connected; a `false` answer from a live child rejects as unable to
  *   deliver. The supervisor does not disclose which cause produced that answer.
  * - **`close()`** runs the supervisor's bounded termination and teardown, then fires `close` once
- *   (idempotent). That teardown reaches the child's TERMINAL MOMENT, where the supervisor freezes
+ *   (idempotent). That teardown reaches the child's terminal moment, where the supervisor freezes
  *   `evidence`, ends `lines`, and settles `exit` together, so this transport needs no release of
  *   its own to get its line pump back: the stream ends under the pump rather than throwing at it.
  *   A line the supervisor had already framed behind the one being delivered is dropped rather than
@@ -45,7 +45,7 @@ import { dispatchLines } from '../helpers.js'
  *   child's own process group `SIGTERM`, waits the grace window, then `SIGKILL`s through the same
  *   route, so the kill reaches grandchildren rather than orphaning them, while Windows ends the
  *   tree with `taskkill /F /T`, which nothing in the child can intercept.
- * - **Evidence.** `evidence` reports that retained stderr tail off the HELD child — its live tail
+ * - **Evidence.** `evidence` reports that retained stderr tail off the held child — its live tail
  *   while the child runs, and the value the supervisor froze at that child's terminal moment
  *   afterwards. The reference is held past that moment and replaced only by the next `start()`,
  *   which is what keeps a post-`close()` read stable without a private copy: the frozen value
@@ -53,7 +53,7 @@ import { dispatchLines } from '../helpers.js'
  *   cannot grow it. See {@link StdioClientTransportInterface.evidence} for the readings and the
  *   byte bound.
  * - **Observable.** Owns the `emitter` ({@link MCPMessageTransportEventMap}); the
- *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
+ *   emitter isolates a listener throw; `error` is a domain event (a transport-level
  *   fault, including the child spawn cause the supervisor surfaces and the notice that this
  *   lifetime's `evidence` was cut off at the `drain` bound), distinct from the emitter's own
  *   listener-error channel.

@@ -10,16 +10,16 @@ import type {
  * through.
  *
  * @remarks
- * A native async generator decides cancellation with a QUEUE: `return()` and `throw()` wait
+ * A native async generator decides cancellation with a queue: `return()` and `throw()` wait
  * behind a `next()` the producer has not answered, so a consumer abandoning a source parked
  * on an event that will never arrive waits forever for its own cancellation. This class
- * arbitrates instead of queueing. It keeps at most ONE read outstanding against the source,
- * settles the consumer's read itself, aborts the request's lifetime BEFORE it delegates
+ * arbitrates instead of queueing. It keeps at most one read outstanding against the source,
+ * settles the consumer's read itself, aborts the request's lifetime before it delegates
  * cleanup to the producer — so a cooperating producer is woken rather than waited on —
  * contains every promise the producer settles late, and makes every closure path idempotent.
  *
  * The closures are deliberately different answers: the source's own return is the
- * terminal RESPONSE, `return(value)` is the consumer saying it has the answer already, and
+ * terminal response, `return(value)` is the consumer saying it has the answer already, and
  * {@link stop} is an owner saying there will be no answer at all. Only the source's own
  * return is a message a peer ever sees.
  *
@@ -27,7 +27,7 @@ import type {
  * generator is suspended inside, so the signal is how an uncooperative producer is asked to
  * finish, and this controller never blocks its consumer on the answer.
  *
- * **What this class does NOT have is an owner of last resort.** No finalizer, no timer, no
+ * **What this class does not have is an owner of last resort.** No finalizer, no timer, no
  * timeout ends an exchange nobody released. That absence is the design: an exchange holds a
  * producer, a request lifetime and a live server slot, so a silent background release would
  * turn "a pump forgot its obligation" from a reproducible defect into a nondeterministic one,

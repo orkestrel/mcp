@@ -115,7 +115,7 @@ export function supportsFormElicitation(value: unknown): boolean {
  * Computes the capabilities one round of input requests needs and the client did not declare.
  *
  * @remarks
- * The protocol's rule is about SENDING: a server never issues a request kind the client's
+ * The protocol's rule is about sending: a server never issues a request kind the client's
  * declared capabilities exclude. So this reads the round rather than the method, and it
  * answers with the refusal's own payload — the `requiredCapabilities` record a
  * `MissingRequiredClientCapability` error carries, keyed by each missing capability, in the
@@ -127,7 +127,7 @@ export function supportsFormElicitation(value: unknown): boolean {
  * recognize needs nothing, because {@link import('./validators.js').isMCPInputRequestMap}
  * has already refused the round it would have travelled in. Total over hostile input.
  *
- * The `elicitation` value names the ARM the round needs, so a client can act on the refusal
+ * The `elicitation` value names the arm the round needs, so a client can act on the refusal
  * by declaring exactly what the payload asks for. A missing URL arm answers `{ url: {} }`, a
  * missing form arm answers the empty record this package reads as form-only, and a round
  * needing both answers `{ form: {}, url: {} }`. An empty record for a URL round would name
@@ -179,14 +179,14 @@ export function computeMissingCapabilities(
  *
  * @remarks
  * The declaration lives at `extensions['io.modelcontextprotocol/tasks']` and the schema
- * types its value EXACTLY EMPTY — `Record<string, never>`, an object with no additional
+ * types its value exactly empty — `Record<string, never>`, an object with no additional
  * properties. So the key's presence is the whole declaration, and the value carries the
  * whole of the check: a `true` or a string there is a client speaking a different protocol
  * rather than a shorthand, and a member inside the object is a client declaring an option
  * this extension does not define. Both are refused, because a server that accepted either
  * would be reading a shape no peer can produce from the snapshot's own schema.
  *
- * A client declares this PER REQUEST. Nothing here consults a session, because the modern
+ * A client declares this per request. Nothing here consults a session, because the modern
  * revision is stateless and a capability declared once at connect time says nothing about
  * the request in hand. Total over hostile input.
  *
@@ -479,7 +479,7 @@ export function buildProgressNotification(
  * Builds one official cancellation notification for a request already sent.
  *
  * @remarks
- * `requestId` and `reason` are WIRE SPELLINGS carried verbatim from the dated schema's
+ * `requestId` and `reason` are wire spellings carried verbatim from the dated schema's
  * `CancelledNotificationParams`, and so is the `cancelled` in the method name — this
  * package's own vocabulary says `abort`, but the method is the protocol's and does not
  * change. The notification is FIRE-AND-FORGET in the strongest sense: it carries no id,
@@ -518,7 +518,7 @@ export function buildCancelledNotification(id: JSONRPCId, reason?: string): JSON
  * Determines whether one method may answer with a given modern `resultType`.
  *
  * @remarks
- * The dated protocol lets a `tools/call` answer in more than one way — it COMPLETED, it became a
+ * The dated protocol lets a `tools/call` answer in more than one way — it completed, it became a
  * durable task, or it needs another round trip — while every other method this client
  * issues has exactly one legal answer. So the arm a peer chose is only meaningful beside
  * the method it answers, and this is the one place that pairing is decided.
@@ -548,9 +548,9 @@ export function matchesResultType(method: string, resultType: unknown): boolean 
  * Concatenates an MCP tool-call result's text content blocks into one string.
  *
  * @remarks
- * The inverse of a server splitting a value into text block(s), and TOTAL: a non-record
+ * The inverse of a server splitting a value into text block(s), and total: a non-record
  * result, a non-array `content`, or a non-string `text` contributes nothing rather than
- * throwing. What it returns is a RENDERING — the prose a model reads — and not the tool's
+ * throwing. What it returns is a rendering — the prose a model reads — and not the tool's
  * value, which travels as `structuredContent` whenever the peer sent one.
  *
  * @param result - The unknown result payload to read content blocks from
@@ -580,12 +580,12 @@ export function extractContentText(result: unknown): string {
  * the arms the protocol gives a shape to, and deriving the tool's value from the one it
  * does not:
  *
- * - A peer's `structuredContent` is PREFERRED over the content blocks, because it is the
+ * - A peer's `structuredContent` is preferred over the content blocks, because it is the
  *   tool's value in its original structure while the blocks are a rendering beside it. Its
  *   mere presence decides — an explicit `null` is a value the tool returned, not an absence.
  * - With no structured value the legacy shape applies: the value was JSON-serialized into
  *   the text block(s), so parse them and fall back to the raw string when they are not JSON.
- * - A remote tool FAILURE (`isError: true`) THROWS the error text, so an agent's tool
+ * - A remote tool failure (`isError: true`) throws the error text, so an agent's tool
  *   registry isolates it into a failure result exactly as it would a local throw.
  *
  * @param name - The tool's name, used only to describe a failure that carried no text
@@ -692,14 +692,14 @@ export function buildJSONRPCResult(
  * as an `error` object.
  *
  * @remarks
- * An `undefined` `id` is OMITTED from the envelope rather than serialized as `null`:
+ * An `undefined` `id` is omitted from the envelope rather than serialized as `null`:
  * MCP overrides the base specification here, so a peer that could not have its id
  * read receives a response with no `id` member at all.
  *
  * @param id - The failed request's id, or `undefined` when none could be read
  * @param code - One of the reserved JSON-RPC codes (see `./constants.js`)
  * @param message - A short human description of the failure
- * @param data - An OPTIONAL machine-readable payload (omitted from the envelope when absent)
+ * @param data - An optional machine-readable payload (omitted from the envelope when absent)
  * @returns The error response envelope
  */
 export function buildJSONRPCError(
@@ -720,11 +720,11 @@ export function buildJSONRPCError(
  * receives.
  *
  * @remarks
- * The ONE place a cancellation signal is resolved. A caller may have no signal to
+ * The one place a cancellation signal is resolved. A caller may have no signal to
  * offer; a dispatched method always has one to observe, so a missing signal becomes
  * a real signal rather than an absence every downstream handler would have to case on.
  *
- * The resolved signal is the request's LIFETIME, which is strictly wider than the
+ * The resolved signal is the request's lifetime, which is strictly wider than the
  * caller's: it composes the caller's signal, when there is one, with the `lifetime`
  * dispatch owns and aborts once the answer this request produced is finished. That is
  * what wakes a stream producer parked on an event that will never arrive after its
@@ -1091,7 +1091,7 @@ export function buildSubscriptionResult(
  * `capabilities.resources` and `capabilities.prompts` appear only for servers with their
  * respective managers and derive notification flags from the configured subscription filter.
  * `capabilities.completions` is independent and appears only with a completion provider.
- * `capabilities.extensions` appears only for a server that CONFIGURED the extension it
+ * `capabilities.extensions` appears only for a server that configured the extension it
  * would name. An advertisement is a promise a client is entitled to act on, so a server
  * with no `task` policy omits the member entirely rather than advertising an empty
  * record — and its discovery answer stays byte-for-byte what it was before the extension
@@ -1172,7 +1172,7 @@ export function buildInitializeResult(
  * before it hands the string on.
  *
  * @remarks
- * The bound is checked FIRST, against the raw string, so an oversized message is never
+ * The bound is checked first, against the raw string, so an oversized message is never
  * parsed at all: a decoder that parses before it measures has already spent the work
  * the bound exists to refuse. A message over the bound, malformed JSON, and a well-formed
  * value that is not a JSON-RPC message are one answer — `undefined` — because a binder does
@@ -1203,12 +1203,12 @@ export function decodeBoundedMessage(
  * Decodes one inbound frame and delivers it onto a transport emitter as `message` or `error`.
  *
  * @remarks
- * The ONE inbound fold every message-carrying transport in this package runs: parse the frame,
+ * The one inbound fold every message-carrying transport in this package runs: parse the frame,
  * narrow it with `parseJSONRPCMessage`, emit `message` for a well-formed
  * {@link JSONRPCMessage}, and emit `error` for anything else. Total — an adversarial frame
  * produces an `error` emission and never a throw.
  *
- * The two failures report differently on purpose. Unparsable text emits the CAUGHT parse
+ * The failures report differently on purpose. Unparsable text emits the caught parse
  * error, which names the offending position; well-formed JSON that is not a JSON-RPC message
  * has no caught value to report, so it emits `fault` — the carrier's own wording, passed in
  * rather than forked into a second copy of this body.
@@ -1275,8 +1275,8 @@ export function decodeEvent(data: string): JSONRPCMessage | undefined {
  * })` (handling a multi-byte character split across reads) and `@orkestrel/sse`'s
  * {@link SSEParserInterface} (handling a partial line or in-progress event split across
  * reads), then narrows each dispatched event's `data` to a {@link JSONRPCMessage} through
- * {@link decodeEvent} (so a non-message or non-JSON `data:` event is DROPPED, never thrown —
- * total). It reuses the SAME `SSEParser` a server's `createStream` seam serializes against, so
+ * {@link decodeEvent} (so a non-message or non-JSON `data:` event is dropped, never thrown —
+ * total). It reuses the same `SSEParser` a server's `createStream` seam serializes against, so
  * the wire round-trips. A `null` body (no stream) yields no messages;
  * {@link import('./transports/HTTPClientTransport.js').HTTPClientTransport} reads a
  * request/response SSE reply (the server sends one `data:` event then ends), so this drains to
@@ -1355,7 +1355,7 @@ export function buildResponseError(response: Response, type: string): Error {
  * second spelling of a byte, so it is refused: `=?base64?QR==?=` reaches for the byte
  * `=?base64?QQ==?=` spells canonically, and only the canonical spelling decodes. A malformed
  * payload answers `undefined` rather than falling back to the literal, because the protocol
- * requires a server to REJECT invalid characters, and a fallback would admit the very value
+ * requires a server to reject invalid characters, and a fallback would admit the very value
  * the rule exists to refuse. A value missing either marker is a literal and comes back
  * unchanged.
  *
@@ -1406,7 +1406,7 @@ export function decodeSentinel(value: string): string | undefined {
  *
  * @remarks
  * The exact inverse of {@link decodeSentinel}, and its membership rule is stated as that
- * inverse rather than as a second list that could drift: a value travels LITERALLY when it is
+ * inverse rather than as a second list that could drift: a value travels literally when it is
  * plain printable ASCII — every code point in `U+0020`–`U+007E`, the RFC 9110 field-value
  * range this package admits — and {@link decodeSentinel} gives it back unchanged. Every other
  * value travels wrapped in {@link MCP_SENTINEL_PREFIX} and {@link MCP_SENTINEL_SUFFIX}, the
@@ -1448,7 +1448,7 @@ export function encodeSentinel(value: string): string {
  *
  * @remarks
  * The companion of {@link extractHeaderAnnotations}, which reads only the annotations a
- * `properties` chain reaches. Comparing the two answers is how
+ * `properties` chain reaches. Comparing the answers is how
  * {@link buildHeaderParameters} decides reachability without a second walk that would have
  * to re-state which JSON Schema keywords are traversable: an annotation the reachable walk
  * did not read is one sitting under `items`, a composition or conditional keyword, a `$ref`
@@ -1495,12 +1495,12 @@ export function countHeaderAnnotations(value: unknown): number {
  * Reachability is the protocol's own rule: an annotation counts only where a chain of
  * `properties` keys leads to it from the `inputSchema` root, so `path` is both the schema
  * position and the position the call's `arguments` carry the value at. A property named
- * `items` is reachable like any other, because the chain is read by key POSITION rather than
+ * `items` is reachable like any other, because the chain is read by key position rather than
  * by key name.
  *
  * `undefined` means the definition is invalid rather than empty: a reachable annotation whose
  * value is not an {@link import('./validators.js').isFieldToken} token, one sitting on the
- * schema ROOT (which is no property), one on a leaf whose declared type is not an
+ * schema root (which is no property), one on a leaf whose declared type is not an
  * {@link import('./validators.js').isMCPHeaderPrimitive} primitive, or a chain deeper than
  * `DEFAULT_MCP_LIMITS.depth` — which is also what makes a self-referential schema terminate.
  * A node that is not a record carries nothing and answers an empty list, because a leaf the
@@ -1546,8 +1546,8 @@ export function extractHeaderAnnotations(
  *
  * @remarks
  * The single decision both sides of the protocol make about an annotated tool: an HTTP
- * CLIENT excludes a definition this refuses from the `tools/list` result it delivers, and a
- * SERVER recognizes exactly the `Mcp-Param-*` names this returns for its own definitions.
+ * client excludes a definition this refuses from the `tools/list` result it delivers, and a
+ * server recognizes exactly the `Mcp-Param-*` names this returns for its own definitions.
  *
  * `undefined` means the definition is invalid, and every rule the protocol states produces
  * it: a value that is not an RFC 9110 token, a non-primitive or untyped annotated leaf, a
@@ -1585,11 +1585,11 @@ export function buildHeaderParameters(schema: unknown): readonly MCPHeaderParame
  * Renders one projected argument as the text its `Mcp-Param-*` header carries.
  *
  * @remarks
- * The protocol's conversion table, and the ONE place it is stated: a string travels as
+ * The protocol's conversion table, and the one place it is stated: a string travels as
  * itself, an integer in decimal, and a boolean as lowercase `true` or `false`. The value's
  * runtime shape must match the leaf's declared type, so a schema that declares `integer` and
  * an argument that supplies a string, a fraction, or a magnitude outside the IEEE 754 safe
- * range carries NOTHING — a header that cannot round-trip the body value is worse than an
+ * range carries nothing — a header that cannot round-trip the body value is worse than an
  * absent one, and the tool's own argument validation owns the disagreement.
  *
  * @param value - The argument value read at the parameter's path
@@ -1687,7 +1687,7 @@ export function extractToolSchema(
  * {@link buildCancelledNotification}.
  *
  * @remarks
- * `requestId` is the WIRE SPELLING carried verbatim from the dated schema, and it must be a
+ * `requestId` is the wire spelling carried verbatim from the dated schema, and it must be a
  * real {@link JSONRPCId}: `null` is not one, and neither is an absent member, so a
  * malformed frame reads as "cancels nothing" rather than as an error. Anything that is not a
  * `notifications/cancelled` notification — a response, a request that happens to use the
@@ -1715,14 +1715,14 @@ export function readCancelledId(message: JSONRPCMessage): JSONRPCId | undefined 
 
 /**
  * Pumps a controlled serialized exchange onto a transport — every notification in order, then
- * the terminating response — and END the exchange however the pump leaves.
+ * the terminating response — and end the exchange however the pump leaves.
  *
  * @remarks
  * The generator's `return` value is a message like any other on the wire: it is sent
- * LAST and closes the exchange. Sends are awaited one at a time so the transport
+ * last and closes the exchange. Sends are awaited one at a time so the transport
  * receives the sequence in the order the method produced it.
  *
- * The first parameter is the CONTROLLED arm rather than a bare
+ * The first parameter is the controlled arm rather than a bare
  * {@link import('./types.js').MCPTextStream}, and that is the whole point of it: this pump is
  * an owner, and an owner needs a lifecycle member to discharge its obligation with. A bare
  * generator has none, so an exit where nothing was cancelled — a `send` that threw two
@@ -1732,7 +1732,7 @@ export function readCancelledId(message: JSONRPCMessage): JSONRPCId | undefined 
  * is a no-op for an exchange that already ended on its terminal.
  *
  * The `finally` is spelled explicitly rather than with `await using` because this package's
- * declared Node floor cannot PARSE `await using` — `target: ESNext` emits the declaration
+ * declared Node floor cannot parse `await using` — `target: ESNext` emits the declaration
  * verbatim, and a floor engine rejects the whole module at load. The obligation discharged is
  * identical either way.
  *
@@ -1778,7 +1778,7 @@ export async function sendStream(
  * `server.handle` already turns a malformed message into a serialized `-32700` /
  * `-32600` reply and a notification into `undefined` (no reply), so this binder parses
  * nothing the server would parse differently: it decodes each inbound message through
- * {@link decodeBoundedMessage} under `server.limit`, the SERVER'S OWN bound, so a message
+ * {@link decodeBoundedMessage} under `server.limit`, the server'S own bound, so a message
  * the server would refuse is never parsed here either and still receives its `-32700` from
  * the one place that words it. A HELD-OPEN reply arrives as an
  * {@link import('./types.js').MCPTextStreamControllerInterface} instead of a string: this is
@@ -1787,27 +1787,27 @@ export async function sendStream(
  * mid-stream included — is caught and routed
  * to `server.emitter`'s `error` event (never rethrown, never an unhandled rejection);
  * a listener on that event that itself throws is swallowed (the end of the line —
- * the caller's own bug, never this binder's). A fault raised AFTER its own request was
+ * the caller's own bug, never this binder's). A fault raised after its own request was
  * cancelled reports nothing, because a cancellation is not a fault.
  *
- * **This binder OWNS every exchange it starts, and ends each one on every exit.** It holds one
+ * **This binder owns every exchange it starts, and ends each one on every exit.** It holds one
  * `AbortController` per live request, keyed by the request's id and deleted whenever that
  * request leaves — normally, by a throw, or by cancellation — and it supplies that signal to
  * `handle` as {@link import('./types.js').MCPDispatchOptions}. These consequences follow.
- * An inbound `notifications/cancelled` ABORTS the request it names, which is how the message-
+ * An inbound `notifications/cancelled` aborts the request it names, which is how the message-
  * based cancellation path reaches a tool on the carriers that have one (stdio, WebSocket,
- * `MessagePort`); a cancelled request writes NO response, because a peer that asked for a call
+ * `MessagePort`); a cancelled request writes no response, because a peer that asked for a call
  * to stop is not answered by it; and the transport's `closed` signal aborts every request
  * still in flight, so an exchange being pumped when the carrier dies ends with it instead of
  * writing into a socket nobody is holding.
  *
- * `listen`/`closed` are REPLACE semantics (§ port contract): the returned unbind
- * DETACHES by replacing this binder's own handlers with no-ops, so a subsequent
- * `bindServer` call on the SAME transport is never double-dispatched by a stale
+ * `listen`/`closed` are replace semantics (§ port contract): the returned unbind
+ * detaches by replacing this binder's own handlers with no-ops, so a subsequent
+ * `bindServer` call on the same transport is never double-dispatched by a stale
  * subscription left behind — an unbind→rebind cycle yields exactly one reply per
  * request. Unbinding is itself an owner exit: it aborts and retires every request still in
  * flight before detaching, so `unbind()` then `close()` and `close()` then `unbind()` end the
- * same exchanges. It does NOT close the transport; that remains the caller's decision.
+ * same exchanges. It does not close the transport; that remains the caller's decision.
  *
  * @param server - The transport-agnostic server to dispatch inbound messages over
  * @param transport - The duplex channel to pipe the server over
@@ -1886,7 +1886,7 @@ export function bindServer(
 
 /**
  * Pipes an {@link MCPTransportInterface} into an {@link MCPClientInterface} — every
- * inbound message is decoded and delivered onto the client's OWN transport
+ * inbound message is decoded and delivered onto the client's own transport
  * (`client.transport.emitter`'s `message` / `close` events), resolving/rejecting the
  * client's correlated pending requests exactly as a direct reply would.
  *
@@ -1894,30 +1894,30 @@ export function bindServer(
  * The client's outbound writes flow through `client.transport.send` — its existing,
  * unmodified request/response correlation — so `client` must have been constructed
  * with a {@link import('./types.js').MCPMessageTransportInterface} that itself carries
- * the SAME `transport` (see {@link import('./factories.js').createDuplexClientTransport},
+ * the same `transport` (see {@link import('./factories.js').createDuplexClientTransport},
  * the additive factory that adapts an {@link MCPTransportInterface} into that shape);
  * this binder then completes the inbound half by decoding each message and pushing it
  * onto `client.transport.emitter` (an {@link import('@orkestrel/emitter').EmitterInterface}
  * exposes `emit`, so no client modification is needed). A malformed / non-JSON-RPC
- * inbound message is DROPPED (total — never throws); a delivery fault is routed to
+ * inbound message is dropped (total — never throws); a delivery fault is routed to
  * `client.transport.emitter`'s `error` event (never rethrown). The returned unbind
- * DETACHES this binder (further inbound messages and the transport's `closed` signal are
- * ignored) WITHOUT closing the transport.
+ * detaches this binder (further inbound messages and the transport's `closed` signal are
+ * ignored) without closing the transport.
  *
- * `listen`/`closed` are REPLACE semantics (§ port contract): the returned unbind
- * DETACHES by replacing this binder's own handlers with no-ops, so a subsequent
- * `bindClient` call on the SAME transport is never double-dispatched by a stale
+ * `listen`/`closed` are replace semantics (§ port contract): the returned unbind
+ * detaches by replacing this binder's own handlers with no-ops, so a subsequent
+ * `bindClient` call on the same transport is never double-dispatched by a stale
  * subscription left behind — an unbind→rebind cycle delivers exactly one `message`
  * emit per inbound reply.
  *
  * **This binder needs no live-request registry, and the asymmetry with {@link bindServer} is
- * real rather than an omission.** A server binder holds the lifetime of work it STARTED, so an
+ * real rather than an omission.** A server binder holds the lifetime of work it started, so an
  * inbound `notifications/cancelled` has something to reach; a client binder starts no work —
  * `MCPClient` already owns its pending entries and already writes the cancellation frame
  * itself when a caller's `signal` aborts, on a carrier declaring `duplex`. Adding a registry
- * here would be a second correlation table for ids the client is already correlating, and two
- * tables for one fact drift. The one obligation this binder does carry is delivery: a
- * malformed / non-JSON-RPC inbound message is DROPPED (total — never throws).
+ * here would be a second correlation table for ids the client is already correlating, and a
+ * pair of tables for one fact drift. The one obligation this binder does carry is delivery: a
+ * malformed / non-JSON-RPC inbound message is dropped (total — never throws).
  *
  * @param client - The transport-agnostic client whose transport to deliver messages onto
  * @param transport - The duplex channel to pipe the client over

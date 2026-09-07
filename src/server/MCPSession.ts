@@ -6,39 +6,39 @@ import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constan
 /**
  * Represents one MCP transport session — the per-session entity a {@link
  * import('./middlewares.js').createMCPSession} middleware owns, keyed by its `id`, carrying the
- * resumable server→client push channel with its bounded replay log FOLDED IN.
+ * resumable server→client push channel with its bounded replay log folded in.
  *
  * @remarks
  * One entity carries the whole session: it holds the
- * session `id`, its OWN bounded, replayable log of pushed server→client messages (the
+ * session `id`, its own bounded, replayable log of pushed server→client messages (the
  * resumable GET-SSE channel — a private `#events` `Map` + a monotone `#counter`, with
  * `capacity` / `ttl` eviction, not a separate store), and the set of open
  * server→client SSE streams (a resumable `GET {path}` registers through `attach`, unregisters through
  * `detach` on disconnect). Still a small entity (not a record), built minimal + extensible.
  *
- * - **`push` is the server-initiated primitive.** It APPENDS the message to the log (assigning
- *   a monotone base36 event id) and FANS it out to every attached stream as one `id:`-tagged
- *   SSE event (`stream.write({ id, data })`). A push with NO attached stream is still logged,
- *   so a client that connects (or reconnects with a `Last-Event-ID`) LATER replays it from the
+ * - **`push` is the server-initiated primitive.** It appends the message to the log (assigning
+ *   a monotone base36 event id) and fans it out to every attached stream as one `id:`-tagged
+ *   SSE event (`stream.write({ id, data })`). A push with no attached stream is still logged,
+ *   so a client that connects (or reconnects with a `Last-Event-ID`) later replays it from the
  *   log. A `write` to a closed stream is a safe no-op (the {@link
  *   `@orkestrel/server`'s `createStream` contract), so a just-disconnected stream that
  *   has not yet been `detach`ed never throws. A replayed event and the live one carry the
- *   IDENTICAL id (the log assigns it once).
+ *   identical id (the log assigns it once).
  *
  * - **`replay(afterId)` is strictly-after.** It returns every retained log entry whose id sorts
- *   AFTER `afterId` in append order — the missed-events list the `GET {path}` handler writes
- *   before attaching the stream for live pushes. The decision for an UNKNOWN / already-evicted
+ *   after `afterId` in append order — the missed-events list the `GET {path}` handler writes
+ *   before attaching the stream for live pushes. The decision for an unknown / already-evicted
  *   `afterId` (the client's cursor fell off the back of the capacity window, or never existed):
- *   replay NOTHING. Replaying the whole retained log would re-deliver events the client never
- *   lost (its cursor is OLDER than everything retained); returning `[]` lets the handler then
+ *   replay nothing. Replaying the whole retained log would re-deliver events the client never
+ *   lost (its cursor is older than everything retained); returning `[]` lets the handler then
  *   stream only the fresh pushes that follow `attach` — the spec-sane resume.
  *
- * - **Bounded, append-ordered, plain `Map`.** The log lives in ONE insertion-ordered
- *   `Map<id, entry>` — insertion order IS append order IS id order, so `replay` and capacity
- *   eviction both walk the map directly. NO database mirror — the log is process-local
+ * - **Bounded, append-ordered, plain `Map`.** The log lives in one insertion-ordered
+ *   `Map<id, entry>` — insertion order is append order is id order, so `replay` and capacity
+ *   eviction both walk the map directly. No database mirror — the log is process-local
  *   transport mechanics, not durable state. `push` first drops every entry older than `ttl`
  *   (lazy TTL — no background timer, the middleware's lazy-window idiom), appends, then evicts
- *   the OLDEST entries until at most `capacity` remain; `replay` also runs the lazy TTL sweep
+ *   the oldest entries until at most `capacity` remain; `replay` also runs the lazy TTL sweep
  *   first, so a stale entry is never replayed.
  *
  * - **No transport coupling beyond the SSE seam.** It holds session state + the generic {@link

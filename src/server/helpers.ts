@@ -13,16 +13,16 @@ import { isString } from '@orkestrel/contract'
 
 /**
  * Pumps a controlled held-open exchange onto an open SSE stream — one `data:` event per
- * notification in order, then the terminating response — and END the exchange however the
+ * notification in order, then the terminating response — and end the exchange however the
  * pump leaves.
  *
  * @remarks
  * The Streamable-HTTP twin of {@link import('@orkestrel/mcp').sendStream}, and it owns exactly what
- * that owns. The `finally` releases the exchange on EVERY exit — the normal terminal, a
+ * that owns. The `finally` releases the exchange on every exit — the normal terminal, a
  * producer that threw, a `write` that threw, and an abort alike — because nothing else will:
  * a request whose client vanished cancels nothing by itself, so an exchange this pump walks
  * away from keeps its producer, its request lifetime, and its live subscription slot forever.
- * The exchange is released BEFORE the body ends, so the slot is already back when the response
+ * The exchange is released before the body ends, so the slot is already back when the response
  * completes.
  *
  * Total — never throws and never rejects. A held-open SSE response has already sent its
@@ -179,7 +179,7 @@ export function readLastEventId(request: Request): string | undefined {
  * @remarks
  * Returns `Response.json(buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Session not
  * found'), { status: 404 })`, mirroring `createMCPRoutes`'s `400` transport-failure shape (a
- * JSON-RPC error BODY with NO id) but at the session-not-found status. Shared by
+ * JSON-RPC error body with no id) but at the session-not-found status. Shared by
  * every {@link import('./middlewares.js').createMCPSession} validation site — the
  * non-`initialize` `POST` path, the resumable `GET {path}` open, and the `DELETE {path}`
  * session-end (each a missing / unknown / TTL-evicted id) — so the single `404` envelope
@@ -198,7 +198,7 @@ export function rejectUnknownSession(): Response {
  * the `createWebSocketServer` upgrade-path match.
  *
  * @remarks
- * A `node:http` {@link import('node:http').IncomingMessage}'s `url` is the request TARGET
+ * A `node:http` {@link import('node:http').IncomingMessage}'s `url` is the request target
  * (`'/mcp?x=1'`), narrowed with `isString` (never `as`) and defaulting to `'/'` for an
  * absent target; it is parsed against a placeholder base (only the pathname matters for the upgrade
  * decision) and the `pathname` returned. The upgrade handler compares this against its
@@ -220,7 +220,7 @@ export function upgradeRequestPath(request: IncomingMessage): string {
  *
  * @remarks
  * Concatenates `buffer` (the carried-forward partial line from the previous call)
- * with `chunk`, splits on `'\n'`, and returns every COMPLETE line (a `'\r'` trailing
+ * with `chunk`, splits on `'\n'`, and returns every complete line (a `'\r'` trailing
  * a line, from a CRLF-framed peer, is trimmed) plus the final, possibly-empty
  * fragment as the new `remainder` — the caller threads it back in as the next call's
  * `buffer`. A chunk containing no `'\n'` yields no lines and the whole (buffer +
@@ -245,12 +245,12 @@ export function extractLines(buffer: string, chunk: string): LineExtraction {
  * The completion callback is the writable channel's backpressure boundary. A callback error and
  * a synchronous `write` throw reject the returned promise with the original value.
  *
- * That callback is the ONLY thing that settles the promise: this helper holds no timer and no
+ * That callback is the only thing that settles the promise: this helper holds no timer and no
  * abort, so an output that neither confirms nor fails the write parks the promise for as long as
  * the caller-owned stream holds the callback. A caller wanting a bound races this promise against
  * one it owns — {@link import('./transports/StdioServerTransport.js').StdioServerTransport}
  * registers such a bound per send and rejects it on `close()`, so closing the transport settles
- * the CALLER's `send` while the abandoned write stays with the stream that still holds its
+ * the caller's `send` while the abandoned write stays with the stream that still holds its
  * callback, reachable from nothing the transport retains.
  *
  * @param output - The writable stream that receives the line

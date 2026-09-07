@@ -20,12 +20,18 @@ import type { ToolCall, ToolInterface, ToolManagerInterface, ToolResult } from '
 // `invocation.id === undefined` and `response.error === undefined` narrow the union
 // at the one place a caller asks.
 
-/** Represents a JSON-RPC 2.0 correlation id — the value a request and its response share. */
+/**
+ * Represents a JSON-RPC 2.0 correlation id — the value a request and its response share.
+ *
+ * @remarks
+ * `null` is not an id. A response that could not read one omits the member entirely, which is
+ * what {@link JSONRPCErrorResponse} declares.
+ */
 export type JSONRPCId = string | number
 
 /**
  * Represents a JSON-RPC 2.0 request — a `method` call with optional `params`, correlated to
- * its response by the `id` it REQUIRES.
+ * its response by the `id` it requires.
  *
  * @remarks
  * `jsonrpc` is the literal `'2.0'`. A call with no `id` is not a request at all: it
@@ -74,7 +80,7 @@ export type JSONRPCInvocation = JSONRPCRequest | JSONRPCNotification
  *
  * @remarks
  * `code` is one of the reserved JSON-RPC codes (see `./constants.js`); `message`
- * is a short human description; `data` is an OPTIONAL machine-readable payload
+ * is a short human description; `data` is an optional machine-readable payload
  * carrying extra detail.
  */
 export interface JSONRPCError {
@@ -89,7 +95,7 @@ export interface JSONRPCError {
  *
  * @remarks
  * A result answers a request, and a request always has a readable `id`, so `id` is
- * REQUIRED here. `result` is an {@link MCPResult} on the modern wire and an
+ * required here. `result` is an {@link MCPResult} on the modern wire and an
  * {@link MCPLegacyResult} on the legacy one; `error` is forbidden.
  */
 export interface JSONRPCResultResponse {
@@ -105,13 +111,13 @@ export interface JSONRPCResultResponse {
  * the {@link JSONRPCError} that ended it.
  *
  * @remarks
- * `id` is OMITTED, never `null`, when the request could not be parsed or its id
+ * `id` is omitted, never `null`, when the request could not be parsed or its id
  * read: MCP overrides the base specification here, so a modern peer receives an
  * envelope with no `id` member at all. `result` is forbidden.
  */
 export interface JSONRPCErrorResponse {
 	readonly jsonrpc: '2.0'
-	/** Holds the failed request's id; ABSENT when no id could be read. */
+	/** Holds the failed request's id; absent when no id could be read. */
 	readonly id?: JSONRPCId
 	readonly error: JSONRPCError
 	/** Forbids this member; an answer carries a result or an error, never both. */
@@ -144,7 +150,7 @@ export type JSONRPCMessage = JSONRPCInvocation | JSONRPCResponse
  * Represents one modern MCP result — the open contract every dated-revision result satisfies.
  *
  * @remarks
- * The dated schema requires a `resultType` on EVERY modern result and leaves the
+ * The dated schema requires a `resultType` on every modern result and leaves the
  * rest of the object open, so this contract does the same: `resultType` is a string
  * rather than a closed union because the protocol keeps issuing new ones (`task`
  * alongside `complete` and `input_required`), and the index signature is the
@@ -153,7 +159,7 @@ export type JSONRPCMessage = JSONRPCInvocation | JSONRPCResponse
  * Concrete results — {@link MCPCallResult}, {@link MCPDiscoverResult},
  * {@link MCPListResult}, {@link MCPPromptListResult}, {@link MCPPromptGetResult},
  * {@link MCPCompletionResult}, {@link MCPInputResult}, and
- * {@link MCPSubscriptionResult} — stay CLOSED and keep their literal
+ * {@link MCPSubscriptionResult} — stay closed and keep their literal
  * `resultType`, so a caller that knows which method it called still narrows to a
  * literal through that result's guard. Openness lives here, at the arm a server may
  * answer any registered method through, and nowhere else.
@@ -174,7 +180,7 @@ export interface MCPResult {
  *
  * @remarks
  * The legacy revision has no result-discriminator concept, so a legacy result
- * carries NO `resultType`. That absence is the whole distinction, which is why it is
+ * carries no `resultType`. That absence is the whole distinction, which is why it is
  * declared `never` rather than optional: an {@link MCPResult} is not assignable
  * here, this type is not assignable to {@link MCPResult}, and
  * `result.resultType === undefined` narrows a {@link JSONRPCResultResponse}'s
@@ -201,7 +207,7 @@ export type MCPVersion = MCPModernVersion | MCPLegacyVersion
  * Represents the exact finite JSON metadata carried by MCP `_meta` envelopes.
  *
  * @remarks
- * The `Object` suffix is not a role suffix from the type table — it NAMES THE SHAPE.
+ * The `Object` suffix is not a role suffix from the type table — it names the shape.
  * `_meta` is a JSON object whose values are exact JSON, and a reader who sees
  * `MCPMeta` cannot tell that from a key, a string, or an entry. The same holds for
  * {@link MCPResultMetaObject} and {@link MCPSubscriptionResultMetaObject}, which are
@@ -333,7 +339,13 @@ export interface MCPResource {
 	readonly _meta?: MCPMetaObject
 }
 
-/** Represents one RFC 6570 resource-template descriptor advertised by `resources/templates/list`. */
+/**
+ * Represents one RFC 6570 resource-template descriptor advertised by `resources/templates/list`.
+ *
+ * @remarks
+ * The `uriTemplate` member is published as a string and forwarded verbatim: this package never
+ * parses or expands it, and no RFC 6570 level is implied.
+ */
 export interface MCPResourceTemplate {
 	readonly uriTemplate: string
 	readonly name: string
@@ -436,7 +448,7 @@ export interface MCPToolResultContent {
  *
  * @remarks
  * The dated schema's `SamplingMessageContentBlock`: the text, image, and audio blocks
- * {@link MCPContent} also admits, plus the two tool blocks a tool-using model produces. The
+ * {@link MCPContent} also admits, plus the tool blocks a tool-using model produces. The
  * resource arms of {@link MCPContent} are deliberately absent — the schema leaves them out of
  * a sampling completion.
  */
@@ -448,11 +460,11 @@ export type MCPSampleContent =
 	| MCPToolResultContent
 
 /**
- * Represents a `tools/call` result BEFORE the modern stamp — the executed tool's output as
+ * Represents a `tools/call` result before the modern stamp — the executed tool's output as
  * `content` blocks, with `isError` flagging a tool failure.
  *
  * @remarks
- * The name states the whole distinction: this is the tool-call result WITHOUT
+ * The name states the whole distinction: this is the tool-call result without
  * `resultType`, which is the only shape the legacy revision has for one.
  * {@link MCPCallResult} is this payload plus the modern `'complete'` stamp, so
  * stamping is the one difference between the modern and legacy answers to `tools/call`.
@@ -461,8 +473,8 @@ export type MCPSampleContent =
  *
  * A success carries the tool's value unchanged as `structuredContent` alongside
  * its serialized form in one `text` content block. A value-less success omits
- * `structuredContent`. A tool FAILURE (the `success: false` branch the registry
- * isolated) carries its `error` text in `content` AND sets `isError: true`, so the
+ * `structuredContent`. A tool failure (the `success: false` branch the registry
+ * isolated) carries its `error` text in `content` and sets `isError: true`, so the
  * model sees the failure as a tool result it can react to rather than a protocol
  * error.
  */
@@ -567,7 +579,12 @@ export interface MCPElicitForm {
 	readonly requestedSchema: MCPElicitSchema
 }
 
-/** Represents the parameters of a URL-mode `elicitation/create` request. */
+/**
+ * Represents the parameters of a URL-mode `elicitation/create` request.
+ *
+ * @remarks
+ * A consumer round may compose one, and the client must declare `elicitation.url` to receive it.
+ */
 export interface MCPElicitURL {
 	readonly mode: 'url'
 	readonly message: string
@@ -593,10 +610,10 @@ export interface MCPElicitResult {
  * Represents one embedded multi-round-trip request.
  *
  * @remarks
- * A consumer composes any of the three arms into an {@link MCPInputRound}, and this server
+ * A consumer composes any of the arms into an {@link MCPInputRound}, and this server
  * issues whichever arms that round carries. The elicitation arm is fully typed because this
  * package issues its schema and enforces the answer against it. The sampling and roots arms
- * keep OPEN parameter records: the dated schema leaves their request bodies to the caller, and
+ * keep open parameter records: the dated schema leaves their request bodies to the caller, and
  * narrowing them here would refuse parameters the protocol permits.
  */
 export type MCPInputRequest =
@@ -652,7 +669,7 @@ export interface MCPSampleResult {
  * The arms are discriminated by their own required members — `action` for an elicitation,
  * `roots` for a roots listing, and `model` beside `role` for a sampling completion — because
  * the protocol gives a response no `method` of its own. The server knows which arm applies
- * from the request it ISSUED under that key, so {@link MCPInputHandler} receives every answer
+ * from the request it issued under that key, so {@link MCPInputHandler} receives every answer
  * already checked against the question it answers.
  */
 export type MCPInputResponse = MCPElicitResult | MCPSampleResult | MCPRootResult
@@ -686,9 +703,9 @@ export type MCPInputResult =
  * Represents the integrity-protected payload carried inside an opaque `requestState` token.
  *
  * @remarks
- * `id` is the FIRST round's request id and stays bound across every later round, so a
+ * `id` is the first round's request id and stays bound across every later round, so a
  * multi-round exchange remains one correlated call rather than a chain whose origin is lost
- * after the second hop. `requests` is the EXACT round that was issued: it carries the keys the
+ * after the second hop. `requests` is the exact round that was issued: it carries the keys the
  * retry must answer and, for a form elicitation, the schema {@link isElicitContent} enforces
  * an accepted answer against — a round that is bound but never enforced buys nothing.
  * `requests` and `expiry` are re-minted every round; `principal`, `id`, `version`, `method`,
@@ -795,12 +812,12 @@ export interface MCPProgressInterface {
 }
 
 /**
- * Represents the OWNING half of one progress slot — {@link MCPProgressInterface} plus the
+ * Represents the owning half of one progress slot — {@link MCPProgressInterface} plus the
  * consuming and stopping the slot's owner performs.
  *
  * @remarks
- * Two interfaces over one entity because two parties hold it and they are owed different
- * powers. An executor receives the narrow {@link MCPProgressInterface} through
+ * A second interface over one entity because the executor and the owner hold it and they are
+ * owed different powers. An executor receives the narrow {@link MCPProgressInterface} through
  * {@link MCPExecutionContext} and can publish and nothing else; the MCP-owned response stream
  * that created the slot holds this one and also drains it and shuts it down. Naming the owner's
  * half is what keeps `take` and `stop` documented as contract rather than as extra surface a
@@ -824,14 +841,14 @@ export interface MCPProgressOwnerInterface extends MCPProgressInterface {
  * Receives one progress report a peer published for a request this client issued.
  *
  * @remarks
- * The RECEIVING half of {@link MCPProgressInterface}, and deliberately not its mirror:
+ * The receiving half of {@link MCPProgressInterface}, and deliberately not its mirror:
  * the reporter awaits consumption because a server must not outrun the stream carrying
  * its frames, while a client consuming an already-delivered frame has nothing left to
  * push back on. So this returns `void` — a handler that throws is isolated by nothing
  * and would surface on the client's `error` event, and one that needs to await
  * something owns that lifetime itself.
  *
- * The handler is registered for the LIFETIME OF ONE REQUEST and is released the moment
+ * The handler is registered for the lifetime of one request and is released the moment
  * that request settles, whichever way it settles. A frame that arrives afterwards is a
  * late frame for a request nobody is waiting on, and reaches the `notification` event
  * like any other unclaimed server-initiated message.
@@ -878,14 +895,14 @@ export type MCPExecutionHandler = (
  * Names the lifecycle state of one durable task.
  *
  * @remarks
- * `completed`, `failed`, and `cancelled` are TERMINAL: a task that reaches one never
+ * `completed`, `failed`, and `cancelled` are terminal: a task that reaches one never
  * moves again. `failed` reports that the deferred call could not be executed at all —
- * a JSON-RPC-level failure. A tool that RAN and returned an error is `completed`
+ * a JSON-RPC-level failure. A tool that ran and returned an error is `completed`
  * carrying an `isError: true` result, exactly as an inline `tools/call` would answer,
  * because the deferral must not change what the tool's own failure means.
  *
  * `input_required` collides by spelling with {@link MCPInputResult}'s `resultType`
- * and is a DIFFERENT mechanism: that one suspends a live request and resumes through
+ * and is a different mechanism: that one suspends a live request and resumes through
  * a protected `requestState` on the next `tools/call`, while this one suspends a
  * durable task and resumes through `tasks/update`. Neither spelling is this package's
  * to change — both are on the wire.
@@ -897,8 +914,8 @@ export type MCPTaskStatus = 'working' | 'input_required' | 'completed' | 'failed
  * with.
  *
  * @remarks
- * Every field name here is a WIRE SPELLING carried verbatim from the extension's
- * schema, so the compound-member prohibition does not reach them; the type NAME is
+ * Every field name here is a wire spelling carried verbatim from the extension's
+ * schema, so the compound-member prohibition does not reach them; the type name is
  * this library's own. `ttlMs` is `null` — not absent — when the task has no expiry,
  * because the schema distinguishes absence from `null`. `createdAt` and `lastUpdatedAt` are
  * described as ISO 8601 instants, though the generated schema validates only a
@@ -929,7 +946,7 @@ export type MCPTask = {
  * `completed` carries the deferred call's result, `failed` carries the JSON-RPC error
  * that ended it, and `working` / `cancelled` carry nothing extra. Narrow on `status`.
  *
- * `result` is an OPEN RECORD rather than an {@link MCPResult} or an
+ * `result` is an open record rather than an {@link MCPResult} or an
  * {@link MCPCallResult}, because the schema declares it one: a completed task's payload
  * is whatever the deferred method answered, and the extension constrains nothing inside
  * it — not even a `resultType`. Only `tools/call` can be deferred today, and the
@@ -950,9 +967,9 @@ export type MCPTaskDetail =
  * Represents the wire answer to `tasks/get` — one snapshot under the completed-result stamp.
  *
  * @remarks
- * DISTINCT from {@link MCPTaskDetail}, and the distinction is the whole point. A detail is
+ * distinct from {@link MCPTaskDetail}, and the distinction is the whole point. A detail is
  * what the consumer's {@link MCPTaskManagerInterface} answers, unstamped, because a durable
- * store knows nothing about the request that read it. This is what a `tasks/get` REPLY
+ * store knows nothing about the request that read it. This is what a `tasks/get` reply
  * carries: the schema types that reply as the detail intersected with the standard result,
  * so `resultType: 'complete'` is required rather than incidental and a peer that omits it
  * has answered something other than the method's declared result.
@@ -972,7 +989,7 @@ export type MCPTaskDetailResult = MCPTaskDetail & {
  * stamped with the subscription that delivered it.
  *
  * @remarks
- * FLAT, and that is the schema's shape rather than a choice: the extension types these
+ * flat, and that is the schema's shape rather than a choice: the extension types these
  * parameters as the notification envelope intersected with the detail, so every task field
  * sits directly under `params` and no `task` wrapper member exists. Narrow on `status`
  * exactly as with {@link MCPTaskDetail}.
@@ -1006,7 +1023,7 @@ export type MCPTaskNotification = JSONRPCNotification & {
  * Represents the modern `tools/call` result announcing that the call became a durable task.
  *
  * @remarks
- * The only result in this package whose `resultType` is `'task'`. It is FLAT — the
+ * The only result in this package whose `resultType` is `'task'`. It is flat — the
  * task's fields sit beside the discriminator rather than under a `task` member — and
  * it carries no terminal payload, because a task at creation has no
  * outcome yet. The outcome arrives through {@link MCPTaskDetail}.
@@ -1022,14 +1039,14 @@ export type MCPTaskResult = MCPTask & {
  * {@link MCPTaskManagerInterface.start}.
  *
  * @remarks
- * It carries NO cancellation signal, and that absence is deliberate rather than an
- * omission. The signal on the accompanying {@link MCPMethodOptions} is the REQUEST's
+ * It carries no cancellation signal, and that absence is deliberate rather than an
+ * omission. The signal on the accompanying {@link MCPMethodOptions} is the request's
  * lifetime, and a deferred request ends the moment its `resultType: 'task'` answer is
  * written — a transport aborts it as soon as the response body is flushed. A manager
  * that plumbs `options.signal` into the task's work therefore loses every task it
  * creates, milliseconds after creating it, and the loss looks exactly like a client
  * that disconnected. Use `options.signal` for work that must finish before the
- * ANSWER is written, and give the task's own work a lifetime the manager owns.
+ * answer is written, and give the task's own work a lifetime the manager owns.
  *
  * `call` is the canonical tool call the deferral is standing in for, so a manager
  * needs nothing from `request.params` to run the work; `request` is supplied whole
@@ -1047,18 +1064,18 @@ export interface MCPTaskContext {
  * package creates tasks through and reads them back from.
  *
  * @remarks
- * There is deliberately NO plural accessor. The extension defines no `tasks/list`, and
+ * There is deliberately no plural accessor. The extension defines no `tasks/list`, and
  * a port that could enumerate tasks would invite one; the absence is how this contract
  * states the non-goal.
  *
  * {@link task} answers `undefined` for a task that never existed, one whose TTL purged
- * it, AND one this caller is not entitled to see. They are indistinguishable ON
- * PURPOSE: they all become the same `-32602`, so a `taskId` cannot be probed for
+ * it, and one this caller is not entitled to see. They are indistinguishable on
+ * purpose: they all become the same `-32602`, so a `taskId` cannot be probed for
  * existence. A manager that distinguishes them — by throwing for the unauthorized case,
  * say — turns its own store into an enumeration oracle no matter what this package does.
  *
  * Every method receives the resolved per-request options and is expected to
- * AUTHORIZE the call itself: the extension requires authorization on each task request,
+ * authorize the call itself: the extension requires authorization on each task request,
  * and this package has no principal of its own to check one against.
  */
 export interface MCPTaskManagerInterface {
@@ -1076,10 +1093,10 @@ export interface MCPTaskManagerInterface {
 	 * - **A `taskId` must resist enumeration.** It is a bearer handle over a durable
 	 *   operation. Mint it from a cryptographic source; do not derive it from `key`, from
 	 *   a counter, or from anything a caller can predict.
-	 * - **Deduplicate by key, and SCOPE THE KEY TO ITS PRINCIPAL.** Returning the existing
+	 * - **Deduplicate by key, and scope the key to its principal.** Returning the existing
 	 *   task for a repeated key is what makes a retried call idempotent. But a key that is
 	 *   not scoped to the caller means two principals submitting the same key receive the
-	 *   SAME task — one principal reading another's work through a handle it merely
+	 *   same task — one principal reading another's work through a handle it merely
 	 *   guessed. This package forwards `key` unchanged, exactly as the handler produced
 	 *   it, and has no principal to scope it by; the scoping belongs here, or in the
 	 *   handler that mints the key.
@@ -1094,7 +1111,7 @@ export interface MCPTaskManagerInterface {
 	 * Reads one task's current snapshot.
 	 *
 	 * @remarks
-	 * EVERY `tasks/*` method runs through here first, not only `tasks/get`. {@link update}
+	 * every `tasks/*` method runs through here first, not only `tasks/get`. {@link update}
 	 * and {@link abort} answer `void`, so neither has a way to say "no such task" and neither
 	 * can be the place authorization is decided; this is. Expect one read of the named task
 	 * before every update and every cancellation, and expect an `undefined` answer to end that
@@ -1110,11 +1127,11 @@ export interface MCPTaskManagerInterface {
 	 *
 	 * @remarks
 	 * Responses are keyed by the request keys the task published. A key the task does not
-	 * recognize, or has already been answered, is IGNORED rather than refused, and a
+	 * recognize, or has already been answered, is ignored rather than refused, and a
 	 * partial set of answers is acceptable. This package forwards the client's record
-	 * VERBATIM — it holds none of the task's keys, so the ignoring is this method's to do.
+	 * verbatim — it holds none of the task's keys, so the ignoring is this method's to do.
 	 *
-	 * This is the SECOND multi-round-trip mechanism in the package, and it is the weaker one.
+	 * This is the second multi-round-trip mechanism in the package, and it is the weaker one.
 	 * The built-in input path binds each round with a sealed `requestState`, an argument digest,
 	 * an absolute expiry, and the resolved principal; this path has none of them, because MCP
 	 * neither issued the question nor owns the channel it is answered on. Anything equivalent
@@ -1134,7 +1151,7 @@ export interface MCPTaskManagerInterface {
 	 * Asks one task to stop.
 	 *
 	 * @remarks
-	 * Cancellation is COOPERATIVE: a task that has already finished, or one whose work
+	 * Cancellation is cooperative: a task that has already finished, or one whose work
 	 * cannot be interrupted, may legally reach `completed` after this resolves. The
 	 * acknowledgement says the request was accepted, never that the task stopped.
 	 *
@@ -1148,15 +1165,15 @@ export interface MCPTaskManagerInterface {
  * Decides whether the `tools/call` in hand becomes a durable task.
  *
  * @remarks
- * Deferral is entirely the SERVER's decision. The extension gives a client no flag and
+ * Deferral is entirely the server's decision. The extension gives a client no flag and
  * no parameter to ask for a task; the client only declares that it can cope with one.
  * So this handler is where the policy lives — long-running tool, queue depth, caller
  * tier, time of day — and it is consulted only for a client that declared the
  * capability on the request in hand.
  *
- * The returned string is the STABLE OPERATION KEY the manager deduplicates on: the same
+ * The returned string is the stable operation key the manager deduplicates on: the same
  * logical call must produce the same key, and two different calls must not. Mint it from
- * the CALLER and the canonical call — never from `call.id`, which is the client's own
+ * the caller and the canonical call — never from `call.id`, which is the client's own
  * JSON-RPC request id: a retry of one logical call changes it, so dedup never fires, and
  * two principals whose clients both started counting at 1 collide on it.
  *
@@ -1232,13 +1249,23 @@ export interface MCPHeaderParameter {
 	readonly primitive: MCPHeaderPrimitive
 }
 
-/** Represents the cursor parameters shared by every paginated modern list method. */
+/**
+ * Represents the cursor parameters shared by every paginated modern list method.
+ *
+ * @remarks
+ * The cursor is opaque to this package, and the consumer's own manager mints it.
+ */
 export interface MCPPaginationParams {
 	/** Holds the opaque cursor returned by the preceding page. */
 	readonly cursor?: string
 }
 
-/** Represents the cursor result fields shared by every paginated modern list method. */
+/**
+ * Represents the cursor result fields shared by every paginated modern list method.
+ *
+ * @remarks
+ * An absent `nextCursor` member means the answered page was the final one.
+ */
 export interface MCPPaginationResult {
 	/** Holds the opaque cursor for the following page; absent when this is the final page. */
 	readonly nextCursor?: string
@@ -1259,14 +1286,23 @@ export interface MCPPromptPage extends MCPPaginationResult {
 	readonly prompts: readonly MCPPrompt[]
 }
 
-/** Parameters accepted by `resources/read`. */
+/**
+ * Represents the parameters `resources/read` accepts — a concrete `uri` plus the optional
+ * multi-round continuation carriers.
+ */
 export interface MCPResourceReadParams {
 	readonly uri: string
 	readonly inputResponses?: Readonly<Record<string, unknown>>
 	readonly requestState?: string
 }
 
-/** Parameters accepted by `prompts/get`. */
+/**
+ * Represents the parameters `prompts/get` accepts — a prompt name plus the optional argument
+ * values and multi-round continuation carriers.
+ *
+ * @remarks
+ * Argument values are strings by contract, which is what the prompt wire shape requires.
+ */
 export interface MCPPromptGetParams {
 	readonly name: string
 	readonly arguments?: Readonly<Record<string, string>>
@@ -1319,8 +1355,8 @@ export interface MCPPromptGetResult {
  * Represents the consumer-supplied resource registry port.
  *
  * @remarks
- * MCP owns no storage. The host may back this port with memory, a workspace, a database,
- * or any other registry. The list methods carry the shared cursor contract verbatim;
+ * MCP owns no storage and no template engine. The host may back this port with memory, a
+ * workspace, a database, or any other registry. The list methods carry the shared cursor contract verbatim;
  * `resource` returns `undefined` when the URI does not resolve and may instead return an
  * {@link MCPInputResult} for a modern multi-round interaction.
  */
@@ -1410,7 +1446,12 @@ export interface MCPPromptReference {
 	readonly name: string
 }
 
-/** Represents a completion reference to one resource-template URI descriptor. */
+/**
+ * Represents a completion reference to one resource-template URI descriptor.
+ *
+ * @remarks
+ * The `uri` member may itself be a template, and it is forwarded to the host verbatim.
+ */
 export interface MCPResourceTemplateReference {
 	readonly type: 'ref/resource'
 	readonly uri: string
@@ -1430,7 +1471,10 @@ export interface MCPCompletionContext {
 	readonly arguments?: Readonly<Record<string, string>>
 }
 
-/** Parameters accepted by `completion/complete`. */
+/**
+ * Represents the parameters `completion/complete` accepts — a reference, the argument fragment
+ * being completed, and the optional resolved context.
+ */
 export interface MCPCompletionParams {
 	readonly ref: MCPCompletionReference
 	readonly argument: MCPCompletionArgument
@@ -1444,7 +1488,13 @@ export interface MCPCompletion {
 	readonly hasMore?: boolean
 }
 
-/** Represents the complete `completion/complete` result. */
+/**
+ * Represents the complete `completion/complete` result.
+ *
+ * @remarks
+ * The candidate set is capped at 100 values, and `hasMore` reads `true` whenever that cap
+ * truncated the host's own answer.
+ */
 export interface MCPCompletionResult {
 	readonly resultType: 'complete'
 	readonly completion: MCPCompletion
@@ -1459,7 +1509,7 @@ export interface MCPCompletionResult {
  * verbatim and performs no template parsing or expansion. Returning `undefined` means the
  * referenced prompt or resource template does not exist.
  *
- * This is the PORT that produces a {@link MCPCompletion}, not the behavioural face of one: the
+ * This is the port that produces a {@link MCPCompletion}, not the behavioural face of one: the
  * candidate set is the data type, and this contract is the single method a host answers it from.
  */
 export interface MCPCompletionInterface {
@@ -1512,13 +1562,13 @@ export type MCPResultMetaObject = MCPMetaObject & {
  * Carries open notification metadata with the dated reserved subscription field.
  *
  * @remarks
- * The subscription id is OPTIONAL here, and that is the schema's own split rather than
+ * The subscription id is optional here, and that is the schema's own split rather than
  * this package hedging. A frame delivered down a `subscriptions/listen` stream carries the
  * stamp naming the listen request that agreed to it; the same notification delivered any
  * other way carries no stamp, because there is no subscription to name. A required key
  * would refuse a frame the protocol permits.
  *
- * Compare {@link MCPSubscriptionResultMetaObject}, where the same key is REQUIRED: that one
+ * Compare {@link MCPSubscriptionResultMetaObject}, where the same key is required: that one
  * sits on the terminating result of a stream, so a subscription always exists to name.
  */
 export type MCPNotificationMetaObject = MCPMetaObject & {
@@ -1559,11 +1609,11 @@ export type MCPDiscoverResult = {
  * Names the notification families a client may opt in to on a `subscriptions/listen` stream.
  *
  * @remarks
- * Every key here is a WIRE SPELLING, carried verbatim from the dated schema's
+ * Every key here is a wire spelling, carried verbatim from the dated schema's
  * `params.notifications` object. They are the one place in this file where the
  * compound-key prohibition does not apply, because these strings are not this
  * package's to choose: grouping them into `{ tools: { changed } }` would read better
- * and would speak a protocol no peer implements. The type NAME is the library's own
+ * and would speak a protocol no peer implements. The type name is the library's own
  * and takes the `MCP` prefix; the keys are the protocol's and do not change.
  */
 export interface MCPSubscriptionFilter {
@@ -1580,17 +1630,17 @@ export interface MCPSubscriptionFilter {
 	 *
 	 * @remarks
 	 * The wire placement is `params.notifications.taskIds`, beside `resourceSubscriptions`,
-	 * and that placement is THIS PACKAGE'S READING rather than a settled fact: the Tasks
+	 * and that placement is this package'S reading rather than a settled fact: the Tasks
 	 * extension declares the fragment carrying this member without composing it into the
 	 * `subscriptions/listen` request, so no source states where the fragment lands. The
 	 * spelling itself is the schema's and is carried verbatim under the same wire-key
 	 * exemption as its siblings.
 	 *
-	 * The server honours the member only when a consumer configured BOTH a task manager and
+	 * The server honours the member only when a consumer configured both a task manager and
 	 * a subscription producer: the manager resolves each requested identifier before the
 	 * acknowledgement agrees to it, and the producer is what a transition frame arrives
 	 * through. Either one missing leaves nothing to deliver, so the acknowledgement omits
-	 * the member. That fact is DERIVED from the two configured options at the moment the
+	 * the member. That fact is derived from the configured options at the moment the
 	 * listen request is answered; no third flag records it, so it cannot drift from them.
 	 */
 	readonly taskIds?: readonly string[]
@@ -1635,7 +1685,7 @@ export interface MCPListenOptions {
  * Represents the per-request execution options every dispatched handler receives.
  *
  * @remarks
- * `caller` is consumer-ASSERTED and NEVER VERIFIED. Sessions mint transport identity, not
+ * `caller` is consumer-ASSERTED and never verified. Sessions mint transport identity, not
  * caller identity, and nothing in MCP authenticates this value. This package carries it
  * opaquely without inspecting, validating, or serializing it. A consumer must narrow it with
  * its own total guard and treat absence as unauthenticated.
@@ -1648,12 +1698,12 @@ export interface MCPDispatchOptions {
 }
 
 /**
- * Represents the RESOLVED per-request options one dispatched method receives.
+ * Represents the resolved per-request options one dispatched method receives.
  *
  * @remarks
- * The mirror of {@link MCPDispatchOptions} on the far side of dispatch: a CALLER may
+ * The mirror of {@link MCPDispatchOptions} on the far side of dispatch: a caller may
  * have no signal to offer, but a dispatched method always has one to observe, so
- * `signal` is REQUIRED here. Dispatch resolves it once, at the single ingress, and
+ * `signal` is required here. Dispatch resolves it once, at the single ingress, and
  * supplies the same value to every handler, input, principal, and subscription
  * producer the request reaches — none of them may reinvent a cancellation source or
  * treat absence as a case.
@@ -1661,14 +1711,14 @@ export interface MCPDispatchOptions {
  * Distinct from {@link MCPExecutionContext}, which is scoped to one tool execution
  * and carries the call and registry alongside the signal.
  *
- * The resolved signal is the request's LIFETIME, not merely the caller's: it aborts when
- * the caller's own signal aborts AND when the answer this request produced is finished —
+ * The resolved signal is the request's lifetime, not merely the caller's: it aborts when
+ * the caller's own signal aborts and when the answer this request produced is finished —
  * a held-open stream that completed, that its consumer returned, or that an owner stopped.
  * A producer parked on an event that will never arrive is woken by exactly that, which is
  * why a custom stream producer observes this signal for its own cleanup instead of
  * relying on the consumer to iterate it to the end.
  *
- * `caller` is consumer-ASSERTED and NEVER VERIFIED, and is carried by identity: this
+ * `caller` is consumer-ASSERTED and never verified, and is carried by identity: this
  * package neither inspects, validates, clones, nor serializes it.
  */
 export interface MCPMethodOptions {
@@ -1708,14 +1758,14 @@ export interface MCPSubscriptionOptions {
  * `return` value is the terminating response.
  *
  * @remarks
- * A stream yields NOTIFICATIONS and never requests — the yield type forbids an `id`,
+ * A stream yields notifications and never requests — the yield type forbids an `id`,
  * so a producer cannot put a call the peer is expected to answer onto a stream that
  * has no way to carry the answer back.
  *
- * Held-open closure is a RESULT in the modern revision, not an out-of-band event, so it
+ * Held-open closure is a result in the modern revision, not an out-of-band event, so it
  * arrives where a result arrives — the generator's `return`. Consuming a stream and
  * consuming a unary response therefore end the same way, and a transport narrows a stream
- * from a response at ONE point (`Symbol.asyncIterator in answer`), at the place that already pumps
+ * from a response at one point (`Symbol.asyncIterator in answer`), at the place that already pumps
  * messages onto the wire. The `TNext` type parameter is stated explicitly because a stream
  * accepts nothing back from its consumer.
  */
@@ -1725,25 +1775,25 @@ export type MCPStream = AsyncGenerator<JSONRPCNotification, JSONRPCResponse, unk
 export type MCPTextStream = AsyncGenerator<string, string, unknown>
 
 /**
- * Represents a held-open modern result whose cancellation ONE owner arbitrates — the arm
+ * Represents a held-open modern result whose cancellation one owner arbitrates — the arm
  * every stream leaving `MCPServer.dispatch` takes.
  *
  * @remarks
  * The generator protocol states what a stream yields and says nothing about who ends one,
- * and a native async generator answers that badly: `return()` and `throw()` QUEUE behind a
+ * and a native async generator answers that badly: `return()` and `throw()` queue behind a
  * `next()` the producer has not answered yet, so a consumer walking away from a source
  * parked on an event that will never arrive waits forever for its own cancellation. A
- * controller settles the consumer's read ITSELF, aborts the request's signal before it
+ * controller settles the consumer's read itself, aborts the request's signal before it
  * delegates cleanup to the producer, contains every promise the producer settles late, and
  * makes every closure path idempotent.
  *
- * {@link stop} is the operation the protocol has no member for: end the exchange with NO
+ * {@link stop} is the operation the protocol has no member for: end the exchange with no
  * terminal, from an owner that is not the consumer of the iteration — a transport whose
  * connection closed, a pump whose write failed. `return(value)` says "here is the answer";
  * `stop()` says "there will be no answer", and that is exactly the difference a cancelled
  * request and a completed one must not blur.
  *
- * **Ending a controlled exchange is the obligation of whoever is handed it, on EVERY exit —
+ * **Ending a controlled exchange is the obligation of whoever is handed it, on every exit —
  * including the exits where nothing was cancelled.** One of these holds a producer, a request
  * lifetime, and (for the built-in `subscriptions/listen`) one of a finite number of live
  * server slots, and a consumer that walks away releases none of them: no signal fires
@@ -1754,10 +1804,10 @@ export type MCPTextStream = AsyncGenerator<string, string, unknown>
  * floor, is for.
  *
  * A conforming {@link MCPStreamControllerInterface.[Symbol.asyncDispose] | asyncDispose}
- * releases the producer, request lifetime, and live slot BEFORE it may reject. Throwing before
+ * releases the producer, request lifetime, and live slot before it may reject. Throwing before
  * release would let a disposal fault mask the pump's original failure while leaking the exchange.
  *
- * There is deliberately NO owner of last resort — no finalizer, no timer, no timeout. One
+ * There is deliberately no owner of last resort — no finalizer, no timer, no timeout. One
  * would convert a missing obligation into a nondeterministic one and hide the very defect
  * this sentence exists to make visible, and GC timing is not a lifecycle.
  */
@@ -1766,7 +1816,7 @@ export interface MCPStreamControllerInterface extends MCPStream {
 	 * Reads the next notification, or the terminating response that ends the exchange.
 	 *
 	 * @remarks
-	 * At most ONE read is outstanding against the producer, and a rival read is refused
+	 * At most one read is outstanding against the producer, and a rival read is refused
 	 * rather than queued: two live consumers on one held-open answer would split a sequence
 	 * neither could reassemble. A read parked on the producer settles the moment the exchange
 	 * closes, however long the producer takes to notice.
@@ -1821,27 +1871,27 @@ export interface MCPStreamControllerInterface extends MCPStream {
  * already serialized.
  *
  * @remarks
- * A TRANSLATION boundary and nothing more: it serializes each message, and every lifecycle
+ * A translation boundary and nothing more: it serializes each message, and every lifecycle
  * decision — cancellation, abort, closure — ends the controlled typed stream beneath it, so
  * the string face never becomes a second cancellation engine with its own queue to fall
  * behind. `stop()` reaches the typed producer, which is why a transport holding only the
  * serialized arm can still end the exchange it is writing.
  *
  * {@link MCPTextStreamControllerInterface.return} is the one member that narrows rather than
- * passes through, and the narrowing is inherent: it is handed a STRING, so it has no typed
+ * passes through, and the narrowing is inherent: it is handed a string, so it has no typed
  * terminal to close the exchange on and never parses one back out of its argument. The typed
- * exchange therefore ends with NO terminal while this face answers its own consumer with the
+ * exchange therefore ends with no terminal while this face answers its own consumer with the
  * supplied text — so a cooperating producer runs its cancellation path here where the typed
  * {@link MCPStreamControllerInterface.return} would have run its normal return.
  *
  * **The ownership obligation is identical and it is not discharged twice.** Whoever is handed
- * this face ends it on EVERY exit, and every closure member here reaches the TYPED exchange
+ * this face ends it on every exit, and every closure member here reaches the typed exchange
  * beneath — so releasing the serialized arm releases the producer, the request lifetime, and
  * the live server slot behind it. A serialized pump therefore owns exactly what a typed pump
  * owns, and neither has an owner of last resort to fall back on.
  *
  * A conforming {@link MCPTextStreamControllerInterface.[Symbol.asyncDispose] | asyncDispose}
- * releases the typed producer, request lifetime, and live slot BEFORE it may reject. Throwing
+ * releases the typed producer, request lifetime, and live slot before it may reject. Throwing
  * before delegating would let a disposal fault mask the pump's original failure while leaking
  * the exchange.
  */
@@ -1856,9 +1906,9 @@ export interface MCPTextStreamControllerInterface extends MCPTextStream {
 	 * Ends the exchange because the consumer already has its answer.
 	 *
 	 * @remarks
-	 * The typed exchange ends with NO terminal: a string is not a {@link JSONRPCResponse}, and
+	 * The typed exchange ends with no terminal: a string is not a {@link JSONRPCResponse}, and
 	 * this face never parses one back out of its argument. The supplied text is the answer to
-	 * THIS consumer alone.
+	 * this consumer alone.
 	 *
 	 * @param value - The serialized terminal the consumer is ending on
 	 * @returns That terminal as the iteration's `return`
@@ -1896,21 +1946,21 @@ export interface MCPTextStreamControllerInterface extends MCPTextStream {
  * @remarks
  * A registered method answers a {@link JSONRPCRequest} — with a terminating
  * {@link JSONRPCResponse}, or by holding the exchange open as an {@link MCPStream}. It is
- * invoked for nothing else: dispatch short-circuits a {@link JSONRPCNotification} BEFORE the
+ * invoked for nothing else: dispatch short-circuits a {@link JSONRPCNotification} before the
  * registry is read, so the notification arm never arrives here and no handler has to narrow
  * one away.
  *
  * The seam is this narrow because the future a wider one was kept for is structurally
  * unavailable. The only client-to-server notification the core protocol defines is
- * `notifications/cancelled`, and a handler acting on one must reach the OTHER request's
- * `AbortController` — which dispatch creates per request, AFTER the notification
+ * `notifications/cancelled`, and a handler acting on one must reach the other request's
+ * `AbortController` — which dispatch creates per request, after the notification
  * short-circuit, and publishes to no registry and no member. Admitting a cancellation
  * handler therefore needs a live request-id-to-controller registry — new cross-request
  * server state — before the parameter's width ever becomes the obstacle.
  *
  * Answering is not optional either, and that is a runtime rule as well as a type. A handler
  * resolving `undefined` for a request contradicts `dispatch`'s own overloads and leaves the
- * caller waiting until its deadline, so dispatch CONTAINS one as `-32603` plus a single
+ * caller waiting until its deadline, so dispatch contains one as `-32603` plus a single
  * `error` event rather than passing the absence on.
  *
  * `options.signal` is already resolved and always present — what a handler does with it
@@ -1928,12 +1978,12 @@ export type MCPMethodHandler = (
 
 /**
  * Represents the modern method registry an {@link MCPServerInterface} dispatches through —
- * the ONE seam carrying both the built-in methods and any method a consumer adds.
+ * the one seam carrying both the built-in methods and any method a consumer adds.
  *
  * @remarks
  * `server/discover`, `tools/list`, `tools/call`, and `subscriptions/listen` are registered here at construction,
- * so they travel the SAME path as every later method: there is no second dispatch route
- * and no precedence puzzle. `add` under an existing name REPLACES that method — a
+ * so they travel the same path as every later method: there is no second dispatch route
+ * and no precedence puzzle. `add` under an existing name replaces that method — a
  * consumer overriding a built-in is an ordinary registration, not a special case. A name
  * with no handler is not an error state to model: {@link method} answers `undefined` and
  * the dispatch branch turns that into `-32601`.
@@ -1961,8 +2011,8 @@ export interface MCPMethodManagerInterface {
  * through `server.emitter.on`.
  *
  * @remarks
- * `request` fires at the TOP of every `dispatch` with the method, correlating id
- * (ABSENT for a notification, which has none), and structurally selected wire era, BEFORE the
+ * `request` fires at the top of every `dispatch` with the method, correlating id
+ * (absent for a notification, which has none), and structurally selected wire era, before the
  * method runs — so an observer sees every inbound call. Listener isolation is the emitter's: a
  * listener throw is routed to the emitter's `error` handler (the `error` option),
  * never onto this map, so a buggy observer can never corrupt a dispatch. Declared as
@@ -1977,14 +2027,14 @@ export type MCPServerEventMap = {
 	 * Fires ahead of the `_meta` bound check, so an observer sees a call the server is about
 	 * to refuse for exceeding its metadata budget exactly as it sees one that passes — an
 	 * observation surface that skipped the refused calls could not be used to account for
-	 * inbound traffic. Only SCALARS are reported: nothing read out of the request graph
+	 * inbound traffic. Only scalars are reported: nothing read out of the request graph
 	 * escapes here, so a listener can never observe a value the ownership seam has not yet
 	 * bounded.
 	 *
 	 * Not every reported invocation arrived from a peer. A modern `tools/call` reaching the
-	 * HTTP POST handler (`createMCPPostHandler`) reports the SYNTHETIC `tools/list` that
+	 * HTTP POST handler (`createMCPPostHandler`) reports the synthetic `tools/list` that
 	 * handler dispatches to read the called tool's `x-mcp-header` annotations, ahead of the
-	 * call itself. Each carries the RESERVED id `0`, and one fires per page the handler
+	 * call itself. Each carries the reserved id `0`, and one fires per page the handler
 	 * walks, up to {@link MCP_LOOKUP_PAGES}. So an observer accounting for inbound traffic
 	 * subtracts a `('tools/list', 0, 'modern')` that precedes a `tools/call`, and one
 	 * tracing the server's own work keeps it. The id is reserved by convention rather than
@@ -1992,7 +2042,7 @@ export type MCPServerEventMap = {
 	 */
 	readonly request: readonly [method: string, id: JSONRPCId | undefined, era: MCPEra]
 	/**
-	 * Reports an operational fault the server CONTAINED — the caught value, exactly once per
+	 * Reports an operational fault the server contained — the caught value, exactly once per
 	 * fault.
 	 *
 	 * @remarks
@@ -2002,11 +2052,11 @@ export type MCPServerEventMap = {
 	 * fault surfaced while a bound {@link MCPTransportInterface} was piping a reply out (a
 	 * `send` throw or rejection from `bindServer`).
 	 *
-	 * This is the ONE place a caught detail is legible. The wire answer is detail-free by
-	 * construction, so an operator who wants to know WHY a request failed subscribes here;
+	 * This is the one place a caught detail is legible. The wire answer is detail-free by
+	 * construction, so an operator who wants to know why a request failed subscribes here;
 	 * a peer never learns it. Payload typed `unknown` because a thrown value is.
 	 *
-	 * A DOMAIN event, distinct from the emitter's own listener-error channel: a listener
+	 * A domain event, distinct from the emitter's own listener-error channel: a listener
 	 * that throws while observing this event is routed to the emitter's `error` handler
 	 * (the `error` option) and never back onto this map.
 	 */
@@ -2091,7 +2141,7 @@ export interface MCPServerOptions {
 	 * Holds the optional explicit execution policy above the canonical live tool registry.
 	 *
 	 * @remarks
-	 * This is also the ONLY way a tool observes cancellation. The default path calls
+	 * This is also the only way a tool observes cancellation. The default path calls
 	 * {@link ToolManagerInterface.execute}, whose signature takes a call and nothing else, so
 	 * there is no seam to hand a signal through — a server with no `execution` runs its tool to
 	 * completion even after the request that asked for it has ended, and abandons the result.
@@ -2124,7 +2174,7 @@ export interface MCPServerOptions {
 	 *
 	 * @remarks
 	 * Omitting it leaves every existing path untouched — nothing is advertised, no call is
-	 * deferred, and `tasks/*` stays unregistered. The extension is the STABLE, immutable
+	 * deferred, and `tasks/*` stays unregistered. The extension is the stable, immutable
 	 * snapshot dated 2026-07-28, so the shape this option admits is fixed.
 	 */
 	readonly task?: MCPTaskOptions
@@ -2198,21 +2248,21 @@ export interface MCPDispatcherInterface {
 
 /**
  * Dispatches JSON-RPC 2.0 modern requests over a live
- * {@link ToolManagerInterface}, with NO transport coupling (a transport layer
+ * {@link ToolManagerInterface}, with no transport coupling (a transport layer
  * pumps strings through `handle`).
  *
  * @remarks
- * - **`dispatch` and `handle`.** `dispatch(invocation)` is the TYPED core: it takes an
+ * - **`dispatch` and `handle`.** `dispatch(invocation)` is the typed core: it takes an
  *   already-parsed {@link JSONRPCInvocation}, runs the method, and resolves a
  *   {@link JSONRPCResponse} — or an {@link MCPStream} for a held-open modern method — for
  *   a {@link JSONRPCRequest}, and `undefined` for a {@link JSONRPCNotification}. Its
  *   overloads say exactly that, so a caller dispatching a request never handles an
  *   `undefined` answer and a caller dispatching a notification never handles a response.
- *   `handle(message)` is the STRING boundary: it `JSON.parse`s the raw message, narrows it
+ *   `handle(message)` is the string boundary: it `JSON.parse`s the raw message, narrows it
  *   to an invocation, dispatches, and serializes the answer back to a string (or an
  *   {@link MCPTextStream}, the same sequence already serialized) — turning a parse failure
  *   into a `-32700` response and a non-invocation into a `-32600` response, and returning
- *   `undefined` for a notification. Both error envelopes OMIT the `id` they could not read.
+ *   `undefined` for a notification. Both error envelopes omit the `id` they could not read.
  * - **One method seam.** Every modern method — the built-in `server/discover` /
  *   `tools/list` / `tools/call` / `subscriptions/listen` and configured resource methods
  *   included — is registered on `methods` and dispatched
@@ -2234,7 +2284,7 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 	 * @remarks
 	 * Derived from {@link MCPServerOptions.limit} at construction and stored nowhere else, so
 	 * it cannot drift from the value the boundary checks read. It is published because the
-	 * code in front of the server needs the SAME number: a binder that decodes an inbound
+	 * code in front of the server needs the same number: a binder that decodes an inbound
 	 * message before handing it on must refuse at the byte the server would have refused at,
 	 * and the alternative — a second configured copy of one bound, on the binder's own options
 	 * — is a second number that will disagree the first time either is changed.
@@ -2244,7 +2294,7 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 	 * Dispatches an already-parsed request — runs its method and resolves its answer.
 	 *
 	 * @remarks
-	 * A held-open modern method answers with a CONTROLLED stream instead of a response:
+	 * A held-open modern method answers with a controlled stream instead of a response:
 	 * narrow a stream from a response with `Symbol.asyncIterator in answer`. Whatever the method
 	 * produced, what leaves here is an {@link MCPStreamControllerInterface} — dispatch is
 	 * the one wrapping seam — so a caller may end the exchange promptly without waiting on
@@ -2273,7 +2323,7 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 	 * @remarks
 	 * The union arm a transport uses when it has narrowed a message no further than
 	 * {@link JSONRPCInvocation}. A value that is not structurally an invocation at
-	 * RUNTIME — which only a caller defeating these types can produce — answers a
+	 * runtime — which only a caller defeating these types can produce — answers a
 	 * `-32600` error response with no `id`.
 	 *
 	 * @param invocation - The parsed JSON-RPC invocation to dispatch
@@ -2290,13 +2340,13 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 	 * @remarks
 	 * A `JSON.parse` failure resolves a serialized `-32700` (Parse error) response;
 	 * a parsed value that is not a valid invocation resolves a serialized `-32600`
-	 * (Invalid Request) response — each with its unreadable `id` OMITTED, never `null`;
+	 * (Invalid Request) response — each with its unreadable `id` omitted, never `null`;
 	 * a notification resolves `undefined` (no response). A
 	 * held-open method resolves an {@link MCPTextStreamControllerInterface} — the controlled
 	 * typed stream's mirror, already serialized — so a transport writes each message with no
 	 * second parse and can still end the exchange it is writing.
 	 *
-	 * The vague-verb prohibition (`process`, `handle`) governs STANDALONE helpers,
+	 * The vague-verb prohibition (`process`, `handle`) governs standalone helpers,
 	 * which carry no entity to supply their object. Here the entity does: `server.handle`
 	 * reads as "the server handles this message", and it is the string-boundary twin of
 	 * {@link dispatch} — one verb per entry point, the same act at the typed and string levels.
@@ -2326,13 +2376,13 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
  * Messages are already-serialized JSON-RPC strings; the transport owns framing
  * (a WS text frame, an SSE `data:` event, a newline-terminated stdio line, a
  * `postMessage` payload) and never parses the string itself. `listen` and
- * `closed` each register THE SINGLE handler for their event — a second call
- * REPLACES the first (matching the emitter-free, minimal-surface carrier idiom
+ * `closed` each register the single handler for their event — a second call
+ * replaces the first (matching the emitter-free, minimal-surface carrier idiom
  * `bindServer` / `bindClient` themselves rely on), not an additive subscription
  * list.
  *
  * `closed` reads as an adjective where the naming law asks for a verb, and it is
- * KEPT: it is a registrar for the port's terminal event, paired with `listen` for
+ * kept: it is a registrar for the port's terminal event, paired with `listen` for
  * the other one, and no verb states that without lying. `close()` is already taken
  * by the imperative on the line below it, `end`/`stop` would read as a second way to
  * close, and `onClose` is the `on`-prefixed shape the rules reject outright. The
@@ -2343,9 +2393,9 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 export interface MCPTransportInterface {
 	/** Delivers one outbound JSON-RPC message (already serialized). */
 	readonly send: (message: string) => void | Promise<void>
-	/** Registers the single inbound-message handler — a second call REPLACES the first. */
+	/** Registers the single inbound-message handler — a second call replaces the first. */
 	readonly listen: (handler: (message: string) => void) => void
-	/** Registers the single closed handler — a second call REPLACES the first. */
+	/** Registers the single closed handler — a second call replaces the first. */
 	readonly closed: (handler: () => void) => void
 	/** Closes the underlying channel. */
 	readonly close: () => void | Promise<void>
@@ -2366,13 +2416,13 @@ export interface MCPTransportInterface {
  * {@link MCPClientInterface} (and any tracer) subscribes to through `transport.emitter.on`.
  *
  * @remarks
- * - `message` — a JSON-RPC message ARRIVED from the remote server (a response the
+ * - `message` — a JSON-RPC message arrived from the remote server (a response the
  *   client correlates to a pending request by `id`, or a server-initiated
  *   notification). The transport decodes the wire bytes (a JSON body or an SSE
  *   `data:` event) and emits the parsed {@link JSONRPCMessage}.
  * - `close` — the transport's connection ended (a stream closed, `close()` ran).
  * - `error` — a transport-level fault (a malformed message, a network error); the
- *   payload is typed `unknown`. This is a DOMAIN event, distinct from the emitter's
+ *   payload is typed `unknown`. This is a domain event, distinct from the emitter's
  *   own listener-error channel: a listener throw is routed to the emitter's `error` handler
  *   (the `error` option), never onto this map. Declared as a `type` alias so the
  *   type-literal satisfies `EventMap` structurally.
@@ -2417,7 +2467,7 @@ export interface MCPMessageTransportInterface {
 	 * `true` for a genuinely bidirectional channel — a WebSocket, a stdio pipe pair, an
 	 * in-process duplex port — where a frame the client writes at any moment reaches the
 	 * peer. `false` for a request/response carrier such as Streamable HTTP: the dated
-	 * revision defines NO client-to-server notification over it, and the cancellation
+	 * revision defines no client-to-server notification over it, and the cancellation
 	 * signal there is closing the response stream rather than a frame. A `false` carrier
 	 * is not a degraded one — it has its own signal — so the client withholds the frame
 	 * rather than writing one nothing will read.
@@ -2427,7 +2477,7 @@ export interface MCPMessageTransportInterface {
 	 * Opens the transport — establishes the connection and arms any reply reader.
 	 *
 	 * @remarks
-	 * A `start` that REJECTS must first release whatever it had already acquired. The
+	 * A `start` that rejects must first release whatever it had already acquired. The
 	 * {@link MCPClientInterface} claims a connection only once `start` resolves, so a rejection
 	 * leaves it holding an error and no claim: a socket, session, or reader the transport opened
 	 * before failing is reachable by nothing the client can call, and no client-side mechanism can
@@ -2445,7 +2495,7 @@ export interface MCPMessageTransportInterface {
 	 * transport, its synchronous reply emitted), not when a logical response arrives;
 	 * the {@link MCPClientInterface} awaits the response through its `id` correlation.
 	 *
-	 * A `send` that FAILS must fail by REJECTING, never by throwing synchronously. The
+	 * A `send` that fails must fail by rejecting, never by throwing synchronously. The
 	 * {@link MCPClientInterface} registers the write inside the same promise executor that
 	 * records the request's pending entry, so a synchronous throw leaves no promise for that
 	 * registration to attach to: the entry set one statement earlier is never settled, and a
@@ -2469,18 +2519,18 @@ export interface MCPMessageTransportInterface {
 	 * Closes the transport — ends the connection and releases resources.
 	 *
 	 * @remarks
-	 * A `close` must SETTLE, and its settlements mean different things to its caller: resolving
+	 * A `close` must settle, and its settlements mean different things to its caller: resolving
 	 * says the connection ended, rejecting says it did not. The
 	 * {@link MCPClientInterface}'s only other bound is a deadline, which reports that the shutdown
-	 * did not ANSWER and never that it did not happen — so a `close` that resolves or rejects hours
+	 * did not answer and never that it did not happen — so a `close` that resolves or rejects hours
 	 * late still decides the outcome, and one that never settles leaves the connection owed for the
 	 * client's life. `close` is never called twice concurrently for one connection: a caller that
-	 * gave up waiting JOINS the `close` still running rather than issuing another. It IS called
-	 * again after an earlier `close` REJECTED, because a rejected close ended nothing.
+	 * gave up waiting joins the `close` still running rather than issuing another. It is called
+	 * again after an earlier `close` rejected, because a rejected close ended nothing.
 	 *
-	 * `close` is IDEMPOTENT: a call on a transport an earlier `close` already ended resolves
+	 * `close` is idempotent: a call on a transport an earlier `close` already ended resolves
 	 * without emitting `close` again and without releasing anything a second time. Idempotence
-	 * bounds ONE closed lifetime rather than the object — a transport that reopens on `start`
+	 * bounds one closed lifetime rather than the object — a transport that reopens on `start`
 	 * arms itself there, and its next `close` ends that connection and emits once for it.
 	 *
 	 * @returns Resolves once the transport is closed
@@ -2495,7 +2545,7 @@ export interface MCPMessageTransportInterface {
  * @remarks
  * - `url` — the absolute URL of the remote server's Streamable-HTTP endpoint (the
  *   `POST` target every JSON-RPC message is written to, for example,
- *   `http://localhost:3000/mcp`). REQUIRED.
+ *   `http://localhost:3000/mcp`). Required.
  * - `headers` — extra request headers merged onto every `POST` (for example, an
  *   `Authorization` bearer for a guarded server). The transport always sets
  *   `content-type: application/json` and an `Accept` of both `application/json` and
@@ -2555,13 +2605,13 @@ export interface MCPLegacyClientTransportOptions {
  * - `disconnect` — the connection this client had announced ended (every pending request
  *   rejected, and the connection it owned on the transport closed — or that close faulted or
  *   timed out, which rejects the `disconnect` caller rather than withholding this event).
- * - `notification` — a server-initiated JSON-RPC NOTIFICATION arrived — forwarded for the
+ * - `notification` — a server-initiated JSON-RPC notification arrived — forwarded for the
  *   consumer to react to (for example, a `notifications/tools/list_changed`). A
  *   `notifications/progress` frame claimed by an in-flight request's progress handler is
- *   delivered there instead, and a RESPONSE correlating to nothing pending is discarded
+ *   delivered there instead, and a response correlating to nothing pending is discarded
  *   rather than forwarded here, because it answers a request that has already settled.
  * - `error` — a client-level fault surfaced for observation (typed `unknown`). This is
- *   a DOMAIN event, distinct from the emitter's own listener-error channel: a listener throw
+ *   a domain event, distinct from the emitter's own listener-error channel: a listener throw
  *   is routed to the emitter's `error` handler (the `error` option), never onto this map.
  *   Declared as a `type` alias so the literal satisfies `EventMap`.
  */
@@ -2582,7 +2632,7 @@ export type MCPClientEventMap = {
  * `on` hooks.
  *
  * @remarks
- * - `transport` — the carrier the client drives a remote MCP server over (REQUIRED;
+ * - `transport` — the carrier the client drives a remote MCP server over (required;
  *   a concrete one from `src/server/mcp`, or an in-process loopback). The bare client negotiates
  *   the modern revision through `server/discover`; wrap the carrier with
  *   {@link import('./factories.js').createMCPLegacyClientTransport} for a legacy peer.
@@ -2593,9 +2643,9 @@ export type MCPClientEventMap = {
  *   request; defaults to an empty record.
  * - `version` — an optional modern protocol pin; absence lets `server/discover` negotiate.
  * - `timeout` — the per-request deadline in milliseconds: a `server/discover` / `tools/list` /
- *   `tools/call` that the server does not answer within it REJECTS (the pending
+ *   `tools/call` that the server does not answer within it rejects (the pending
  *   request is settled by an `AbortSignal.timeout(timeout)` deadline — never a raw
- *   `setTimeout`). The same deadline bounds the client's WAIT on the transport's `close`, so a
+ *   `setTimeout`). The same deadline bounds the client's wait on the transport's `close`, so a
  *   shutdown the transport accepts and never answers rejects its caller instead of wedging the
  *   client — which makes a short `timeout` a short shutdown grace as well as a short request
  *   deadline. Defaults to {@link import('./constants.js').DEFAULT_MCP_REQUEST_TIMEOUT}.
@@ -2626,10 +2676,10 @@ export interface MCPClientOptions {
  * @remarks
  * Each option lives for exactly one request:
  *
- * - `signal` cancels THAT request and nothing else. It never closes the connection, never
+ * - `signal` cancels that request and nothing else. It never closes the connection, never
  *   reaches a durable task the call may have become, and never asks the peer to undo work
  *   already done — cancellation is advisory in MCP, so the peer may finish anyway and the
- *   caller stops waiting. A signal that is ALREADY aborted refuses the call before
+ *   caller stops waiting. A signal that is already aborted refuses the call before
  *   anything is written, so no request the peer would have to be told about is ever issued.
  * - `progress` receives each `notifications/progress` frame the peer publishes for this
  *   request. Supplying it is what stamps the request's progress token, so a peer only
@@ -2665,9 +2715,9 @@ export interface MCPCallOptions {
  * - `'complete'` — the call finished. `value` is the tool's own value: the peer's
  *   `structuredContent` when it sent one (the tool's value in its original structure),
  *   and otherwise the concatenated `text` blocks parsed as JSON, falling back to the raw
- *   text. A tool FAILURE never reaches this arm — `isError: true` throws, so an agent's
+ *   text. A tool failure never reaches this arm — `isError: true` throws, so an agent's
  *   {@link ToolManagerInterface} isolates a remote failure exactly as it does a local one.
- * - {@link MCPTaskResult} — the server DEFERRED the call into a durable task. The request
+ * - {@link MCPTaskResult} — the server deferred the call into a durable task. The request
  *   is over and the work is not; the outcome arrives later through the task's own methods.
  * - {@link MCPInputResult} — the call needs another round trip before it can finish.
  *
@@ -2693,8 +2743,8 @@ export type MCPCallOutcome =
  * correlated-request path here, so a task read travels the exact channel `call` and `tools`
  * travel — one id space, one pending table, one drain on `disconnect`.
  *
- * It resolves the peer's `result` UNVALIDATED, because validating it is the caller's job and
- * every caller wants a different shape. It REJECTS with an
+ * It resolves the peer's `result` unvalidated, because validating it is the caller's job and
+ * every caller wants a different shape. It rejects with an
  * {@link import('./errors.js').MCPError} for an error response, and with an ordinary `Error`
  * for a deadline, an abort, or a transport write that failed.
  *
@@ -2726,16 +2776,16 @@ export interface MCPTaskClientOptions {
 }
 
 /**
- * Reads, answers, and stops a durable task the peer created — the CLIENT half of the stable
+ * Reads, answers, and stops a durable task the peer created — the client half of the stable
  * Tasks extension.
  *
  * @remarks
  * The mirror of {@link MCPTaskManagerInterface} minus `start`, because creating a task is
  * never the client's decision: the extension gives a client no flag and no parameter to ask
- * for one, and a task exists only because the SERVER deferred a `tools/call` it received. The
+ * for one, and a task exists only because the server deferred a `tools/call` it received. The
  * methods that remain are the `tasks/*` methods on the wire.
  *
- * There is deliberately NO plural accessor, for the same reason the server-side port has none:
+ * There is deliberately no plural accessor, for the same reason the server-side port has none:
  * the extension defines no `tasks/list`, and an accessor that could enumerate tasks would
  * invite one. The absence is how this contract states that.
  *
@@ -2760,13 +2810,13 @@ export interface MCPTaskClientInterface {
 	 * Reads one durable task's current snapshot.
 	 *
 	 * @remarks
-	 * REJECTS rather than answering `undefined` for a task it cannot read. The peer's refusal
+	 * rejects rather than answering `undefined` for a task it cannot read. The peer's refusal
 	 * is byte-identical across a task that never existed, one whose TTL purged it, and one this
 	 * caller is not entitled to see — that indistinguishability is the extension's whole
 	 * anti-enumeration property — so manufacturing a lookup-miss here would mean matching on
 	 * the peer's message text and publishing a difference the peer refused to publish.
 	 *
-	 * The peer's payload is carried VERBATIM once it proves well-formed. A modern result's own
+	 * The peer's payload is carried verbatim once it proves well-formed. A modern result's own
 	 * `resultType: 'complete'` and `_meta` stamps therefore ride along on the snapshot, because
 	 * rebuilding the object to drop them would also drop the unrecognized members this
 	 * package deliberately preserves.
@@ -2787,7 +2837,7 @@ export interface MCPTaskClientInterface {
 	 *
 	 * @remarks
 	 * The responses are keyed by the request keys the task itself published, and they travel
-	 * VERBATIM: a key the task does not recognize, or has already answered, is the manager's to
+	 * verbatim: a key the task does not recognize, or has already answered, is the manager's to
 	 * ignore rather than this client's to refuse. A partial set of answers is legal.
 	 *
 	 * @param id - The `taskId` the responses belong to
@@ -2805,14 +2855,14 @@ export interface MCPTaskClientInterface {
 	 * Asks one durable task to stop.
 	 *
 	 * @remarks
-	 * ADVISORY, exactly like the server-side port it mirrors: the acknowledgement reports that
+	 * advisory, exactly like the server-side port it mirrors: the acknowledgement reports that
 	 * the request was accepted, never that the task stopped, and a task whose work cannot be
 	 * interrupted may legally reach `completed` afterwards. Read the task again to learn what
 	 * happened.
 	 *
 	 * This is a different mechanism from `call`'s `options.signal`, which withdraws one caller
 	 * from one in-flight request and never reaches a task. A call that already answered
-	 * `resultType: 'task'` is a request that is OVER; only this method reaches the work it left
+	 * `resultType: 'task'` is a request that is over; only this method reaches the work it left
 	 * behind.
 	 *
 	 * @param id - The `taskId` to stop
@@ -2828,13 +2878,13 @@ export interface MCPTaskClientInterface {
 }
 
 /**
- * Connects to a REMOTE MCP server over any injected {@link MCPMessageTransportInterface},
+ * Connects to a remote MCP server over any injected {@link MCPMessageTransportInterface},
  * negotiates the modern wire revision, and exposes the server's tools as local
  * {@link ToolInterface}s an agent can run.
  *
  * @remarks
- * - **The mirror of {@link MCPServerInterface}.** Where the server DISPATCHES requests
- *   over a tool registry, the client ISSUES them over a transport: `connect` negotiates through
+ * - **The mirror of {@link MCPServerInterface}.** Where the server dispatches requests
+ *   over a tool registry, the client issues them over a transport: `connect` negotiates through
  *   `server/discover`. A legacy peer requires an explicit
  *   {@link MCPLegacyClientTransportOptions legacy transport adapter}; the bare client refuses a
  *   peer that does not speak the modern era and names that adapter.
@@ -2842,11 +2892,11 @@ export interface MCPTaskClientInterface {
  *   the remote tools and wraps each as a local {@link ToolInterface} whose `execute`
  *   calls back through `call`; `call(name, args)` runs a remote `tools/call` and reports
  *   the arm the peer answered with — a value, a durable task, or a request for more input
- *   (a remote tool FAILURE — `isError: true` — throws locally, so the agent's
+ *   (a remote tool failure — `isError: true` — throws locally, so the agent's
  *   {@link ToolManagerInterface} isolates it into a `success: false` result exactly like a
  *   local throw). A wrapped tool has no way to hand an agent a deferred answer, so a
  *   non-`'complete'` arm throws there instead.
- * - **Per-request cancellation.** `call`'s `options.signal` cancels ONE in-flight request:
+ * - **Per-request cancellation.** `call`'s `options.signal` cancels one in-flight request:
  *   it rejects locally on every carrier, and additionally writes `notifications/cancelled`
  *   where the transport declares itself {@link MCPMessageTransportInterface.duplex}. It
  *   never cancels the connection, and never a durable task — a call that already answered
@@ -2855,17 +2905,17 @@ export interface MCPTaskClientInterface {
  * - **Durable tasks, no schedule.** `tasks` ({@link MCPTaskClientInterface}) reads, answers,
  *   and stops a task the peer deferred a call into. It carries the peer's `pollIntervalMs`
  *   datum and supplies the one-shot read; it starts no timer and keeps no cache, so a client
- *   left alone after a `resultType: 'task'` answer writes NOTHING until its consumer asks.
+ *   left alone after a `resultType: 'task'` answer writes nothing until its consumer asks.
  * - **Request↔response correlation.** Every request is tagged with a monotonic numeric
  *   `id`; the client subscribes to the transport's `message` event and resolves /
  *   rejects the matching pending request by that `id`. A server-initiated message is
  *   surfaced on `notification` — except a `notifications/progress` frame naming a request
  *   whose caller supplied a progress handler, which goes to that handler instead. A
- *   RESPONSE whose id matches nothing pending is DISCARDED: the request it answers has
+ *   response whose id matches nothing pending is discarded: the request it answers has
  *   already settled, by its deadline, by an abort, or by a disconnect, and the protocol
  *   says to ignore it rather than surface it as something a caller might act on.
  * - **Per-request deadline.** A request carrying a deadline races an
- *   `AbortSignal.timeout(timeout)`: a server that never replies REJECTS that pending
+ *   `AbortSignal.timeout(timeout)`: a server that never replies rejects that pending
  *   request once the deadline fires. The initial discovery probe and every public request use a
  *   deadline. An omitted `timeout` selects {@link DEFAULT_MCP_REQUEST_TIMEOUT}; an explicit
  *   timeout applies that deadline to the probe. The client's
@@ -2893,7 +2943,7 @@ export interface MCPClientInterface {
 	 *
 	 * @remarks
 	 * Always present, because the `tasks/*` methods are ordinary requests a client may
-	 * issue at any time; whether they SUCCEED is the peer's decision, and a server that did not
+	 * issue at any time; whether they succeed is the peer's decision, and a server that did not
 	 * configure the extension answers each of them `-32601`. Nothing here is advertised, cached, or
 	 * polled — see {@link MCPTaskClientInterface} for why the schedule stays the consumer's.
 	 */
@@ -2904,14 +2954,14 @@ export interface MCPClientInterface {
 	 *
 	 * @remarks
 	 * Idempotent — a second `connect` while already connected is a no-op, and one issued
-	 * while the CURRENT attempt is in flight joins that attempt and returns its outcome
+	 * while the current attempt is in flight joins that attempt and returns its outcome
 	 * instead of opening a second connection. One issued while a {@link disconnect} is closing
 	 * waits for that close first; one issued while an attempt that a {@link disconnect}
-	 * superseded is still unwinding OUTWAITS it, because that attempt may still owe the close
+	 * superseded is still unwinding outwaits it, because that attempt may still owe the close
 	 * of a connection it opened, and then opens the next connection or joins whichever caller
-	 * reached it first. One issued while a close is still OWED — an earlier `close` having failed,
+	 * reached it first. One issued while a close is still owed — an earlier `close` having failed,
 	 * or having outrun its deadline without ever confirming that the connection ended — closes that
-	 * connection FIRST, joining a close still running rather than issuing a second one, and rejects
+	 * connection first, joining a close still running rather than issuing a second one, and rejects
 	 * with the fault if that close fails or goes unanswered again; so the transport is never opened
 	 * beside a connection no path has closed. The client probes `server/discover`; an explicit legacy
 	 * transport adapter owns any `initialize` handshake and presents a modern discovery result.
@@ -2956,7 +3006,7 @@ export interface MCPClientInterface {
 	 * `start` does, because nothing here bounds the opening step. It closes the connection the
 	 * client owns when it runs, and closes nothing for an attempt still inside the transport's
 	 * `start` — that attempt owns nothing yet and closes what it opens itself. The transport's
-	 * `close` carries the per-request deadline on the WAIT, so a shutdown the transport accepts and
+	 * `close` carries the per-request deadline on the wait, so a shutdown the transport accepts and
 	 * never answers rejects instead of holding this caller and every later {@link connect} — while
 	 * that close itself keeps running, because the deadline only ends this client's waiting. A `close`
 	 * that faults or goes unanswered rejects this call and leaves the connection owned, so the next
@@ -3003,17 +3053,17 @@ export interface MCPClientInterface {
 	 *
 	 * @remarks
 	 * The answer is an {@link MCPCallOutcome} because the peer, not the caller, decides
-	 * whether the call finished: a modern server may DEFER it into a durable task or ask
+	 * whether the call finished: a modern server may defer it into a durable task or ask
 	 * for another round trip, and both are legal answers to an ordinary call. Narrow on
 	 * `resultType`; the `'complete'` arm carries the tool's `value` — the peer's
 	 * `structuredContent` when it sent one, otherwise its concatenated `text` parsed as
-	 * JSON (falling back to the raw string). A remote tool FAILURE (`isError: true`)
-	 * THROWS an `Error` carrying the error text instead, so an agent's
+	 * JSON (falling back to the raw string). A remote tool failure (`isError: true`)
+	 * throws an `Error` carrying the error text instead, so an agent's
 	 * {@link ToolManagerInterface} isolates it into a `success: false` result exactly as
 	 * it would a local tool throw. A `resultType` this client cannot name is refused.
 	 *
-	 * `options.signal` cancels THIS request only — the caller stops waiting, the pending
-	 * request rejects, and the peer is TOLD on a carrier that can carry a client
+	 * `options.signal` cancels this request only — the caller stops waiting, the pending
+	 * request rejects, and the peer is told on a carrier that can carry a client
 	 * notification (see {@link MCPMessageTransportInterface.duplex}). MCP cancellation is
 	 * advisory: the peer may answer anyway, and that late answer is discarded rather than
 	 * raised. `options.progress` receives this request's progress frames.

@@ -37,19 +37,19 @@ import {
  *
  * @remarks
  * Total — a non-message returns `undefined`, never throws. The input must
- * ALREADY be `JSON.parse`d: the raw-string parse (which can throw on malformed
+ * already be `JSON.parse`d: the raw-string parse (which can throw on malformed
  * JSON) happens in `MCPServer.handle` inside a try/catch that maps a parse failure
  * to a `-32700` response.
  *
- * A defined result is an OWNED CANONICAL SNAPSHOT, never the input reference: it is
+ * A defined result is an owned canonical snapshot, never the input reference: it is
  * rebuilt from the canonical text and deeply frozen, so `-0` arrives as `0`. Every record
- * was SERIALIZED with its keys sorted, but the rebuilt object enumerates its own keys the
+ * was serialized with its keys sorted, but the rebuilt object enumerates its own keys the
  * way JavaScript does, so an integer-like `'9'` still precedes `'10'`: the result's key
  * order is neither promised nor generally the canonical one. A caller who needs canonical
- * BYTES takes them from `serializeJSON`/`snapshotJSON` rather than re-stringifying this
+ * bytes takes them from `serializeJSON`/`snapshotJSON` rather than re-stringifying this
  * result. Identity is not preserved and is not promised.
  *
- * The parser's sound partner is the COMPOSITE `isJSONRPCMessage(value) &&
+ * The parser's sound partner is the composite `isJSONRPCMessage(value) &&
  * isBoundedJSON(value, limits)`, and against it both halves of the soundness law
  * hold by construction:
  *
@@ -57,12 +57,12 @@ import {
  *   is applied to the exact frozen reference returned.
  * - Every input satisfying the composite is admitted rather than rejected, because
  *   `isBoundedJSON` is this parser's own admission test — the same canonical
- *   serializer under the same `limits` — so the two cannot disagree about the bound.
+ *   serializer under the same `limits` — so they cannot disagree about the bound.
  *
- * {@link isJSONRPCMessage} ALONE is not that partner. It is clone-backed and so already
+ * {@link isJSONRPCMessage} Alone is not that partner. It is clone-backed and so already
  * exact about shape, but it carries no size or depth bound — so guard-valid values
  * exist that this parser rejects: a message nested deeper than `limits.depth`, and one
- * whose canonical text exceeds `limits.bytes`. Those are named causes, NOT a complete
+ * whose canonical text exceeds `limits.bytes`. Those are named causes, not a complete
  * boundary. Among values `isJSONRPCMessage` already admits, the admitted set is exactly
  * what canonical serialization accepts under `limits`, so a caller who needs that line
  * tests it with `isBoundedJSON` rather than inferring it from this list.
@@ -96,7 +96,7 @@ export function parseJSONRPCMessage(
  * This is the validity step after {@link isModernRequest}: a defined result can
  * only come from a guard-positive request, while a guard-positive request returns
  * `undefined` when its required modern metadata is malformed — and also when the
- * request falls outside the bound this parser INHERITS by routing through
+ * request falls outside the bound this parser inherits by routing through
  * {@link parseJSONRPCMessage} under the same `limits`. The version
  * must be a string but need not be supported; unsupported strings belong to the
  * dedicated protocol-version error path. Client identity is optional, but when
@@ -143,11 +143,11 @@ export function parseRequestContext(
  * @remarks
  * This parser does not open the opaque continuation carrier; the configured
  * continuation port performs that boundary first. The protected
- * payload binds the authenticated principal, absolute expiry, ORIGINAL request id, version,
+ * payload binds the authenticated principal, absolute expiry, original request id, version,
  * method, the exact round that was issued, tool name, argument digest, and optional
  * application state. Every member is required except application state: a payload missing its
  * round cannot have the client's answers enforced, so it is refused rather than admitted
- * unenforced. An EMPTY round is refused for the same reason — a retry against it would answer
+ * unenforced. An empty round is refused for the same reason — a retry against it would answer
  * no question at all. Total over malformed or hostile input.
  *
  * @param value - The opened canonical continuation value to parse

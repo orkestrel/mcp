@@ -1,6 +1,9 @@
-// The consumer-side guides-parity drop-in: runs @orkestrel/guide's checks against this
-// repository's own guides/README.md manifest. The constants below are this package's
-// own, and are what a sibling package changes.
+// The consumer-side guides-parity drop-in: runs `@orkestrel/guide`'s checks against
+// this repo's own `guides/README.md` manifest. The constants that follow are this
+// package's own, and are the only part a sibling package changes. This package's own
+// executed proofs follow that shared body: the public-face import refusals and their stranded
+// control, what a spawned stdio child actually receives on its environment and its stderr, and
+// how the composed stdio server answers a legacy `initialize`.
 
 import type {
 	JSONRPCId,
@@ -38,6 +41,7 @@ import {
 	createSource,
 	createSourceManager,
 	extractFenceImports,
+	findDrift,
 	findMissing,
 	findMissingSymbols,
 	findUnexampled,
@@ -60,6 +64,8 @@ import { findMissingNamedImports } from './setupServer.js'
 const FENCE_LANGUAGES = Object.freeze(['text', 'ts'])
 /** The fence language whose blocks count as worked examples. */
 const EXAMPLE_LANGUAGE = 'ts'
+/** The one guide this package sources, whose tagline the README pitch equals. */
+const GUIDE_SPEC = 'guides/mcp.md'
 /** Each import specifier this package's own guides may resolve against. */
 const MODULES = Object.freeze({
 	'@orkestrel/mcp': 'src/core',
@@ -69,10 +75,10 @@ const MODULES = Object.freeze({
 /**
  * Declarations deliberately kept out of the barrel, as `computeSymbolKey` strings.
  *
- * A class that one-class-per-file evicted from its single consumer cannot become a local, so
- * it stays exported without being public. Naming it here is what makes that intentional rather
- * than forgotten — and the internal-membership assertion fails when a name stops being stranded,
- * so the list cannot rot.
+ * A class that one-class-per-file evicted from its single consumer cannot become a
+ * local, so it stays exported without being public. Naming it here is what makes that
+ * intentional rather than forgotten — and the assertion that follows it fails when a name
+ * here stops being stranded, so the list cannot rot.
  */
 const INTERNAL: readonly string[] = Object.freeze([])
 
@@ -116,6 +122,10 @@ const manifest = parseManifest(
 	'guides',
 )
 const sourceManager = createSourceManager({ files, modules: MODULES })
+const own = requireValue(
+	manifest.find((entry) => entry.spec === GUIDE_SPEC),
+	`Missing manifest row: ${GUIDE_SPEC}`,
+)
 
 describe('README.md', () => {
 	const readme = createGuide(requireValue(files['README.md'], 'Missing file: README.md'))
@@ -134,6 +144,52 @@ describe('README.md', () => {
 
 it('manifest lists at least one guide', () => {
 	expect(manifest.length).toBeGreaterThan(0)
+})
+
+// The example half of the equality case is silent over an empty population: with no
+// title on both sides `findDrift` compares no pair and the case passes on the summaries
+// alone. This pins the population this repository's own guide contributes, so removing
+// every `@example` title reddens the suite instead of quietly retiring half the gate.
+// The failure names both title sets, because a pin reporting only its own emptiness
+// leaves the reader to work out which side dropped the title.
+it('pairs at least one example title across the guide and the source', () => {
+	const guide = createGuide(requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`))
+	const source = createSource({ files, module: own.source })
+	const declared = source
+		.examples()
+		.map((example) => example.title)
+		.filter((title) => title !== undefined)
+	const titled = new Set(declared)
+	const headings: string[] = []
+	const paired: string[] = []
+	for (const fence of guide.fences()) {
+		if (fence.title === undefined) continue
+		headings.push(fence.title)
+		if (titled.has(fence.title)) paired.push(fence.title)
+	}
+	const unpaired =
+		paired.length > 0
+			? []
+			: [
+					`${GUIDE_SPEC} pairs: guide ${JSON.stringify(headings)} source ${JSON.stringify(declared)}`,
+				]
+	expect(unpaired).toEqual([])
+})
+
+// The README's pitch and the guide's tagline are one text, each read as the blockquote
+// under its file's H1. `README.md` is outside the concept index, so the reader is
+// applied to it directly rather than through a manifest row. Each side is guarded
+// against `undefined` first, so a file that lost its blockquote reports that rather
+// than reporting two absences as agreement.
+it('opens the README with the guide tagline', () => {
+	const pitch = createGuide(requireValue(files['README.md'], 'Missing file: README.md')).tagline()
+	const tagline = createGuide(
+		requireValue(files[GUIDE_SPEC], `Missing file: ${GUIDE_SPEC}`),
+	).tagline()
+
+	expect(pitch).not.toBeUndefined()
+	expect(tagline).not.toBeUndefined()
+	expect(pitch).toBe(tagline)
 })
 
 describe('legacy server-ingress ownership', () => {
@@ -239,7 +295,7 @@ describe('public package faces', () => {
 	// swallows its neighbour's module leaves that neighbour nothing of its own to refuse, so the
 	// row reports an empty control instead of passing on a refusal it has stopped making.
 	for (const face of FACES) {
-		const own = createSource({ files, module: face.module })
+		const published = createSource({ files, module: face.module })
 			.surface()
 			.map((symbol) => symbol.name)
 		const neighbours = FACES.filter((other) => other !== face).map((other) =>
@@ -249,7 +305,7 @@ describe('public package faces', () => {
 						.surface()
 						.map((symbol) => symbol.name),
 				),
-			).filter((name) => !own.includes(name)),
+			).filter((name) => !published.includes(name)),
 		)
 
 		it(`refuses every name a neighbouring face owns on ${face.specifier}`, () => {
@@ -645,6 +701,24 @@ for (const entry of manifest) {
 				})
 			})
 		}
+
+		// The equality gate: a `Summary` cell against its export's description paragraph, a
+		// titled fence against the `@example` of that title. `findDrift` owns the comparison
+		// and names both sides; converge the two sides with `npm run docs`, never by
+		// weakening this assertion. `findDrift` pairs an example only where a title is
+		// present on both sides, so an untitled `@example` block is outside this case. Each
+		// collected line is the spec, the key, and each side's text or `absent` — the same
+		// worklist `npm run docs` prints, so a failure here is read the way that command's
+		// output is.
+		it('keeps every compared summary and example equal to its source', () => {
+			const disagreeing: string[] = []
+			for (const drift of findDrift(guide, source)) {
+				const left = drift.guide === undefined ? 'absent' : JSON.stringify(drift.guide)
+				const right = drift.source === undefined ? 'absent' : JSON.stringify(drift.source)
+				disagreeing.push(`${entry.spec} ${drift.key}: guide ${left} source ${right}`)
+			}
+			expect(disagreeing).toEqual([])
+		})
 
 		it('documents an example for every Surface function', () => {
 			const fences = guide
@@ -1472,7 +1546,7 @@ async function readGuideBoundCall(): Promise<MCPCallOutcome> {
 // The fence names the value its binding holds, and `call` resolves an MCPCallOutcome rather than
 // the bare result — so the comment is executed here instead of read, and it reddens the moment
 // the documented shape and the resolved shape disagree.
-describe('guides/mcp.md § Bind an `MCPServer` / `MCPClient` to any duplex transport', () => {
+describe('guides/mcp.md § Bind a server or a client to any duplex transport', () => {
 	it('resolves the outcome the fence documents over the bound loopback pair', async () => {
 		expect(await readGuideBoundCall()).toEqual({ resultType: 'complete', value: 7 })
 	})

@@ -66,13 +66,13 @@ import {
 } from './validators.js'
 
 /**
- * Connects to a REMOTE MCP server over any injected {@link MCPMessageTransportInterface},
+ * Connects to a remote MCP server over any injected {@link MCPMessageTransportInterface},
  * negotiates the modern revision, and exposes the server's tools as local
  * {@link ToolInterface}s an agent can run.
  *
  * @remarks
- * - **The mirror of `MCPServer`.** The server DISPATCHES requests over a tool registry;
- *   this client ISSUES them over a transport. `connect` probes `server/discover` and exposes
+ * - **The mirror of `MCPServer`.** The server dispatches requests over a tool registry;
+ *   this client issues them over a transport. `connect` probes `server/discover` and exposes
  *   the negotiated `version`; a legacy peer requires an explicit transport adapter.
  *   `tools()` lists the remote tools and wraps each as a
  *   local {@link ToolInterface} whose `execute` calls back through `call`; `call` runs a
@@ -87,9 +87,9 @@ import {
  *   every pending request because the peer could not identify which request failed. A
  *   server-initiated message is re-surfaced on the `notification` event, except a progress
  *   frame claimed by the request that asked
- *   for it; a RESPONSE correlating to nothing pending is discarded, because the request it
+ *   for it; a response correlating to nothing pending is discarded, because the request it
  *   answers has already settled.
- * - **Per-request cancellation.** `call`'s `options.signal` withdraws ONE caller from ONE
+ * - **Per-request cancellation.** `call`'s `options.signal` withdraws one caller from one
  *   request: the pending entry rejects on every carrier, and `notifications/cancelled` goes
  *   out only where the transport declares itself duplex — the dated revision defines no
  *   client-to-server notification over Streamable HTTP, where closing the response stream
@@ -106,7 +106,7 @@ import {
  *   discovery probe uses that same configured deadline, so a silent peer cannot hold
  *   negotiation indefinitely.
  *   `AbortSignal.timeout` (never a raw `setTimeout`) rejects only that pending request, and the
- *   same deadline bounds the WAIT on the transport's `close`, the one wait no drain and no signal
+ *   same deadline bounds the wait on the transport's `close`, the one wait no drain and no signal
  *   can reach. It bounds the wait rather than the close, which keeps running, so a retry joins it
  *   instead of shutting one connection down twice.
  * - **Transport-agnostic.** Imports only core siblings (JSON-RPC + the tool vocabulary);

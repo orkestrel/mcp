@@ -11,33 +11,33 @@ import { isString } from '@orkestrel/contract'
  * - **Symmetric.** Unlike {@link import('./WebSocketClientTransport.js').WebSocketClientTransport}
  *   / {@link import('@orkestrel/mcp').HTTPClientTransport} (CLIENT-only
  *   carriers of `@orkestrel/mcp`'s `MCPMessageTransportInterface`), a `MessagePort` is a
- *   plain duplex channel — the SAME class implements `@orkestrel/mcp`'s
- *   `MCPTransportInterface` and is handed to EITHER `bindServer` or
+ *   plain duplex channel — the same class implements `@orkestrel/mcp`'s
+ *   `MCPTransportInterface` and is handed to either `bindServer` or
  *   `bindClient`/`createDuplexClientTransport`; which role it plays comes entirely
  *   from the binder it is given to, not from anything this class decides.
  * - **`start()` at construction — bind synchronously.** `MessagePort.start()` is only
- *   REQUIRED when listening with `addEventListener` (as opposed to the `onmessage`
+ *   required when listening with `addEventListener` (as opposed to the `onmessage`
  *   setter, which implies it) — this transport uses `addEventListener`, and
  *   `MCPTransportInterface` has no separate open/connect step for the caller to hook
  *   a start into, so the constructor calls `port.start()` immediately: the port
- *   begins dispatching QUEUED messages the moment the transport exists. This is safe
+ *   begins dispatching queued messages the moment the transport exists. This is safe
  *   inside `createScopeServer`'s flow (the transport is synchronously handed to `bindServer`
  *   before control returns to the event loop), but is a **footgun for direct use**:
  *   if you construct `new MessagePortTransport({ port })` and then `await` anything
- *   before calling `listen`, messages that arrived in the gap are DROPPED. **Bind
+ *   before calling `listen`, messages that arrived in the gap are dropped. **Bind
  *   synchronously after construction** — do not interleave an `await` between
  *   `new MessagePortTransport(…)` and `bindServer` / `listen`.
  * - **String payloads only.** `send` posts the message string as-is (`postMessage`
  *   structured-clones it — a string clones to an identical string, so the wire stays
  *   plain JSON-RPC text like every other transport in this package). Inbound: a
  *   non-string `event.data` (a host or a misbehaving peer posting a structured
- *   object) is IGNORED — dropped silently, never forwarded, never thrown —
+ *   object) is ignored — dropped silently, never forwarded, never thrown —
  *   because `MCPTransportInterface` carries no `error` channel for this port to
  *   surface a non-string frame on (unlike `MCPMessageTransportInterface`'s `emitter`);
  *   silently ignoring is the total, contract-shaped choice.
- * - **`messageerror` is IGNORED, not routed to `closed`.** A `messageerror` event
+ * - **`messageerror` is ignored, not routed to `closed`.** A `messageerror` event
  *   (the structured-clone deserialization of an inbound message threw) reports one
- *   BAD FRAME, not a dead channel — the port itself keeps working and later, well-
+ *   bad frame, not a dead channel — the port itself keeps working and later, well-
  *   formed messages still arrive. This transport registers no listener for it: an
  *   unhandled `messageerror` on a `MessagePort` neither throws, closes the port, nor
  *   reaches this transport, so one bad frame costs exactly that frame and nothing
@@ -45,14 +45,14 @@ import { isString } from '@orkestrel/contract'
  *   `bindServer`/`bindClient` wiring (and, transitively, every session it carries)
  *   over a single malformed frame.
  * - **`close()`** is idempotent: it closes the underlying `port` (`MessagePort.close()`
- *   disconnects it — further `postMessage` calls on EITHER end are silently
+ *   disconnects it — further `postMessage` calls on either end are silently
  *   undelivered, per the platform contract) and fires the registered `closed`
  *   handler exactly once, whether the caller closes it once or twice. There is no
  *   native "peer closed" signal for a `MessagePort` (unlike a WebSocket's `close`
- *   event) — `closed` fires ONLY from this transport's own `close()`.
+ *   event) — `closed` fires only from this transport's own `close()`.
  * - **Single-handler-replace (the port contract, `@orkestrel/mcp`'s `MCPTransportInterface`
  *   doc).** `listen`/`closed` each hold the one active handler; a
- *   second call REPLACES the first rather than adding a second subscriber.
+ *   second call replaces the first rather than adding a second subscriber.
  *
  * @example
  * ```ts

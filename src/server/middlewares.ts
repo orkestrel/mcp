@@ -27,7 +27,7 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  * Creates the native MCP session {@link MiddlewareHandler} — the plug-and-play stateful layer
  * that fronts a session-agnostic {@link import('./factories.js').createMCPRoutes}. Compose it
  * with `router.use(createMCPSession())` (or the equivalent middleware seam), mirroring any
- * other closure-scoped stateful middleware. Has NO dependency on `@orkestrel/middleware` — the
+ * other closure-scoped stateful middleware. Has no dependency on `@orkestrel/middleware` — the
  * session store, mint-on-`initialize`, and resumable stream are all native to this package.
  *
  * @remarks
@@ -40,32 +40,32 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  *
  * - **`POST {path}`.** Buffers `const text = await request.text()` (so the downstream route
  *   can re-read it from a freshly-built forwarded `Request`). Resolves a session through {@link
- *   readSessionHeader}: a VALID id touches the entry and sets `context.state.session`; an
- *   ABSENT / unknown id whose (guarded) body parses to an `initialize` request ({@link
- *   isInitializeRequest}) MINTS a fresh {@link MCPSession} (`crypto.randomUUID()`, the `session`
+ *   readSessionHeader}: a valid id touches the entry and sets `context.state.session`; an
+ *   absent / unknown id whose (guarded) body parses to an `initialize` request ({@link
+ *   isInitializeRequest}) mints a fresh {@link MCPSession} (`crypto.randomUUID()`, the `session`
  *   options group) and sets `context.state.session`; neither → {@link rejectUnknownSession}
  *   (`404`). The
  *   minted entry pins the negotiated legacy revision, which is supplied to a later headerless
  *   live-session request. It then
- *   FORWARDS a fresh `Request` carrying the buffered `text` (`next(forwarded)`) — never the
+ *   forwards a fresh `Request` carrying the buffered `text` (`next(forwarded)`) — never the
  *   already-consumed original — so the route re-reads the same body, and stamps the response
- *   with {@link MCP_SESSION_HEADER}. The entry's `touched` instant is read AFTER that
- *   downstream response, because it means the LAST ACCESS: a request slower than `ttl` would
+ *   with {@link MCP_SESSION_HEADER}. The entry's `touched` instant is read after that
+ *   downstream response, because it means the last access: a request slower than `ttl` would
  *   otherwise store a session that is already expired, and the write-back RE-ASKS the store, so
  *   a `DELETE` arriving while the request was suspended is not undone.
  * - **`GET {path}`.** Resolves the session the same way (no mint — only `initialize` mints);
  *   an invalid / unknown id is the same `404`. A valid session opens the resumable
  *   server→client stream through `@orkestrel/server`'s {@link import('@orkestrel/server').createStream}:
- *   replays every event after the client's `Last-Event-ID` ({@link readLastEventId}) BEFORE
+ *   replays every event after the client's `Last-Event-ID` ({@link readLastEventId}) before
  *   attaching the stream for live pushes, then attaches; cancellation of the streamed response
  *   body composes with `request.signal` and detaches it. Long-lived — never `end()`ed here.
  * - **`DELETE {path}`.** Resolves the session; a valid id deletes it from the store and answers
  *   `204`; an invalid / unknown id is the same `404`.
  *
- * It is MECHANISM, not policy, and ADDITIVE: omit it entirely for the stateless default
+ * It is mechanism, not policy, and additive: omit it entirely for the stateless default
  * ({@link import('./factories.js').createMCPRoutes}'s only behavior). The `path` MUST match the
  * `createMCPRoutes` `path` it fronts. The WebSocket transport is inherently one session per
- * connection (the socket IS the session), so this middleware does not apply to it.
+ * connection (the socket is the session), so this middleware does not apply to it.
  *
  * @typeParam TState - The consumer's `TState`, which MUST extend {@link MCPSessionState} so
  *   the resolved session can be threaded through `context.state.session`

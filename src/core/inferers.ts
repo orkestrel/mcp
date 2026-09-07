@@ -7,9 +7,9 @@ import { MCP_META_VERSION, SUPPORTED_MODERN_PROTOCOL_VERSIONS } from './constant
  * Infers the wire era for an MCP protocol revision.
  *
  * @remarks
- * The era is READ from the two era guards rather than restated here, so a revision added
+ * The era is read from the era guards rather than restated here, so a revision added
  * to {@link SUPPORTED_MODERN_PROTOCOL_VERSIONS} or {@link SUPPORTED_LEGACY_PROTOCOL_VERSIONS}
- * carries its era with it and no third list can disagree with those two.
+ * carries its era with it and no further list can disagree with them.
  *
  * @param version - The protocol revision to classify
  * @returns `'modern'` for a revision a bare server accepts, `'legacy'` for a revision the
@@ -25,10 +25,10 @@ export function inferEra(version: string): MCPEra | undefined {
  * Infers the wire era one invocation's own structure selects.
  *
  * @remarks
- * The STRUCTURAL read, distinct from {@link inferEra}'s read of a revision string: era is fixed
+ * The structural read, distinct from {@link inferEra}'s read of a revision string: era is fixed
  * by the reserved modern metadata a request carries, so this answers for a message whose
  * revision has not been read and cannot answer `undefined` — every invocation took one of the
- * two published wire shapes. It is what an observation surface reports and what an ingress
+ * published wire shapes. It is what an observation surface reports and what an ingress
  * routes on, so both derive it here rather than each spelling the ternary out.
  *
  * @param invocation - The invocation whose structure selects the era
@@ -57,15 +57,15 @@ export function inferVersion(offered: readonly string[]): MCPModernVersion | und
 }
 
 /**
- * Infers the protocol version an outbound message announces itself with — the ONE
+ * Infers the protocol version an outbound message announces itself with — the one
  * projection every HTTP client transport stamps `mcp-protocol-version` from.
  *
  * @remarks
- * This is deliberately the SAME read the server's own expectation performs
+ * This is deliberately the same read the server's own expectation performs
  * ({@link import('@orkestrel/mcp/server').inferHeaderIssue}): a modern request's reserved
- * `_meta` version, accepted whenever it is a string. It is NOT
+ * `_meta` version, accepted whenever it is a string. It is not
  * {@link import('./parsers.js').parseRequestContext}, and the difference is the whole
- * point. That parser answers a different question — is the modern metadata WELL FORMED —
+ * point. That parser answers a different question — is the modern metadata well formed —
  * and refuses a request whose capability declaration or logging level is malformed. Such a
  * request is still modern (era is fixed by key presence) and the server still demands the
  * header for it, so projecting through the parser withholds a header the peer requires and
@@ -74,7 +74,7 @@ export function inferVersion(offered: readonly string[]): MCPModernVersion | und
  * A non-modern message projects nothing: a legacy request's version comes from the
  * `initialize` handshake the transport captured, not from the message.
  *
- * Header NAMES stay with the transports that own the wire (see `constants.ts`); core owns
+ * Header names stay with the transports that own the wire (see `constants.ts`); core owns
  * the value this projection derives, which is the part the browser and Node faces disagreed about.
  *
  * @param message - The outbound message about to be written

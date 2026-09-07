@@ -6,7 +6,8 @@ import type { MCPLegacyVersion, MCPModernVersion, MCPVersion } from './types.js'
 // reads it back are one contract; a copy per environment face is the drift the faces carried.
 
 /**
- * Names the revision offered and defaulted to in the legacy `initialize` handshake.
+ * Names the revision offered and defaulted to in the legacy `initialize` handshake,
+ * `'2025-11-25'`.
  *
  * @remarks
  * This is deliberately a legacy revision, and the newest one supported. 2026-07-28 is stateless
@@ -15,14 +16,17 @@ import type { MCPLegacyVersion, MCPModernVersion, MCPVersion } from './types.js'
  */
 export const MCP_HANDSHAKE_VERSION: MCPLegacyVersion = '2025-11-25'
 
-/** Names the older legacy revision the optional legacy decorator accepts and an adapter can pin. */
+/**
+ * Names the older legacy revision the optional legacy decorator accepts and an adapter can pin,
+ * `'2025-06-18'`.
+ */
 export const MCP_FALLBACK_VERSION: MCPLegacyVersion = '2025-06-18'
 
-/** Names the modern revision offered by an unpinned client during discovery. */
+/** Names the modern revision offered by an unpinned client during discovery, `'2026-07-28'`. */
 export const MCP_MODERN_VERSION: MCPModernVersion = '2026-07-28'
 
 /**
- * Lists the modern MCP protocol revisions a bare server accepts and advertises.
+ * Lists the modern MCP protocol revisions a bare server accepts and advertises, `2026-07-28`.
  *
  * @remarks
  * Frozen in discovery-advertisement order. Legacy revisions are absent because
@@ -33,7 +37,10 @@ export const SUPPORTED_MODERN_PROTOCOL_VERSIONS: readonly MCPModernVersion[] = O
 	MCP_MODERN_VERSION,
 ])
 
-/** Lists the protocol revisions accepted by the optional legacy decorator. */
+/**
+ * Lists the protocol revisions accepted by the optional legacy decorator, `2025-11-25` and
+ * `2025-06-18`.
+ */
 export const SUPPORTED_LEGACY_PROTOCOL_VERSIONS: readonly MCPLegacyVersion[] = Object.freeze([
 	MCP_HANDSHAKE_VERSION,
 	MCP_FALLBACK_VERSION,
@@ -67,8 +74,8 @@ export const MCP_META_SUBSCRIPTION = 'io.modelcontextprotocol/subscriptionId'
  * Names the reserved extension key identifying the stable Tasks extension.
  *
  * @remarks
- * The ONE spelling of it in this package, and the identity of the immutable snapshot dated
- * 2026-07-28 this package implements. A client declares it per REQUEST, under
+ * The one spelling of it in this package, and the identity of the immutable snapshot dated
+ * 2026-07-28 this package implements. A client declares it per request, under
  * `_meta['io.modelcontextprotocol/clientCapabilities'].extensions`; a server advertises it
  * under `server/discover`'s `capabilities.extensions`. Both sides carry an empty object —
  * the extension defines no options, so presence is the entire declaration.
@@ -79,10 +86,10 @@ export const MCP_EXTENSION_TASKS = 'io.modelcontextprotocol/tasks'
  * Names the opening marker of the Base64 sentinel a standard MCP header value travels in.
  *
  * @remarks
- * The markers are LOWERCASE and exact, and this constant with {@link MCP_SENTINEL_SUFFIX} is
- * their ONE spelling in this package: {@link import('@orkestrel/mcp').encodeSentinel} builds a
+ * The markers are lowercase and exact, and this constant with {@link MCP_SENTINEL_SUFFIX} is
+ * their one spelling in this package: {@link import('@orkestrel/mcp').encodeSentinel} builds a
  * sentinel from them and {@link import('@orkestrel/mcp').decodeSentinel} recognizes one by
- * them, so the two directions cannot drift apart.
+ * them, so the directions cannot drift apart.
  */
 export const MCP_SENTINEL_PREFIX = '=?base64?'
 
@@ -109,7 +116,7 @@ export const MCP_PARAM_PREFIX = 'Mcp-Param-'
  * Names the Streamable-HTTP transport header that carries the MCP session id.
  *
  * @remarks
- * A STATEFUL server sends it on the `initialize` reply, and
+ * A stateful server sends it on the `initialize` reply, and
  * {@link import('./transports/HTTPClientTransport.js').HTTPClientTransport} echoes it as a
  * request header on every subsequent request, so a client passes that server's session
  * validation unchanged.
@@ -146,7 +153,7 @@ export const MCP_NAME_HEADER = 'mcp-name'
  * Identifies the tool-schema annotation key naming the header one parameter projects into.
  *
  * @remarks
- * It is valid ONLY on a primitive property schema statically reachable from the `inputSchema`
+ * It is valid only on a primitive property schema statically reachable from the `inputSchema`
  * root through `properties` keys alone. An occurrence anywhere else — under `items`, a
  * composition or conditional keyword, or a `$ref` target — makes the whole tool definition
  * invalid, which is what {@link import('@orkestrel/mcp').buildHeaderParameters} decides.
@@ -198,7 +205,7 @@ export const MCP_HEADER_MISMATCH = -32020
  * declared.
  *
  * @remarks
- * The GENERIC code for the whole condition, not one capability's code. This server answers
+ * The generic code for the whole condition, not one capability's code. This server answers
  * it in more than one place — a `tools/call` that needs `elicitation`, and a `tasks/*` request
  * whose client never declared `io.modelcontextprotocol/tasks` — and they are told apart by
  * `error.data.requiredCapabilities` alone (`{ elicitation: {} }` against
@@ -249,7 +256,7 @@ export const DEFAULT_MCP_LIMITS = Object.freeze({
  * Holds the one empty argument record every argument-less modern `tools/call` runs with.
  *
  * @remarks
- * Frozen and null-prototype, and SHARED: two calls that name no `arguments` receive the same
+ * Frozen and null-prototype, and shared: two calls that name no `arguments` receive the same
  * reference, so nothing a tool writes into its own `arguments` can survive into the next
  * call — the write fails instead. That failure is a tool-domain failure like any other: the
  * registry isolates it into a `success: false` result, which reaches the peer as an
@@ -280,7 +287,7 @@ export const JSONRPC_INVALID_PARAMS = -32602
  * valid request.
  *
  * @remarks
- * The code every MODERN internal fault answers with — a provider, handler, continuation,
+ * The code every modern internal fault answers with — a provider, handler, continuation,
  * capacity, stream-source, normalization, or serialization failure the server contained.
  * It is detail-free on the wire: the caught value reaches the application through the
  * server's `error` event and never through the response.
@@ -291,7 +298,7 @@ export const JSONRPC_INTERNAL_ERROR = -32603
  * Names the JSON-RPC 2.0 implementation-defined server error (the `-32000` to `-32099` range).
  *
  * @remarks
- * Retained for the LEGACY branch alone. A modern fault answers
+ * Retained for the legacy branch alone. A modern fault answers
  * {@link JSONRPC_INTERNAL_ERROR}; this code survives only where an old-wire peer was
  * already characterized against it.
  */

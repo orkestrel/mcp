@@ -129,8 +129,8 @@ export function isMCPResultMetaObject(value: unknown): value is MCPResultMetaObj
  * subscription id.
  *
  * @remarks
- * The reserved key is OPTIONAL, so a frame delivered outside a `subscriptions/listen`
- * stream passes with no stamp at all. When the key IS present its value must be a valid
+ * The reserved key is optional, so a frame delivered outside a `subscriptions/listen`
+ * stream passes with no stamp at all. When the key is present its value must be a valid
  * {@link JSONRPCId}, because a stamp naming nothing addressable is worse than no stamp.
  *
  * @param value - The unknown value to inspect
@@ -339,7 +339,7 @@ export function isAbsoluteURI(value: unknown): value is string {
  * Determines whether a value is one RFC 3339 `full-date` naming a real calendar day.
  *
  * @remarks
- * RFC 3339 §5.6 defines `date-mday` as `01-28`, `29`, `30`, or `31` BASED ON the month and
+ * RFC 3339 §5.6 defines `date-mday` as `01-28`, `29`, `30`, or `31` based on the month and
  * year, so the grammar is not satisfied by shape alone: `2026-02-30` and `2025-02-29` are
  * well-formed triples that name no day, and a downstream `new Date` rolls each of them
  * silently onto a different date rather than refusing it. February's length follows the
@@ -347,7 +347,7 @@ export function isAbsoluteURI(value: unknown): value is string {
  *
  * The check is pure integer arithmetic on the matched fields and never constructs a `Date`,
  * because `Date` is exactly the component that performs the rollover this guard exists to
- * refuse. It is a SYNTAX guard: no time zone, locale, calendar era, or leap second applies.
+ * refuse. It is a syntax guard: no time zone, locale, calendar era, or leap second applies.
  *
  * @param value - The unknown value to inspect
  * @returns True if the value is an RFC 3339 `full-date` for a day that exists; false otherwise
@@ -1015,7 +1015,7 @@ export function isMCPContent(value: unknown): value is MCPContent {
  *
  * @remarks
  * The open contract's guard: a record carrying a string `resultType` and, when
- * present, exact result metadata. It deliberately does NOT narrow `resultType` to a
+ * present, exact result metadata. It deliberately does not narrow `resultType` to a
  * known value, because the dated schema keeps adding them — a caller that needs a
  * specific result uses that result's own guard, which narrows to its literal.
  * Mutually exclusive with {@link isMCPLegacyResult} on every input: this one needs
@@ -1098,7 +1098,7 @@ export function isMCPCallResult(value: unknown): value is MCPCallResult {
  * proof: this is what stands between a manager that answers a numeric `taskId` and a
  * client that would receive one. `ttlMs` accepts `null` because the schema uses it to
  * mean "no expiry", which is distinct from an absent field, and both durations must be
- * INTEGER milliseconds because the schema formats them `int`.
+ * integer milliseconds because the schema formats them `int`.
  *
  * @param value - The unknown value to inspect
  * @returns True if the value is a well-formed `resultType: 'task'` result; false otherwise
@@ -1166,7 +1166,7 @@ export function isMCPTaskStatus(value: unknown): value is MCPTaskStatus {
  * the requests to answer, `completed` owns the deferred call's result, `failed` owns the
  * JSON-RPC error that ended it, and `working` / `cancelled` own nothing further.
  *
- * A `completed` task's `result` is checked as an OBJECT and no further. The schema declares
+ * A `completed` task's `result` is checked as an object and no further. The schema declares
  * it an open record, so its contents belong to whichever method was deferred; a guard that
  * demanded a protocol result here would refuse payloads the extension permits.
  * `ttlMs` and `pollIntervalMs` are integer milliseconds, per the schema's `int` formats.
@@ -1219,11 +1219,11 @@ export function isMCPTaskDetail(value: unknown): value is MCPTaskDetail {
  * Determines whether a value is the wire answer to `tasks/get`.
  *
  * @remarks
- * {@link isMCPTaskDetail} plus the stamp the METHOD owes. The schema types a `tasks/get`
+ * {@link isMCPTaskDetail} plus the stamp the method owes. The schema types a `tasks/get`
  * reply as the detail intersected with the standard result, so `resultType: 'complete'` is
  * part of the answer rather than decoration on it — and an unstamped payload, or one
  * carrying the creation answer's `resultType: 'task'`, is a peer answering some other
- * shape. Use this guard wherever a `tasks/get` REPLY is read; use
+ * shape. Use this guard wherever a `tasks/get` reply is read; use
  * {@link isMCPTaskDetail} wherever a consumer's manager answers directly.
  *
  * `_meta` is checked only when present, and only as result metadata: the server identity a
@@ -1254,14 +1254,14 @@ export function isMCPTaskDetailResult(value: unknown): value is MCPTaskDetailRes
  * Determines whether a value is a `notifications/tasks` frame carrying a task snapshot.
  *
  * @remarks
- * The ADMISSION guard for a task transition: a subscription producer is consumer-written,
+ * The admission guard for a task transition: a subscription producer is consumer-written,
  * so the frame it hands over is foreign input, and this is what stands between a mutated
  * or half-built snapshot and a subscribed client. Both halves are checked — the method
  * literal the extension fixes, and params that hold together as an
  * {@link MCPTaskDetail} — because either alone admits a frame the other rejects.
  *
- * `_meta` is checked for SHAPE WHEN PRESENT and nothing more. The reserved subscription
- * stamp is the SERVER'S to write, after this guard admits the frame and the matcher agrees
+ * `_meta` is checked for shape when present and nothing more. The reserved subscription
+ * stamp is the server'S to write, after this guard admits the frame and the matcher agrees
  * to it, so a guard that demanded the stamp would refuse every frame a producer emits.
  *
  * @param value - The unknown value to inspect
@@ -1756,13 +1756,13 @@ export function isMCPElicitResult(value: unknown): value is MCPElicitResult {
  * Determines whether accepted elicitation content satisfies the exact schema that was issued.
  *
  * @remarks
- * {@link isMCPElicitResult} says a response has the SHAPE of a response; this says the
- * response answers the QUESTION that was asked. A server that protects the schema it issued
+ * {@link isMCPElicitResult} says a response has the shape of a response; this says the
+ * response answers the question that was asked. A server that protects the schema it issued
  * and then never enforces it has bought nothing, so this guard closes that gap: it is what
  * turns a bound schema into a checked one.
  *
  * Every own value must be one {@link MCPElicitValue} — a string, a finite number, a boolean,
- * or an array of strings. A value whose name is DECLARED in `schema.properties` must in
+ * or an array of strings. A value whose name is declared in `schema.properties` must in
  * addition satisfy that field's schema: `integer` rejects a fraction, `minimum` / `maximum`
  * bound a number, `minLength` / `maxLength` bound a string by code points, `enum` and `oneOf`
  * bound it to a declared member, `format` is enforced (`uri` by {@link isAbsoluteURI}, `email`
@@ -1771,9 +1771,9 @@ export function isMCPElicitResult(value: unknown): value is MCPElicitResult {
  * `maxItems` with every entry drawn from its `items.enum` or `items.anyOf`. Every name listed
  * in `schema.required` must be present.
  *
- * An UNDECLARED property remains valid: the restricted schema is open by default, so a client
+ * An undeclared property remains valid: the restricted schema is open by default, so a client
  * that answers more than it was asked is not refused for it. A `schema` that is not itself a
- * valid {@link MCPElicitSchema} admits NOTHING — an unenforceable schema is never a permissive
+ * valid {@link MCPElicitSchema} admits nothing — an unenforceable schema is never a permissive
  * one — which is why `schema` is accepted as `unknown` and checked rather than trusted. Total
  * over hostile content and hostile schemas alike.
  *
@@ -1998,10 +1998,11 @@ export function isMCPSampleContent(value: unknown): value is MCPSampleContent {
  *
  * @remarks
  * The schema's `CreateMessageResult` types `content` as an `anyOf` over one
- * {@link isMCPSampleContent} block or an ARRAY of them, so both are admitted here: a
+ * {@link isMCPSampleContent} block or an array of them, so both are admitted here: a
  * tool-using model answers with `tool_use` and `tool_result` blocks, and a model answering in
  * several parts answers with the array. `stopReason` stays an open string because the schema
- * names four values and permits any other a provider reports. Total over hostile input.
+ * names `endTurn`, `stopSequence`, `maxTokens`, and `toolUse` and permits any other a provider
+ * reports. Total over hostile input.
  *
  * @param value - The unknown value to inspect
  * @returns True if `value` has the sampling-completion shape; false otherwise
@@ -2044,12 +2045,12 @@ export function isMCPSampleResult(value: unknown): value is MCPSampleResult {
  * Determines whether a response answers the exact embedded request that was issued.
  *
  * @remarks
- * A response carries no `method` of its own, so the ISSUED request selects which arm applies
+ * A response carries no `method` of its own, so the issued request selects which arm applies
  * — the same way {@link isElicitContent} takes the issued schema rather than trusting the
  * content to describe itself. A form elicitation is checked twice: once for the response
  * shape and once, on `accept`, for the content against the schema that round issued. A
  * URL-mode elicitation issues no schema, so only the shape is checked. A request this
- * package cannot recognize admits NOTHING, because an unrecognized question has no correct
+ * package cannot recognize admits nothing, because an unrecognized question has no correct
  * answer. Total over hostile responses and hostile requests alike.
  *
  * @param value - The client's answer to check
@@ -2114,7 +2115,7 @@ export function isMCPInputResult(value: unknown): value is MCPInputResult {
  *
  * @remarks
  * A request is a record with `jsonrpc === '2.0'`, a string `method`, and an `id`
- * that {@link isJSONRPCId} accepts. An id-less call is NOT a request — it is a
+ * that {@link isJSONRPCId} accepts. An id-less call is not a request — it is a
  * {@link JSONRPCNotification}, which {@link isJSONRPCNotification} answers for. The
  * guards are mutually exclusive on every input: this one requires a valid `id`
  * value, that one requires no own `id` member at all. `params`, when present, must
@@ -2144,7 +2145,7 @@ export function isJSONRPCRequest(value: unknown): value is JSONRPCRequest {
  * Determines whether a parsed value is a {@link JSONRPCNotification}.
  *
  * @remarks
- * A notification is a request-shaped call carrying NO `id` member — the protocol
+ * A notification is a request-shaped call carrying no `id` member — the protocol
  * forbids one, because nothing answers a notification. `params`, when present, must
  * be a record. Total: any other input returns `false`.
  *
@@ -2187,8 +2188,8 @@ export function isJSONRPCInvocation(value: unknown): value is JSONRPCInvocation 
  * arm of a response.
  *
  * @remarks
- * A result answers a request, so `id` is REQUIRED and must be a valid
- * {@link isJSONRPCId}. The envelope must own a `result` and must NOT own an `error`,
+ * A result answers a request, so `id` is required and must be a valid
+ * {@link isJSONRPCId}. The envelope must own a `result` and must not own an `error`,
  * which is what makes this guard and {@link isJSONRPCErrorResponse} mutually
  * exclusive on every input. `result` itself must be an object: either a modern
  * {@link isMCPResult} or a legacy {@link isMCPLegacyResult}, never a bare primitive.
@@ -2217,17 +2218,17 @@ export function isJSONRPCResultResponse(value: unknown): value is JSONRPCResultR
  * Determines whether a value is one JSON-RPC `error` member.
  *
  * @remarks
- * The failure OBJECT, not the envelope carrying it — the shape a failed response owns
+ * The failure object, not the envelope carrying it — the shape a failed response owns
  * under `error`, and the shape a `failed` {@link MCPTaskDetail} owns under the same name,
  * which is why it is one guard rather than the same checks written twice.
  *
- * It is deliberately STRUCTURAL rather than exact-JSON: `data` is declared `unknown`, so
+ * It is deliberately structural rather than exact-JSON: `data` is declared `unknown`, so
  * requiring the whole object to survive a JSON clone would refuse a legal error that
  * carried a non-JSON payload. Both callers here hand it an already-owned value.
  *
  * That choice is why the key reads are guarded. Every sibling guard clones first, and a
  * clone reads each key once behind a boundary that already owns totality; this one is the
- * family's only DIRECT reader, so it meets `code` and `message` exactly as the value defines
+ * family's only direct reader, so it meets `code` and `message` exactly as the value defines
  * them — including as accessors that throw. Reading a named key off an unowned value is
  * itself the hostile step, and it is bounded here rather than allowed to escape. Total.
  *
@@ -2251,9 +2252,9 @@ export function isJSONRPCError(value: unknown): value is JSONRPCError {
  * arm of a response.
  *
  * @remarks
- * `id` is OPTIONAL here and only here: a peer that could not read the failed
- * request's id OMITS the member rather than sending `null`, so an absent `id` is
- * valid and a `null` one is not. The envelope must own an `error` and must NOT own a
+ * `id` is optional here and only here: a peer that could not read the failed
+ * request's id omits the member rather than sending `null`, so an absent `id` is
+ * valid and a `null` one is not. The envelope must own an `error` and must not own a
  * `result`. `error` carries an integer `code` and a string `message`. Total.
  *
  * @param value - The already-parsed value to test

@@ -11,15 +11,15 @@ import { WEBSOCKET_READY_OPEN } from '@orkestrel/websocket'
 
 /**
  * Wraps a {@link NodeWebSocketInterface} (the RFC 6455 wire wrapper) as a
- * {@link MCPMessageTransportInterface} — the per-connection JSON-RPC-over-WebSocket SERVER
+ * {@link MCPMessageTransportInterface} — the per-connection JSON-RPC-over-WebSocket server
  * bridge, the bidirectional JSON-RPC message channel
  * `createWebSocketServer` pumps `mcp.dispatch` over and the egress mirror's
  * {@link import('./WebSocketClientTransport.js').WebSocketClientTransport} reuses.
  *
  * @remarks
- * - **Reuses `MCPMessageTransportInterface`.** It IS the same generic carrier the HTTP
+ * - **Reuses `MCPMessageTransportInterface`.** It is the same generic carrier the HTTP
  *   client transport implements — `emitter` (`message` / `close` / `error`), `start`,
- *   `send`, `close` — so the WebSocket server and client both speak ONE transport contract,
+ *   `send`, `close` — so the WebSocket server and client both speak one transport contract,
  *   no near-duplicate sibling interface. `session` is `undefined` (the stateless v1; a
  *   session id is the deferred sessions tier). The name keeps the role explicit even though
  *   the shape is shared.
@@ -27,13 +27,13 @@ import { WEBSOCKET_READY_OPEN } from '@orkestrel/websocket'
  *   frame runs through the shared `deliverMessage` fold (parse, then narrow) — a
  *   well-formed {@link JSONRPCMessage} is re-emitted on this transport's `message` event (the
  *   parsed envelope the {@link import('@orkestrel/mcp').MCPServerInterface} pump dispatches), while
- *   a non-JSON or non-message frame is surfaced on `error` and DROPPED, never thrown. It
+ *   a non-JSON or non-message frame is surfaced on `error` and dropped, never thrown. It
  *   also bridges the socket's `close` → this transport's `close`, and the socket's `error`.
  * - **Outbound (`send`).** `send(message)` writes one text frame
  *   (`nodeWs.send(JSON.stringify(message))`). The underlying wrapper no-ops a write on a
  *   non-open socket and confirms nothing, so this bridge answers a closed channel from its own
  *   state and the socket's `readyState`: a `send` after `close()`, after the peer's close, or on
- *   a socket that is not `OPEN` REJECTS with `WebSocket transport is not connected` rather than
+ *   a socket that is not `OPEN` rejects with `WebSocket transport is not connected` rather than
  *   resolving on a frame nobody wrote. `bindServer` catches that rejection and routes it to the
  *   dispatcher's `error` event, and it aborts every in-flight request the moment this transport's
  *   `close` fires — so a peer that disconnects mid-request is answered by no write at all.
@@ -44,7 +44,7 @@ import { WEBSOCKET_READY_OPEN } from '@orkestrel/websocket'
  *   releases the same way, so a closed transport is never subscribed to a live socket.
  * - **Observable.** Owns the `emitter` ({@link MCPMessageTransportEventMap}); the emitter
  *   isolates a listener throw (a buggy observer never corrupts the bridge). `error` is a
- *   DOMAIN event (a transport-level fault), distinct from the emitter's listener-error channel.
+ *   domain event (a transport-level fault), distinct from the emitter's listener-error channel.
  */
 export class WebSocketServerTransport implements MCPMessageTransportInterface {
 	readonly #emitter: Emitter<MCPMessageTransportEventMap>

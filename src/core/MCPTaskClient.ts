@@ -9,19 +9,19 @@ import { MCPError } from './errors.js'
 import { isMCPTaskDetailResult } from './validators.js'
 
 /**
- * Issues the `tasks/*` methods over one correlated-request door — the CLIENT half of the
+ * Issues the `tasks/*` methods over one correlated-request door — the client half of the
  * stable Tasks extension, exposed as an {@link import('./types.js').MCPClientInterface}'s
  * `tasks`.
  *
  * @remarks
  * - **The mirror of the server-side port, minus `start`.** An
  *   {@link import('./types.js').MCPTaskManagerInterface} is the consumer's durable store the
- *   SERVER creates tasks in; this is the client's read/answer/stop access to the tasks a peer
+ *   server creates tasks in; this is the client's read/answer/stop access to the tasks a peer
  *   already created. Creation is missing on purpose: the extension gives a client no flag and
  *   no parameter to ask for a task, so `start` has no wire method to be.
  * - **No plural accessor, no loop, no cache.** MCP defines no `tasks/list`, so nothing here
  *   enumerates. A task snapshot's `pollIntervalMs` is carried untouched and a one-shot read
- *   sits beside it; the SCHEDULE is the consumer's, because this package has no durable place
+ *   sits beside it; the schedule is the consumer's, because this package has no durable place
  *   to keep a task, no idea when the application still cares, and no lifetime to hang a timer
  *   on that outlives the request it was born from. An instance left alone writes nothing.
  * - **One channel.** Every request goes through the injected

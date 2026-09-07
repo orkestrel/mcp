@@ -32,7 +32,7 @@ import { dispatchLines, extractLines, writeLine } from '../helpers.js'
  * - **`close()`** removes this transport's input and output subscriptions, rejects every
  *   pending send, and fires its `close`
  *   event (idempotent). It pauses the input only when the caller was not already reading
- *   it at `start` (`readableFlowing !== true`) AND no `data` listener remains once this
+ *   it at `start` (`readableFlowing !== true`) and no `data` listener remains once this
  *   transport's own is removed — so a process holding `process.stdin` can exit, and a
  *   caller's own flow is never stopped underneath it. The transport preserves flowing versus
  *   non-flowing state and restores every caller-owned listener. A Node stream that had never been
@@ -43,7 +43,7 @@ import { dispatchLines, extractLines, writeLine } from '../helpers.js'
  *   `process.stdin`/`process.stdout`), so the transport never destroys, ends, or blanket-clears
  *   them.
  * - **Observable.** Owns the `emitter` ({@link MCPMessageTransportEventMap}); the
- *   emitter isolates a listener throw; `error` is a DOMAIN event (a transport-level
+ *   emitter isolates a listener throw; `error` is a domain event (a transport-level
  *   fault), distinct from the emitter's own listener-error channel.
  */
 export class StdioServerTransport implements MCPMessageTransportInterface {

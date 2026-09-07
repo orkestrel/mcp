@@ -22,7 +22,7 @@ import {
 } from '@orkestrel/websocket'
 
 /**
- * Drives a REMOTE MCP server over a WebSocket — a CLIENT
+ * Drives a remote MCP server over a WebSocket — a client
  * {@link MCPMessageTransportInterface} for the Model Context Protocol, the
  * egress mirror of {@link import('./factories.js').createWebSocketServer} and the WebSocket
  * sibling of {@link import('@orkestrel/mcp').HTTPClientTransport}.
@@ -32,16 +32,16 @@ import {
  *   RFC 6455 client handshake: it opens a `node:http`(`s`) `GET` carrying `Connection: Upgrade`
  *   / `Upgrade: websocket` / a random `Sec-WebSocket-Key` / `Sec-WebSocket-Version: 13` /
  *   `Sec-WebSocket-Protocol: mcp` (plus any `options.headers`), awaits the client `'upgrade'`
- *   event, and VALIDATES `Sec-WebSocket-Accept === computeWebSocketAccept(key)` (the D2 helper)
- *   — a mismatch (or a non-`101` response, or a request error) REJECTS `start()` and the socket
+ *   event, and validates `Sec-WebSocket-Accept === computeWebSocketAccept(key)` (the D2 helper)
+ *   — a mismatch (or a non-`101` response, or a request error) rejects `start()` and the socket
  *   is destroyed. On success it wraps the raw upgraded socket in `createNodeWebSocket({ socket,
- *   head })` (CLIENT mode — no key → frames are MASKED per RFC 6455 §5.3) and bridges its
+ *   head })` (client mode — no key → frames are masked per RFC 6455 §5.3) and bridges its
  *   `message`.
  * - **The arriving socket is RE-ASKED for, never assumed.** `start()` suspends across that
  *   connect and upgrade, so it re-checks the transport's state before installing anything: a
  *   concurrent `start()` that already installed a socket, or a {@link close} that ended the
- *   transport while the handshake was on the wire, both WIN — the socket that arrives late is
- *   DESTROYED and never bound, so no orphan is left re-emitting frames at nobody. Both
+ *   transport while the handshake was on the wire, both win — the socket that arrives late is
+ *   destroyed and never bound, so no orphan is left re-emitting frames at nobody. Both
  *   `start()` calls still resolve; exactly one socket is ever bound.
  * - **Inbound (`message`).** Each decoded text frame runs through the shared `deliverMessage`
  *   fold (parse, then narrow) — a {@link JSONRPCMessage} re-emits on this transport's `message`
@@ -49,14 +49,14 @@ import {
  *   non-JSON / non-message frame surfaces on `error` and is dropped. The socket's `close`
  *   / `error` bridge to this transport's events.
  * - **Outbound (`send`).** `send(message)` writes one masked text frame. A socket write is not
- *   confirmed, so this transport answers a closed channel from its own state AND the socket's
+ *   confirmed, so this transport answers a closed channel from its own state and the socket's
  *   `readyState`: a `send` with no bound socket — before `start()`, after `close()`, or after the
- *   peer ended the socket — and a `send` on a bound socket that is not `OPEN` both REJECT with
+ *   peer ended the socket — and a `send` on a bound socket that is not `OPEN` both reject with
  *   `WebSocket transport is not connected`. It neither drops the message nor queues it for a
  *   connection this transport is not holding — the browser face queues a pre-open send, and this
  *   one, holding no connection to flush it onto, rejects that too.
  * - **`close()`** unsubscribes from the socket, closes it, and fires `close` (idempotent). An
- *   upgrade still on the wire is DESTROYED, so a `close()` during the handshake ends the
+ *   upgrade still on the wire is destroyed, so a `close()` during the handshake ends the
  *   transport at once instead of waiting for a peer that may never answer — the suspended
  *   `start()` resolves, because the close is the outcome its caller asked for.
  * - **URL scheme.** `options.url` accepts a `ws://` / `wss://` URL or an `http://` / `https://`
@@ -64,7 +64,7 @@ import {
  *   → TLS through `node:https`). Either reaches the same endpoint.
  * - **Observable.** Owns the `emitter` ({@link MCPMessageTransportEventMap}); every emit
  *   the emitter isolates a listener throw (a buggy observer never corrupts the transport);
- *   `error` is a DOMAIN event (a transport-level fault).
+ *   `error` is a domain event (a transport-level fault).
  *
  * @example
  * ```ts

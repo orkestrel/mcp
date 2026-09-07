@@ -5,15 +5,15 @@ import type { MCPStreamControllerInterface, MCPTextStreamControllerInterface } f
  * serialized.
  *
  * @remarks
- * A TRANSLATION boundary and deliberately nothing else. It serializes each message and the
+ * A translation boundary and deliberately nothing else. It serializes each message and the
  * terminating response, and every lifecycle decision — return, throw, dispose, stop — ends
  * the typed exchange beneath it rather than this face. That is the whole design constraint: a
- * serialized face implemented as its own async generator would add a SECOND operation queue,
+ * serialized face implemented as its own async generator would add a second operation queue,
  * and the queue is exactly the defect the typed controller exists to remove — a `return()`
  * promptly settled at the text face and left queued at the typed one cancels nothing.
  *
  * One member is a narrowing rather than a pass-through, and it is worth knowing before it
- * surprises a producer. `return` receives a STRING; it cannot rebuild the typed
+ * surprises a producer. `return` receives a string; it cannot rebuild the typed
  * `JSONRPCResponse` the typed face would close on, and inventing one by parsing the
  * argument back would make this face decide what the exchange ended with. So it ends the
  * typed exchange with {@link MCPStreamControllerInterface.stop} — no terminal — and answers
@@ -22,11 +22,11 @@ import type { MCPStreamControllerInterface, MCPTextStreamControllerInterface } f
  * the honest translation of "the consumer already has its answer" when the answer is opaque
  * text, not a downgrade to work around.
  *
- * It accepts only a CONTROLLED typed stream. A raw generator would have no lifecycle to
+ * It accepts only a controlled typed stream. A raw generator would have no lifecycle to
  * delegate to, and this class refuses to grow one of its own.
  *
  * Delegation is total and it is what makes the ownership obligation transitive: `return`,
- * `throw`, `stop`, and dispose each end the TYPED exchange, so a pump holding only this
+ * `throw`, `stop`, and dispose each end the typed exchange, so a pump holding only this
  * serialized face still releases the producer, the request lifetime, and the live server slot
  * behind it. There is no owner of last resort here either, for the same reason there is none
  * on the typed face.
@@ -70,7 +70,7 @@ export class MCPTextStreamController implements MCPTextStreamControllerInterface
 	 * @remarks
 	 * The typed exchange ends with no terminal, because a string is not a
 	 * `JSONRPCResponse` and this face never parses one back out of its argument. The
-	 * supplied text is the answer to THIS consumer, and a cooperating producer sees its
+	 * supplied text is the answer to this consumer, and a cooperating producer sees its
 	 * cancellation path rather than its normal return.
 	 *
 	 * @param value - The serialized terminal the consumer is ending on

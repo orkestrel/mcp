@@ -75,7 +75,7 @@ export function inferHeaderTarget(request: JSONRPCInvocation): string | undefine
  * body requires a protocol header after initialization. Messages name the expected value but
  * never echo the client-supplied one.
  *
- * The expectation a LIVE SESSION supplies is a different rule over a different input, so it
+ * The expectation a live session supplies is a different rule over a different input, so it
  * is {@link inferSessionHeaderIssue} rather than a second arm of this one.
  *
  * @param request - The HTTP request carrying the headers
@@ -161,7 +161,7 @@ export function inferHeaderIssue(
  * The session layer's rule, distinct from the body-derived one {@link inferHeaderIssue} owns:
  * a live legacy session pinned its revision at `initialize`, so every later request on that
  * session must name the same one. An absent header reads as `missing`, which the session
- * middleware answers by SUPPLYING the pinned revision rather than refusing; a present header
+ * middleware answers by supplying the pinned revision rather than refusing; a present header
  * naming another revision reads as `mismatched` and is refused. The message names the session's
  * revision and never echoes the client-supplied value.
  *
@@ -202,8 +202,8 @@ export function inferSessionHeaderIssue(
  *
  * @remarks
  * The custom-header half of the standard-header seam {@link inferHeaderIssue} owns, and it
- * takes the SERVED definition's projections rather than a header issue: SEP-2243 scopes the
- * rule to the `Mcp-Param-*` names the server's OWN tool definitions annotate, so a name no
+ * takes the served definition's projections rather than a header issue: SEP-2243 scopes the
+ * rule to the `Mcp-Param-*` names the server's own tool definitions annotate, so a name no
  * parameter claims is another party's header and travels through untouched.
  *
  * For each recognized parameter the body's value at the parameter's own property path fixes
@@ -266,7 +266,7 @@ export function inferParameterRefusal(
  *
  * @remarks
  * A supported legacy request is pinned exactly. A modern, malformed, absent, or unsupported
- * request selects the newest supported legacy revision. The read is deliberately the SAME one
+ * request selects the newest supported legacy revision. The read is deliberately the same one
  * {@link import('@orkestrel/mcp').buildInitializeResult} performs — `isMCPLegacyVersion` over
  * the requested revision — because the session version this pins and the version that result
  * echoes must be the one value. Routing through `inferVersion` cannot do it: that inferer is

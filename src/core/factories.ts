@@ -40,20 +40,35 @@ import { MCPServer } from './MCPServer.js'
  *   {@link import('@orkestrel/emitter').EmitterHooks} (see {@link MCPServerOptions})
  * @returns A working {@link MCPServerInterface}
  *
- * @example
+ * @example Expose a tool registry over MCP
  * ```ts
  * import { createMCPServer } from '@orkestrel/mcp'
  * import { createTool, createToolManager } from '@orkestrel/tool'
  *
  * const tools = createToolManager()
+ * tools.add(
+ * 	createTool({
+ * 		name: 'search',
+ * 		description: 'Search the docs',
+ * 		execute: (a) => find(String(a.query)),
+ * 	}),
+ * )
  * tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
  *
- * const server = createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
+ * const server = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools })
  * server.emitter.on('request', (method, id) => log(method, id))
  *
- * // A transport pumps message strings through `handle`:
- * const reply = await server.handle('{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}')
- * // reply → '{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"add","inputSchema":{"type":"object"}}],"resultType":"complete","ttlMs":60000,"cacheScope":"private","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"calculator","version":"1.0.0"}}}}'
+ * // A transport reads a framed message string and writes the reply:
+ * for await (const message of transport) {
+ * 	const reply = await server.handle(message)
+ * 	if (reply !== undefined) await transport.send(reply) // a notification has no reply
+ * }
+ *
+ * // `handle` also answers one message string on its own:
+ * const listed = await server.handle(
+ * 	'{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}',
+ * )
+ * // listed → '{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search","inputSchema":{"type":"object"},"description":"Search the docs"},{"name":"add","inputSchema":{"type":"object"}}],"resultType":"complete","ttlMs":60000,"cacheScope":"private","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"docs","version":"1.0.0"}}}}'
  * ```
  */
 export function createMCPServer(options: MCPServerOptions): MCPServerInterface {
@@ -71,14 +86,14 @@ export function createMCPLegacy(server: MCPServerInterface): MCPDispatcherInterf
 }
 
 /**
- * Creates a transport-agnostic Model Context Protocol CLIENT — connects to a REMOTE
+ * Creates a transport-agnostic Model Context Protocol client — connects to a remote
  * MCP server over an injected {@link import('./types.js').MCPMessageTransportInterface},
  * negotiates the modern revision through `server/discover`, and exposes the server's tools as local
  * {@link import('@orkestrel/tool').ToolInterface}s an agent can run.
  *
  * @remarks
  * The egress mirror of {@link createMCPServer}: where the server exposes a local tool
- * registry over MCP, the client USES a remote server's tools. `connect()` discovers,
+ * registry over MCP, the client uses a remote server's tools. `connect()` discovers,
  * validates, and exposes the negotiated modern protocol; a legacy peer requires
  * {@link createMCPLegacyClientTransport}. `tools()` lists + wraps the remote
  * tools (each `execute` calls back over the wire),
@@ -88,7 +103,7 @@ export function createMCPLegacy(server: MCPServerInterface): MCPDispatcherInterf
  * `fetch`) lives in the published server environment; the client itself is provider-agnostic. Subscribe
  * to `connect` / `disconnect` / `notification` through `client.emitter.on(...)`.
  *
- * @param options - `transport` (the carrier; REQUIRED), an optional `identity`
+ * @param options - `transport` (the carrier; required), an optional `identity`
  *   (the client identity), `timeout` (the per-request deadline), and the reserved `on`
  *   {@link import('@orkestrel/emitter').EmitterHooks} (see {@link MCPClientOptions})
  * @returns A working {@link MCPClientInterface}
@@ -139,7 +154,7 @@ export function createMCPLegacyClientTransport(
  * existing shape.
  *
  * @remarks
- * Hand the RESULT to `createMCPClient({ transport })`, then pass the SAME
+ * Hand the result to `createMCPClient({ transport })`, then pass the same
  * `transport` to {@link import('./helpers.js').bindClient} to complete the inbound
  * wiring: `send` serializes each outbound {@link JSONRPCMessage} and writes it through
  * `transport.send`; `close` closes the underlying
@@ -147,10 +162,10 @@ export function createMCPLegacyClientTransport(
  * it is handed in — there is no separate connect step at this layer); `session` is
  * always `undefined` (session correlation is a higher-level concern the duplex port
  * does not carry); and `duplex` is always `true`, because carrying frames in both
- * directions at any moment is exactly what the adapted port is — a claim DRIVEN over a real
+ * directions at any moment is exactly what the adapted port is — a claim driven over a real
  * `MessageChannel` and a real scope pair (a client-initiated `notifications/cancelled`
  * observed arriving at the peer) rather than read back off this literal. The literal is
- * true of the PORT, and stays true only while the port has a peer: close the far half and
+ * true of the port, and stays true only while the port has a peer: close the far half and
  * this transport still declares `true` while carrying nothing, which is the one thing a
  * per-carrier declaration cannot express. Inbound delivery (`emitter`'s `message` / `close` events) is
  * `bindClient`'s job, not this factory's — the returned object exposes a `message`-

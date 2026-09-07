@@ -19,20 +19,20 @@ import { MessagePortTransport } from './transports/MessagePortTransport.js'
 import { WebSocketClientTransport } from './transports/WebSocketClientTransport.js'
 
 /**
- * Creates the browser-face WebSocket CLIENT transport for an
+ * Creates the browser-face WebSocket client transport for an
  * {@link import('@orkestrel/mcp').MCPClientInterface} — a {@link MCPMessageTransportInterface}
- * that drives a REMOTE MCP server over the native `WebSocket` global. This factory is the
+ * that drives a remote MCP server over the native `WebSocket` global. This factory is the
  * browser sibling of the Node face's `createWebSocketClientTransport` (`@orkestrel/mcp/server`).
  *
  * @remarks
  * Hand it to `createMCPClient({ transport })`: `start()` (run by `client.connect()`)
  * opens `new WebSocket(options.url, options.protocols)` and awaits the native
  * `'open'` event — the RFC 6455 handshake itself is the browser's concern. Each
- * JSON-RPC message the client `send`s before the socket opens is QUEUED and flushed,
+ * JSON-RPC message the client `send`s before the socket opens is queued and flushed,
  * in order, once it does; each decoded reply is surfaced on the transport's
  * `message` event for the client's id correlation.
  *
- * @param options - `url` (the remote WebSocket endpoint; REQUIRED) and optional
+ * @param options - `url` (the remote WebSocket endpoint; required) and optional
  *   `protocols` (the WebSocket subprotocol(s) to request); see
  *   {@link WebSocketClientTransportOptions}
  * @returns A working {@link MCPMessageTransportInterface} over the native `WebSocket`
@@ -56,9 +56,9 @@ export function createWebSocketClientTransport(
 }
 
 /**
- * Creates the HTTP CLIENT transport for an
+ * Creates the HTTP client transport for an
  * {@link import('@orkestrel/mcp').MCPClientInterface} — a {@link MCPMessageTransportInterface}
- * that drives a REMOTE Streamable-HTTP MCP server over the native `fetch`.
+ * that drives a remote Streamable-HTTP MCP server over the native `fetch`.
  *
  * @remarks
  * It returns the core {@link import('@orkestrel/mcp').HTTPClientTransport}, the same class the
@@ -70,18 +70,18 @@ export function createWebSocketClientTransport(
  * Hand it to `createMCPClient({ transport })`: each JSON-RPC message the client
  * sends is `POST`ed to `options.url` with `content-type: application/json` and an
  * `Accept` of both `application/json` and `text/event-stream` (the server answers
- * with EITHER — a plain JSON envelope or a Streamable-HTTP SSE `data:` event,
+ * with either — a plain JSON envelope or a Streamable-HTTP SSE `data:` event,
  * decoded with `@orkestrel/sse`), and the reply is surfaced on the transport's
  * `message` event for the client's id correlation. Add `options.headers` (for example, an
  * `Authorization` bearer) to reach a guarded server. `start` / `close` hold no
- * connection; against a STATEFUL server it captures the `mcp-session-id` from
+ * connection; against a stateful server it captures the `mcp-session-id` from
  * `initialize` and echoes it on later requests. It also captures the initialize
  * result's `protocolVersion` and sends `mcp-protocol-version` alone on subsequent
  * legacy requests. Modern requests instead derive `mcp-protocol-version` and
  * `mcp-method` from the message, plus `mcp-name` only for `tools/call`, so the
  * same `MCPClient` passes either era's protocol gates without caller wiring.
  *
- * @param options - `url` (the remote endpoint; REQUIRED), optional `headers` merged
+ * @param options - `url` (the remote endpoint; required), optional `headers` merged
  *   onto every request, optional `fetch` (default `globalThis.fetch`), and optional
  *   `timeout` (ms, applied with `AbortSignal.timeout`); see
  *   {@link HTTPClientTransportOptions}
@@ -108,7 +108,7 @@ export function createHTTPClientTransport(
 /**
  * Creates the browser-face `MessagePort` transport — a
  * {@link import('@orkestrel/mcp').MCPTransportInterface} over a native `MessagePort`, the
- * SYMMETRIC carrier that works as either a server or a client transport depending on
+ * symmetric carrier that works as either a server or a client transport depending on
  * which binder ({@link import('@orkestrel/mcp').bindServer} or
  * {@link import('@orkestrel/mcp').bindClient}) it is handed to.
  *
@@ -118,7 +118,7 @@ export function createHTTPClientTransport(
  * dropped, never thrown); `messageerror` is ignored (one bad frame does not close the
  * channel); `close()` closes the port and fires `closed` exactly once.
  *
- * @param options - `port` (the `MessagePort` half to drive; REQUIRED); see
+ * @param options - `port` (the `MessagePort` half to drive; required); see
  *   {@link MessagePortTransportOptions}
  * @returns A working {@link import('@orkestrel/mcp').MCPTransportInterface} over the port
  *
@@ -204,28 +204,28 @@ export function createScopeServer(
 
 /**
  * Builds {@link createScopeServer}'s `message`-event listener — the unified dispatcher that
- * routes EVERY inbound event on a hostable scope, portless or port-bearing, to the right
+ * routes every inbound event on a hostable scope, portless or port-bearing, to the right
  * binding.
  *
  * @remarks
- * Port-bearing events (`event.ports.length > 0`) are gated by `options.accept` FIRST
+ * Port-bearing events (`event.ports.length > 0`) are gated by `options.accept` first
  * — when the gate returns `false` the event is dropped entirely (no binding, no reply).
  * Accepted events spawn a fresh `MessagePortTransport` over `event.ports[0]`,
  * `bindServer` `server` onto it, and record a teardown (`unbind` then `transport.close()`)
- * into `teardowns` KEYED BY THAT PORT. A port already present is IGNORED — repeated delivery
+ * into `teardowns` keyed by that port. A port already present is ignored — repeated delivery
  * of the same `MessagePort` would create duplicate bindings over one port (→ duplicated
  * replies), so a repeat is silently dropped.
  *
- * The key is what makes `teardowns` the ONLY place an accepted port is remembered. A separate
+ * The key is what makes `teardowns` the only place an accepted port is remembered. A separate
  * seen-port set would be a second collection over the same lifetime, and the scope server's
  * `stop` would have to remember to empty both — so a long-lived scope such as a Service Worker
  * would retain every port it ever accepted, closed and unbound ones included. Membership
  * answers "already bound?" and `clear()` drops the binding and the dedup together.
  *
- * This branch fires on EITHER a Service-Worker-shaped scope (its normal per-client
+ * This branch fires on either a Service-Worker-shaped scope (its normal per-client
  * channel) or a dedicated-worker-shaped one that happens to receive a port-bearing event
  * (the unified design's deliberate cross-case, needing no upfront shape flag). An event
- * with NO ports and a STRING `data` is pushed onto `scopeTransport.deliver` (the
+ * with no ports and a string `data` is pushed onto `scopeTransport.deliver` (the
  * implicit, already-bound scope channel); any other event (no ports, non-string data)
  * is silently dropped — total, never throws.
  *
@@ -280,7 +280,7 @@ export function createScopeMessageListener(
  *
  * @remarks
  * `send` writes each outbound string through `scope.postMessage`. `listen`/`closed`
- * register the SINGLE handler `deliver` / the underlying close path route through —
+ * register the single handler `deliver` / the underlying close path route through —
  * the scope server's own `scope` `message`-event listener calls `deliver(event.data)`
  * for every portless, string-payload event (there is no native registration point on
  * the scope itself for the scope server to hand a `listen` handler to, so `deliver` is

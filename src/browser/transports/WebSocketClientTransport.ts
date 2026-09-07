@@ -10,8 +10,8 @@ import { isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 
 /**
- * Drives a REMOTE MCP server over the native `WebSocket` global from the browser face, as a
- * CLIENT {@link MCPMessageTransportInterface}. This class is the browser sibling of the Node
+ * Drives a remote MCP server over the native `WebSocket` global from the browser face, as a
+ * client {@link MCPMessageTransportInterface}. This class is the browser sibling of the Node
  * face's {@link import('@orkestrel/mcp/server').WebSocketClientTransport}.
  *
  * @remarks
@@ -19,33 +19,33 @@ import { Emitter } from '@orkestrel/emitter'
  *   waits for the native `'open'` event — the RFC 6455 handshake itself is entirely
  *   the host's concern, so this transport carries none of the Node client's
  *   `node:crypto` / `node:http(s)` machinery. A connection failure (the native
- *   `'error'` event while not yet `OPEN`) REJECTS `start()`.
+ *   `'error'` event while not yet `OPEN`) rejects `start()`.
  * - **Queued sends.** `send` writes each message as one text frame immediately once
  *   the socket is `OPEN`; a `send` issued before `'open'` fires (or before `start()`
- *   is even called) is QUEUED and flushed, IN ORDER, the moment the socket opens —
- *   so a caller need not await `start()` before calling `send`. A queue rides ONE
- *   connection: a close DISCARDS whatever is still in it.
- * - **A closed channel REJECTS.** The native socket confirms nothing about a write, so this
+ *   is even called) is queued and flushed, in order, the moment the socket opens —
+ *   so a caller need not await `start()` before calling `send`. A queue rides one
+ *   connection: a close discards whatever is still in it.
+ * - **A closed channel rejects.** The native socket confirms nothing about a write, so this
  *   transport answers from its own state: a `send` after `close()`, or on a socket already
- *   reporting `CLOSING` / `CLOSED`, REJECTS with `WebSocket transport is not connected` rather
+ *   reporting `CLOSING` / `CLOSED`, rejects with `WebSocket transport is not connected` rather
  *   than resolving on a frame nobody wrote. Only the closed state rejects — a pre-open `send`
  *   still queues.
  * - **Inbound (`message`).** Each decoded text frame runs through the shared
  *   `deliverMessage` fold (parse, then narrow) — a well-formed {@link JSONRPCMessage}
  *   re-emits on this transport's `message` event; a non-text (binary) frame or a
- *   non-JSON / non-message text frame surfaces on `error` and is DROPPED (never
+ *   non-JSON / non-message text frame surfaces on `error` and is dropped (never
  *   throws on adversarial wire input).
  * - **`close()`** unsubscribes from the underlying socket, closes it, and fires `close`
  *   (idempotent); the socket's native `close` event (a server-initiated close) fires the
- *   SAME `close` exactly once total — `close()` first flips the guard, so the native event
+ *   same `close` exactly once total — `close()` first flips the guard, so the native event
  *   never double-emits, and the released socket reports its own close to nobody. Closing before
  *   the socket opens resolves the pending `start()` rather than leaving it pending, matching the
- *   Node face. A `send` issued after `close()` REJECTS (it is never queued), and the
- *   pre-open queue is DISCARDED — by `close()` and by the native `close` event alike — so a
+ *   Node face. A `send` issued after `close()` rejects (it is never queued), and the
+ *   pre-open queue is discarded — by `close()` and by the native `close` event alike — so a
  *   closed transport delivers nothing until a `start()` opens a new connection, and nothing
  *   the caller handed the abandoned connection rides that one.
  * - **Observable.** Owns the `emitter` ({@link MCPMessageTransportEventMap}); every
- *   emit the emitter isolates a listener throw; `error` is a DOMAIN event (a
+ *   emit the emitter isolates a listener throw; `error` is a domain event (a
  *   transport-level fault).
  *
  * @example

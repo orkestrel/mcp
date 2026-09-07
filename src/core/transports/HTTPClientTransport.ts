@@ -26,7 +26,7 @@ import { parseJSONRPCMessage } from '../parsers.js'
 import { isJSONRPCResponse, isMCPVersion, isModernRequest } from '../validators.js'
 
 /**
- * Drives a REMOTE Streamable-HTTP MCP server over `fetch` — a CLIENT
+ * Drives a remote Streamable-HTTP MCP server over `fetch` — a client
  * {@link MCPMessageTransportInterface} for the Model Context Protocol, the egress mirror of
  * the server's `createMCPRoutes`.
  *
@@ -38,7 +38,7 @@ import { isJSONRPCResponse, isMCPVersion, isModernRequest } from '../validators.
  *   class, so a reply reaches a page and a Node process through the same decode.
  * - **Request/response over `fetch`.** `send(message)` POSTs the JSON-serialized
  *   message to `options.url` with `content-type: application/json` and an
- *   `Accept` of BOTH `application/json` and `text/event-stream` (so the server may
+ *   `Accept` of both `application/json` and `text/event-stream` (so the server may
  *   answer with either framing) — plus any `options.headers` (for example, an `Authorization`
  *   bearer). It then decodes the reply and emits each decoded {@link JSONRPCMessage} on
  *   the `message` event the {@link import('@orkestrel/mcp').MCPClientInterface} subscribes
@@ -51,12 +51,12 @@ import { isJSONRPCResponse, isMCPVersion, isModernRequest } from '../validators.
  *   Accepted (a notification) carries no body and emits nothing.
  * - **Session and protocol headers.** `start()` is a no-op (a
  *   request/response transport opens no long-lived connection). The
- *   `mcp-session-id` response header, when a STATEFUL server sends one (on
- *   `initialize`), is captured into `session` and then ECHOED as the
- *   `mcp-session-id` request header on every SUBSEQUENT request — so an
+ *   `mcp-session-id` response header, when a stateful server sends one (on
+ *   `initialize`), is captured into `session` and then echoed as the
+ *   `mcp-session-id` request header on every subsequent request — so an
  *   `MCPClient` passes a stateful server's session validation. The
  *   initialize result's `protocolVersion` is likewise captured, but only
- *   when it is a SUPPORTED value, and echoed as `mcp-protocol-version` alone on
+ *   when it is a supported value, and echoed as `mcp-protocol-version` alone on
  *   subsequent legacy requests. Modern requests instead derive protocol and method
  *   headers from the message, plus the name header only for `tools/call` — carried in the
  *   protocol's Base64 sentinel form whenever the tool name cannot ride as plain ASCII.
@@ -64,11 +64,11 @@ import { isJSONRPCResponse, isMCPVersion, isModernRequest } from '../validators.
  *   `close()` clears the captured protocol so a reconnect's `initialize`
  *   POST is headerless; the captured `session` persists across `close()`.
  * - **`close()` releases what is in flight.** Every `fetch` this transport still has open is
- *   ABORTED, which cancels the response body a `send` is reading — an SSE reply the server
+ *   aborted, which cancels the response body a `send` is reading — an SSE reply the server
  *   never ends would otherwise outlive the transport, with nothing left able to reach it. The
  *   aborted read surfaces on `error` and the `send` reporting it resolves. `close()` is
  *   idempotent (one `close` event per connected lifetime), and `start()` opens the next one.
- * - **Total at the boundary, and a non-success reply REJECTS.** Every reply is narrowed
+ * - **Total at the boundary, and a non-success reply rejects.** Every reply is narrowed
  *   (`parseJSONRPCMessage`, the SSE decoder). A non-message success reply is dropped, never
  *   asserted. A non-success reply that carries no valid JSON-RPC message rejects `send` with
  *   an error naming its HTTP status and body shape — the peer answered, and answering the
