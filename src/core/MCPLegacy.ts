@@ -9,10 +9,11 @@ import type {
 	MCPDispatcherInterface,
 	MCPLegacyOptions,
 	MCPLimitOptions,
+	MCPStream,
 	MCPStreamControllerInterface,
 	MCPTextStreamControllerInterface,
 } from './types.js'
-import { isRecord, isString, parseJSON } from '@orkestrel/contract'
+import { isInteger, isRecord, isString, parseJSON } from '@orkestrel/contract'
 import {
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_INVALID_REQUEST,
@@ -26,11 +27,20 @@ import {
 	buildInitializeResult,
 	buildJSONRPCError,
 	buildJSONRPCResult,
+	buildMethodOptions,
 	legacyInvocationToModern,
 	modernResultToLegacy,
 } from './helpers.js'
+
+import { MCPStreamController } from './MCPStreamController.js'
+import { MCPTextStreamController } from './MCPTextStreamController.js'
 import { parseJSONRPCMessage } from './parsers.js'
-import { isBoundedString, isJSONRPCInvocation, isModernRequest } from './validators.js'
+import {
+	isBoundedString,
+	isJSONRPCInvocation,
+	isMCPProgress,
+	isModernRequest,
+} from './validators.js'
 
 /**
  * Translates the fixed legacy method set onto one modern dispatcher.
@@ -106,13 +116,16 @@ export class MCPLegacy implements MCPDispatcherInterface {
 			return this.#options.dispatcher.handle(message, options)
 		}
 		const answer = await this.#legacy(parsed, options)
-		return answer === undefined ? undefined : JSON.stringify(answer)
+		if (answer === undefined) return undefined
+		return Symbol.asyncIterator in answer
+			? new MCPTextStreamController(answer)
+			: JSON.stringify(answer)
 	}
 
 	async #legacy(
 		invocation: JSONRPCInvocation,
 		options?: MCPDispatchOptions,
-	): Promise<JSONRPCResponse | undefined> {
+	): Promise<JSONRPCResponse | MCPStreamControllerInterface | undefined> {
 		if (invocation.id === undefined) return undefined
 		const id = invocation.id
 		// The same bound on the typed door, applied before the switch so a locally answered
@@ -163,15 +176,65 @@ export class MCPLegacy implements MCPDispatcherInterface {
 		}
 	}
 
-	async #forward(request: JSONRPCRequest, options?: MCPDispatchOptions): Promise<JSONRPCResponse> {
+	async #forward(
+		request: JSONRPCRequest,
+		options?: MCPDispatchOptions,
+	): Promise<JSONRPCResponse | MCPStreamControllerInterface> {
 		const translated = legacyInvocationToModern(request)
-		const answer = await this.#options.dispatcher.dispatch(translated, options)
-		if (Symbol.asyncIterator in answer) {
-			answer.stop()
-			await answer[Symbol.asyncDispose]()
-			return this.#unsupported(request.id, 'stream')
+		const metadata = request.method === 'tools/call' ? request.params?.['_meta'] : undefined
+		const candidate = isRecord(metadata) ? metadata['progressToken'] : undefined
+		const token = isString(candidate) || isInteger(candidate) ? candidate : undefined
+		if (token === undefined) {
+			const answer = await this.#options.dispatcher.dispatch(translated, options)
+			if (Symbol.asyncIterator in answer) {
+				answer.stop()
+				await answer[Symbol.asyncDispose]()
+				return this.#unsupported(request.id, 'stream')
+			}
+			return this.#project(answer, request.id)
 		}
-		return this.#project(answer, request.id)
+		const closure = new AbortController()
+		const resolved = buildMethodOptions(options ?? {}, closure.signal)
+		try {
+			const answer = await this.#options.dispatcher.dispatch(translated, resolved)
+			if (Symbol.asyncIterator in answer) {
+				return new MCPStreamController(
+					this.#progress(answer, request.id, token),
+					resolved.signal,
+					closure,
+				)
+			}
+			closure.abort()
+			return this.#project(answer, request.id)
+		} catch (error) {
+			closure.abort(error)
+			throw error
+		}
+	}
+
+	async *#progress(
+		stream: MCPStreamControllerInterface,
+		id: JSONRPCId,
+		token: string | number,
+	): MCPStream {
+		try {
+			while (true) {
+				const frame = await stream.next()
+				if (frame.done === true) return this.#project(frame.value, id)
+				const params = frame.value.params
+				if (
+					frame.value.method !== 'notifications/progress' ||
+					!isRecord(params) ||
+					params['progressToken'] !== token ||
+					!isMCPProgress(params)
+				) {
+					return this.#unsupported(id, 'stream')
+				}
+				yield frame.value
+			}
+		} finally {
+			await stream[Symbol.asyncDispose]()
+		}
 	}
 
 	#project(answer: JSONRPCResponse, id: JSONRPCId): JSONRPCResponse {
