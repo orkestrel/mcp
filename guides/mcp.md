@@ -551,9 +551,17 @@ with `SyntaxError: Unexpected identifier`, taking every unrelated export in the 
 The same file written with the explicit `finally` runs on that floor and discharges the
 identical obligation.
 
-A legacy request never reaches a held-open answer: its method set is frozen by a
-shipped revision, and `MCPLegacy` ends any stream the modern engine hands back
-before answering `-32000`, because the dated revision has no shape for one. See
+A legacy `tools/call` carrying a string or integer progress token receives a controlled
+stream when the modern execution policy reports progress. `MCPLegacy` forwards only
+`notifications/progress` frames carrying that request's token, then projects the terminal
+complete or error response onto the legacy wire. A call whose executor reports no progress
+still returns its projected terminal through the stream. Stopping the typed or text face
+aborts the modern request lifetime and releases its controlled source.
+
+The fixed legacy method set still refuses every other held-open answer. A `tools/list`
+override stream, a `tools/call` stream without a legal token, and a stream yielding another
+notification or another request's token end with `-32000`, because the dated revision has no
+result shape for them. See
 [Compose or remove the legacy protocol layer](#compose-or-remove-the-legacy-protocol-layer).
 
 ### Project a host-owned resource, prompt, and completion registry
@@ -2049,10 +2057,11 @@ The shared cause is worth stating once, plainly: **legacy inherits the modern en
 because it now runs on it.** `NaN` is not JSON, the modern path always refused it, and a server
 that refused one caller while silently nulling the other was answering the same question in
 contradictory ways. Uniform refusal is the coherent answer, and it is the intended consequence of the collapse
-rather than a side effect of it. `-32000` survives, but only where it carries a meaning no modern
-code does: a modern result the dated revision has no shape for — a held-open stream, a `task`, an
-`input_required`, or a capability refusal — which is the one thing the older revision genuinely
-cannot represent.
+rather than a side effect of it. `-32000` survives where it carries a meaning no modern code does:
+a `task`, an `input_required`, a capability refusal, or an unsupported stream the dated revision
+cannot represent. A legal `tools/call` progress stream is the narrow exception: matching progress
+notifications remain progress notifications, and its final complete or error response becomes the
+legacy answer.
 
 ### Adapt a legacy peer at the client transport boundary
 
