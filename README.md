@@ -5,10 +5,8 @@
 
 Bridge the `@orkestrel/tool` registry to MCP: `createMCPServer` exposes a live
 `ToolManagerInterface` to any MCP client, and `createMCPClient` drives a remote MCP server
-and surfaces its tools as local `ToolInterface`s. No agent runtime is required. The dispatch
-core in `src/core` speaks JSON-RPC 2.0 and nothing else; each transport lives one layer out,
-in `src/server` for Node and `src/browser` for the page, and each is mechanism rather than
-policy. Part of the `@orkestrel` line.
+and surfaces its tools as local `ToolInterface`s. No agent runtime is required. Part of the
+`@orkestrel` line.
 
 ## Install
 
@@ -29,8 +27,6 @@ npm install @orkestrel/mcp
 
 ## Usage
 
-Expose a tool registry over MCP, mounted on the HTTP spine:
-
 ```ts
 import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createMCPRoutes } from '@orkestrel/mcp/server'
@@ -44,6 +40,8 @@ const mcp = createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }
 const routes = createMCPRoutes(createMCPLegacy(mcp)) // answers `initialize` too; pass `mcp` alone for modern-only
 router.add(routes)
 ```
+
+This example exposes a tool registry over MCP, mounted on the HTTP spine.
 
 Drive a remote MCP server as a client, over the same transport-agnostic core:
 
@@ -95,7 +93,7 @@ The publication facts, each with its number. Full detail, plus every
 protocol-level gap and non-goal, is in
 [the MCP guide](https://github.com/orkestrel/mcp/blob/main/guides/mcp.md#declared-packaging-limits).
 
-- **No IDE evidence.** See above. The conformance number is about the wire
+- **No IDE evidence.** See the [wire conformance evidence](https://github.com/orkestrel/mcp#proven). The conformance number is about the wire
   and does not transfer to a host application.
 - **No top-level `types` field.** Every `exports` subpath carries a `types`
   condition, so `node16`, `nodenext`, and `bundler` resolution find

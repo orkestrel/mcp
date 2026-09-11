@@ -156,6 +156,8 @@ with the replacement character, where `encodeUTF8` would refuse it and widen
 names JSON Schema `byte` membership for the blob, image, and audio content a peer sends; it
 does not govern this payload.
 
+### Connect through the HTTP client
+
 Use the client and HTTP transport together and none of that wire anatomy reaches the
 call site — the transport derives all reserved metadata and headers:
 
@@ -166,6 +168,8 @@ import { createHTTPClientTransport } from '@orkestrel/mcp/server'
 const transport = createHTTPClientTransport({ url: 'https://mcp.example/rpc' })
 const client = createMCPClient({ transport })
 ```
+
+### Inspect a raw modern tool call
 
 The equivalent raw modern `tools/call` carries the reserved request metadata keys
 and their HTTP projections side by side:
@@ -323,7 +327,7 @@ malformed runtime result instead becomes a detail-free `-32603` response, and th
 value that was caught is reported on the server's `error` event — the one place it
 is legible, and never the wire.
 
-That is the whole of the common case. The sections below add one capability at a
+That is the whole of the common case. The following sections add one capability at a
 time — the envelope arms, the method seam, the resource / prompt / completion
 ports and the adapters that fit an existing registry behind one, subscriptions,
 elicitation, input bounds, the duplex port, and the removable legacy layer — then
@@ -378,11 +382,11 @@ isMCPResult(answer.result) // true — a modern result always carries `resultTyp
 isMCPLegacyResult({ protocolVersion: '2025-11-25' }) // true — the legacy arm never does
 
 const anonymous = buildJSONRPCError(undefined, -32700, 'Parse error')
-Object.hasOwn(anonymous, 'id') // false — the member is ABSENT, not null
+Object.hasOwn(anonymous, 'id') // false — the member is absent, not null
 isJSONRPCErrorResponse(anonymous) // true
 
 // The resolved options every dispatched method receives. The signal is the request's
-// LIFETIME: dispatch composes the caller's signal, when there is one, with the one it
+// Lifetime: dispatch composes the caller's signal, when there is one, with the one it
 // aborts as soon as the answer is finished.
 const lifetime = new AbortController()
 buildMethodOptions({}, lifetime.signal).signal.aborted // false — until the answer ends
@@ -398,6 +402,8 @@ forbidden there, and `MCPResult` and `MCPLegacyResult` are unassignable in both
 directions.
 
 ### Register a modern method on the seam
+
+#### Replace a method on the registry
 
 The modern branch answers from one registry, `server.methods`. The built-in
 methods are registered on it at construction — plus the `tasks/*` methods
@@ -421,7 +427,7 @@ server.methods.method('demo/probe') // undefined → the modern branch answers -
 server.methods.add('demo/probe', async (request) =>
 	buildJSONRPCResult(request.id, { probed: true }),
 )
-// the SAME method now answers; `add` under an existing name replaces it, which is
+// the same method now answers; `add` under an existing name replaces it, which is
 // how a consumer overrides a built-in — no precedence rule to remember.
 ```
 
@@ -437,6 +443,8 @@ resolved `undefined` for a request would contradict `dispatch`'s own overloads
 and leave the caller waiting to its deadline. The registry is open, so a handler
 that was never typechecked against the seam can still arrive; dispatch contains
 that as `-32603` plus one `error` event rather than passing the absence on.
+
+#### Carry request context into a method
 
 A handler also receives an `MCPMethodOptions` bag — the resolved mirror of the
 `MCPDispatchOptions` a caller passes. Its `signal` aborts when the bound
@@ -476,6 +484,8 @@ inspects, validates, or serializes it. Narrow it with your own total guard and
 treat absence as unauthenticated. It remains `unknown`, rather than a threaded
 generic that would falsely promise protocol verification.
 
+#### Control a streaming method response
+
 A handler that must hold the request open returns an `MCPStream` instead of
 a response: each `yield` is a `JSONRPCNotification`, and the generator's
 `return` value is the terminating response — closure is a result, not an
@@ -514,12 +524,12 @@ const answer = await server.dispatch({
 	},
 })
 if (answer !== undefined && Symbol.asyncIterator in answer) {
-	// the ONE narrowing point — a controlled stream, serializable and pumpable:
+	// the one narrowing point — a controlled stream, serializable and pumpable:
 	const text = new MCPTextStreamController(answer)
 	try {
 		await sendStream(text, transport)
 	} catch {
-		text.stop() // ends the TYPED exchange, not just the serialized adapter
+		text.stop() // ends the typed exchange, not just the serialized adapter
 	}
 }
 ```
@@ -649,6 +659,8 @@ completion port and the host answers it. The party that owns expansion owns know
 its own variables; parsing templates inside MCP to answer a completion would
 reintroduce the engine this ruling removes. `ref/prompt` is forwarded the same way.
 
+#### Provide resource, prompt, and completion ports
+
 Completion candidates are capped at the protocol's **100** values. A manager that
 returns more has its list projected down to the first 100 with `hasMore: true`
 stamped, whatever it reported itself — so 105 candidates leave as 100 plus the honest
@@ -672,7 +684,7 @@ const resources: MCPResourceManagerInterface = {
 	resources: () => ({
 		resources: [{ uri: 'docs://readme', name: 'readme', mimeType: 'text/plain' }],
 	}),
-	// A CONCRETE uri arrives here. Matching `docs://page/{slug}` against it, and reading
+	// A concrete URI arrives here. Matching `docs://page/{slug}` against it, and reading
 	// `slug` back out, is this function's job — MCP substituted nothing on the way in.
 	resource: (params) => {
 		const text = documents.get(params.uri)
@@ -729,6 +741,8 @@ const server = createMCPServer({
 server.methods.method('resources/read') // registered, because `resources` was supplied
 server.methods.method('logging/setLevel') // undefined → -32601, like any unconfigured capability
 ```
+
+#### Validate projected registry values
 
 The guards behind those projections are exported, so a host can validate its own
 registry with the same totals the server validates it with:
@@ -804,7 +818,7 @@ line up and pretending otherwise would cost a reader an afternoon.
    in the first place. A first page and an unbounded workspace are the same call.
 4. **Templates stay the adapter's.** If the adapter publishes `docs://page/{slug}`, it
    is the one that matches the concrete URI back to a workspace path, exactly as the
-   ruling above requires.
+   preceding ruling requires.
 
 **Template → `prompts`: a near-perfect match and a real mismatch.**
 `TemplatePlaceholder` (`{ name, description?, required?, path?, fallback? }`) maps onto
@@ -914,6 +928,8 @@ caught value reported on the server's `error` event. Ending the source normally 
 with the complete result; an abort closes with no terminal at all, because a cancelled
 request is not an answered one.
 
+#### Configure the subscription producer
+
 The filter keys — `toolsListChanged`, `promptsListChanged`,
 `resourcesListChanged`, `resourceSubscriptions`, `taskIds` — and the `params.notifications`
 object holding them are wire spellings carried verbatim from the dated schema.
@@ -999,6 +1015,8 @@ calls task notifications optional, so this package states what it delivers and w
 not: every frame the producer yields that passes the filter is stamped and written to this
 stream, in producer order. A transition emitted before this subscription existed is not
 resent, so a client that needs the state it missed reads it with `tasks/get`.
+
+#### Filter task notifications
 
 The helpers behind that path are `buildSubscriptionFilter` and
 `matchesSubscriptionNotification`, the ones the other families use, with `enabled` supplied:
@@ -1126,7 +1144,7 @@ subscription.abort()
 
 ### Execute rich results and request-scoped progress
 
-`MCPServerOptions.execution` is the explicit modern execution port above the live
+`MCPServerOptions.execution` is the explicit modern execution port over the live
 `ToolManagerInterface`. Its input contains the original `request`, canonical `call`,
 real `tools` manager, effective `signal`, and an optional `progress` reporter. Returning
 a `ToolResult` uses the normal text/structured normalization; returning a validated
@@ -1168,6 +1186,8 @@ stops on completion, abort, or generator return, rejects late reports, and never
 replay or durable state.
 A server without `execution` still calls `ToolManagerInterface.execute` exactly once and
 may answer unary even when a token was supplied.
+
+#### Stream rich results and progress
 
 **Completion, a consumer `return(value)`, and `stop()` or an abort all end the exchange, and
 only completion reaches the wire.** Running the source to completion
@@ -1225,6 +1245,8 @@ const response = await server.dispatch({
 
 if (response !== undefined && Symbol.asyncIterator in response) await response.next()
 ```
+
+#### Validate rich result boundaries
 
 The exported boundary helpers validate the same wire model and derive stable argument
 bindings without a second JSON implementation:
@@ -1343,6 +1365,8 @@ already in flight — a carrier sealed under a listed older secret still opens, 
 seals under the current. Core supplies no signer of its own, and a consumer substituting its own
 port takes that integrity property with it: a port whose `open` returns whatever it was given
 makes every binding a client-supplied claim.
+
+#### Issue a server-side input round
 
 The order the server runs those steps in is itself a contract, because each step is a
 provider call somebody pays for. On a first round: the selector runs, its round is owned and
@@ -1513,6 +1537,8 @@ a port that opens successfully onto a payload this server never authored, or ont
 outside the state bound, because the client wrote neither and cannot act on being told it
 was at fault. A carrier the port cannot recover, and an invalid resolved principal, round, or
 carrier, remain `-32602`. Recovered state is bounded before parsing.
+
+#### Answer an input round from the client
 
 Place the retry through the `input` group on `MCPCallOptions`. `responses` is required and
 `state` is optional: a peer may issue a round with no `requestState` to return, and SEP-2322
@@ -1693,7 +1719,7 @@ server.methods.method('tasks/get') // registered only because `task` was configu
 both key obligations at once: a client that retries one logical call sends a fresh id and mints
 a second durable task, which is dedup never firing; and two principals whose clients both start
 counting at `1` produce the same key, which is one principal handed a `taskId` over the other's
-work. Mint from the caller and the canonical arguments, as above. `deferral` returning `undefined`
+work. Mint from the caller and the canonical arguments. `deferral` returning `undefined`
 is the only way to say "run this inline"; an empty string cannot identify an operation and is
 refused as `-32603` rather than quietly taking the inline path.
 
@@ -2079,6 +2105,8 @@ peer. A legacy result gains the modern `resultType`, server identity, and cache 
 reaches `MCPClient`. The shared projections live in the core helpers and are the same projections
 the server decorator uses in the opposite direction.
 
+#### Convert between modern and legacy messages
+
 The projections are also public when another explicit boundary needs the same wire conversion:
 
 ```ts
@@ -2094,6 +2122,8 @@ const legacyRequest = modernInvocationToLegacy(request)
 const result = legacyResultToModern({}, 'tools/list', { name: 'legacy', version: '1.0.0' })
 const legacyResult = modernResultToLegacy(result)
 ```
+
+#### Wrap a legacy client transport
 
 Wrap the transport explicitly when the peer exposes only the legacy handshake:
 
@@ -2335,7 +2365,7 @@ A `Shape` cell holds the constant's declared type.
 | `bindServer`                       | function | Pipes an `MCPTransportInterface` into an `MCPDispatcherInterface` — every inbound message runs through `server.handle`, and a defined reply is written back through `transport.send`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `bindClient`                       | function | Pipes an `MCPTransportInterface` into an `MCPClientInterface` — every inbound message is decoded and delivered onto the client's own transport (`client.transport.emitter`'s `message` / `close` events), resolving/rejecting the client's correlated pending requests exactly as a direct reply would.                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `decodeEvent`                      | function | Decodes one SSE event's `data` string into a `JSONRPCMessage`, or `undefined` when it is not one — the per-event step `readEventStream` folds over.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `readEventStream`                  | function | Decodes a `fetch` Response's Server-Sent-Events body into the JSON-RPC messages it carried — the CLIENT-side inverse of a server's Streamable-HTTP SSE response.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `readEventStream`                  | function | Decodes a `fetch` Response's Server-Sent-Events body into the JSON-RPC messages it carried — the client-side inverse of a server's Streamable-HTTP SSE response.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `buildResponseError`               | function | Builds the error for a non-success HTTP response that carried no JSON-RPC message.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 ### Types
@@ -2343,6 +2373,7 @@ A `Shape` cell holds the constant's declared type.
 A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an
 optional member and `plus` introducing its call-signature members, and a type alias's own type
 literal with a union's arms escaped as `\|`.
+An extended interface's name comes before `plus`, with the members it adds after.
 
 | Type                               | Kind      | Shape                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Summary                                                                                                                                                                                                     |
 | ---------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -2361,8 +2392,8 @@ literal with a union's arms escaped as `\|`.
 | `MCPModernVersion`                 | type      | `'2026-07-28'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Names a modern protocol revision supported by the bare MCP server.                                                                                                                                          |
 | `MCPLegacyVersion`                 | type      | `'2025-11-25' \| '2025-06-18'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Names a legacy protocol revision supported by the optional legacy decorators.                                                                                                                               |
 | `MCPMetaObject`                    | type      | `Readonly<Record<string, JSONValue>>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Represents the exact finite JSON metadata carried by MCP `_meta` envelopes.                                                                                                                                 |
-| `MCPResultMetaObject`              | type      | `MCPMetaObject & {}`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Carries open result metadata with the dated reserved server identity field.                                                                                                                                 |
-| `MCPNotificationMetaObject`        | type      | `MCPMetaObject & {}`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Carries open notification metadata with the dated reserved subscription field.                                                                                                                              |
+| `MCPResultMetaObject`              | type      | `MCPMetaObject & { 'io.modelcontextprotocol/serverInfo'? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Carries open result metadata with the dated reserved server identity field.                                                                                                                                 |
+| `MCPNotificationMetaObject`        | type      | `MCPMetaObject & { 'io.modelcontextprotocol/subscriptionId'? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Carries open notification metadata with the dated reserved subscription field.                                                                                                                              |
 | `MCPLoggingLevel`                  | type      | `'debug' \| 'info' \| 'notice' \| 'warning' \| 'error' \| 'critical' \| 'alert' \| 'emergency'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Names the dated logging levels accepted by MCP request metadata.                                                                                                                                            |
 | `MCPClientCapabilities`            | type      | `Readonly<Record<string, MCPMetaObject>> & { experimental?, roots?, sampling?, elicitation?, extensions? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Represents the open dated client-capability declaration carried by modern requests.                                                                                                                         |
 | `MCPServerCapabilities`            | type      | `Readonly<Record<string, MCPMetaObject>> & { experimental?, logging?, completions?, prompts?, resources?, tools?, extensions? }`                                                                                                                                                                                                                                                                                                                                                                                                                                 | Represents the open dated server-capability declaration returned by discovery.                                                                                                                              |
@@ -2385,8 +2416,8 @@ literal with a union's arms escaped as `\|`.
 | `MCPResource`                      | interface | `{ uri, name, title?, description?, mimeType?, annotations?, size?, icons?, _meta? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Represents one resource descriptor advertised by `resources/list`.                                                                                                                                          |
 | `MCPResourceTemplate`              | interface | `{ uriTemplate, name, title?, description?, mimeType?, annotations?, icons?, _meta? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Represents one RFC 6570 resource-template descriptor advertised by `resources/templates/list`.                                                                                                              |
 | `MCPResourceContents`              | type      | `(MCPTextResource & { blob?: never }) \| (MCPBlobResource & { text?: never })`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Represents the resource contents returned by `resources/read`.                                                                                                                                              |
-| `MCPResourcePage`                  | interface | `{ nextCursor?, resources }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Represents one consumer-owned page projected by `resources/list`.                                                                                                                                           |
-| `MCPResourceTemplatePage`          | interface | `{ nextCursor?, resourceTemplates }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Represents one consumer-owned page projected by `resources/templates/list`.                                                                                                                                 |
+| `MCPResourcePage`                  | interface | `MCPPaginationResult plus { resources }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Represents one consumer-owned page projected by `resources/list`.                                                                                                                                           |
+| `MCPResourceTemplatePage`          | interface | `MCPPaginationResult plus { resourceTemplates }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Represents one consumer-owned page projected by `resources/templates/list`.                                                                                                                                 |
 | `MCPResourceReadParams`            | interface | `{ uri, inputResponses?, requestState? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Represents the parameters `resources/read` accepts — a concrete `uri` plus the optional multi-round continuation carriers.                                                                                  |
 | `MCPResourceListResult`            | type      | `MCPResourcePage & { resultType: 'complete', ttlMs, cacheScope: 'public' \| 'private', _meta? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Represents the complete cacheable `resources/list` result.                                                                                                                                                  |
 | `MCPResourceReadResult`            | type      | `{ contents, resultType: 'complete', ttlMs, cacheScope: 'public' \| 'private', _meta? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Represents the complete cacheable `resources/read` result.                                                                                                                                                  |
@@ -2394,8 +2425,8 @@ literal with a union's arms escaped as `\|`.
 | `MCPResourceManagerInterface`      | interface | `{} plus resources, resource, templates`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Represents the consumer-supplied resource registry port.                                                                                                                                                    |
 | `MCPPromptArgument`                | interface | `{ name, title?, description?, required? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Represents one argument descriptor advertised with an MCP prompt.                                                                                                                                           |
 | `MCPPrompt`                        | interface | `{ name, title?, description?, arguments?, icons?, _meta? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Represents one prompt descriptor advertised by `prompts/list`.                                                                                                                                              |
-| `MCPPromptMessage`                 | interface | `{ role: 'user' \| 'assistant', content }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Represents one user or assistant message returned by `prompts/get`.                                                                                                                                         |
-| `MCPPromptPage`                    | interface | `{ nextCursor?, prompts }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Represents one consumer-owned page projected by `prompts/list`.                                                                                                                                             |
+| `MCPPromptMessage`                 | interface | `{ role, content }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Represents one user or assistant message returned by `prompts/get`.                                                                                                                                         |
+| `MCPPromptPage`                    | interface | `MCPPaginationResult plus { prompts }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Represents one consumer-owned page projected by `prompts/list`.                                                                                                                                             |
 | `MCPPromptGetParams`               | interface | `{ name, arguments?, inputResponses?, requestState? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Represents the parameters `prompts/get` accepts — a prompt name plus the optional argument values and multi-round continuation carriers.                                                                    |
 | `MCPPromptListResult`              | type      | `MCPPromptPage & { resultType: 'complete', ttlMs, cacheScope: 'public' \| 'private', _meta? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Represents the complete cacheable `prompts/list` result.                                                                                                                                                    |
 | `MCPPromptGetResult`               | interface | `{ resultType: 'complete', description?, messages, _meta? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Represents the complete, non-cacheable `prompts/get` result.                                                                                                                                                |
@@ -2412,7 +2443,7 @@ literal with a union's arms escaped as `\|`.
 | `MCPElicitValue`                   | type      | `string \| number \| boolean \| readonly string[]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Names the primitive value shapes accepted in an MCP form elicitation response.                                                                                                                              |
 | `MCPElicitChoice`                  | interface | `{ const, title }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Represents one titled value in a form elicitation's single- or multi-select schema.                                                                                                                         |
 | `MCPElicitFieldSchema`             | type      | `{ type: 'boolean', title?, description?, default? } \| { type: 'number' \| 'integer', title?, description?, minimum?, maximum?, default? } \| { type: 'string', title?, description?, minLength?, maxLength?, format?: 'uri' \| 'email' \| 'date' \| 'date-time', default? } \| { type: 'string', title?, description?, enum, default? } \| { type: 'string', title?, description?, oneOf, default? } \| { type: 'string', title?, description?, enum, enumNames, default? } \| { type: 'array', title?, description?, minItems?, maxItems?, default?, items }` | Represents one restricted single-field schema accepted by MCP form-mode elicitation.                                                                                                                        |
-| `MCPElicitSchema`                  | interface | `{ $schema?, type: 'object', properties, required? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Represents the restricted top-level object schema in a form-mode elicitation request.                                                                                                                       |
+| `MCPElicitSchema`                  | interface | `Readonly<Record<string, unknown>> plus { $schema?, type, properties, required? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Represents the restricted top-level object schema in a form-mode elicitation request.                                                                                                                       |
 | `MCPElicitForm`                    | interface | `{ mode?: 'form', message, requestedSchema }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Represents the parameters of a form-mode `elicitation/create` request.                                                                                                                                      |
 | `MCPElicitURL`                     | interface | `{ mode: 'url', message, url }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Represents the parameters of a URL-mode `elicitation/create` request.                                                                                                                                       |
 | `MCPElicitParams`                  | type      | `MCPElicitForm \| MCPElicitURL`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Represents the mode-discriminated parameters of an `elicitation/create` request.                                                                                                                            |
@@ -2449,7 +2480,7 @@ literal with a union's arms escaped as `\|`.
 | `MCPTaskOptions`                   | interface | `{ tasks, deferral }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Configures the consumer policy for the server's stable Tasks extension.                                                                                                                                     |
 | `MCPProgress`                      | interface | `{ progress, total?, message? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Represents one official request-scoped progress payload.                                                                                                                                                    |
 | `MCPProgressInterface`             | interface | `{} plus report`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Reports request-scoped progress under backpressure — the reporter supplied to an explicit executor.                                                                                                         |
-| `MCPProgressOwnerInterface`        | interface | `{} plus report, take, stop`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Represents the owning half of one progress slot — `MCPProgressInterface` plus the consuming and stopping the slot's owner performs.                                                                         |
+| `MCPProgressOwnerInterface`        | interface | `MCPProgressInterface plus take, stop`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Represents the owning half of one progress slot — `MCPProgressInterface` plus the consuming and stopping the slot's owner performs.                                                                         |
 | `MCPExecutionContext`              | interface | `{ request, call, tools, signal, progress? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Represents the explicit, host-neutral context for one modern tool execution.                                                                                                                                |
 | `MCPExecutionHandler`              | type      | `(context: MCPExecutionContext,) => ToolResult \| MCPCallResult \| Promise<ToolResult \| MCPCallResult>`                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Executes one canonical tool call or returns a fully formed complete MCP result.                                                                                                                             |
 | `MCPListResult`                    | type      | `{ tools, resultType: 'complete', ttlMs, cacheScope: 'public' \| 'private', _meta? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Represents the MCP `tools/list` result — tool descriptors plus optional modern result stamps.                                                                                                               |
@@ -2460,7 +2491,7 @@ literal with a union's arms escaped as `\|`.
 | `MCPRequestContext`                | interface | `{ version, capabilities, identity? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Represents the validated per-request context projected from a modern request's reserved `_meta` keys.                                                                                                       |
 | `MCPDiscoverResult`                | type      | `{ supportedVersions, capabilities, resultType: 'complete', ttlMs, cacheScope: 'public' \| 'private', instructions?, _meta? }`                                                                                                                                                                                                                                                                                                                                                                                                                                   | Represents the mandatory modern `server/discover` result.                                                                                                                                                   |
 | `MCPSubscriptionFilter`            | interface | `{ toolsListChanged?, promptsListChanged?, resourcesListChanged?, resourceSubscriptions?, taskIds? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Names the notification families a client may opt in to on a `subscriptions/listen` stream.                                                                                                                  |
-| `MCPSubscriptionResultMetaObject`  | type      | `MCPResultMetaObject & {}`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Represents the required metadata on a graceful `subscriptions/listen` result.                                                                                                                               |
+| `MCPSubscriptionResultMetaObject`  | type      | `MCPResultMetaObject & { 'io.modelcontextprotocol/subscriptionId' }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Represents the required metadata on a graceful `subscriptions/listen` result.                                                                                                                               |
 | `MCPSubscriptionResult`            | type      | `{ resultType: 'complete', _meta }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Represents the terminating result returned when a `subscriptions/listen` stream closes gracefully.                                                                                                          |
 | `MCPSubscriptionStream`            | type      | `AsyncGenerator< JSONRPCNotification, MCPSubscriptionResult, unknown >`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Represents a client subscription's owned notifications and graceful terminal result.                                                                                                                        |
 | `MCPListenOptions`                 | interface | `{ signal, capacity? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Configures the per-subscription cancellation and bounded buffering policy.                                                                                                                                  |
@@ -2470,8 +2501,8 @@ literal with a union's arms escaped as `\|`.
 | `MCPSubscriptionOptions`           | interface | `{ notifications, producer }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Configures the server's built-in `subscriptions/listen` method.                                                                                                                                             |
 | `MCPStream`                        | type      | `AsyncGenerator<JSONRPCNotification, JSONRPCResponse, unknown>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Represents a held-open modern result: each `yield` is a `JSONRPCNotification`; the `return` value is the terminating response.                                                                              |
 | `MCPTextStream`                    | type      | `AsyncGenerator<string, string, unknown>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Mirrors `MCPStream` at the string boundary — the same sequence, already serialized.                                                                                                                         |
-| `MCPStreamControllerInterface`     | interface | `{} plus next, return, throw, stop, [Symbol.asyncDispose]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Represents a held-open modern result whose cancellation one owner arbitrates — the arm every stream leaving `MCPServer.dispatch` takes.                                                                     |
-| `MCPTextStreamControllerInterface` | interface | `{} plus next, return, throw, stop, [Symbol.asyncDispose]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Mirrors `MCPStreamControllerInterface` at the string boundary — the same exchange, already serialized.                                                                                                      |
+| `MCPStreamControllerInterface`     | interface | `MCPStream plus next, return, throw, stop, [Symbol.asyncDispose]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Represents a held-open modern result whose cancellation one owner arbitrates — the arm every stream leaving `MCPServer.dispatch` takes.                                                                     |
+| `MCPTextStreamControllerInterface` | interface | `MCPTextStream plus next, return, throw, stop, [Symbol.asyncDispose]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Mirrors `MCPStreamControllerInterface` at the string boundary — the same exchange, already serialized.                                                                                                      |
 | `MCPMethodHandler`                 | type      | `(request: JSONRPCRequest, options: MCPMethodOptions,) => Promise<JSONRPCResponse \| MCPStream>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Represents one modern method, registered on the seam that dispatches it.                                                                                                                                    |
 | `MCPMethodManagerInterface`        | interface | `{} plus add, method`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Represents the modern method registry an `MCPServerInterface` dispatches through — the one seam carrying both the built-in methods and any method a consumer adds.                                          |
 | `MCPServerEventMap`                | type      | `{ request, error }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Represents the push observation surface of an `MCPServerInterface` — the dispatch moments a fire-and-forget observer (logging, tracing) subscribes to through `server.emitter.on`.                          |
@@ -2479,7 +2510,7 @@ literal with a union's arms escaped as `\|`.
 | `MCPJSONLimitOptions`              | interface | `{ bytes, keys?, depth }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Limits applied by `isBoundedJSON` to one JSON value.                                                                                                                                                        |
 | `MCPServerOptions`                 | interface | `{ on?, error?, identity, tools, resources?, prompts?, completion?, execution?, instructions?, cache?, input?, subscription?, task?, limit? }`                                                                                                                                                                                                                                                                                                                                                                                                                   | Options for `createMCPServer` — the server `MCPIdentity`, the live `ToolManagerInterface` it exposes, optional `instructions`, and the reserved `on` hooks.                                                 |
 | `MCPDispatcherInterface`           | interface | `{ emitter, limit } plus dispatch, handle`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Represents the minimal transport-facing MCP dispatch surface.                                                                                                                                               |
-| `MCPServerInterface`               | interface | `{ emitter, limit, identity, methods } plus dispatch, handle`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Dispatches JSON-RPC 2.0 modern requests over a live `ToolManagerInterface`, with no transport coupling (a transport layer pumps strings through `handle`).                                                  |
+| `MCPServerInterface`               | interface | `MCPDispatcherInterface plus { identity, methods }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Dispatches JSON-RPC 2.0 modern requests over a live `ToolManagerInterface`, with no transport coupling (a transport layer pumps strings through `handle`).                                                  |
 | `MCPLegacyOptions`                 | interface | `{ dispatcher, identity }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Represents the construction options for the removable legacy protocol decorator.                                                                                                                            |
 | `MCPTransportInterface`            | interface | `{} plus send, listen, closed, close`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Represents a duplex message channel an environment face provides to the pure engine — the one port `bindServer` and `bindClient` (`./helpers.js`) pipe an `MCPServerInterface` / `MCPClientInterface` over. |
 | `MCPMessageTransportEventMap`      | type      | `{ message, close, error }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Lists the observable events of a `MCPMessageTransportInterface` — the moments the `MCPClientInterface` (and any tracer) subscribes to through `transport.emitter.on`.                                       |
@@ -2497,7 +2528,7 @@ literal with a union's arms escaped as `\|`.
 | `MCPClientInterface`               | interface | `{ emitter, connected, version, transport, tasks } plus connect, discover, disconnect, tools, listen, call`                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Connects to a remote MCP server over any injected `MCPMessageTransportInterface`, negotiates the modern wire revision, and exposes the server's tools as local `ToolInterface`s an agent can run.           |
 
 The `emitter`, `identity`, `methods`, and `limit` members of `MCPServerInterface` are
-`readonly` data members (Surface rows, above) — its call-signature methods
+`readonly` data members in the Surface rows — its call-signature methods
 are documented under [Methods](#methods), and the registry `methods` exposes
 has its own method table there. Likewise the `emitter` /
 `connected` / `version` / `transport` / `tasks` members of `MCPClientInterface` and
@@ -2642,7 +2673,7 @@ accepted only through a live session, whose pinned negotiated version the sessio
 middleware supplies; every other headerless request is HTTP `400` + `-32020`.
 `GET` / `DELETE` to the path fall through to whatever the router does with an
 unmatched method (the resumable server→client GET-SSE channel + session-end
-live in the session middleware below).
+live in the session middleware).
 
 **Sessions are a separate, native, plug-and-play middleware — no dependency on
 `@orkestrel/middleware`.** `createMCPSession` is a `MiddlewareHandler<TState>`
@@ -2744,21 +2775,22 @@ decoders and the response-error builder are host-independent and ship from `@ork
 A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an
 optional member and `plus` introducing its call-signature members, and a type alias's own type
 literal with a union's arms escaped as `\|`.
+An extended interface's name comes before `plus`, with the members it adds after.
 
-| Type                          | Kind      | Shape                                                                                                          | Summary                                                                                                                                                                                                                                                                                 |
-| ----------------------------- | --------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MCPHeaderIssue`              | interface | `{ header: 'MCP-Protocol-Version' \| 'Mcp-Method' \| 'Mcp-Name', reason: 'missing' \| 'mismatched', message }` | Reports one required MCP HTTP header that is absent or disagrees with its server-derived value.                                                                                                                                                                                         |
-| `MCPOriginOptions`            | interface | `{ enabled?, origins? }`                                                                                       | Configures the protocol-required HTTP `Origin` validation shared by the route and session enforcement sites.                                                                                                                                                                            |
-| `MCPKeepaliveOptions`         | interface | `{ interval? }`                                                                                                | Configures the shared SSE keepalive for held-open HTTP responses.                                                                                                                                                                                                                       |
-| `MCPCallerHandler`            | type      | `unknown> = (request: Request, context: RouteContext<string, TState> \| undefined,) => unknown`                | Extracts consumer-asserted caller context synchronously from an HTTP request after the transport has validated it for dispatch.                                                                                                                                                         |
-| `HTTPHandlerOptions`          | interface | `{ streaming?, origin?, keepalive?, caller? }`                                                                 | Options shared by the MCP Streamable-HTTP POST handler and route factory.                                                                                                                                                                                                               |
-| `HTTPTransportOptions`        | interface | `{ streaming?, origin?, keepalive?, caller?, path? }`                                                          | Options for `createMCPRoutes` — the mount path plus the shared POST-handler options. `createMCPRoutes` is stateless; sessions are a separate middleware (`createMCPSession`), composed with `server.use`.                                                                               |
-| `MCPSessionOptions`           | interface | `{ capacity?, ttl? } plus clock?`                                                                              | Options for the `MCPSession` entity — its folded replay log's capacity and per-event lifetime.                                                                                                                                                                                          |
-| `MCPSessionMiddlewareOptions` | interface | `{ path?, ttl?, session?, origin?, keepalive? } plus clock?`                                                   | Options for `createMCPSession` — the path the session middleware owns, the session idle time-to-live, and the per-session resumable event-log bound.                                                                                                                                    |
-| `MCPSessionInterface`         | interface | `{ id } plus attach, detach, push, replay`                                                                     | Represents one MCP transport session — the per-session entity a `createMCPSession` middleware owns (the `MCPSession` entity), carrying the resumable server→client push channel with its bounded replay log folded in.                                                                  |
-| `MCPSessionState`             | interface | `{ session? }`                                                                                                 | Declares the `context.state` slice a `createMCPSession` middleware sets on a validated / minted request — a consumer's `TState` extends this so the downstream route handler can read `context.state.session` to `push` a server-initiated message onto the session's resumable stream. |
-| `MCPSessionEvent`             | interface | `{ id, message, timestamp }`                                                                                   | Represents one entry of an `MCPSessionInterface`'s folded replay log — a single pushed `JSONRPCMessage` tagged with the monotone event `id` the session assigned and the `timestamp` it was appended at (for the lazy-TTL replay window).                                               |
-| `MCPSessionEntry`             | interface | `{ session, touched, version }`                                                                                | Represents the closure store entry a `createMCPSession` middleware keeps per minted session — the live `MCPSession` entity plus the epoch-ms instant it was last touched (the lazy-TTL sweep's idle clock, independent of the session's own replay-log TTL).                            |
+| Type                          | Kind      | Shape                                                                               | Summary                                                                                                                                                                                                                                                                                 |
+| ----------------------------- | --------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MCPHeaderIssue`              | interface | `{ header, reason, message }`                                                       | Reports one required MCP HTTP header that is absent or disagrees with its server-derived value.                                                                                                                                                                                         |
+| `MCPOriginOptions`            | interface | `{ enabled?, origins? }`                                                            | Configures the protocol-required HTTP `Origin` validation shared by the route and session enforcement sites.                                                                                                                                                                            |
+| `MCPKeepaliveOptions`         | interface | `{ interval? }`                                                                     | Configures the shared SSE keepalive for held-open HTTP responses.                                                                                                                                                                                                                       |
+| `MCPCallerHandler`            | type      | `(request: Request, context: RouteContext<string, TState> \| undefined) => unknown` | Extracts consumer-asserted caller context synchronously from an HTTP request after the transport has validated it for dispatch.                                                                                                                                                         |
+| `HTTPHandlerOptions`          | interface | `{ streaming?, origin?, keepalive?, caller? }`                                      | Options shared by the MCP Streamable-HTTP POST handler and route factory.                                                                                                                                                                                                               |
+| `HTTPTransportOptions`        | interface | `HTTPHandlerOptions<TState> plus { path? }`                                         | Options for `createMCPRoutes` — the mount path plus the shared POST-handler options. `createMCPRoutes` is stateless; sessions are a separate middleware (`createMCPSession`), composed with `server.use`.                                                                               |
+| `MCPSessionOptions`           | interface | `{ capacity?, ttl? } plus clock?`                                                   | Options for the `MCPSession` entity — its folded replay log's capacity and per-event lifetime.                                                                                                                                                                                          |
+| `MCPSessionMiddlewareOptions` | interface | `{ path?, ttl?, session?, origin?, keepalive? } plus clock?`                        | Options for `createMCPSession` — the path the session middleware owns, the session idle time-to-live, and the per-session resumable event-log bound.                                                                                                                                    |
+| `MCPSessionInterface`         | interface | `{ id } plus attach, detach, push, replay`                                          | Represents one MCP transport session — the per-session entity a `createMCPSession` middleware owns (the `MCPSession` entity), carrying the resumable server→client push channel with its bounded replay log folded in.                                                                  |
+| `MCPSessionState`             | interface | `{ session? }`                                                                      | Declares the `context.state` slice a `createMCPSession` middleware sets on a validated / minted request — a consumer's `TState` extends this so the downstream route handler can read `context.state.session` to `push` a server-initiated message onto the session's resumable stream. |
+| `MCPSessionEvent`             | interface | `{ id, message, timestamp }`                                                        | Represents one entry of an `MCPSessionInterface`'s folded replay log — a single pushed `JSONRPCMessage` tagged with the monotone event `id` the session assigned and the `timestamp` it was appended at (for the lazy-TTL replay window).                                               |
+| `MCPSessionEntry`             | interface | `{ session, touched, version }`                                                     | Represents the closure store entry a `createMCPSession` middleware keeps per minted session — the live `MCPSession` entity plus the epoch-ms instant it was last touched (the lazy-TTL sweep's idle clock, independent of the session's own replay-log TTL).                            |
 
 _This face declares no `HTTPClientTransportOptions`. It is host-independent and ships from
 `@orkestrel/mcp`; see [Core § Types](#types)._
@@ -2822,7 +2854,7 @@ const mcp = createMCPServer({
 // Claims an MCP WebSocket upgrade to /mcp, and closes those sockets when the spine stops.
 server.upgrade(createWebSocketServer(createMCPLegacy(mcp), { emitter: server.emitter })) // answers `initialize` too; pass `mcp` alone for modern-only
 
-// An MCP client connects over the SAME MCPClient, a WebSocket transport instead of HTTP:
+// An MCP client connects over the same MCPClient, a WebSocket transport instead of HTTP:
 const client = createMCPClient({
 	transport: createWebSocketClientTransport({ url: `ws://127.0.0.1:${port}/mcp` }),
 })
@@ -2862,7 +2894,7 @@ literal with a union's arms escaped as `\|`.
 | Type                              | Kind      | Shape                              | Summary                                                                                                                                                     |
 | --------------------------------- | --------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `WebSocketServerOptions`          | interface | `{ emitter, path?, subprotocol? }` | Options for `createWebSocketServer` — the spine lifecycle the ingress follows, plus where the WebSocket upgrade is accepted and the subprotocol negotiated. |
-| `WebSocketClientTransportOptions` | interface | `{ url, protocols? }`              | Options for `createWebSocketClientTransport` — the remote MCP WebSocket endpoint and any extra handshake headers.                                           |
+| `WebSocketClientTransportOptions` | interface | `{ url, headers? }`                | Options for `createWebSocketClientTransport` — the remote MCP WebSocket endpoint and any extra handshake headers.                                           |
 
 ### stdio transport
 
@@ -2953,7 +2985,7 @@ tears that channel down and settles it as the same undeliverable rejection.
 neither covers the other. `delivery` answers "the child is not reading my
 bytes" — a write the kernel cannot confirm. `timeout` answers "the child never
 replied" — a request that was written and drew no response. A message that never
-landed draws no reply either. `DEFAULT_MCP_DELIVERY` sits below
+landed draws no reply either. `DEFAULT_MCP_DELIVERY` is shorter than
 `DEFAULT_MCP_REQUEST_TIMEOUT`; that ordering distinguishes a default-bound
 undeliverable write from the later deadline for a peer that did not answer.
 
@@ -3035,20 +3067,21 @@ _See `extractLines` / `dispatchLines` under [HTTP transport § Helpers](#helpers
 A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an
 optional member and `plus` introducing its call-signature members, and a type alias's own type
 literal with a union's arms escaped as `\|`.
+An extended interface's name comes before `plus`, with the members it adds after.
 
-| Type                            | Kind      | Shape                                                            | Summary                                                                                                                                                                                                                                       |
-| ------------------------------- | --------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `StdioClientTransportInterface` | interface | `{ emitter, session, duplex, evidence } plus start, send, close` | Declares the contract `createStdioClientTransport` returns — a `MCPMessageTransportInterface` that also reports the supervised child's stderr tail, the diagnostic a child that dies at startup leaves behind.                                |
-| `StdioClientTransportOptions`   | interface | `{ command, args?, env?, delivery? }`                            | Options for `createStdioClientTransport` — the child process to spawn as a stdio-framed MCP server (newline-delimited JSON-RPC over `stdin`/`stdout`).                                                                                        |
-| `StdioServerInterface`          | interface | `{} plus start, stop`                                            | Arms and tears down the newline-delimited JSON-RPC pump over the `StdioServerOptions` stream pair — the stdio ingress handle `createStdioServer` returns.                                                                                     |
-| `StdioServerOptions`            | interface | `{ input?, output? }`                                            | Options for `createStdioServer` — the injectable stdin/stdout streams the server transport reads newline-delimited JSON-RPC requests from and writes responses to.                                                                            |
-| `LineExtraction`                | interface | `{ lines, remainder }`                                           | Represents the result of folding one more chunk of raw stdio bytes into a newline-framed buffer — every complete line extracted (newline-terminated in the wire bytes) plus the trailing partial line carried forward as the new `remainder`. |
+| Type                            | Kind      | Shape                                            | Summary                                                                                                                                                                                                                                       |
+| ------------------------------- | --------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `StdioClientTransportInterface` | interface | `MCPMessageTransportInterface plus { evidence }` | Declares the contract `createStdioClientTransport` returns — a `MCPMessageTransportInterface` that also reports the supervised child's stderr tail, the diagnostic a child that dies at startup leaves behind.                                |
+| `StdioClientTransportOptions`   | interface | `{ command, args?, env?, delivery? }`            | Options for `createStdioClientTransport` — the child process to spawn as a stdio-framed MCP server (newline-delimited JSON-RPC over `stdin`/`stdout`).                                                                                        |
+| `StdioServerInterface`          | interface | `{} plus start, stop`                            | Arms and tears down the newline-delimited JSON-RPC pump over the `StdioServerOptions` stream pair — the stdio ingress handle `createStdioServer` returns.                                                                                     |
+| `StdioServerOptions`            | interface | `{ input?, output? }`                            | Options for `createStdioServer` — the injectable stdin/stdout streams the server transport reads newline-delimited JSON-RPC requests from and writes responses to.                                                                            |
+| `LineExtraction`                | interface | `{ lines, remainder }`                           | Represents the result of folding one more chunk of raw stdio bytes into a newline-framed buffer — every complete line extracted (newline-terminated in the wire bytes) plus the trailing partial line carried forward as the new `remainder`. |
 
 ### Browser transport
 
 The **browser transport** (`src/browser`, through the `@src/browser` barrel /
 `@orkestrel/mcp/browser`) is the page / Web Worker / Service Worker face.
-CLIENT-only transports drive a remote MCP server from the browser,
+Client-only transports drive a remote MCP server from the browser,
 over the same `MCPMessageTransportInterface` the Node face's transports
 implement, so `createMCPClient` consumes either identically.
 `createWebSocketClientTransport` drives the native `WebSocket` global (the
@@ -3153,21 +3186,21 @@ const tools = await http.tools()
 
 #### Factories
 
-| API                              | Kind     | Summary                                                                                                                                                                                                                                                       |
-| -------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createWebSocketClientTransport` | function | Create a `MCPMessageTransportInterface` over the native `WebSocket` global that drives a remote MCP server (browser face).                                                                                                                                    |
-| `createHTTPClientTransport`      | function | Return the core `HTTPClientTransport` over the native `fetch` that drives a remote Streamable-HTTP MCP server — the same class the Node face's factory returns.                                                                                               |
-| `createMessagePortTransport`     | function | Creates the browser-face `MessagePort` transport — a `MCPTransportInterface` over a native `MessagePort`, the symmetric carrier that works as either a server or a client transport depending on which binder (`bindServer` or `bindClient`) it is handed to. |
-| `createScopeServer`              | function | Creates an `MCPServer` hosted inside a worker scope and wires that scope's message events to it — the browser face's bootstrap, and the twin of the Node face's `createStdioServer`.                                                                          |
-| `createScopeTransport`           | function | Adapts a hostable `ScopeInterface` (`self` in a dedicated Web Worker, or any structurally matching double) into a `ScopeTransportInterface` — the implicit, portless message channel `createScopeServer` binds for the dedicated-worker shape.                |
-| `createScopeMessageListener`     | function | Builds `createScopeServer`'s `message`-event listener — the unified dispatcher that routes every inbound event on a hostable scope, portless or port-bearing, to the right binding.                                                                           |
+| API                              | Kind     | Summary                                                                                                                                                                                                                                                                                                   |
+| -------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createWebSocketClientTransport` | function | Creates the browser-face WebSocket client transport for an `MCPClientInterface` — a `MCPMessageTransportInterface` that drives a remote MCP server over the native `WebSocket` global. This factory is the browser sibling of the Node face's `createWebSocketClientTransport` (`@orkestrel/mcp/server`). |
+| `createHTTPClientTransport`      | function | Creates the HTTP client transport for an `MCPClientInterface` — a `MCPMessageTransportInterface` that drives a remote Streamable-HTTP MCP server over the native `fetch`.                                                                                                                                 |
+| `createMessagePortTransport`     | function | Creates the browser-face `MessagePort` transport — a `MCPTransportInterface` over a native `MessagePort`, the symmetric carrier that works as either a server or a client transport depending on which binder (`bindServer` or `bindClient`) it is handed to.                                             |
+| `createScopeServer`              | function | Creates an `MCPServer` hosted inside a worker scope and wires that scope's message events to it — the browser face's bootstrap, and the twin of the Node face's `createStdioServer`.                                                                                                                      |
+| `createScopeTransport`           | function | Adapts a hostable `ScopeInterface` (`self` in a dedicated Web Worker, or any structurally matching double) into a `ScopeTransportInterface` — the implicit, portless message channel `createScopeServer` binds for the dedicated-worker shape.                                                            |
+| `createScopeMessageListener`     | function | Builds `createScopeServer`'s `message`-event listener — the unified dispatcher that routes every inbound event on a hostable scope, portless or port-bearing, to the right binding.                                                                                                                       |
 
 #### Classes
 
-| API                        | Kind  | Summary                                                                                                                                                                                |
-| -------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WebSocketClientTransport` | class | The browser-face `MCPMessageTransportInterface` over the native `WebSocket` — queues sends until `open`, flushed in order and discarded at close; a closed-channel send rejects.       |
-| `MessagePortTransport`     | class | Carries the Model Context Protocol over a native `MessagePort` from the browser face — a `MCPTransportInterface`, the genuinely new capability this face adds: MCP over `postMessage`. |
+| API                        | Kind  | Summary                                                                                                                                                                                                           |
+| -------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WebSocketClientTransport` | class | Drives a remote MCP server over the native `WebSocket` global from the browser face, as a client `MCPMessageTransportInterface`. This class is the browser sibling of the Node face's `WebSocketClientTransport`. |
+| `MessagePortTransport`     | class | Carries the Model Context Protocol over a native `MessagePort` from the browser face — a `MCPTransportInterface`, the genuinely new capability this face adds: MCP over `postMessage`.                            |
 
 #### Constants
 
@@ -3188,13 +3221,14 @@ host-independent and ship from `@orkestrel/mcp`; see [Core § Helpers](#helpers)
 A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an
 optional member and `plus` introducing its call-signature members, and a type alias's own type
 literal with a union's arms escaped as `\|`.
+An extended interface's name comes before `plus`, with the members it adds after.
 
 | Type                              | Kind      | Shape                                                        | Summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | --------------------------------- | --------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WebSocketClientTransportOptions` | interface | `{ url, protocols? }`                                        | the remote WS endpoint + optional subprotocol(s) (default `MCP_WEBSOCKET_SUBPROTOCOL`; pass `[]` for no subprotocol).                                                                                                                                                                                                                                                                                                                                                                   |
+| `WebSocketClientTransportOptions` | interface | `{ url, protocols? }`                                        | Options for `createWebSocketClientTransport` (browser face) — the remote MCP WebSocket endpoint and any negotiated subprotocols.                                                                                                                                                                                                                                                                                                                                                        |
 | `MessagePortTransportOptions`     | interface | `{ port }`                                                   | Options for `createMessagePortTransport` — the native `MessagePort` a `MessagePortTransport` sends and listens on.                                                                                                                                                                                                                                                                                                                                                                      |
 | `ScopeInterface`                  | interface | `{} plus postMessage, addEventListener, removeEventListener` | Describes the structural shape `createScopeServer` needs from a hostable scope — `self` in a dedicated Web Worker or a Service Worker (or any double matching this shape).                                                                                                                                                                                                                                                                                                              |
-| `ScopeTransportInterface`         | interface | `{} plus send, listen, closed, close, deliver`               | Adapts a message-event-bearing scope (`self` in a dedicated Web Worker, or any object shaped the same way) as a duplex `MCPTransportInterface` — the internal carrier `createScopeServer` binds to route the implicit (portless) message channel, plus the `deliver` entry point the scope's own `message` listener pushes an inbound string through (the scope itself never registers `listen`'s handler for the caller — the scope server's dispatcher does, through this `deliver`). |
+| `ScopeTransportInterface`         | interface | `MCPTransportInterface plus deliver`                         | Adapts a message-event-bearing scope (`self` in a dedicated Web Worker, or any object shaped the same way) as a duplex `MCPTransportInterface` — the internal carrier `createScopeServer` binds to route the implicit (portless) message channel, plus the `deliver` entry point the scope's own `message` listener pushes an inbound string through (the scope itself never registers `listen`'s handler for the caller — the scope server's dispatcher does, through this `deliver`). |
 | `ScopeServerInterface`            | interface | `{} plus stop`                                               | Represents one MCP server hosted inside a worker scope — what `createScopeServer` returns.                                                                                                                                                                                                                                                                                                                                                                                              |
 | `ScopeServerOptions`              | interface | `{ tools, name?, version? } plus accept?`                    | Options for `createScopeServer` — the live `ToolManagerInterface` to expose plus the optional server identity, mirroring `createMCPServer`'s `MCPServerOptions` (`@orkestrel/mcp`) but with `name`/`version` optional (defaulting to `DEFAULT_MCP_SERVER_NAME` / `DEFAULT_MCP_SERVER_VERSION`).                                                                                                                                                                                         |
 
@@ -3253,7 +3287,7 @@ Both take an optional `MCPDispatchOptions` bag carrying `signal` and asserted
 follows the argument's arm: a `JSONRPCRequest` resolves a response or a held-open
 controlled stream and never `undefined`; a `JSONRPCNotification` resolves `undefined`
 and never a response; and the union arm — for a transport that narrowed no
-further than `JSONRPCInvocation` — admits each of them. The Returns column below
+further than `JSONRPCInvocation` — admits each of them. The Returns column in this table
 states that widest arm.
 
 | Method     | Returns                                                                 | Summary                                                                             |
@@ -3360,13 +3394,15 @@ agree.
 | `throw`  | `Promise<IteratorResult<JSONRPCNotification, JSONRPCResponse>>` | Ends the exchange with a failure the consumer is raising.                        |
 | `stop`   | `void`                                                          | Ends the exchange permanently, with no terminal response.                        |
 
+This example stops the typed exchange through its serialized mirror.
+
 ```ts
 import { MCPStreamController, MCPTextStreamController } from '@orkestrel/mcp'
 
 const closure = new AbortController()
 const stream = new MCPStreamController(source, closure.signal, closure)
 const text = new MCPTextStreamController(stream)
-text.stop() // ends the TYPED exchange; `closure.signal` is aborted for the producer
+text.stop() // ends the typed exchange; `closure.signal` is aborted for the producer
 ```
 
 #### `MCPTextStreamControllerInterface`
@@ -3383,8 +3419,8 @@ the adapter, which is the one thing it exists not to do.
 | Method   | Returns                                   | Summary                                                                             |
 | -------- | ----------------------------------------- | ----------------------------------------------------------------------------------- |
 | `next`   | `Promise<IteratorResult<string, string>>` | Reads the next serialized message, or the serialized terminating response.          |
-| `return` | `Promise<IteratorResult<string, string>>` | Ends the exchange because the consumer already has its answer.                      |
-| `throw`  | `Promise<IteratorResult<string, string>>` | Ends the exchange with a failure the consumer is raising.                           |
+| `return` | `Promise<IteratorResult<string, string>>` | Ends the serialized exchange on the text supplied by its consumer.                  |
+| `throw`  | `Promise<IteratorResult<string, string>>` | Ends the serialized exchange with the failure supplied by its consumer.             |
 | `stop`   | `void`                                    | Ends the exchange permanently, with no terminal response, through the typed stream. |
 
 #### `MCPMethodManagerInterface`
@@ -3401,6 +3437,8 @@ why its methods answer `-32601` rather than a bespoke refusal.
 | -------- | ------------------------------- | ---------------------------------------------------------------------------- |
 | `add`    | `void`                          | Registers one modern method — replacing any handler already under that name. |
 | `method` | `MCPMethodHandler \| undefined` | Finds the handler registered for one method name.                            |
+
+This example registers and looks up a modern method handler.
 
 ```ts
 import { buildJSONRPCResult, createMCPServer } from '@orkestrel/mcp'
@@ -3455,7 +3493,7 @@ and is expected to **authorize the call itself**, exactly as the task port is.
 
 #### `MCPPromptManagerInterface`
 
-The prompt mirror of the port above, with the same gating: supplying it registers
+The prompt mirror of the resource port, with the same gating: supplying it registers
 `prompts/list` and `prompts/get` and advertises `prompts`, and omitting it leaves both
 answering `-32601`. The mirror is exact in naming — `prompt(params)` / `prompts(pagination)`
 against `resource(params)` / `resources(pagination)`, under the same shared cursor contract —
@@ -3487,7 +3525,7 @@ remote tools as local `ToolInterface`s, `call` runs a remote `tools/call`,
 `disconnect` rejects pending requests, clears the negotiated revision, and
 closes the connection it owns. Subscribe to client events through `emitter.on`.
 The `tasks` data member is the stable Tasks extension's client half — see
-[`MCPTaskClientInterface`](#mcptaskclientinterface) below.
+[`MCPTaskClientInterface`](#mcptaskclientinterface).
 
 | Method       | Returns                             | Summary                                                                                                                               |
 | ------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
@@ -3542,6 +3580,8 @@ MCP defines no `tasks/list`, and the absence is how the shape says so.
 | `update` | `Promise<void>`          | Answers the input requests an `input_required` task is waiting on. |
 | `abort`  | `Promise<void>`          | Asks one durable task to stop.                                     |
 
+This example reads and updates a deferred tool call through the Tasks extension.
+
 ```ts
 import { createMCPClient, MCP_EXTENSION_TASKS } from '@orkestrel/mcp'
 
@@ -3556,7 +3596,7 @@ await client.connect()
 const outcome = await client.call('render', { page: 3 })
 if (outcome.resultType === 'task') {
 	outcome.pollIntervalMs // the peer's HINT, carried untouched — the schedule is yours
-	const detail = await client.tasks.task(outcome.taskId) // ONE request, no timer
+	const detail = await client.tasks.task(outcome.taskId) // one request, no timer
 	if (detail.status === 'input_required') {
 		await client.tasks.update(outcome.taskId, { approval: { action: 'accept' } })
 	} else if (detail.status === 'working') {
@@ -3696,6 +3736,8 @@ bridge's own timer and listener. The timer stops on every terminal path.
 | -------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bridge` | `Response` | Bridges one open SSE response through cancellation-aware byte forwarding and keepalives. Consumer cancellation, a read failure while forwarding, and a keepalive tick that finds the SSE stream already closed each abort `signal`; consumer cancellation also cancels the upstream reader. Upstream completion closes the returned body without inventing an abort. Every terminal path clears the keepalive timer and detaches the bridge-owned abort listener. |
 
+This example bridges a held-open SSE response to the request's cancellation signal.
+
 ```ts
 import { HTTPDisconnect } from '@orkestrel/mcp/server'
 
@@ -3708,7 +3750,7 @@ return disconnect.bridge(stream)
 #### `MCPSessionInterface`
 
 One MCP transport session (the `MCPSession` entity) — its `id` is a data
-member (Surface row); the methods below drive the resumable server→client
+member (Surface row); the methods in this group drive the resumable server→client
 push channel, with the bounded replay log folded in (private). `createMCPSession`
 mints + stores it; an in-request handler reads it off `context.state.session`
 and `push`es.
@@ -3719,6 +3761,8 @@ and `push`es.
 | `detach` | `void`                       | Unregisters a stream — the middleware calls it when the client disconnects.                                                                                                   |
 | `push`   | `string`                     | Appends a message to the folded replay log under a fresh monotone event id, returns that id, and fans the message out to every attached stream as one `id:`-tagged SSE event. |
 | `replay` | `readonly MCPSessionEvent[]` | Returns every retained log entry strictly after a cursor, in append order; an unknown or evicted cursor replays nothing.                                                      |
+
+This example pushes, replays, attaches, and detaches a session's resumable stream.
 
 ```ts
 import { createMCPSession } from '@orkestrel/mcp/server'
@@ -3747,6 +3791,8 @@ live stream pair.
 | `start` | `void`  | Arms the pump: subscribes to `input` and dispatches every complete line through the bound `MCPDispatcherInterface`, writing each defined response back to `output`. The pump arms once, so a repeated call attaches nothing further and an inbound request still draws exactly one reply. |
 | `stop`  | `void`  | Unbinds the pump and closes the transport: removes the listeners the `start` method put on `input` and `output`, rejects every pending write, and releases `input` so the process can exit. A repeated call does nothing.                                                                 |
 
+This example starts and stops the stdio ingress handle.
+
 ```ts
 import { createMCPServer } from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
@@ -3773,6 +3819,8 @@ between the call and an explicit arm would reach nothing.
 | Method | Returns | Summary                                                                                |
 | ------ | ------- | -------------------------------------------------------------------------------------- |
 | `stop` | `void`  | Ends every binding this scope server owns — idempotent, and permanent for this handle. |
+
+This example stops a worker-scope server and shows that repeated cleanup is inert.
 
 ```ts
 import { createScopeServer } from '@orkestrel/mcp/browser'
@@ -3897,8 +3945,8 @@ await stdio.connect()
 
 ### Build response envelopes and validate wire messages directly
 
-The lower-level building blocks `dispatch` / `handle` compose internally —
-useful directly in a test or a custom transport.
+This example uses the response builders and wire guards that the `dispatch` and
+`handle` methods compose internally. Use them in a test or custom transport.
 
 ```ts
 import {
@@ -3929,6 +3977,8 @@ remote.context // { method: 'missing' }
 ```
 
 ### Route a request by era and build a modern result
+
+#### Route a core request by era
 
 The 2026-07-28 era is selected structurally, per request, and never stored. A request is
 modern exactly when its `params._meta` carries the reserved protocol-version **key** — presence
@@ -3993,6 +4043,8 @@ const called = buildModernResult({ content: [] }, identity) // no TTL → no cac
 const discovered = buildDiscoverResult({ identity, tools: createToolManager() })
 discovered.supportedVersions // the revisions this server negotiates
 ```
+
+#### Infer the server response boundary
 
 The same era decision has consequences on the server face: which legacy revision an
 `initialize` handshake negotiates, and which HTTP status the dispatch outcome leaves on. A
@@ -4098,8 +4150,8 @@ upgradeRequestPath(rawUpgradeRequest) // the incoming upgrade request's pathname
 
 ### Frame newline-delimited JSON-RPC over stdio directly
 
-The shared line-framing step the stdio transports read their inbound
-messages through.
+This example extracts and dispatches newline-delimited JSON-RPC messages with the
+helpers used by the stdio transports.
 
 ```ts
 import { dispatchLines, extractLines } from '@orkestrel/mcp/server'
@@ -4107,10 +4159,12 @@ import { Emitter } from '@orkestrel/emitter'
 
 const emitter = new Emitter()
 const { lines, remainder } = extractLines('', '{"jsonrpc":"2.0","method":"ping"}\n{"jsonrpc"')
-dispatchLines(emitter, lines) // emits `message` for the complete line above
+dispatchLines(emitter, lines) // emits `message` for the preceding complete line
 ```
 
 ### Serve MCP from a Web Worker
+
+#### Start a worker scope server
 
 `createScopeServer` is the drop-in entry for a real Web Worker's `main.ts` — boot an
 `MCPServer` over the worker's own implicit `postMessage` channel (a dedicated
@@ -4164,6 +4218,8 @@ worker.stop()
 > `createScopeServer` suits bounded, long-lived client sets. Embedders with high client
 > churn must manage lifecycle themselves (`stop` and re-serve, or wrap the
 > scope in their own reaping layer).
+
+#### Drive an explicit worker scope
 
 Passing `scope` explicitly is the same wiring over an object you supply — this
 runnable fence drives it with a minimal `ScopeInterface` (the exact
@@ -4262,14 +4318,12 @@ closed — while ordinary upstream completion closes the response without invent
 - [HTTP response lifecycle composition](../tests/src/server/HTTPDisconnect.test.ts)
 - [HTTP handler integration](../tests/src/server/handlers.test.ts)
 - [Session middleware integration](../tests/src/server/middlewares.test.ts)
-- [Guide/source/public-barrel parity, what the spawned stdio child actually receives, and how the composed stdio server answers a legacy `initialize`](../tests/guides.test.ts)
-- [The equality gate: every `Summary` cell against its declaration's description paragraph, the titled `Expose a tool registry over MCP` fence against the `@example` block of that title (pinned so the titled pair cannot be retired silently), and the README pitch against this guide's tagline](../tests/guides.test.ts)
+- [Guide/source/public-barrel parity; legacy-removability and public-face boundaries; native guide-input, fence-language, summary, titled-example, and README-pitch checks; what the spawned stdio child receives; how the composed stdio server answers a legacy `initialize`; and the client subscription, progress, and transport demonstrations](../tests/guides.test.ts)
 - [The packed artifact a consumer installs, across its faces and its ESM and CommonJS builds](../tests/distribution.test.ts)
-- [Package guide law, including the legacy-removability boundary](../tests/guides.test.ts)
 
 ## Declared non-goals
 
-Everything below is intentionally absent, with its reason. A capability named here is
+Everything in the following list is intentionally absent, with its reason. A capability named here is
 not a defect and not a roadmap entry: it is a decision, and the guide states it so a
 consumer can plan around it instead of discovering it.
 
@@ -4389,7 +4443,7 @@ that silently stops running fails the run instead of disappearing into a matchin
 cause — so read the fixture before quoting the number.** It was first recorded as
 **8 passed / 15 failed**, measuring a fixture built without
 `MCPServerOptions.execution` — the shipped, documented port
-[above](#execute-rich-results-and-request-scoped-progress) — so the rich-content
+[request-scoped progress section](#execute-rich-results-and-request-scoped-progress) — so the rich-content
 scenarios received a normalized text result instead of the image, audio,
 embedded-resource, and mixed content they asked for, and another counted two progress
 frames where the scenario specifies three. Wiring that port moved it to **13/10**. It
@@ -4512,7 +4566,7 @@ and retry the call. That listing carries no `cursor`, so the transport replaces 
 with it: the next call projects the current headers for a tool the listing still advertises,
 and projects nothing for one it no longer advertises. **Closer:** a retry policy owned by
 `MCPClient` rather than by a transport, with the caller able to decline it — not scheduled,
-and it needs the per-request options seam the entries above name.
+and it needs the per-request options seam those entries name.
 
 **A retry the server cannot verify is refused, not re-requested — a declared `SHOULD` departure.**
 The MRTR page says a server that finds requested information missing on a retry `SHOULD` answer a
@@ -4618,7 +4672,7 @@ by request id and retired whenever that request leaves, and supplies its signal 
 so an inbound cancellation aborts the named request and the cancelled request writes no
 response. A tool observes that abort only through `MCPServerOptions.execution`, whose
 `MCPExecutionContext` carries `signal`; the default `ToolManagerInterface.execute` path has no
-seam to hand one through, which is a separate declared limit above. **What remains:** on
+seam to hand one through, which is a separate declared task limit. **What remains:** on
 Streamable HTTP there is no such frame at all — there, closing the response stream is the
 cancellation signal, and only a streamed response has one to close. **Closer:** none possible
 for the HTTP face; the limit is the dated revision's.
@@ -4668,7 +4722,7 @@ one that is live is not a collision the client detects: the peer's answer arrive
 `message` subscription, correlates to the pending entry that id already names, and settles
 somebody else's `call` with the wrong result. That has been run — a raw `prompts/get` written
 under a live `call`'s id resolved the `call` with the prompt — so it is a hazard rather than a
-workaround, and the `MCPRequestFunction` route above is the supported one precisely because it
+workaround, and the `MCPRequestFunction` route is the supported one precisely because it
 mints its ids through the same door everything else does.
 
 **Where the task subscription filter sits on the wire is this package's reading, not settled
@@ -4765,7 +4819,7 @@ reaches a consumer are inside this code. Measured with `npm pack --dry-run --jso
 
 The normative reference, placed here because it is the least narrative thing in this guide. These
 invariants hold across the MCP layer (`src/core` + `src/server` + `src/browser`) ↔
-`mcp.md`; where a sentence earlier in this guide summarizes one, the clause below is
+`mcp.md`; where a sentence earlier in this guide summarizes one, the following clause is
 the exact statement:
 
 1. **doc ↔ source bijection.** Every `function` / `class` / `const` /
@@ -4775,7 +4829,7 @@ transport` tables) is a real export of the mcp layer (`src/core` or
    `src/server`), and every export of either appears as a Surface row —
    exhaustive, both directions.
 2. **JSON-RPC 2.0 envelope.** A `dispatch` response is always `{ jsonrpc:
-'2.0', … }` with EXACTLY ONE of `result` / `error`. The success arm always
+'2.0', … }` with exactly one of `result` / `error`. The success arm always
    carries an `id`, echoing the request's, because a result answers a request and
    a request always has one. The error arm is the only arm whose `id` may be
    missing, and it is then omitted — the member is absent from the envelope, never
@@ -4784,7 +4838,7 @@ transport` tables) is a real export of the mcp layer (`src/core` or
    here, and `JSONRPCErrorResponse` states it: `id?: JSONRPCId`, where `JSONRPCId`
    admits no `null`.
    `handle` serializes that envelope with `JSON.stringify` and returns the
-   string. A HELD-OPEN answer is the other arm of the same return: `dispatch`
+   string. A held-open answer is the other arm of the same return: `dispatch`
    resolves an `MCPStream` and `handle` its serialized `MCPTextStream` mirror,
    narrowed apart at one point (`Symbol.asyncIterator in result`). The stream's
    `return` value is the terminating response and obeys this same envelope, and its
@@ -4868,7 +4922,7 @@ JSON.stringify(value) }], structuredContent: value }`, carrying the value unchan
    an earlier one. The legacy method remains absent and answers `-32601`.
 7. **`handle` maps the boundary failures.** A `JSON.parse` throw (malformed
    JSON) → a serialized `-32700` (Parse error) response with no `id` member; a
-   message above `limit.message` reaches that same response before `JSON.parse`;
+   message exceeding `limit.message` reaches that same response before `JSON.parse`;
    `_meta` is then bounded by serialized bytes, total object keys, and depth
    before modern context parsing; `requestState` is bounded before HMAC verification
    and before/after signing; the complete produced modern tool-call result—including stamps,
@@ -5014,7 +5068,7 @@ in request`, no `as`) — is HTTP **400** with a JSON-RPC error body carrying no
     consumer-provided list.
 13. **The client is the modern-only egress mirror (`src/core`).**
     `createMCPClient({ transport, identity?, capabilities?, version?, timeout?,
-on? })` drives a REMOTE server over an injected `MCPMessageTransportInterface`
+on? })` drives a remote server over an injected `MCPMessageTransportInterface`
     (transport-abstract, like the server). `connect()` issues a modern
     `server/discover` carrying `_meta` with the offered revision,
     client capabilities, and client identity. It intersects the peer's
@@ -5104,7 +5158,7 @@ on? })` drives a REMOTE server over an injected `MCPMessageTransportInterface`
     (`src/server`).** `createHTTPClientTransport({ url, headers?, fetch?,
 timeout? })` returns a `MCPMessageTransportInterface` whose `send` POSTs one
     JSON-serialized message to `url` with `content-type:
-application/json` and an `Accept` of BOTH `application/json` and
+application/json` and an `Accept` of both `application/json` and
     `text/event-stream` (plus any `headers`), then decodes the reply and
     emits each carried `JSONRPCMessage` on the `message` event: an
     `application/json` body is narrowed with `parseJSONRPCMessage`; a
@@ -5156,7 +5210,7 @@ application/json` and an `Accept` of BOTH `application/json` and
     (`upgradeRequestPath`) is not `options.path` (default `DEFAULT_MCP_PATH`),
     the `Sec-WebSocket-Key` is absent, or the `Sec-WebSocket-Version` is not
     `13`. Otherwise it claims (returns `true`): `createNodeWebSocket({
-socket, key, head, protocol })` (SERVER mode → writes the `101` handshake,
+socket, key, head, protocol })` (server mode → writes the `101` handshake,
     selecting the configured subprotocol only when the client's offer contains it,
     and sends unmasked frames), wraps it in a `WebSocketServerTransport`, and
     pumps — each inbound `JSONRPCMessage` that `isJSONRPCRequest` runs
@@ -5225,7 +5279,7 @@ socket, key, head, protocol })` (SERVER mode → writes the `101` handshake,
     (`src/server`).** `createMCPSession({ path?, ttl?, session?, clock?, origin?, keepalive? })`
     returns a `MiddlewareHandler<TState>` (`TState extends MCPSessionState`)
     that owns its own closure `Map<string, { session: MCPSession; touched:
-number; version: MCPVersion }>` — NO dependency on `@orkestrel/middleware` and no shared
+number; version: MCPVersion }>` — no dependency on `@orkestrel/middleware` and no shared
     session primitive; the store, mint, and validation are all native to
     this package. Compose it with `router.use(createMCPSession())` in front
     of a session-agnostic `createMCPRoutes(mcp)`; it owns its `path` (default
@@ -5367,7 +5421,7 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     never reads its `stdin` fills the pipe, and the write the kernel cannot
     confirm rejects at that bound with the child still running and with neither
     `error` nor `close` fired for it. An omitted `delivery` selects
-    `DEFAULT_MCP_DELIVERY`, which sits below `DEFAULT_MCP_REQUEST_TIMEOUT` to
+    `DEFAULT_MCP_DELIVERY`, which is shorter than `DEFAULT_MCP_REQUEST_TIMEOUT` to
     distinguish a default-bound undeliverable write from the later request
     deadline for a peer that did not answer; an explicit `0` removes the bound
     and leaves such a write pending on the channel until teardown settles it as
@@ -5430,7 +5484,7 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     server or a client carrier depending on whether it is handed to
     `bindServer` or `bindClient`/`createDuplexClientTransport`). `port.start()`
     runs at construction (there is no separate open step on the port contract
-    for the caller to hook one into); inbound is STRING-ONLY — a non-string
+    for the caller to hook one into); inbound is string-only — a non-string
     `event.data` is dropped, never forwarded (the port contract carries no
     `error` channel to surface it on); `messageerror` is ignored, not routed
     to `closed` (one bad frame is not a dead channel); `close()` closes the

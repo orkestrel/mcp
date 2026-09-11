@@ -1,19 +1,19 @@
 import type { MCPTransportInterface } from '@src/core'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 
-// The MCP browser-transport surface — the source of truth. The CLIENT
-// transports for the Model Context Protocol drive a REMOTE server from a page
+// The MCP browser-transport surface — the source of truth. The client
+// transports for the Model Context Protocol drive a remote server from a page
 // / Web Worker / Service Worker: the native `WebSocket` transport
 // (`transports/WebSocketClientTransport.ts`) and the host-independent `fetch` +
 // `@orkestrel/sse` streamable-HTTP transport `@src/core` publishes, which this face's
-// `createHTTPClientTransport` returns. Every one speaks the SAME `@src/core`
+// `createHTTPClientTransport` returns. Every one speaks the same `@src/core`
 // `MCPMessageTransportInterface`, so `createMCPClient` consumes them identically. The host
 // performs the WebSocket handshake, so this face carries none of the Node client's
 // `node:crypto` / `node:http(s)` machinery.
 //
-// `MessagePortTransport` (below) is the genuinely new capability: unlike the
-// CLIENT-only carriers above, a `MessagePort` is SYMMETRIC — the same class is handed
-// to EITHER `bindServer` or `bindClient` (`@src/core`), the role coming from which
+// `MessagePortTransport` is the genuinely new capability: unlike the
+// client-only carriers, a `MessagePort` is symmetric — the same class is handed
+// to either `bindServer` or `bindClient` (`@src/core`), the role coming from which
 // binder it is given to. `ScopeServerOptions`, `ScopeInterface`, and
 // `ScopeServerInterface` back `createScopeServer`, the factory that wires a Web Worker's /
 // Service Worker's own message events (and any `MessagePort` they carry) to an `MCPServer`.

@@ -9,7 +9,7 @@ import type { ToolCall, ToolInterface, ToolManagerInterface, ToolResult } from '
 // JSON-RPC 2.0 wire types (https://www.jsonrpc.org/specification) — the envelope
 // the Model Context Protocol speaks. An INVOCATION is either a request (a `method`
 // call carrying an `id` that correlates it with its response) or a notification (the
-// same call with NO `id`, answered by nothing). A RESPONSE is either a result arm or
+// same call with no `id`, answered by nothing). A response is either a result arm or
 // an error arm, never both.
 //
 // Several members below are declared `?: never`. That is not an optional value: it is
@@ -1083,8 +1083,7 @@ export interface MCPTaskManagerInterface {
 	 * Creates — or returns the existing — durable task for one stable operation key.
 	 *
 	 * @remarks
-	 * The obligations this package cannot enforce, and one consequence a reader can
-	 * to miss:
+	 * The obligations this package cannot enforce, and one consequence a reader can miss:
 	 *
 	 * - **Durability before return.** The returned task MUST already be retrievable by
 	 *   {@link task} when this resolves. This package awaits `start` before it builds the
@@ -1630,7 +1629,7 @@ export interface MCPSubscriptionFilter {
 	 *
 	 * @remarks
 	 * The wire placement is `params.notifications.taskIds`, beside `resourceSubscriptions`,
-	 * and that placement is this package'S reading rather than a settled fact: the Tasks
+	 * and that placement is this package's reading rather than a settled fact: the Tasks
 	 * extension declares the fragment carrying this member without composing it into the
 	 * `subscriptions/listen` request, so no source states where the fragment lands. The
 	 * spelling itself is the schema's and is carried verbatim under the same wire-key
@@ -1903,7 +1902,7 @@ export interface MCPTextStreamControllerInterface extends MCPTextStream {
 	 */
 	next(): Promise<IteratorResult<string, string>>
 	/**
-	 * Ends the exchange because the consumer already has its answer.
+	 * Ends the serialized exchange on the text supplied by its consumer.
 	 *
 	 * @remarks
 	 * The typed exchange ends with no terminal: a string is not a {@link JSONRPCResponse}, and
@@ -1915,7 +1914,7 @@ export interface MCPTextStreamControllerInterface extends MCPTextStream {
 	 */
 	return(value: string | PromiseLike<string>): Promise<IteratorResult<string, string>>
 	/**
-	 * Ends the exchange with a failure the consumer is raising.
+	 * Ends the serialized exchange with the failure supplied by its consumer.
 	 *
 	 * @param error - The failure to end the exchange with
 	 * @returns Never — the returned promise always rejects with the supplied failure
@@ -2401,12 +2400,12 @@ export interface MCPTransportInterface {
 	readonly close: () => void | Promise<void>
 }
 
-// MCP CLIENT (the egress side) — the mirror of the server, split the same way: a
-// transport-agnostic {@link MCPClientInterface} that drives a REMOTE MCP server
+// MCP client (the egress side) — the mirror of the server, split the same way: a
+// transport-agnostic {@link MCPClientInterface} that drives a remote MCP server
 // (`initialize` / `tools/list` / `tools/call`) over an injected {@link
 // MCPMessageTransportInterface}, exposing each remote tool as a local {@link
 // ToolInterface} an agent can run. The transport speaks only the JSON-RPC wire (a
-// concrete one — the HTTP transport — lives ONE layer out in `src/server/mcp`,
+// concrete one — the HTTP transport — lives one layer out in `src/server/mcp`,
 // mirroring the server's core-vs-HTTP split); the client owns the request↔response
 // correlation, the per-request deadline, and the tool mapping, with no transport
 // coupling.
@@ -2456,7 +2455,7 @@ export interface MCPMessageTransportInterface {
 	/** Holds a server-assigned session id after a stateful transport has one; `undefined` otherwise. */
 	readonly session: string | undefined
 	/**
-	 * Reports whether this carrier accepts a CLIENT-INITIATED notification — one written with
+	 * Reports whether this carrier accepts a client-initiated notification — one written with
 	 * no `id`, which no response will ever answer.
 	 *
 	 * @remarks

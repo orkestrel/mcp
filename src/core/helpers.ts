@@ -1268,7 +1268,7 @@ export function decodeEvent(data: string): JSONRPCMessage | undefined {
 
 /**
  * Decodes a `fetch` Response's Server-Sent-Events body into the JSON-RPC messages it
- * carried — the CLIENT-side inverse of a server's Streamable-HTTP SSE response.
+ * carried — the client-side inverse of a server's Streamable-HTTP SSE response.
  *
  * @remarks
  * Reads the whole `response.body` stream chunk-by-chunk through a `TextDecoder({ stream: true
@@ -1763,7 +1763,7 @@ export async function sendStream(
 }
 
 // The environment-agnostic PORT binders — the keystone that lets an
-// {@link MCPDispatcherInterface} / {@link MCPClientInterface} run over ANY
+// {@link MCPDispatcherInterface} / {@link MCPClientInterface} run over any
 // {@link MCPTransportInterface} (a Node stdio pair, a browser MessagePort, a Web
 // Worker `self`) with no per-environment dispatch/correlation wiring duplicated at
 // each face. Both are TOTAL: a `send` throw or rejection is caught and never
@@ -1778,9 +1778,9 @@ export async function sendStream(
  * `server.handle` already turns a malformed message into a serialized `-32700` /
  * `-32600` reply and a notification into `undefined` (no reply), so this binder parses
  * nothing the server would parse differently: it decodes each inbound message through
- * {@link decodeBoundedMessage} under `server.limit`, the server'S own bound, so a message
+ * {@link decodeBoundedMessage} under `server.limit`, the server's own bound, so a message
  * the server would refuse is never parsed here either and still receives its `-32700` from
- * the one place that words it. A HELD-OPEN reply arrives as an
+ * the one place that words it. A held-open reply arrives as an
  * {@link import('./types.js').MCPTextStreamControllerInterface} instead of a string: this is
  * the one place that pumps it, writing each notification in order and then the generator's
  * returned terminating response ({@link sendStream}). A `transport.send` throw or rejection —

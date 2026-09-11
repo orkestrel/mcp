@@ -1261,7 +1261,7 @@ export function isMCPTaskDetailResult(value: unknown): value is MCPTaskDetailRes
  * {@link MCPTaskDetail} — because either alone admits a frame the other rejects.
  *
  * `_meta` is checked for shape when present and nothing more. The reserved subscription
- * stamp is the server'S to write, after this guard admits the frame and the matcher agrees
+ * stamp is the server's to write, after this guard admits the frame and the matcher agrees
  * to it, so a guard that demanded the stamp would refuse every frame a producer emits.
  *
  * @param value - The unknown value to inspect

@@ -78,6 +78,10 @@ export function createMCPServer(options: MCPServerOptions): MCPServerInterface {
 /**
  * Decorates one MCP server with the fixed legacy method translation.
  *
+ * @remarks
+ * Adds support for the `2025-11-25` and `2025-06-18` legacy revisions. Removing this one
+ * decorator removes that legacy surface while leaving the modern dispatcher unchanged.
+ *
  * @param server - The sole modern dispatcher and handshake identity source
  * @returns A dispatcher accepting both modern and legacy invocations
  */
