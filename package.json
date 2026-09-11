@@ -92,8 +92,7 @@
 		"prepack": "npm run build",
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:distribution -- --mode release",
 		"test:bench": "vitest bench --config vite.config.ts --no-cache --project probe",
-		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup",
-		"docs": "node --experimental-strip-types scripts/docs.ts"
+		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup"
 	},
 	"dependencies": {
 		"@orkestrel/codec": "^0.0.3",
@@ -105,7 +104,7 @@
 		"@orkestrel/websocket": "^0.0.12"
 	},
 	"devDependencies": {
-		"@microsoft/api-extractor": "^7.59.0",
+		"@microsoft/api-extractor": "^7.59.1",
 		"@modelcontextprotocol/conformance": "0.2.0-alpha.11",
 		"@orkestrel/guide": "^0.0.18",
 		"@orkestrel/probe": "^0.0.12",
@@ -113,13 +112,13 @@
 		"@orkestrel/scaffold": "^0.0.64",
 		"@orkestrel/server": "^0.0.19",
 		"@orkestrel/test": "^0.0.14",
-		"@types/node": "^26.4.1",
+		"@types/node": "^26.5.1",
 		"@vitest/browser-playwright": "^4.1.11",
-		"oxfmt": "^0.66.0",
-		"oxlint": "^1.81.0",
-		"playwright": "^1.62.1",
+		"oxfmt": "^0.67.0",
+		"oxlint": "^1.82.0",
+		"playwright": "^1.63.0",
 		"typescript": "^6.0.3",
-		"vite": "^8.2.2",
+		"vite": "^8.3.0",
 		"vitest": "^4.1.11"
 	},
 	"peerDependencies": {
