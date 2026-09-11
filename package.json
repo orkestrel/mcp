@@ -96,23 +96,23 @@
 		"docs": "node --experimental-strip-types scripts/docs.ts"
 	},
 	"dependencies": {
-		"@orkestrel/codec": "^0.0.2",
-		"@orkestrel/contract": "^0.0.16",
-		"@orkestrel/emitter": "^0.0.9",
-		"@orkestrel/process": "^0.0.10",
-		"@orkestrel/sse": "^0.0.6",
-		"@orkestrel/tool": "^0.0.13",
-		"@orkestrel/websocket": "^0.0.11"
+		"@orkestrel/codec": "^0.0.3",
+		"@orkestrel/contract": "^0.0.17",
+		"@orkestrel/emitter": "^0.0.10",
+		"@orkestrel/process": "^0.0.11",
+		"@orkestrel/sse": "^0.0.7",
+		"@orkestrel/tool": "^0.0.14",
+		"@orkestrel/websocket": "^0.0.12"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.0",
 		"@modelcontextprotocol/conformance": "0.2.0-alpha.11",
-		"@orkestrel/guide": "^0.0.17",
+		"@orkestrel/guide": "^0.0.18",
 		"@orkestrel/probe": "^0.0.12",
-		"@orkestrel/router": "^0.0.13",
-		"@orkestrel/scaffold": "^0.0.63",
-		"@orkestrel/server": "^0.0.18",
-		"@orkestrel/test": "^0.0.13",
+		"@orkestrel/router": "^0.0.14",
+		"@orkestrel/scaffold": "^0.0.64",
+		"@orkestrel/server": "^0.0.19",
+		"@orkestrel/test": "^0.0.14",
 		"@types/node": "^26.4.1",
 		"@vitest/browser-playwright": "^4.1.11",
 		"oxfmt": "^0.66.0",
@@ -123,8 +123,8 @@
 		"vitest": "^4.1.11"
 	},
 	"peerDependencies": {
-		"@orkestrel/router": "^0.0.13",
-		"@orkestrel/server": "^0.0.18"
+		"@orkestrel/router": "^0.0.14",
+		"@orkestrel/server": "^0.0.19"
 	},
 	"engines": {
 		"node": ">=22.12.0"
