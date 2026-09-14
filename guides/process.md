@@ -774,12 +774,14 @@ A POSIX platform input leaves the file lookup to `execvp`, so `resolveExecutable
 because the host searches the working directory before `PATH` and applies `PATHEXT`, and Node
 reproduces neither for a direct spawn. `buildExecutableCandidates` makes that decision and the
 ordered candidate list pure, so every platform input executes on every test host.
-Within each searched directory the literal name is tried first and each `PATHEXT` candidate after
-it, whether or not the name already carries an extension: `report.txt` resolves to a `report.txt`
-file where one exists, and to `report.txt.cmd` where none does. The lookup reads the child's
-effective environment, so an overridden `PATH` selects the executable the child would have found, it
-falls back to `PROCESS_PATHEXT` when the environment declares no `PATHEXT`, and it accepts a
-candidate only when `isFile` reports a regular file.
+Within each searched directory, `buildExecutableCandidates` enumerates `PATHEXT` candidates for an
+extensionless name. For an extension-bearing name, it enumerates the literal path before `PATHEXT`
+candidates: `report.txt` resolves to a `report.txt` file where one exists, and to `report.txt.cmd`
+where none does. The lookup reads the child's effective environment, so an overridden `PATH`
+selects the executable the child would have found, it falls back to `PROCESS_PATHEXT` when the
+environment declares no `PATHEXT`, and it accepts a candidate only when `isFile` reports a regular
+file. When no candidate is a regular file, `resolveExecutable` returns `undefined` and `buildSpawn`
+preserves the command file as written for native spawning.
 
 A resolved `.cmd` or `.bat` script cannot be spawned directly. `buildSpawn` runs it through an
 explicitly quoted `cmd.exe /d /s /c` command line and sets `verbatim`, so the host receives that line
@@ -811,6 +813,7 @@ the child.
 
 ```ts
 import {
+	buildExecutableCandidates,
 	buildSpawn,
 	formatCommand,
 	quoteArgument,
@@ -823,6 +826,11 @@ formatCommand({ file: 'git', arguments: ['status'] }) // 'git status'
 quoteArgument('status') // 'status'
 quoteArgument('a&b') // '"a&b"'
 quoteArgument('%1') // '"%1"'
+buildExecutableCandidates('git', 'C:\\work', { PATH: 'C:\\bin' }, 'win32')
+// [
+//   'C:\\work\\git.COM', 'C:\\work\\git.EXE', 'C:\\work\\git.BAT', 'C:\\work\\git.CMD',
+//   'C:\\bin\\git.COM', 'C:\\bin\\git.EXE', 'C:\\bin\\git.BAT', 'C:\\bin\\git.CMD',
+// ]
 buildSpawn({ file: 'node', arguments: ['--version'] }).verbatim // false
 ```
 
@@ -1484,15 +1492,23 @@ a timeout carries no diagnostic about the code.
 
 The pure platform-decision rows execute both `win32` and POSIX inputs on every host. They cover
 environment-key folding and merging, `PATHEXT` candidate order, batch routing, argument quoting, and
-the percent-sign refusal. Those rows were last proven on Linux on 2026-08-20. The live POSIX rows
-were also last proven on Linux on 2026-08-20, before the terminal-moment fixtures landed.
+the percent-sign refusal. The 2026-08-20 Linux reading predates the candidate-order correction.
+The corrected candidate-order row has a Windows reading on 2026-09-13 and no Linux reading.
+The live POSIX rows were proven on Linux on 2026-08-20, before the terminal-moment fixtures landed.
 
-The live Windows filesystem, `cmd.exe`, and `taskkill.exe` rows execute on Windows only, and the
-current fixtures were last proven on Windows on 2026-08-21. That run settles `killTree` through
-`taskkill.exe` and grandchild tree termination through a live root. The unproven residue is the live
-POSIX rows against those same fixtures, which cover the terminal moment, the drain cutoff, and the
-descendant that outlives its root. On a POSIX host, settle them and re-run every server row with
-this command:
+The live Windows filesystem, `cmd.exe`, and `taskkill.exe` rows execute on Windows only. The
+2026-08-21 Windows run settled `killTree` through `taskkill.exe` and grandchild tree termination
+through a live root. On Windows 11 with Node v24.20.0 on 2026-09-13, the selected resolution run
+settled the `PATHEXT` candidates and the real sibling `.cmd` launch. This command produced that
+reading:
+
+```text
+npm run test:src:server -- tests/src/server/helpers.test.ts -t "Windows extensionless candidates|Windows sibling launchers"
+```
+
+The unproven residue is the live POSIX rows against the same terminal-moment fixtures,
+which cover the terminal moment, the drain cutoff, and the descendant that outlives its root. On a
+POSIX host, settle them and re-run every server row with this command:
 
 ```text
 npx vitest run --config vite.config.ts --no-cache --project src:server
@@ -1563,17 +1579,20 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   vector and environment record a later mutation cannot reach, and the absent optional that stays
   absent rather than becoming an explicit `undefined`.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts) — the building blocks
-  and the spawns that compose them: the resolver under `PATHEXT` and an extension-bearing name, each
-  platform input to the quoted batch builder and its percent-sign refusal, the environment merge
-  under each platform input, the UTF-8-safe byte bounds retreating a cut to a code-point boundary,
-  the per-chunk capture bound and the byte it keeps past `limit`, the validators, the termination
-  helpers, and `waitForClose` across a close inside its deadline, a deadline that elapsed first, and
-  the listeners it leaves behind. The runs carry their own rows: the asynchronous one-shot run's
-  owned inputs, buffered outcomes, failure delivery, cancellation, timeout, capture bounds, spawn
-  faults, and pre-spawn refusal; the blocking run's root-only timeout and argument integrity beside
-  its own owned inputs, buffered outcomes, failure delivery, capture bounds, spawn faults, and
-  pre-spawn refusal; and the fire-and-forget spawn's owned inputs, detached process-group behavior,
-  invalid-input refusal, and the validated working directory.
+  and the spawns that compose them: `PATHEXT` candidates for extensionless names, the literal path
+  before `PATHEXT` candidates for extension-bearing names, the real Windows sibling `.cmd` selected
+  across bare, relative, and absolute inputs and run through `executeSync` and `execute`, unresolved
+  command-file preservation through `buildSpawn`, each platform input to the quoted batch builder
+  and its percent-sign refusal, the environment merge under each platform input, the UTF-8-safe
+  byte bounds retreating a cut to a code-point boundary, the per-chunk capture bound and the byte it
+  keeps past `limit`, the validators, the termination helpers, and `waitForClose` across a close
+  inside its deadline, a deadline that elapsed first, and the listeners it leaves behind. The runs
+  carry their own rows: the asynchronous one-shot run's owned inputs, buffered outcomes, failure
+  delivery, cancellation, timeout, capture bounds, spawn faults, and pre-spawn refusal; the blocking
+  run's root-only timeout and argument integrity beside its own owned inputs, buffered outcomes,
+  failure delivery, capture bounds, spawn faults, and pre-spawn refusal; and the fire-and-forget
+  spawn's owned inputs, detached process-group behavior, invalid-input refusal, and the validated
+  working directory.
 - [`tests/guides.test.ts`](../tests/guides.test.ts) — this guide: the `## Surface` bijection against
   each published face's barrel, the interface-to-class method bijections, and the equality gate:
   every `Summary` cell against its declaration's description paragraph, the titled
