@@ -785,7 +785,7 @@ export const CONFORMANCE_CONTENT: Readonly<Record<string, readonly MCPContent[]>
  * `parameters` becomes the advertised `inputSchema` unchanged, so anything the listing drops is
  * the library dropping it.
  */
-export const CONFORMANCE_SCHEMA: Readonly<Record<string, unknown>> = Object.freeze({
+export const CONFORMANCE_INPUT_SCHEMA: Readonly<Record<string, unknown>> = Object.freeze({
 	$schema: 'https://json-schema.org/draft/2020-12/schema',
 	type: 'object',
 	$defs: {
@@ -933,7 +933,7 @@ export function buildConformanceTools(): ToolManagerInterface {
 		createTool({
 			name: 'json_schema_2020_12_tool',
 			description: 'Tool with JSON Schema 2020-12 features',
-			parameters: CONFORMANCE_SCHEMA,
+			parameters: CONFORMANCE_INPUT_SCHEMA,
 			execute: (values) => values,
 		}),
 	)
