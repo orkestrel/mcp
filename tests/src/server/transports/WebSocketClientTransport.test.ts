@@ -241,7 +241,7 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 				result: {
 					resultType: 'complete',
 					supportedVersions: [MCP_MODERN_VERSION],
-					capabilities: { tools: {} },
+					capabilities: { tools: { listChanged: true } },
 					ttlMs: DEFAULT_MCP_CACHE_TTL,
 					cacheScope: 'private',
 					_meta: {

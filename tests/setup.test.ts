@@ -8,7 +8,12 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { BrowserFixtureInterface } from './fixtures/browserServer.js'
-import type { JSONRPCMessage, MCPMethodOptions, MCPTaskContext } from '@src/core'
+import type {
+	JSONRPCMessage,
+	MCPMethodOptions,
+	MCPSubscriptionFilter,
+	MCPTaskContext,
+} from '@src/core'
 import {
 	bindClient,
 	bindServer,
@@ -27,7 +32,7 @@ import {
 } from '@src/core'
 import { createToolManager } from '@orkestrel/tool'
 import { isRecord } from '@orkestrel/contract'
-import { createRecorder, waitForDelay } from '@orkestrel/test'
+import { collect, createRecorder, waitForDelay } from '@orkestrel/test'
 import {
 	buildNestedRecord,
 	collectSSE,
@@ -40,6 +45,7 @@ import {
 	createLoopbackTransport,
 	createManualClock,
 	createMemoryTransport,
+	createProducerScript,
 	createRecordingTransport,
 	createSubscriptionRequest,
 	createTaskServer,
@@ -71,6 +77,65 @@ const TASK_CONTEXT: MCPTaskContext = {
 	call: { id: 'call-1', name: 'render', arguments: {} },
 	tools: createToolManager(),
 }
+
+describe('createProducerScript', () => {
+	it('yields the supplied frames in order and records the filter and signal', async () => {
+		const frames = [
+			createJSONRPCNotification('notifications/prompts/list_changed'),
+			createJSONRPCNotification('notifications/resources/list_changed'),
+		]
+		const filters = createRecorder<readonly [MCPSubscriptionFilter]>()
+		const signals = createRecorder<readonly [AbortSignal]>()
+		const producer = createProducerScript({ frames, filters, signals })
+		const filter = { promptsListChanged: true }
+		expect(await collect(await producer(filter, METHOD_OPTIONS))).toEqual(frames)
+		expect(filters.calls).toEqual([[filter]])
+		expect(filters.calls[0]?.[0]).toBe(filter)
+		expect(signals.calls).toEqual([[METHOD_OPTIONS.signal]])
+		expect(await collect(await createProducerScript({ frames: [] })({}, METHOD_OPTIONS))).toEqual(
+			[],
+		)
+	})
+
+	it('parks after its frames until the supplied signal aborts', async () => {
+		const controller = new AbortController()
+		const frame = createJSONRPCNotification('notifications/prompts/list_changed')
+		const source = await createProducerScript({ frames: [frame], park: true })(
+			{},
+			{ signal: controller.signal },
+		)
+		const iterator = source[Symbol.asyncIterator]()
+		try {
+			expect(await iterator.next()).toEqual({ done: false, value: frame })
+			const completed = createRecorder()
+			const pending = iterator.next()
+			void pending.then(completed.handler)
+			await waitForDelay(10)
+			expect(completed.count).toBe(0)
+			controller.abort()
+			expect(await pending).toEqual({ done: true, value: undefined })
+		} finally {
+			controller.abort()
+			await iterator.return?.()
+		}
+	})
+
+	it('throws the configured failure after yielding its frames', async () => {
+		const frame = createJSONRPCNotification('notifications/prompts/list_changed')
+		const error = new Error('script failed')
+		const source = await createProducerScript({ frames: [frame], failure: { error } })(
+			{},
+			METHOD_OPTIONS,
+		)
+		const iterator = source[Symbol.asyncIterator]()
+		try {
+			expect(await iterator.next()).toEqual({ done: false, value: frame })
+			await expect(iterator.next()).rejects.toBe(error)
+		} finally {
+			await iterator.return?.()
+		}
+	})
+})
 
 describe('waitForSettlement', () => {
 	it('returns the caller promise value once it settles', async () => {

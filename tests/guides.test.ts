@@ -1243,7 +1243,7 @@ function registerStdioComposition(): void {
 
 /** The honoured families the fence's filter names, as its own fence spells them. */
 const GUIDE_SUBSCRIPTION_FILTER = Object.freeze({
-	toolsListChanged: true,
+	promptsListChanged: true,
 	resourceSubscriptions: Object.freeze(['resource://guide']),
 })
 
@@ -1312,9 +1312,9 @@ async function readGuideSubscription(): Promise<GuideSubscriptionReading> {
 
 	// The fence's own shape: one read per frame, so the consumer is parked when each arrives.
 	const writer = source.writable.getWriter()
-	await writer.write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
-	const tools = await stream.next()
-	if (tools.done === false) frames.push(tools.value.method)
+	await writer.write({ jsonrpc: '2.0', method: 'notifications/prompts/list_changed' })
+	const prompts = await stream.next()
+	if (prompts.done === false) frames.push(prompts.value.method)
 	await writer.write({
 		jsonrpc: '2.0',
 		method: 'notifications/resources/updated',
@@ -1432,14 +1432,13 @@ async function readGuideCapacityRefusal(): Promise<GuideCapacityReading> {
 
 /** The families the burst reading asks for and the server honours, so every write matches. */
 const BURST_SUBSCRIPTION_FILTER = Object.freeze({
-	toolsListChanged: true,
 	promptsListChanged: true,
 	resourcesListChanged: true,
 })
 
 /** The frames the burst reading writes before it reads anything, in wire order. */
 const BURST_METHODS = Object.freeze([
-	'notifications/tools/list_changed',
+	'notifications/prompts/list_changed',
 	'notifications/prompts/list_changed',
 	'notifications/resources/list_changed',
 ])
@@ -1480,7 +1479,7 @@ function registerSubscription(): void {
 			expect(reading.acknowledged).toBe('notifications/subscriptions/acknowledged')
 			expect(reading.frames).toEqual([
 				'notifications/prompts/list_changed',
-				'notifications/tools/list_changed',
+				'notifications/prompts/list_changed',
 				'notifications/resources/updated',
 			])
 			expect(reading.closure?.resultType).toBe('complete')
@@ -1592,7 +1591,36 @@ function registerToolRefresh(): void {
 			}
 		})
 
-		it('replaces remote tools on list_changed and removes obsolete remote names', async () => {
+		it('refreshes after a server registry add without re-publishing or polling', async () => {
+			const fixture = createToolRefresh()
+			const subscription = new AbortController()
+			try {
+				await fixture.client.connect()
+				const notifications = fixture.client.listen(
+					{ toolsListChanged: true },
+					{ signal: subscription.signal },
+				)
+				await notifications.next()
+				let outcome = await refreshTools(fixture.client, fixture.tools, [])
+				fixture.remote.add(createTool({ name: 'added', execute: () => 'added' }))
+				for await (const notification of notifications) {
+					if (notification.method === 'notifications/tools/list_changed') {
+						outcome = await refreshTools(fixture.client, fixture.tools, outcome.installed)
+						break
+					}
+				}
+				expect(outcome).toEqual({ installed: ['remote', 'added'], collisions: [], failures: [] })
+				expect(
+					await fixture.tools.execute({ id: 'added', name: 'added', arguments: {} }),
+				).toMatchObject({ success: true, value: 'added' })
+				expect(fixture.tools.tool('local')).toBe(fixture.local)
+			} finally {
+				subscription.abort()
+				await fixture.close()
+			}
+		})
+
+		it('refreshes replacements and removals serially through one notification loop', async () => {
 			const fixture = createToolRefresh()
 			const subscription = new AbortController()
 			try {
@@ -1604,26 +1632,27 @@ function registerToolRefresh(): void {
 				await notifications.next()
 				let outcome = await refreshTools(fixture.client, fixture.tools, [])
 				const previous = fixture.tools.tool('remote')
+				const refreshed: string[] = []
 				fixture.remote.add(
 					createTool({ name: 'remote', title: 'Replacement', execute: () => 'replacement' }),
 				)
-				fixture.remote.add(createTool({ name: 'added', execute: () => 'added' }))
-				await fixture.writer.write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
 				for await (const notification of notifications) {
-					if (notification.method === 'notifications/tools/list_changed') {
-						outcome = await refreshTools(fixture.client, fixture.tools, outcome.installed)
+					if (notification.method !== 'notifications/tools/list_changed') continue
+					outcome = await refreshTools(fixture.client, fixture.tools, outcome.installed)
+					if (fixture.remote.tool('remote') === undefined) {
+						refreshed.push('removed')
 						break
 					}
+					expect(fixture.tools.tool('remote')).not.toBe(previous)
+					expect(fixture.tools.tool('remote')?.title).toBe('Replacement')
+					expect(
+						await fixture.tools.execute({ id: 'run', name: 'remote', arguments: {} }),
+					).toMatchObject({ success: true, value: 'replacement' })
+					refreshed.push('replaced')
+					fixture.remote.remove('remote')
 				}
-				expect(outcome).toEqual({ installed: ['remote', 'added'], collisions: [], failures: [] })
-				expect(fixture.tools.tool('remote')).not.toBe(previous)
-				expect(fixture.tools.tool('remote')?.title).toBe('Replacement')
-				expect(
-					await fixture.tools.execute({ id: 'run', name: 'remote', arguments: {} }),
-				).toMatchObject({ success: true, value: 'replacement' })
-				fixture.remote.remove('remote')
-				outcome = await refreshTools(fixture.client, fixture.tools, outcome.installed)
-				expect(outcome).toEqual({ installed: ['added'], collisions: [], failures: [] })
+				expect(refreshed).toEqual(['replaced', 'removed'])
+				expect(outcome).toEqual({ installed: [], collisions: [], failures: [] })
 				expect(fixture.tools.tool('remote')).toBeUndefined()
 				expect(fixture.tools.tool('local')).toBe(fixture.local)
 			} finally {

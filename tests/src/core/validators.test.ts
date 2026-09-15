@@ -7,6 +7,7 @@ import type {
 	JSONRPCResponse,
 	JSONRPCResultResponse,
 	MCPCallResult,
+	MCPConsumerFilter,
 	MCPDiscoverResult,
 	MCPElicitForm,
 	MCPElicitParams,
@@ -19,9 +20,10 @@ import type {
 	MCPLegacyResult,
 	MCPListResult,
 	MCPResult,
+	MCPSubscriptionOptions,
+	MCPSubscriptionResult,
 	MCPToolDescriptor,
 	MCPUnstampedCallResult,
-	MCPSubscriptionResult,
 } from '@src/core'
 import * as core from '@src/core'
 import {
@@ -103,6 +105,7 @@ import {
 	isMCPVersion,
 	isModernRequest,
 	isMCPSubscriptionFilter,
+	isMCPConsumerFilter,
 	isMCPSubscriptionResult,
 	isRFC3339Date,
 	isRFC3339DateTime,
@@ -721,6 +724,37 @@ describe('isMCPSubscriptionFilter', () => {
 		const { proxy, revoke } = Proxy.revocable({}, {})
 		revoke()
 		expect(isMCPSubscriptionFilter(proxy)).toBe(false)
+	})
+})
+
+describe('isMCPConsumerFilter', () => {
+	it('narrows unknown input to the declared consumer filter', () => {
+		const value: unknown = { promptsListChanged: true, toolsListChanged: false }
+		if (!isMCPConsumerFilter(value)) throw new Error('Expected a consumer filter')
+		expectTypeOf(value).toEqualTypeOf<MCPConsumerFilter>()
+		expectTypeOf(value.toolsListChanged).toEqualTypeOf<false | undefined>()
+		expectTypeOf<MCPSubscriptionOptions['notifications']>().toEqualTypeOf<MCPConsumerFilter>()
+		expect(value).toEqual({ promptsListChanged: true, toolsListChanged: false })
+	})
+
+	it('accepts consumer families and refuses a tools claim or malformed filter', () => {
+		expect(isMCPConsumerFilter({})).toBe(true)
+		expect(isMCPConsumerFilter({ toolsListChanged: false, promptsListChanged: true })).toBe(true)
+		expect(isMCPConsumerFilter({ toolsListChanged: true })).toBe(false)
+		expect(isMCPConsumerFilter({ promptsListChanged: 'yes' })).toBe(false)
+		expect(isMCPConsumerFilter(null)).toBe(false)
+		expect(
+			isMCPConsumerFilter(
+				new Proxy(
+					{},
+					{
+						getPrototypeOf() {
+							throw new Error('hostile')
+						},
+					},
+				),
+			),
+		).toBe(false)
 	})
 })
 
@@ -2232,6 +2266,7 @@ const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = 
 	isMCPServerCapabilities,
 	isMCPStringArguments,
 	isMCPSubscriptionFilter,
+	isMCPConsumerFilter,
 	isMCPSubscriptionResult,
 	isMCPNotificationMetaObject,
 	isMCPTaskDetail,

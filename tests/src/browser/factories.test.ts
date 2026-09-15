@@ -690,6 +690,8 @@ function createCalculatorTools(): ToolManagerInterface {
 // `createJSONRPCRequest` is correctly rejected by that server with JSON-RPC -32602, and drive
 // `server/discover` because it is the modern era's own required RPC — 2026-07-28 removes
 // `ping`, so a bare server answers that one -32601 and it cannot carry a transport canary.
+// That bare server still advertises `tools: { listChanged: true }`, because it owns the tools
+// family and produces it from its own registry whatever the host configured.
 function expectModernReply(message: unknown, id: number): void {
 	expect(JSON.parse(String(message))).toEqual({
 		jsonrpc: '2.0',
@@ -697,7 +699,7 @@ function expectModernReply(message: unknown, id: number): void {
 		result: {
 			resultType: 'complete',
 			supportedVersions: [MCP_MODERN_VERSION],
-			capabilities: { tools: {} },
+			capabilities: { tools: { listChanged: true } },
 			ttlMs: DEFAULT_MCP_CACHE_TTL,
 			cacheScope: 'private',
 			_meta: {

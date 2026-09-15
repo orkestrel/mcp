@@ -40,6 +40,7 @@ import type {
 	MCPStream,
 	MCPStreamControllerInterface,
 	MCPSubscriptionFilter,
+	MCPSubscriptionOptions,
 	MCPTaskContext,
 	MCPTaskManagerInterface,
 	MCPTaskResult,
@@ -89,6 +90,7 @@ import {
 	supportsTask,
 } from './helpers.js'
 import { MCPMethodManager } from './MCPMethodManager.js'
+import { MCPError } from './errors.js'
 import { MCPProgressReporter } from './MCPProgressReporter.js'
 import { MCPStreamController } from './MCPStreamController.js'
 import { MCPTextStreamController } from './MCPTextStreamController.js'
@@ -102,6 +104,7 @@ import {
 	isMCPCallResult,
 	isMCPCompletion,
 	isMCPCompletionParams,
+	isMCPConsumerFilter,
 	isMCPInputRequestMap,
 	isMCPInputResponse,
 	isMCPInputResult,
@@ -162,6 +165,15 @@ export class MCPServer implements MCPServerInterface {
 	#subscriptions = 0
 
 	constructor(options: MCPServerOptions) {
+		if (
+			options.subscription !== undefined &&
+			!isMCPConsumerFilter(options.subscription.notifications)
+		) {
+			throw new MCPError(
+				'The consumer filter must be a valid filter that omits tools changes, because the server produces that family from its registry',
+				JSONRPC_INVALID_PARAMS,
+			)
+		}
 		this.#emitter = new Emitter<MCPServerEventMap>({
 			...(options.on !== undefined ? { on: options.on } : {}),
 			...(options.error !== undefined ? { error: options.error } : {}),
@@ -1407,7 +1419,11 @@ export class MCPServer implements MCPServerInterface {
 			const task = this.#options.task
 			const configured = this.#options.subscription
 			const tasks = task !== undefined && configured !== undefined
-			let notifications = buildSubscriptionFilter(requested, configured?.notifications ?? {}, tasks)
+			let notifications = buildSubscriptionFilter(
+				requested,
+				{ ...configured?.notifications, toolsListChanged: true },
+				tasks,
+			)
 			const requestedTaskIds = notifications.taskIds
 			if (requestedTaskIds !== undefined) {
 				const resolved: string[] = []
@@ -1419,36 +1435,32 @@ export class MCPServer implements MCPServerInterface {
 				const { taskIds: _dropped, ...rest } = notifications
 				notifications = resolved.length > 0 ? { ...rest, taskIds: resolved } : rest
 			}
-			yield buildSubscriptionAcknowledgement(notifications, id)
-			if (configured !== undefined) {
-				const source = await configured.producer(notifications, options)
-				const iterator = source[Symbol.asyncIterator]()
-				// The iterator is held rather than hidden inside `for await` because ending the
-				// ITERATOR is the only cleanup this loop can still ask of a producer parked on its
-				// own event source. It is an ASK, not a guarantee: a producer suspended inside its
-				// own await queues that `return()` behind it and may never run it — which is why
-				// nothing after the park is load-bearing here, and why the slot is returned from
-				// the signal above rather than from anything this loop reaches.
-				options.signal.addEventListener(
-					'abort',
-					() => void iterator.return?.(undefined)?.catch(() => undefined),
-					{ once: true },
-				)
-				for (let next = await iterator.next(); next.done !== true; next = await iterator.next()) {
-					// Own the produced object BEFORE any decision reads it. The matcher and the
-					// stamper each read `method`, `params.uri`, and `params._meta`; a hostile
-					// producer answering differently per read would otherwise have one value admit
-					// the notification and another value ride out on the wire.
-					const owned = parseJSONRPCMessage(next.value, {
-						bytes: this.#limits.message,
-						depth: this.#limits.depth,
-					})
-					if (owned === undefined || !isJSONRPCNotification(owned)) continue
-					if (matchesSubscriptionNotification(owned, notifications)) {
-						yield stampSubscriptionNotification(owned, id)
-					}
-				}
+			const state: {
+				frame: JSONRPCNotification | undefined
+				failure: { readonly error: unknown } | undefined
+				iterator: AsyncIterator<JSONRPCNotification> | undefined
+			} = {
+				frame: undefined,
+				failure: undefined,
+				iterator: undefined,
 			}
+			// Registry callbacks and demand-driven consumer pulls share one native queue.
+			// MCPStreamController owns cancellation and releases listeners even while idle.
+			// Only a stream omitting the tools family ends gracefully with its producer;
+			// a stream honouring that family stays open until failure or signal abort.
+			const source = new ReadableStream<JSONRPCNotification | undefined>({
+				start: this.#startSubscription.bind(this, notifications, options, configured, state),
+				pull: this.#pullSubscription.bind(this, notifications, options, state),
+			})
+			yield buildSubscriptionAcknowledgement(notifications, id)
+			for await (const notification of source) {
+				if (notification === undefined) continue
+				// Only the registry frame clears the mark, so a consumer frame dequeued ahead of
+				// it cannot let a second registry frame in behind the one still unread.
+				if (notification === state.frame) state.frame = undefined
+				yield stampSubscriptionNotification(notification, id)
+			}
+			if (state.failure !== undefined) throw state.failure.error
 			return buildSubscriptionResult(id, this.#options.identity)
 		} catch (error) {
 			// An abort is a cancellation, not a fault: it produces no terminal and reports
@@ -1459,6 +1471,137 @@ export class MCPServer implements MCPServerInterface {
 		} finally {
 			slot.abort()
 		}
+	}
+
+	async #startSubscription(
+		notifications: MCPSubscriptionFilter,
+		options: MCPMethodOptions,
+		configured: MCPSubscriptionOptions | undefined,
+		state: {
+			frame: JSONRPCNotification | undefined
+			failure: { readonly error: unknown } | undefined
+			iterator: AsyncIterator<JSONRPCNotification> | undefined
+		},
+		controller: ReadableStreamDefaultController<JSONRPCNotification | undefined>,
+	): Promise<void> {
+		const emitter = this.#options.tools.emitter
+		const changed = this.#change.bind(this, controller, options.signal, state)
+		if (options.signal.aborted) {
+			controller.error(options.signal.reason)
+			return
+		}
+		// Skip listener registration on destroyed registries without relying on emitter tolerance.
+		if (notifications.toolsListChanged === true && !emitter.destroyed) {
+			emitter.on('add', changed)
+			emitter.on('remove', changed)
+			emitter.on('clear', changed)
+		}
+		options.signal.addEventListener(
+			'abort',
+			() => {
+				emitter.off('add', changed)
+				emitter.off('remove', changed)
+				emitter.off('clear', changed)
+				const iterator = state.iterator
+				state.iterator = undefined
+				if (iterator !== undefined) this.#releaseProducer(iterator, options.signal.reason)
+				controller.error(options.signal.reason)
+			},
+			{ once: true },
+		)
+		try {
+			if (configured === undefined) return
+			const source = await configured.producer(notifications, options)
+			const iterator = source[Symbol.asyncIterator]()
+			if (options.signal.aborted) this.#releaseProducer(iterator, options.signal.reason)
+			else state.iterator = iterator
+		} catch (error) {
+			this.#failSubscription(state, options.signal, controller, error)
+		}
+	}
+
+	#change(
+		controller: ReadableStreamDefaultController<JSONRPCNotification | undefined>,
+		signal: AbortSignal,
+		state: {
+			frame: JSONRPCNotification | undefined
+			failure: { readonly error: unknown } | undefined
+			iterator: AsyncIterator<JSONRPCNotification> | undefined
+		},
+	): void {
+		// #change is registered only when the honoured filter carries the tools family, and the
+		// graceful close runs only when that filter omits it, so this guard's failure check is the
+		// whole closed-stream test: a stream with these listeners closes on a failure or its signal
+		// and on nothing else.
+		if (signal.aborted || state.failure !== undefined || state.frame !== undefined) return
+		const notification: JSONRPCNotification = {
+			jsonrpc: '2.0',
+			method: 'notifications/tools/list_changed',
+		}
+		state.frame = notification
+		controller.enqueue(notification)
+	}
+
+	async #pullSubscription(
+		notifications: MCPSubscriptionFilter,
+		options: MCPMethodOptions,
+		state: {
+			frame: JSONRPCNotification | undefined
+			failure: { readonly error: unknown } | undefined
+			iterator: AsyncIterator<JSONRPCNotification> | undefined
+		},
+		controller: ReadableStreamDefaultController<JSONRPCNotification | undefined>,
+	): Promise<void> {
+		try {
+			if (options.signal.aborted) return
+			const next = await state.iterator?.next()
+			if (options.signal.aborted) return
+			if (next === undefined || next.done === true) {
+				state.iterator = undefined
+				if (notifications.toolsListChanged !== true) controller.close()
+				return
+			}
+			// Own before matching: a foreign getter cannot change the frame between reads.
+			const owned = parseJSONRPCMessage(next.value, {
+				bytes: this.#limits.message,
+				depth: this.#limits.depth,
+			})
+			// A discarded item still settles this pull. The outer reader skips it and
+			// requests the next item, preserving demand through unmatched producer frames.
+			controller.enqueue(
+				owned !== undefined &&
+					isJSONRPCNotification(owned) &&
+					owned.method !== 'notifications/tools/list_changed' &&
+					matchesSubscriptionNotification(owned, notifications)
+					? owned
+					: undefined,
+			)
+		} catch (error) {
+			this.#failSubscription(state, options.signal, controller, error)
+		}
+	}
+
+	#failSubscription(
+		state: {
+			frame: JSONRPCNotification | undefined
+			failure: { readonly error: unknown } | undefined
+			iterator: AsyncIterator<JSONRPCNotification> | undefined
+		},
+		signal: AbortSignal,
+		controller: ReadableStreamDefaultController<JSONRPCNotification | undefined>,
+		error: unknown,
+	): void {
+		if (signal.aborted) return
+		state.failure = { error }
+		controller.close()
+	}
+
+	// The reason is the release's argument because a `ReadableStream`-backed producer reads it
+	// as the cancel reason: without it the owner's pending writes reject with `undefined` and
+	// name nothing. A generator-backed producer ignores the argument, so it costs that case
+	// nothing.
+	#releaseProducer(iterator: AsyncIterator<JSONRPCNotification>, reason: unknown): void {
+		void iterator.return?.(reason)?.catch(() => undefined)
 	}
 
 	// THE SHARED INGRESS of every `tasks/*` method: the capability the extension requires

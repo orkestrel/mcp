@@ -1128,10 +1128,11 @@ export function buildSubscriptionResult(
  * @remarks
  * `capabilities.resources` and `capabilities.prompts` appear only for servers with their
  * respective managers and derive notification flags from the configured subscription filter.
- * `capabilities.completions` is independent and appears only with a completion provider.
- * `capabilities.extensions` appears only for a server that configured the extension it
- * would name. An advertisement is a promise a client is entitled to act on, so a server
- * with no `task` policy omits the member entirely rather than advertising an empty
+ * `tools.listChanged` is always advertised because the server produces the family from its
+ * own registry. `capabilities.completions` is independent and appears only with a completion
+ * provider. `capabilities.extensions` appears only for a server that configured the
+ * extension it would name. An advertisement is a promise a client is entitled to act on, so
+ * a server with no `task` policy omits the member entirely rather than advertising an empty
  * record — and its discovery answer stays byte-for-byte what it was before the extension
  * existed.
  *
@@ -1143,7 +1144,7 @@ export function buildDiscoverResult(options: MCPServerOptions): MCPDiscoverResul
 		{
 			supportedVersions: SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 			capabilities: {
-				tools: {},
+				tools: { listChanged: true },
 				...(options.resources === undefined
 					? {}
 					: {

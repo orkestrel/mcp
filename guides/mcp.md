@@ -911,22 +911,38 @@ resemblance to one.
 
 ### Configure modern subscriptions
 
-`subscription.notifications` declares what the server can actually honour;
-`subscription.producer` opens the event-driven source for the intersected filter.
-The built-in owns wire acknowledgement, filtering, id stamping, and graceful
-closure. A producer only yields project notifications and ends its iterable when
-the source closes; while idle it parks on its own events and may observe the
-supplied abort signal.
+The server supplies `toolsListChanged` from the tool registry's `add`, `remove`, and `clear`
+events. It registers the listeners before acknowledging the stream and releases them when
+`options.signal` aborts. Registry destruction delivers its final `clear`; the stream then
+stays open until its signal aborts. An already-destroyed registry registers no listeners; the
+server acknowledges the subscription, produces no tools frames, and waits for its signal. A
+stream read between changes receives one frame per change; changes that arrive together, or
+while the previous frame is unread, coalesce into one.
 
-**Every produced notification is owned before it is judged.** The built-in snapshots each
-one into bounded exact JSON before it matches the filter or stamps the id, so the values
-that admitted a notification are the values that reach the wire — a producer answering
-differently on a second read cannot have one URI pass the filter and another ride out.
-A notification that is not bounded exact JSON is dropped and the stream continues; a
-producer that throws ends the subscription with one detail-free `-32603` terminal, its
-caught value reported on the server's `error` event. Ending the source normally closes
-with the complete result; an abort closes with no terminal at all, because a cancelled
-request is not an answered one.
+`subscription.notifications` declares the consumer's supported families through
+`MCPConsumerFilter`, whose optional `toolsListChanged` member accepts only `false`;
+`subscription.producer` opens the event-driven source for the intersected filter, beside the
+built-in tools producer. The consumer producer advances on the stream's demand. A producer
+failure terminates the stream after the notifications it already produced. A consumer filter
+that is malformed, and one claiming `toolsListChanged: true`, are both invalid: construction
+throws `MCPError` with `JSONRPC_INVALID_PARAMS` (`-32602`). Consumer-produced tools
+notifications are dropped, so the tools family has only the registry as its source. The
+built-in owns wire acknowledgement, filtering, id stamping, and graceful closure. A producer
+only yields project notifications and ends its iterable when the source closes; while idle it
+parks on its own events and may observe the supplied abort signal. Releasing the producer
+cancels its source with that signal's abort reason, so a `ReadableStream` source sees its
+pending writes reject with the reason the request was aborted with.
+
+**Every produced notification is owned before it is judged.** The built-in snapshots each one
+into bounded exact JSON before it matches the filter or stamps the id, so the values that
+admitted a notification are the values that reach the wire — a producer answering differently
+on a second read cannot have one URI pass the filter and another ride out. A notification
+that is not bounded exact JSON is dropped and the stream continues; a producer that throws
+ends the subscription after queued notifications with one detail-free `-32603` terminal, its
+caught value reported on the server's `error` event. Ending the consumer source normally
+closes with the complete result only when the honoured filter omits `toolsListChanged`. A
+stream honouring the tools family stays open until failure or signal abort. An abort closes
+with no terminal at all, because a cancelled request is not an answered one.
 
 #### Configure the subscription producer
 
@@ -946,6 +962,7 @@ import {
 	buildSubscriptionFilter,
 	buildSubscriptionResult,
 	createMCPServer,
+	isMCPConsumerFilter,
 	isMCPSubscriptionFilter,
 	matchesSubscriptionNotification,
 	stampSubscriptionNotification,
@@ -953,11 +970,13 @@ import {
 import { createToolManager } from '@orkestrel/tool'
 
 const identity = { name: 'docs', version: '1.0.0' }
-const supported = { toolsListChanged: true, resourceSubscriptions: ['resource://guide'] }
-const input: unknown = { toolsListChanged: true, promptsListChanged: true }
+const supported = { promptsListChanged: true, resourceSubscriptions: ['resource://guide'] }
+isMCPConsumerFilter(supported) // true
+isMCPConsumerFilter({ toolsListChanged: true }) // false — the server owns this family
+const input: unknown = { promptsListChanged: true, resourcesListChanged: true }
 if (!isMCPSubscriptionFilter(input)) throw new Error('invalid filter')
 const honoured = buildSubscriptionFilter(input, supported)
-const event: JSONRPCNotification = { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }
+const event: JSONRPCNotification = { jsonrpc: '2.0', method: 'notifications/prompts/list_changed' }
 matchesSubscriptionNotification(event, honoured) // true
 stampSubscriptionNotification(event, 'listen-1') // every delivery carries the reserved id
 buildSubscriptionAcknowledgement(honoured, 'listen-1') // the first id-carrying message
@@ -1114,7 +1133,7 @@ await client.connect()
 
 const subscription = new AbortController()
 const stream = client.listen(
-	{ toolsListChanged: true, resourceSubscriptions: ['resource://guide'] },
+	{ promptsListChanged: true, resourceSubscriptions: ['resource://guide'] },
 	{ signal: subscription.signal, capacity: 16 },
 )
 
@@ -2292,6 +2311,7 @@ A `Shape` cell holds the constant's declared type.
 | `isInitializeRequest`              | function | Determines whether a parsed value is an MCP `initialize` invocation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `isMCPVersion`                     | function | Determines whether a value is a supported `MCPVersion`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `isMCPSubscriptionFilter`          | function | Determines whether a value is an MCP `MCPSubscriptionFilter`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `isMCPConsumerFilter`              | function | Checks whether a subscription filter leaves the built-in tools family to the server.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `isMCPSubscriptionResult`          | function | Determines whether a value is a graceful `subscriptions/listen` result.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `supportsFormElicitation`          | function | Determines whether a client capability record declares form-mode elicitation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `isMCPElicitFieldSchema`           | function | Determines whether a value is one restricted primitive form-elicitation schema.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -2512,7 +2532,8 @@ An extended interface's name comes before `plus`, with the members it adds after
 | `MCPIdentity`                      | type      | `MCPMetaObject & { name, version, title?, description?, websiteUrl?, icons? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Represents the complete dated identity of an MCP server or client.                                                                                                                                          |
 | `MCPRequestContext`                | interface | `{ version, capabilities, identity? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Represents the validated per-request context projected from a modern request's reserved `_meta` keys.                                                                                                       |
 | `MCPDiscoverResult`                | type      | `{ supportedVersions, capabilities, resultType: 'complete', ttlMs, cacheScope: 'public' \| 'private', instructions?, _meta? }`                                                                                                                                                                                                                                                                                                                                                                                                                                   | Represents the mandatory modern `server/discover` result.                                                                                                                                                   |
-| `MCPSubscriptionFilter`            | interface | `{ toolsListChanged?, promptsListChanged?, resourcesListChanged?, resourceSubscriptions?, taskIds? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Names the notification families a client may opt in to on a `subscriptions/listen` stream.                                                                                                                  |
+| `MCPSubscriptionFilter`            | interface | `{ toolsListChanged?, promptsListChanged?, resourcesListChanged?, resourceSubscriptions?, taskIds? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Names the notification families a client may opt in to on a `subscriptions/listen` stream, including built-in registry changes.                                                                             |
+| `MCPConsumerFilter`                | interface | `MCPSubscriptionFilter plus { toolsListChanged?: false }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Declares the consumer-produced notification families, excluding registry-owned tools changes.                                                                                                               |
 | `MCPSubscriptionResultMetaObject`  | type      | `MCPResultMetaObject & { 'io.modelcontextprotocol/subscriptionId' }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Represents the required metadata on a graceful `subscriptions/listen` result.                                                                                                                               |
 | `MCPSubscriptionResult`            | type      | `{ resultType: 'complete', _meta }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Represents the terminating result returned when a `subscriptions/listen` stream closes gracefully.                                                                                                          |
 | `MCPSubscriptionStream`            | type      | `AsyncGenerator< JSONRPCNotification, MCPSubscriptionResult, unknown >`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Represents a client subscription's owned notifications and graceful terminal result.                                                                                                                        |
@@ -3435,7 +3456,8 @@ const reply = await server.handle(
 	{ signal: controller.signal, caller: authenticatedPrincipal },
 )
 // reply → {"jsonrpc":"2.0","id":2,"result":{"supportedVersions":["2026-07-28"],
-//   "capabilities":{"tools":{}},"resultType":"complete","ttlMs":60000,"cacheScope":"private",
+//   "capabilities":{"tools":{"listChanged":true}},"resultType":"complete","ttlMs":60000,
+//   "cacheScope":"private",
 //   "_meta":{"io.modelcontextprotocol/serverInfo":{"name":"docs","version":"1.0.0"}}}}
 ```
 
@@ -4250,8 +4272,10 @@ const listed = await server.handle(
 
 ### Refresh the tools an agent holds
 
-Apply each snapshot between agent runs. The refresh owns the names it installed from the
-client and replaces or removes tools by name. You must not register a local tool under a
+The server produces each tools notification directly from its registry. A server-side `add`
+triggers this refresh without a consumer producer or a second notification written by the
+application. Apply each snapshot between agent runs. The refresh owns the names it installed
+from the client and replaces or removes tools by name. You must not register a local tool under a
 name the refresh installed. A collision with a local tool records the remote name and
 keeps the local tool. A failed fetch records the error and leaves the last snapshot installed.
 Open the subscription before fetching the initial snapshot so changes during that fetch stay
@@ -5160,7 +5184,9 @@ server `SHOULD` send the empty `subscriptions/listen` result to signal a gracefu
 attributes the notification to the client alone. The schema carries only the generic
 `CancelledNotification` with `requestId` and an optional `reason` — no subscription-specific
 field or variant — so it corroborates neither page. This server sends the empty result,
-correlated by the original request id through `buildSubscriptionResult`, on every transport.
+correlated by the original request id through `buildSubscriptionResult`, on every transport
+when a consumer producer ends and the honoured filter omits `toolsListChanged`. A stream
+honouring the tools family has no graceful end; it stays open until failure or signal abort.
 **What it costs:** a client written against the cancellation page, watching for a notification
 it believes is required, sees the result instead. **Do not "fix" this toward the cancellation
 page** — emitting the notification as well would send a frame the governing page does not
@@ -5401,9 +5427,11 @@ JSON.stringify(value) }], structuredContent: value }`, carrying the value unchan
    requires `params.notifications`; the server acknowledges the exact intersection
    with its configured support, and that acknowledgement is the first message
    carrying this request's reserved subscription id. Every delivered notification
-   carries the same stamp. Ending the event-driven producer closes gracefully with
+   carries the same stamp. Ending the consumer's producer closes gracefully when the
+   honoured filter omits `toolsListChanged`, with
    `{ resultType: 'complete', _meta: { 'io.modelcontextprotocol/subscriptionId': id,
-… } }`. The request id is only stream identity: a later request does not supersede
+… } }`. A stream honouring the tools family stays open until failure or signal abort.
+   The request id is only stream identity: a later request does not supersede
    an earlier one. The legacy method remains absent and answers `-32601`.
 7. **`handle` maps the boundary failures.** A `JSON.parse` throw (malformed
    JSON) → a serialized `-32700` (Parse error) response with no `id` member; a

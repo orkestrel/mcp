@@ -3725,7 +3725,7 @@ describe('MCPClient — subscriptions/listen', () => {
 		const client = createMCPClient({ transport })
 		await client.connect()
 		const stream = client.listen(
-			{ toolsListChanged: true, resourceSubscriptions: ['resource://one'] },
+			{ promptsListChanged: true, resourceSubscriptions: ['resource://one'] },
 			{ signal: new AbortController().signal },
 		)
 		const writer = source.writable.getWriter()
@@ -3733,13 +3733,13 @@ describe('MCPClient — subscriptions/listen', () => {
 		expect((await stream.next()).value).toMatchObject({
 			method: 'notifications/subscriptions/acknowledged',
 		})
-		const tools = { jsonrpc: '2.0' as const, method: 'notifications/tools/list_changed' }
+		const prompts = { jsonrpc: '2.0' as const, method: 'notifications/prompts/list_changed' }
 		const resource = {
 			jsonrpc: '2.0' as const,
 			method: 'notifications/resources/updated',
 			params: { uri: 'resource://one', detail: { revision: 1 } },
 		}
-		await writer.write(tools)
+		await writer.write(prompts)
 		await writer.write(resource)
 		resource.params.uri = 'resource://mutated'
 		resource.params.detail.revision = 2
@@ -3748,7 +3748,7 @@ describe('MCPClient — subscriptions/listen', () => {
 			done: false,
 			value: {
 				jsonrpc: '2.0',
-				method: 'notifications/tools/list_changed',
+				method: 'notifications/prompts/list_changed',
 				params: { _meta: { [MCP_META_SUBSCRIPTION]: 2 } },
 			},
 		})
@@ -3862,34 +3862,34 @@ describe('MCPClient — subscriptions/listen', () => {
 	})
 
 	it('keeps concurrent subscriptions isolated by their stamped request ids', async () => {
-		const tools = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const prompts = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const resources = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const server = createSubscriptionServer((filter) =>
-			filter.toolsListChanged === true ? tools.readable : resources.readable,
+			filter.promptsListChanged === true ? prompts.readable : resources.readable,
 		)
 		const transport = createLoopbackTransport(server)
 		const client = createMCPClient({ transport })
 		await client.connect()
 		const signal = new AbortController()
-		const toolStream = client.listen({ toolsListChanged: true }, { signal: signal.signal })
+		const promptStream = client.listen({ promptsListChanged: true }, { signal: signal.signal })
 		const resourceStream = client.listen(
 			{ resourceSubscriptions: ['resource://two'] },
 			{ signal: signal.signal },
 		)
 
-		const toolAcknowledgement = await Promise.race([
-			toolStream.next(),
+		const promptAcknowledgement = await Promise.race([
+			promptStream.next(),
 			waitForDelay(50).then(() => 'timed out'),
 		])
 		const resourceAcknowledgement = await Promise.race([
 			resourceStream.next(),
 			waitForDelay(50).then(() => 'timed out'),
 		])
-		expect(toolAcknowledgement).not.toBe('timed out')
+		expect(promptAcknowledgement).not.toBe('timed out')
 		expect(resourceAcknowledgement).not.toBe('timed out')
-		await tools.writable.getWriter().write({
+		await prompts.writable.getWriter().write({
 			jsonrpc: '2.0',
-			method: 'notifications/tools/list_changed',
+			method: 'notifications/prompts/list_changed',
 		})
 		await resources.writable.getWriter().write({
 			jsonrpc: '2.0',
@@ -3897,8 +3897,8 @@ describe('MCPClient — subscriptions/listen', () => {
 			params: { uri: 'resource://two' },
 		})
 
-		expect((await toolStream.next()).value).toMatchObject({
-			method: 'notifications/tools/list_changed',
+		expect((await promptStream.next()).value).toMatchObject({
+			method: 'notifications/prompts/list_changed',
 			params: { _meta: { [MCP_META_SUBSCRIPTION]: 2 } },
 		})
 		expect((await resourceStream.next()).value).toMatchObject({
@@ -4074,7 +4074,7 @@ describe('MCPClient — subscriptions/listen', () => {
 		const client = createMCPClient({ transport })
 		await client.connect()
 		const stream = client.listen(
-			{ toolsListChanged: true },
+			{ promptsListChanged: true },
 			{
 				signal: new AbortController().signal,
 				capacity: 1,
@@ -4082,8 +4082,8 @@ describe('MCPClient — subscriptions/listen', () => {
 		)
 		await stream.next()
 		const writer = source.writable.getWriter()
-		await writer.write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
-		await writer.write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+		await writer.write({ jsonrpc: '2.0', method: 'notifications/prompts/list_changed' })
+		await writer.write({ jsonrpc: '2.0', method: 'notifications/prompts/list_changed' })
 		await waitForDelay()
 
 		await expect(stream.next()).rejects.toThrow('subscription frame queue overflow')
@@ -4099,7 +4099,7 @@ describe('MCPClient — subscriptions/listen', () => {
 		const client = createMCPClient({ transport, timeout: 25 })
 		await client.connect()
 		const stream = client.listen(
-			{ toolsListChanged: true },
+			{ promptsListChanged: true },
 			{ signal: new AbortController().signal },
 		)
 		await stream.next()
@@ -4108,7 +4108,7 @@ describe('MCPClient — subscriptions/listen', () => {
 		await waitForDelay(50)
 		await source.writable
 			.getWriter()
-			.write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+			.write({ jsonrpc: '2.0', method: 'notifications/prompts/list_changed' })
 
 		expect(await parked).toEqual([
 			{
@@ -4117,7 +4117,7 @@ describe('MCPClient — subscriptions/listen', () => {
 					done: false,
 					value: {
 						jsonrpc: '2.0',
-						method: 'notifications/tools/list_changed',
+						method: 'notifications/prompts/list_changed',
 						params: { _meta: { [MCP_META_SUBSCRIPTION]: 2 } },
 					},
 				},

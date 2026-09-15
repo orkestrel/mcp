@@ -31,6 +31,7 @@ import type {
 	MCPServerOptions,
 	MCPStream,
 	MCPStreamControllerInterface,
+	MCPSubscriptionFilter,
 	MCPSubscriptionHandler,
 	MCPSubscriptionOptions,
 	MCPTask,
@@ -42,7 +43,7 @@ import type {
 } from '@src/core'
 import type { JSONValue } from '@orkestrel/contract'
 import type { EmitterErrorHandler } from '@orkestrel/emitter'
-import type { ToolManagerInterface, ToolSuccess } from '@orkestrel/tool'
+import type { ToolManagerEventMap, ToolManagerInterface, ToolSuccess } from '@orkestrel/tool'
 import {
 	bindClient,
 	bindServer,
@@ -63,6 +64,7 @@ import {
 	isJSONRPCErrorResponse,
 	isMCPCompletionResult,
 	isMCPInputResult,
+	isMCPError,
 	parseMCPInputState,
 	MCP_EXTENSION_TASKS,
 	MCP_META_CAPABILITIES,
@@ -77,9 +79,18 @@ import {
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { createRecorder, createRecorders, waitForAbort, waitForDelay } from '@orkestrel/test'
+import {
+	captureError,
+	createRecorder,
+	createRecorders,
+	waitForAbort,
+	waitForDelay,
+} from '@orkestrel/test'
 import {
 	createAbortTools,
+	createRegistrySubscription,
+	createProducerScript,
+	REGISTRY_CHANGES,
 	createMemoryTransport,
 	buildNestedRecord,
 	createJSONRPCNotification,
@@ -427,6 +438,418 @@ function resultOf(response: JSONRPCResponse | undefined): Record<string, unknown
 	return record
 }
 
+// Real registry events drive the stream. The release proof retains independent recorders,
+// so listener membership distinguishes the server's cleanup from a cleared emitter.
+describe('MCPServer — registry notifications', () => {
+	it('advances the consumer producer only on demand', async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const writer = source.writable.getWriter()
+		const resolved = createRecorder<readonly [number]>()
+		const fixture = await createRegistrySubscription({
+			notifications: { promptsListChanged: true },
+			producer: () => source.readable,
+		})
+		const writes: Array<Promise<void>> = []
+		try {
+			await fixture.stream.next()
+			for (let index = 0; index < 32; index += 1) {
+				writes.push(
+					writer
+						.write({
+							jsonrpc: '2.0',
+							method: 'notifications/prompts/list_changed',
+							params: { index },
+						})
+						.then(() => resolved.handler(index)),
+				)
+			}
+			await waitForDelay(100)
+			expect(resolved.calls).toEqual([[0]])
+			for (let index = 0; index < 32; index += 1) {
+				expect(await fixture.stream.next()).toMatchObject({
+					done: false,
+					value: { method: 'notifications/prompts/list_changed', params: { index } },
+				})
+			}
+			await Promise.all(writes)
+			expect(resolved.count).toBe(32)
+			await writer.close()
+		} finally {
+			fixture.close()
+			await writer.abort().catch(() => undefined)
+			await Promise.allSettled(writes)
+		}
+	})
+
+	it("releases the consumer producer with the stream's abort reason", async () => {
+		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+		const writer = source.writable.getWriter()
+		const fixture = await createRegistrySubscription({
+			notifications: { promptsListChanged: true },
+			producer: () => source.readable,
+		})
+		const writes: Array<Promise<void>> = []
+		try {
+			await fixture.stream.next()
+			for (let index = 0; index < 3; index += 1) {
+				const write = writer.write({
+					jsonrpc: '2.0',
+					method: 'notifications/prompts/list_changed',
+					params: { index },
+				})
+				writes.push(write)
+				void write.catch(() => undefined)
+			}
+			// The parked write is the producer owner's view of the release: nothing reads the
+			// stream, so this write is still outstanding when the request aborts, and what it
+			// rejects with is whatever the server cancelled the source with.
+			const parked = writer.write({
+				jsonrpc: '2.0',
+				method: 'notifications/prompts/list_changed',
+				params: { index: 3 },
+			})
+			writes.push(parked)
+			const settled = createRecorder<readonly [unknown]>()
+			void parked.then(settled.handler, settled.handler)
+			await waitForDelay(10)
+			expect(settled.count).toBe(0)
+			const reason = new Error('subscription released')
+			fixture.controller.abort(reason)
+			await expect(parked).rejects.toBe(reason)
+		} finally {
+			fixture.close()
+			await writer.abort().catch(() => undefined)
+			await Promise.allSettled(writes)
+		}
+	})
+
+	it.each([new Error('private producer detail'), undefined])(
+		'delivers the queued frame before the failure terminal whatever the producer threw (%s)',
+		async (error) => {
+			const fixture = await createRegistrySubscription({
+				notifications: { promptsListChanged: true },
+				producer: createProducerScript({
+					frames: [{ jsonrpc: '2.0', method: 'notifications/prompts/list_changed' }],
+					failure: { error },
+				}),
+			})
+			try {
+				await fixture.stream.next()
+				expect(await fixture.stream.next()).toMatchObject({
+					done: false,
+					value: { method: 'notifications/prompts/list_changed' },
+				})
+				expect(await fixture.stream.next()).toEqual({
+					done: true,
+					value: {
+						jsonrpc: '2.0',
+						id: 'registry',
+						error: { code: JSONRPC_INTERNAL_ERROR, message: 'Server error' },
+					},
+				})
+			} finally {
+				fixture.close()
+			}
+		},
+	)
+
+	it.each([undefined, new Error('private producer detail')])(
+		'ignores registry changes after the stream closed on a producer failure (%s)',
+		async (error) => {
+			const failures = createRecorder<Parameters<EmitterErrorHandler>>()
+			const registry = createToolManager({ error: failures.handler })
+			const mcp = createMCPServer({
+				identity: { name: 'failed', version: '1' },
+				tools: registry,
+				subscription: {
+					notifications: { promptsListChanged: true },
+					producer: createProducerScript({ frames: [], failure: { error } }),
+				},
+			})
+			const records = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
+			const stream = await mcp.dispatch(
+				createSubscriptionRequest('failed', { toolsListChanged: true, promptsListChanged: true }),
+			)
+			if (!(Symbol.asyncIterator in stream)) throw new Error('Expected a subscription stream')
+			try {
+				expect(await stream.next()).toMatchObject({
+					done: false,
+					value: { params: { notifications: { toolsListChanged: true } } },
+				})
+				await waitForDelay(10)
+				expect(() => registry.clear()).not.toThrow()
+				expect(failures.calls).toEqual([])
+				expect(await stream.next()).toEqual({
+					done: true,
+					value: {
+						jsonrpc: '2.0',
+						id: 'failed',
+						error: { code: JSONRPC_INTERNAL_ERROR, message: 'Server error' },
+					},
+				})
+				expect(records.error.calls).toEqual([[error]])
+			} finally {
+				stream.stop()
+				registry.destroy()
+			}
+		},
+	)
+
+	it('delivers queued notifications before a normal producer close', async () => {
+		const mcp = createMCPServer({
+			identity: { name: 'closing', version: '1' },
+			tools: createToolManager(),
+			subscription: {
+				notifications: { promptsListChanged: true },
+				producer: createProducerScript({
+					frames: [{ jsonrpc: '2.0', method: 'notifications/prompts/list_changed' }],
+				}),
+			},
+		})
+		const stream = await mcp.dispatch(
+			createSubscriptionRequest('close', { promptsListChanged: true }),
+		)
+		if (!(Symbol.asyncIterator in stream)) throw new Error('Expected a subscription stream')
+		try {
+			await stream.next()
+			await waitForDelay(10)
+			expect(await stream.next()).toMatchObject({
+				done: false,
+				value: { method: 'notifications/prompts/list_changed' },
+			})
+			expect(await stream.next()).toMatchObject({
+				done: true,
+				value: { result: { resultType: 'complete' } },
+			})
+		} finally {
+			stream.stop()
+		}
+	})
+
+	it('coalesces registry changes while the last frame is unread', async () => {
+		const fixture = await createRegistrySubscription()
+		try {
+			await fixture.stream.next()
+			for (let index = 0; index < 32; index += 1) {
+				fixture.tools.add(createTool({ name: 'changing', execute: () => 'changed' }))
+				fixture.tools.clear()
+			}
+			expect(await fixture.stream.next()).toMatchObject({
+				done: false,
+				value: { method: 'notifications/tools/list_changed' },
+			})
+			const delivered = createRecorder()
+			const next = fixture.stream.next()
+			void next.then(delivered.handler, () => undefined)
+			await waitForDelay(10)
+			expect(delivered.count).toBe(0)
+			fixture.tools.clear()
+			expect(await next).toMatchObject({
+				done: false,
+				value: { method: 'notifications/tools/list_changed' },
+			})
+			expect(delivered.count).toBe(1)
+		} finally {
+			fixture.close()
+		}
+	})
+
+	it('acknowledges a tools subscription on a destroyed registry and produces nothing', async () => {
+		const fixture = await createRegistrySubscription()
+		fixture.tools.destroy()
+		try {
+			expect(await fixture.stream.next()).toMatchObject({
+				done: false,
+				value: { params: { notifications: { toolsListChanged: true } } },
+			})
+			expect(fixture.tools.emitter.count()).toBe(0)
+			const delivered = createRecorder()
+			const next = fixture.stream.next()
+			void next.then(delivered.handler, () => undefined)
+			await waitForDelay(10)
+			expect(delivered.count).toBe(0)
+			const reason = new Error('destroyed registry ended')
+			fixture.controller.abort(reason)
+			await expect(next).rejects.toBe(reason)
+		} finally {
+			fixture.close()
+		}
+	})
+
+	it.each(REGISTRY_CHANGES.map(({ title, change }) => [title, change] as const))(
+		'pushes tools/list_changed when the registry %s',
+		async (_title, change) => {
+			const fixture = await createRegistrySubscription()
+			try {
+				await fixture.stream.next()
+				change(fixture.tools)
+				expect(await fixture.stream.next()).toMatchObject({
+					done: false,
+					value: {
+						method: 'notifications/tools/list_changed',
+						params: { _meta: { [MCP_META_SUBSCRIPTION]: 'registry' } },
+					},
+				})
+			} finally {
+				fixture.close()
+			}
+		},
+	)
+
+	it('releases the registry subscription when the stream signal aborts', async () => {
+		const fixture = await createRegistrySubscription()
+		const records = createRecorders<ToolManagerEventMap, 'add' | 'remove' | 'clear'>(
+			fixture.tools.emitter,
+			['add', 'remove', 'clear'],
+		)
+		try {
+			await fixture.stream.next()
+			expect(fixture.tools.emitter.count('add')).toBe(2)
+			expect(fixture.tools.emitter.count('remove')).toBe(2)
+			expect(fixture.tools.emitter.count('clear')).toBe(2)
+			const pending = fixture.stream.next()
+			const reason = new Error('subscription ended')
+			fixture.controller.abort(reason)
+			await expect(pending).rejects.toBe(reason)
+			expect(fixture.tools.emitter.count('add')).toBe(1)
+			expect(fixture.tools.emitter.count('remove')).toBe(1)
+			expect(fixture.tools.emitter.count('clear')).toBe(1)
+			fixture.tools.clear()
+			expect(records.clear.count).toBe(1)
+		} finally {
+			fixture.close()
+		}
+	})
+
+	it('pumps a consumer producer beside the built-in tools family', async () => {
+		const filters = createRecorder<readonly [MCPSubscriptionFilter]>()
+		const fixture = await createRegistrySubscription({
+			notifications: { promptsListChanged: true },
+			producer: createProducerScript({
+				filters,
+				frames: [
+					{ jsonrpc: '2.0', method: 'notifications/prompts/list_changed' },
+					{ jsonrpc: '2.0', method: 'notifications/tools/list_changed', params: { foreign: true } },
+				],
+			}),
+		})
+		try {
+			expect(await fixture.stream.next()).toMatchObject({
+				value: { params: { notifications: { toolsListChanged: true, promptsListChanged: true } } },
+			})
+			expect(await fixture.stream.next()).toMatchObject({
+				value: { method: 'notifications/prompts/list_changed' },
+			})
+			fixture.tools.clear()
+			expect(await fixture.stream.next()).toEqual({
+				done: false,
+				value: {
+					jsonrpc: '2.0',
+					method: 'notifications/tools/list_changed',
+					params: { _meta: { [MCP_META_SUBSCRIPTION]: 'registry' } },
+				},
+			})
+			expect(filters.calls).toEqual([[{ toolsListChanged: true, promptsListChanged: true }]])
+		} finally {
+			fixture.close()
+		}
+	})
+
+	it('refuses a consumer filter that claims the tools family or is malformed', () => {
+		// Bypass the literal types to prove the runtime refusal a JavaScript caller reaches.
+		const refusal =
+			'The consumer filter must be a valid filter that omits tools changes, because the server produces that family from its registry'
+		const claimed = captureError(() =>
+			createMCPServer({
+				identity: { name: 'invalid', version: '1' },
+				tools: createToolManager(),
+				subscription: {
+					notifications: { ...Object.fromEntries([['toolsListChanged', true]]) },
+					producer: createProducerScript({ frames: [] }),
+				},
+			}),
+		)
+		const malformed = captureError(() =>
+			createMCPServer({
+				identity: { name: 'malformed', version: '1' },
+				tools: createToolManager(),
+				subscription: {
+					notifications: { ...Object.fromEntries([['promptsListChanged', 'yes']]) },
+					producer: createProducerScript({ frames: [] }),
+				},
+			}),
+		)
+		expect(isMCPError(claimed)).toBe(true)
+		expect(claimed).toMatchObject({ code: JSONRPC_INVALID_PARAMS, message: refusal })
+		expect(isMCPError(malformed)).toBe(true)
+		expect(malformed).toMatchObject({ code: JSONRPC_INVALID_PARAMS, message: refusal })
+	})
+
+	it('advertises tools.listChanged', async () => {
+		const mcp = createMCPServer({
+			identity: { name: 'discovery', version: '1' },
+			tools: createToolManager(),
+		})
+		expect(await mcp.dispatch(modernRequest('server/discover'))).toMatchObject({
+			result: { capabilities: { tools: { listChanged: true } } },
+		})
+	})
+
+	it('delivers the final clear from registry destruction and waits for the stream signal', async () => {
+		const fixture = await createRegistrySubscription()
+		try {
+			await fixture.stream.next()
+			fixture.tools.destroy()
+			expect(await fixture.stream.next()).toMatchObject({
+				done: false,
+				value: { method: 'notifications/tools/list_changed' },
+			})
+			expect(fixture.tools.emitter.destroyed).toBe(true)
+			expect(fixture.tools.emitter.count()).toBe(0)
+			fixture.tools.add(createTool({ name: 'silent', execute: () => 'silent' }))
+			const pending = fixture.stream.next()
+			const reason = new Error('destroyed registry stream ended')
+			fixture.controller.abort(reason)
+			await expect(pending).rejects.toBe(reason)
+		} finally {
+			fixture.close()
+		}
+	})
+
+	it('delivers tools changes while the consumer producer is parked and releases on stop', async () => {
+		const signals = createRecorder<readonly [AbortSignal]>()
+		const fixture = await createRegistrySubscription({
+			notifications: { promptsListChanged: true },
+			producer: createProducerScript({
+				signals,
+				frames: [{ jsonrpc: '2.0', method: 'notifications/prompts/list_changed' }],
+				park: true,
+			}),
+		})
+		try {
+			await fixture.stream.next()
+			expect(await fixture.stream.next()).toMatchObject({
+				value: { method: 'notifications/prompts/list_changed' },
+			})
+			fixture.tools.clear()
+			expect(await fixture.stream.next()).toMatchObject({
+				done: false,
+				value: { method: 'notifications/tools/list_changed' },
+			})
+			fixture.tools.clear()
+			expect(await fixture.stream.next()).toMatchObject({
+				done: false,
+				value: { method: 'notifications/tools/list_changed' },
+			})
+			fixture.stream.stop()
+			expect(signals.calls[0]?.[0].aborted).toBe(true)
+			expect(fixture.tools.emitter.count()).toBe(0)
+		} finally {
+			fixture.close()
+		}
+	})
+})
+
 describe('MCPServer — hostile-input and live-resource limits over the wire', () => {
 	it('publishes frozen secure defaults sized for ordinary MCP traffic', () => {
 		expect(DEFAULT_MCP_LIMITS).toEqual({
@@ -658,13 +1081,13 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 			tools: tools(),
 			limit: { subscriptions: 1 },
 			subscription: {
-				notifications: { toolsListChanged: true },
+				notifications: { promptsListChanged: true },
 				producer: () => source.readable,
 			},
 		})
 		const peer = createHostilePeer(mcp)
 		const params = {
-			notifications: { toolsListChanged: true },
+			notifications: { promptsListChanged: true },
 			_meta: MODERN_METADATA,
 		}
 
@@ -731,7 +1154,7 @@ describe('MCPServer — graceful subscription closure', () => {
 		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const writer = source.writable.getWriter()
 		const mcp = server(undefined, {
-			notifications: { toolsListChanged: true },
+			notifications: { promptsListChanged: true },
 			producer: () => source.readable,
 		})
 		const stream = streamOf(
@@ -739,7 +1162,7 @@ describe('MCPServer — graceful subscription closure', () => {
 				createJSONRPCRequest({
 					method: 'subscriptions/listen',
 					id: 'listen-close',
-					params: { notifications: { toolsListChanged: true }, _meta: MODERN_METADATA },
+					params: { notifications: { promptsListChanged: true }, _meta: MODERN_METADATA },
 				}),
 			),
 		)
@@ -915,7 +1338,7 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 
 		expect(response?.result).toEqual({
 			supportedVersions: SUPPORTED_MODERN_PROTOCOL_VERSIONS,
-			capabilities: { tools: {} },
+			capabilities: { tools: { listChanged: true } },
 			instructions: 'Use the available tools.',
 			resultType: 'complete',
 			ttlMs: 123,
@@ -2607,8 +3030,7 @@ describe('MCPServer — modern subscriptions/listen', () => {
 		const writer = source.writable.getWriter()
 		const mcp = server(undefined, {
 			notifications: {
-				toolsListChanged: true,
-				resourcesListChanged: true,
+				promptsListChanged: true,
 				resourceSubscriptions: ['resource://kept'],
 			},
 			producer(filter, dispatch) {
@@ -2624,8 +3046,8 @@ describe('MCPServer — modern subscriptions/listen', () => {
 					id: 'listen-7',
 					params: {
 						notifications: {
-							toolsListChanged: true,
 							promptsListChanged: true,
+							resourcesListChanged: true,
 							resourceSubscriptions: ['resource://ignored', 'resource://kept'],
 						},
 						_meta: MODERN_METADATA,
@@ -2636,12 +3058,14 @@ describe('MCPServer — modern subscriptions/listen', () => {
 		)
 		const acknowledgement = await stream.next()
 		if (acknowledgement.done) throw new Error('expected a subscription acknowledgement')
-		expect(notifications).toEqual([])
+		expect(notifications).toEqual([
+			{ promptsListChanged: true, resourceSubscriptions: ['resource://kept'] },
+		])
 		const drained = drainStream(stream)
-		await writer.write({ jsonrpc: '2.0', method: 'notifications/prompts/list_changed' })
+		await writer.write({ jsonrpc: '2.0', method: 'notifications/resources/list_changed' })
 		await writer.write({
 			jsonrpc: '2.0',
-			method: 'notifications/tools/list_changed',
+			method: 'notifications/prompts/list_changed',
 			params: { _meta: { producer: true } },
 		})
 		await writer.write({
@@ -2662,7 +3086,7 @@ describe('MCPServer — modern subscriptions/listen', () => {
 			method: 'notifications/subscriptions/acknowledged',
 			params: {
 				notifications: {
-					toolsListChanged: true,
+					promptsListChanged: true,
 					resourceSubscriptions: ['resource://kept'],
 				},
 				_meta: { [MCP_META_SUBSCRIPTION]: 'listen-7' },
@@ -2671,7 +3095,7 @@ describe('MCPServer — modern subscriptions/listen', () => {
 		expect(messages).toEqual([
 			{
 				jsonrpc: '2.0',
-				method: 'notifications/tools/list_changed',
+				method: 'notifications/prompts/list_changed',
 				params: {
 					_meta: { producer: true, [MCP_META_SUBSCRIPTION]: 'listen-7' },
 				},
@@ -2686,7 +3110,7 @@ describe('MCPServer — modern subscriptions/listen', () => {
 			},
 		])
 		expect(notifications).toEqual([
-			{ toolsListChanged: true, resourceSubscriptions: ['resource://kept'] },
+			{ promptsListChanged: true, resourceSubscriptions: ['resource://kept'] },
 		])
 		// The producer receives the request's LIFETIME rather than the caller's signal by
 		// identity: an aborting caller still reaches it, and so does the stream's own close.
@@ -3302,7 +3726,7 @@ function throwingHandlerServer(): MCPServerInterface {
 
 function throwingSourceServer(): MCPServerInterface {
 	return server(undefined, {
-		notifications: { toolsListChanged: true },
+		notifications: { promptsListChanged: true },
 		producer: () => {
 			throw new Error('subscription source detail')
 		},
@@ -3335,7 +3759,7 @@ async function* parking(): MCPStream {
 // state of a real subscription with no notification pending.
 async function* parkingSource(): AsyncGenerator<JSONRPCNotification> {
 	await new Promise<void>(() => undefined)
-	yield { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }
+	yield { jsonrpc: '2.0', method: 'notifications/prompts/list_changed' }
 }
 
 // Every distinct modern fault the server contains, in one population. A fault absent from
@@ -3351,7 +3775,7 @@ function modernFaults(): readonly FaultScenario[] {
 	const listen: JSONRPCRequest = createJSONRPCRequest({
 		method: 'subscriptions/listen',
 		id: 'listen-fault',
-		params: { notifications: { toolsListChanged: true }, _meta: MODERN_METADATA },
+		params: { notifications: { promptsListChanged: true }, _meta: MODERN_METADATA },
 	})
 	const elicitMetadata = {
 		[MCP_META_VERSION]: '2026-07-28',
@@ -3416,7 +3840,7 @@ function modernFaults(): readonly FaultScenario[] {
 				tools: tools(),
 				limit: { subscriptions: 0 },
 				subscription: {
-					notifications: { toolsListChanged: true },
+					notifications: { promptsListChanged: true },
 					producer: () => new TransformStream<JSONRPCNotification, JSONRPCNotification>().readable,
 				},
 			}),
@@ -3690,7 +4114,7 @@ describe('MCPServer — W02-A: the broadened error event', () => {
 				createJSONRPCRequest({
 					method: 'subscriptions/listen',
 					id: 'source-fault',
-					params: { notifications: { toolsListChanged: true }, _meta: MODERN_METADATA },
+					params: { notifications: { promptsListChanged: true }, _meta: MODERN_METADATA },
 				}),
 			),
 		)
@@ -3721,9 +4145,12 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 			identity: { name: 'bounded', version: '1.0.0' },
 			tools: tools(),
 			limit: { subscriptions: 1 },
-			subscription: { notifications: { toolsListChanged: true }, producer: () => source.readable },
+			subscription: {
+				notifications: { promptsListChanged: true },
+				producer: () => source.readable,
+			},
 		})
-		const params = { notifications: { toolsListChanged: true }, _meta: MODERN_METADATA }
+		const params = { notifications: { promptsListChanged: true }, _meta: MODERN_METADATA }
 		const first = streamOf(
 			await mcp.dispatch(createJSONRPCRequest({ method: 'subscriptions/listen', id: 'a', params })),
 		)
@@ -3838,9 +4265,12 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 			identity: { name: 'bounded', version: '1.0.0' },
 			tools: tools(),
 			limit: { subscriptions: 1 },
-			subscription: { notifications: { toolsListChanged: true }, producer: () => parkingSource() },
+			subscription: {
+				notifications: { promptsListChanged: true },
+				producer: () => parkingSource(),
+			},
 		})
-		const params = { notifications: { toolsListChanged: true }, _meta: MODERN_METADATA }
+		const params = { notifications: { promptsListChanged: true }, _meta: MODERN_METADATA }
 		const abandoned = streamOf(
 			await mcp.dispatch(
 				createJSONRPCRequest({ method: 'subscriptions/listen', id: 'parked-a', params }),
@@ -3873,9 +4303,12 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 			identity: { name: 'bounded', version: '1.0.0' },
 			tools: tools(),
 			limit: { subscriptions: 1 },
-			subscription: { notifications: { toolsListChanged: true }, producer: () => parkingSource() },
+			subscription: {
+				notifications: { promptsListChanged: true },
+				producer: () => parkingSource(),
+			},
 		})
-		const params = { notifications: { toolsListChanged: true }, _meta: MODERN_METADATA }
+		const params = { notifications: { promptsListChanged: true }, _meta: MODERN_METADATA }
 		const stopped = streamOf(
 			await mcp.dispatch(
 				createJSONRPCRequest({ method: 'subscriptions/listen', id: 'stopped-a', params }),
@@ -3909,11 +4342,11 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 			tools: tools(),
 			limit: { subscriptions: 1 },
 			subscription: {
-				notifications: { toolsListChanged: true },
+				notifications: { promptsListChanged: true },
 				producer: () => source.readable,
 			},
 		})
-		const params = { notifications: { toolsListChanged: true }, _meta: MODERN_METADATA }
+		const params = { notifications: { promptsListChanged: true }, _meta: MODERN_METADATA }
 		const live = streamOf(
 			await mcp.dispatch(
 				createJSONRPCRequest({ method: 'subscriptions/listen', id: 'live-a', params }),
@@ -3936,7 +4369,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 		const controller = new AbortController()
 		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const mcp = server(undefined, {
-			notifications: { toolsListChanged: true },
+			notifications: { promptsListChanged: true },
 			producer: () => source.readable,
 		})
 		const stream = streamOf(
@@ -3944,7 +4377,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 				createJSONRPCRequest({
 					method: 'subscriptions/listen',
 					id: 'aborted',
-					params: { notifications: { toolsListChanged: true }, _meta: MODERN_METADATA },
+					params: { notifications: { promptsListChanged: true }, _meta: MODERN_METADATA },
 				}),
 				{ signal: controller.signal },
 			),
@@ -5568,11 +6001,11 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 		)
 
 		expect(advertised['capabilities']).toEqual({
-			tools: {},
+			tools: { listChanged: true },
 			extensions: { [MCP_EXTENSION_TASKS]: {} },
 		})
 		// Byte-identical to the answer this server gave before the extension existed.
-		expect(plain['capabilities']).toEqual({ tools: {} })
+		expect(plain['capabilities']).toEqual({ tools: { listChanged: true } })
 	})
 
 	// The real claim: an opt-in extension that is not opted into changes nothing. The

@@ -1628,7 +1628,7 @@ export type MCPDiscoverResult = {
 }
 
 /**
- * Names the notification families a client may opt in to on a `subscriptions/listen` stream.
+ * Names the notification families a client may opt in to on a `subscriptions/listen` stream, including built-in registry changes.
  *
  * @remarks
  * Every key here is a wire spelling, carried verbatim from the dated schema's
@@ -1639,7 +1639,7 @@ export type MCPDiscoverResult = {
  * and takes the `MCP` prefix; the keys are the protocol's and do not change.
  */
 export interface MCPSubscriptionFilter {
-	/** Receives `notifications/tools/list_changed` when the server produces it. */
+	/** Receives built-in `notifications/tools/list_changed` from registry add, remove, and clear events. */
 	readonly toolsListChanged?: boolean
 	/** Receives `notifications/prompts/list_changed` when the server produces it. */
 	readonly promptsListChanged?: boolean
@@ -1666,6 +1666,12 @@ export interface MCPSubscriptionFilter {
 	 * listen request is answered; no third flag records it, so it cannot drift from them.
 	 */
 	readonly taskIds?: readonly string[]
+}
+
+/** Declares the consumer-produced notification families, excluding registry-owned tools changes. */
+export interface MCPConsumerFilter extends MCPSubscriptionFilter {
+	/** Leaves tools changes to the server's registry. */
+	readonly toolsListChanged?: false
 }
 
 /** Represents the required metadata on a graceful `subscriptions/listen` result. */
@@ -1754,9 +1760,13 @@ export interface MCPMethodOptions {
  * Produces notifications for one honoured `subscriptions/listen` filter.
  *
  * @remarks
- * The producer parks on its own event source while idle and ends its iterable to close the
- * subscription gracefully. `options.signal` is the per-request cancellation signal; a
- * producer that needs cancellation observes it directly rather than polling.
+ * The producer parks on its own event source while idle. Ending its iterable closes the
+ * subscription gracefully when the honoured filter omits the built-in tools family. A
+ * subscription honouring that family stays open until failure or signal abort.
+ * `options.signal` is the per-request cancellation signal; a producer that needs
+ * cancellation observes it directly rather than polling. The server releases the source's
+ * iterator with that signal's reason, so a `ReadableStream`-backed producer sees its pending
+ * writes reject with the reason the request was aborted with.
  *
  * @param notifications - The requested filter intersected with the server's supported filter
  * @param options - The resolved per-request method options
@@ -1769,9 +1779,19 @@ export type MCPSubscriptionHandler = (
 
 /** Configures the server's built-in `subscriptions/listen` method. */
 export interface MCPSubscriptionOptions {
-	/** Holds the notification filter this server can actually honour. */
-	readonly notifications: MCPSubscriptionFilter
-	/** Opens the producer for one honoured filter. */
+	/**
+	 * Holds the consumer's supported filter. A malformed filter, and one claiming
+	 * `toolsListChanged: true`, are both invalid.
+	 */
+	readonly notifications: MCPConsumerFilter
+	/**
+	 * Opens the consumer producer beside the server's built-in tools producer.
+	 *
+	 * @remarks
+	 * The producer advances on the stream's demand. A failure terminates the stream after
+	 * the notifications it already produced. Registry changes coalesce while a tools
+	 * notification remains unread.
+	 */
 	readonly producer: MCPSubscriptionHandler
 }
 
@@ -2186,7 +2206,13 @@ export interface MCPServerOptions {
 	 * consumer-supplied.
 	 */
 	readonly input?: MCPInputOptions
-	/** Holds the optional event-driven producer for the modern `subscriptions/listen` method. */
+	/**
+	 * Holds the optional consumer producer for modern subscriptions. The server supplies the
+	 * tools family from its registry independently. The producer advances on stream demand;
+	 * a failure terminates the stream after its queued notifications. Registry changes
+	 * coalesce while a tools notification remains unread. A consumer filter claiming
+	 * `toolsListChanged: true` throws `MCPError` with `JSONRPC_INVALID_PARAMS` at construction.
+	 */
 	readonly subscription?: MCPSubscriptionOptions
 	/**
 	 * Holds the optional Tasks extension; the durable store and the deferral decision are

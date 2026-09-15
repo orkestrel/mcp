@@ -40,7 +40,7 @@ import {
 import { startServer } from '../../setupServer.js'
 
 async function* subscriptionEvents(): AsyncGenerator<JSONRPCNotification> {
-	yield { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }
+	yield { jsonrpc: '2.0', method: 'notifications/prompts/list_changed' }
 }
 
 async function* disconnectEvents(
@@ -54,7 +54,7 @@ async function* disconnectEvents(
 	observe()
 	// This yield is reachable only after the disconnect signal was observed; the live stream
 	// remains idle and cannot use a producer write to trigger its own cancellation.
-	yield { jsonrpc: '2.0', method: 'notifications/tools/list_changed' }
+	yield { jsonrpc: '2.0', method: 'notifications/prompts/list_changed' }
 	throw new Error('subscription client disconnected')
 }
 
@@ -449,7 +449,7 @@ describe('createMCPPostHandler', () => {
 			identity,
 			tools: createToolManager(),
 			subscription: {
-				notifications: { toolsListChanged: true },
+				notifications: { promptsListChanged: true },
 				producer: () => subscriptionEvents(),
 			},
 		})
@@ -466,7 +466,7 @@ describe('createMCPPostHandler', () => {
 						method: 'subscriptions/listen',
 						id: 'http-listen',
 						params: {
-							notifications: { toolsListChanged: true },
+							notifications: { promptsListChanged: true },
 							_meta: {
 								[MCP_META_VERSION]: '2026-07-28',
 								[MCP_META_CAPABILITIES]: {},
@@ -484,13 +484,13 @@ describe('createMCPPostHandler', () => {
 				jsonrpc: '2.0',
 				method: 'notifications/subscriptions/acknowledged',
 				params: {
-					notifications: { toolsListChanged: true },
+					notifications: { promptsListChanged: true },
 					_meta: { [MCP_META_SUBSCRIPTION]: 'http-listen' },
 				},
 			},
 			{
 				jsonrpc: '2.0',
-				method: 'notifications/tools/list_changed',
+				method: 'notifications/prompts/list_changed',
 				params: { _meta: { [MCP_META_SUBSCRIPTION]: 'http-listen' } },
 			},
 			{
@@ -573,7 +573,7 @@ describe('createMCPPostHandler', () => {
 			identity: { name: 'signal-server', version: '1.0.0' },
 			tools: createToolManager(),
 			subscription: {
-				notifications: { toolsListChanged: true },
+				notifications: { promptsListChanged: true },
 				producer: (_notifications, options) => {
 					if (options.signal === undefined) throw new Error('expected HTTP disconnect signal')
 					observed = options.signal
@@ -592,7 +592,7 @@ describe('createMCPPostHandler', () => {
 				method: 'subscriptions/listen',
 				id: 'disconnect-listen',
 				params: {
-					notifications: { toolsListChanged: true },
+					notifications: { promptsListChanged: true },
 					_meta: {
 						[MCP_META_VERSION]: '2026-07-28',
 						[MCP_META_CAPABILITIES]: {},

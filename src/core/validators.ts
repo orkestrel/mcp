@@ -17,6 +17,7 @@ import type {
 	MCPCompletionParams,
 	MCPCompletionReference,
 	MCPCompletionResult,
+	MCPConsumerFilter,
 	MCPContent,
 	MCPElicitFieldSchema,
 	MCPElicitForm,
@@ -1460,6 +1461,27 @@ export function isMCPSubscriptionFilter(value: unknown): value is MCPSubscriptio
 	if (!isUndefined(subscriptions) && !arrayOf(isString)(subscriptions)) return false
 	const tasks = filter['taskIds']
 	return isUndefined(tasks) || arrayOf(isString)(tasks)
+}
+
+/**
+ * Checks whether a subscription filter leaves the built-in tools family to the server.
+ *
+ * @param value - The unknown value to inspect
+ * @returns True if the filter is valid and does not claim tools changes; false otherwise
+ *
+ * @example
+ * ```ts
+ * isMCPConsumerFilter({ promptsListChanged: true }) // true
+ * isMCPConsumerFilter({ toolsListChanged: true }) // false
+ * ```
+ */
+export function isMCPConsumerFilter(value: unknown): value is MCPConsumerFilter {
+	const owned = attempt(() => cloneJSONRecord(value))
+	return (
+		owned.success &&
+		isMCPSubscriptionFilter(owned.value) &&
+		owned.value['toolsListChanged'] !== true
+	)
 }
 
 /**

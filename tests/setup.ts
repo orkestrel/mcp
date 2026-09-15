@@ -16,6 +16,7 @@ import type {
 	JSONRPCResponse,
 	MCPClientCapabilities,
 	MCPClientInterface,
+	MCPConsumerFilter,
 	MCPInputResult,
 	MCPMethodHandler,
 	MCPMethodOptions,
@@ -28,6 +29,7 @@ import type {
 	MCPServerInterface,
 	MCPSubscriptionFilter,
 	MCPSubscriptionHandler,
+	MCPSubscriptionOptions,
 	MCPStreamControllerInterface,
 	MCPTransportInterface,
 	MCPTask,
@@ -778,8 +780,8 @@ export interface TestOwnershipInterface {
  * released) or is refused with the capacity error (it was not). No private state is read and
  * no timing is assumed — the slot is returned synchronously on the exchange's own closure.
  *
- * The producer never yields, so nothing here completes on its own: whatever ends the
- * exchange is something the consumer did.
+ * The built-in tools family keeps the exchange open until its signal aborts, so the
+ * exchange ends only when the consumer releases it.
  *
  * @param consume - The pump under test, handed the controlled exchange to own
  * @returns Whether the exchange was released, and whatever the consumer threw
@@ -793,12 +795,10 @@ export interface TestOwnershipInterface {
 export async function probeOwnership(
 	consume: (stream: MCPStreamControllerInterface) => Promise<void>,
 ): Promise<TestOwnershipInterface> {
-	const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 	const mcp = createMCPServer({
 		identity: { name: 'ownership', version: '1.0.0' },
 		tools: createToolManager(),
 		limit: { subscriptions: 1 },
-		subscription: { notifications: { toolsListChanged: true }, producer: () => source.readable },
 	})
 	const opened = await mcp.dispatch(createSubscriptionRequest('probe-open'))
 	if (!(Symbol.asyncIterator in opened)) throw new Error('expected a controlled exchange')
@@ -958,8 +958,7 @@ export interface MCPTestLoopbackInterface extends MCPMessageTransportInterface {
  */
 export function createSubscriptionServer(
 	producer: MCPSubscriptionHandler,
-	notifications: MCPSubscriptionFilter = {
-		toolsListChanged: true,
+	notifications: MCPConsumerFilter = {
 		promptsListChanged: true,
 		resourcesListChanged: true,
 		resourceSubscriptions: ['resource://one', 'resource://two'],
@@ -989,7 +988,6 @@ export interface ToolRefreshInterface {
 	readonly remote: ToolManagerInterface
 	readonly tools: ToolManagerInterface
 	readonly local: ToolInterface
-	readonly writer: WritableStreamDefaultWriter<JSONRPCNotification>
 	close(): Promise<void>
 }
 
@@ -1058,12 +1056,9 @@ export function createToolRefresh(): ToolRefreshInterface {
 	const tools = createToolManager()
 	const local = createTool({ name: 'local', execute: () => 'local value' })
 	tools.add(local)
-	const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
-	const writer = source.writable.getWriter()
 	const server = createMCPServer({
 		identity: { name: 'refresh', version: '1' },
 		tools: remote,
-		subscription: { notifications: { toolsListChanged: true }, producer: () => source.readable },
 	})
 	const serverSide = createMemoryTransport()
 	const clientSide = createMemoryTransport()
@@ -1078,15 +1073,96 @@ export function createToolRefresh(): ToolRefreshInterface {
 		remote,
 		tools,
 		local,
-		writer,
 		async close() {
 			await client.disconnect()
 			unbindClient()
 			unbindServer()
-			writer.releaseLock()
+			remote.destroy()
+			tools.destroy()
 		},
 	}
 }
+
+/** Configures a scripted consumer producer and its observations. */
+export interface ProducerScriptOptions {
+	readonly frames: readonly JSONRPCNotification[]
+	readonly filters?: RecorderInterface<readonly [MCPSubscriptionFilter]>
+	readonly signals?: RecorderInterface<readonly [AbortSignal]>
+	readonly park?: boolean
+	readonly failure?: { readonly error: unknown }
+}
+
+/**
+ * Creates a consumer producer that yields scripted frames and records its request context.
+ *
+ * @param script - The frames, observations, optional failure, and cancellation wait
+ * @returns A producer that completes after its frames unless configured to park or fail
+ * @remarks If `park` is true, waits on the signal after yielding; if false, completes. A
+ * configured `failure` throws before `park` is reached, so the two never combine.
+ */
+export function createProducerScript(script: ProducerScriptOptions): MCPSubscriptionHandler {
+	return async function* (filter, options) {
+		script.filters?.handler(filter)
+		script.signals?.handler(options.signal)
+		for (const frame of script.frames) yield frame
+		if (script.failure !== undefined) throw script.failure.error
+		if (script.park === true) await waitForAbort(options.signal)
+	}
+}
+
+/** Holds a real registry subscription and its request lifetime. */
+export interface RegistrySubscriptionInterface {
+	readonly tools: ToolManagerInterface
+	readonly stream: MCPStreamControllerInterface
+	readonly controller: AbortController
+	close(): void
+}
+
+/** Creates a server stream over a seeded registry without consuming its acknowledgement. */
+export async function createRegistrySubscription(
+	subscription?: MCPSubscriptionOptions,
+): Promise<RegistrySubscriptionInterface> {
+	const tools = createToolManager()
+	tools.add(createTool({ name: 'original', execute: () => 'original' }))
+	const server = createMCPServer({
+		identity: { name: 'registry', version: '1' },
+		tools,
+		...(subscription === undefined ? {} : { subscription }),
+	})
+	const controller = new AbortController()
+	const stream = await server.dispatch(
+		createJSONRPCRequest({
+			method: 'subscriptions/listen',
+			id: 'registry',
+			params: {
+				notifications: { toolsListChanged: true, promptsListChanged: true },
+				_meta: MODERN_METADATA,
+			},
+		}),
+		{ signal: controller.signal },
+	)
+	if (!(Symbol.asyncIterator in stream)) throw new Error('Expected a registry stream')
+	return {
+		tools,
+		stream,
+		controller,
+		close() {
+			controller.abort()
+			tools.destroy()
+		},
+	}
+}
+
+/** Names the registry operations whose events reach an open tools subscription. */
+export const REGISTRY_CHANGES = Object.freeze([
+	{
+		title: 'adds a tool',
+		change: (tools: ToolManagerInterface) =>
+			tools.add(createTool({ name: 'added', execute: () => 'added' })),
+	},
+	{ title: 'removes a tool', change: (tools: ToolManagerInterface) => tools.remove('original') },
+	{ title: 'clears', change: (tools: ToolManagerInterface) => tools.clear() },
+])
 
 export function createLoopbackTransport(mcp: MCPServerInterface): MCPTestLoopbackInterface {
 	const emitter = createEmitter<MCPMessageTransportEventMap>()

@@ -820,7 +820,7 @@ describe('buildDiscoverResult', () => {
 
 		expect(buildDiscoverResult({ identity, tools: createToolManager() })).toEqual({
 			supportedVersions: ['2026-07-28'],
-			capabilities: { tools: {} },
+			capabilities: { tools: { listChanged: true } },
 			resultType: 'complete',
 			ttlMs: DEFAULT_MCP_CACHE_TTL,
 			cacheScope: 'private',
@@ -840,7 +840,7 @@ describe('buildDiscoverResult', () => {
 			}),
 		).toEqual({
 			supportedVersions: ['2026-07-28'],
-			capabilities: { tools: {} },
+			capabilities: { tools: { listChanged: true } },
 			instructions: 'Use carefully',
 			resultType: 'complete',
 			ttlMs: 0,
@@ -864,10 +864,10 @@ describe('buildDiscoverResult', () => {
 		})
 
 		expect(configured.capabilities).toEqual({
-			tools: {},
+			tools: { listChanged: true },
 			extensions: { [MCP_EXTENSION_TASKS]: {} },
 		})
-		expect(plain.capabilities).toEqual({ tools: {} })
+		expect(plain.capabilities).toEqual({ tools: { listChanged: true } })
 		expect(Object.hasOwn(plain.capabilities, 'extensions')).toBe(false)
 	})
 })
@@ -976,7 +976,7 @@ describe('bindServer', () => {
 				id: 1,
 				result: {
 					supportedVersions: ['2026-07-28'],
-					capabilities: { tools: {} },
+					capabilities: { tools: { listChanged: true } },
 					resultType: 'complete',
 					ttlMs: DEFAULT_MCP_CACHE_TTL,
 					cacheScope: 'private',
@@ -1070,7 +1070,7 @@ describe('bindServer', () => {
 				id: 1,
 				result: {
 					supportedVersions: ['2026-07-28'],
-					capabilities: { tools: {} },
+					capabilities: { tools: { listChanged: true } },
 					resultType: 'complete',
 					ttlMs: DEFAULT_MCP_CACHE_TTL,
 					cacheScope: 'private',
