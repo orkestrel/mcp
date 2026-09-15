@@ -4788,6 +4788,45 @@ closed — while ordinary upstream completion closes the response without invent
 - [Session middleware integration](../tests/src/server/middlewares.test.ts)
 - [Guide/source/public-barrel parity; legacy-removability and public-face boundaries; native guide-input, fence-language, summary, titled-example, and README-pitch checks; what the spawned stdio child receives; how the composed stdio server answers a legacy `initialize`; and the client subscription, progress, transport, and Refresh the tools an agent holds demonstrations](../tests/guides.test.ts)
 - [The packed artifact a consumer installs, across its faces and its ESM and CommonJS builds](../tests/distribution.test.ts)
+- [The packed artifact composed with the installed agent, tool, and parser artifacts in a real Chromium page](../tests/distribution.test.ts)
+
+The `distribution` project runs from `prepublishOnly` as
+`npm run test:distribution -- --mode release`. Under `--mode release` the proof fails when it
+cannot reach the registry or a browser; anywhere else it skips and names what it could not
+reach.
+
+Beside the checks that read this package's published surface, that project composes its packed
+artifact with the installed `@orkestrel/agent`, `@orkestrel/tool`, and `@orkestrel/ndjson`
+artifacts inside a real Chromium page, served by the isolated consumer's own Node fixture. The
+page loads every one of those artifacts over an import map answered from the consumer's own
+`node_modules`, so no bundler stands between the published files and the page. The recorders arm
+after the page and its modules have loaded — the browser's request log and a counter around
+the page's global transport — so each reading covers the composition alone. These are the
+receipts that project reads:
+
+- `evaluates every @orkestrel entry the installed agent imports` — the page evaluates each root
+  entry the installed agent's own module names, and every one of them publishes a defined
+  export.
+- `runs a page tool through an installed agent with no request at all` — an agent driven by a
+  scripted provider dispatches a tool that writes into the document, and neither recorder
+  reports a request.
+- `completes an in-page MCP pair with no request at all` — `createPageServer` connects, lists,
+  and calls, the listing carries the tool's `title` and its `pure` annotation back off the wire,
+  and the client its `stop` leaves behind refuses a later call with `-32600`.
+- `dispatches an agent call into the page server with no request at all` — an agent whose
+  registry holds the pair's tools runs one in the hosted server, the registry's own entry keeps
+  that `title` and annotation, and a name that server does not hold comes back as a failed tool
+  result.
+- `carries a caller abort into the page server handler` — `abort` on the agent's run reaches the
+  hosted handler's own execution-context signal.
+- `spends one relay request per model turn and runs the tool in the page` — an agent over
+  `createRelayProvider` against a `createRelay` fixture on `127.0.0.1` executes its page tool in
+  the page.
+- `refuses a relay turn presenting a credential the fixture does not hold` — the installed relay
+  refuses a credential its `authorize` callback rejects, answering `401`, and the route records
+  the request it refused.
+- `reports one deliberate request on the request log and the counter` — the control that shows
+  the request log and the counter report traffic.
 
 ## Declared non-goals
 
