@@ -33,6 +33,8 @@ import {
 	buildSubscriptionFilter,
 	buildSubscriptionResult,
 	buildToolDescriptors,
+	toolAnnotationsToMCP,
+	mcpAnnotationsToTool,
 	buildToolCall,
 	createDuplexClientTransport,
 	createMCPClient,
@@ -328,6 +330,52 @@ describe('buildMethodOptions', () => {
 	})
 })
 
+describe('tool annotation projections', () => {
+	it('projects explicit annotation booleans and omits unmapped hints without defaults', () => {
+		expect(toolAnnotationsToMCP({ pure: true, consequential: false, untrusted: true })).toEqual({
+			readOnlyHint: true,
+			destructiveHint: false,
+		})
+		expect(toolAnnotationsToMCP({ pure: false, consequential: true })).toEqual({
+			readOnlyHint: false,
+			destructiveHint: true,
+		})
+		expect(toolAnnotationsToMCP({ untrusted: false })).toEqual({})
+		expect(toolAnnotationsToMCP({})).toEqual({})
+		expect(mcpAnnotationsToTool({ readOnlyHint: true, destructiveHint: false })).toEqual({
+			pure: true,
+			consequential: false,
+		})
+		expect(
+			mcpAnnotationsToTool({
+				readOnlyHint: false,
+				destructiveHint: true,
+				idempotentHint: true,
+				openWorldHint: false,
+				title: 'Hint title',
+			}),
+		).toEqual({ pure: false, consequential: true })
+		expect(mcpAnnotationsToTool({ idempotentHint: false, openWorldHint: true })).toEqual({})
+		expect(mcpAnnotationsToTool({})).toEqual({})
+	})
+})
+
+describe('buildToolCall', () => {
+	it('builds call envelopes without caller identity and preserves supplied arguments', () => {
+		expect(buildToolCall.length).toBe(2)
+		const request = createJSONRPCRequest({
+			id: 8,
+			method: 'tools/call',
+			params: { name: 'echo', caller: 'untrusted', arguments: { old: true } },
+		})
+		const args = { value: 'validated' }
+		const call = buildToolCall(request, args)
+		expect(call).toEqual({ id: '8', name: 'echo', arguments: args })
+		expect(call?.arguments).toBe(args)
+		expect(buildToolCall(createJSONRPCRequest({ method: 'tools/call' }))).toBeUndefined()
+	})
+})
+
 describe('buildToolDescriptors', () => {
 	it('maps definitions, renaming parameters to inputSchema', () => {
 		const manager = createToolManager()
@@ -494,13 +542,11 @@ describe('modern execution helpers', () => {
 					method: 'tools/call',
 					params: { name: 'echo', arguments: { value: 1 } },
 				}),
-				{ subject: 'caller' },
 			),
 		).toEqual({
 			id: '7',
 			name: 'echo',
 			arguments: { value: 1 },
-			caller: { subject: 'caller' },
 		})
 		expect(
 			buildProgressNotification('token', { progress: 2, total: 4, message: 'halfway' }),

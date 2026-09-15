@@ -791,7 +791,7 @@ export class MCPServer implements MCPServerInterface {
 		const args = isRecord(rawArguments) ? rawArguments : EMPTY_MCP_ARGUMENTS
 		const input = await this.#input(request, args, options)
 		if (input !== undefined) return input
-		const call = buildToolCall(request, options.caller, args)
+		const call = buildToolCall(request, args)
 		if (call === undefined) {
 			return buildJSONRPCError(
 				id,
@@ -810,7 +810,7 @@ export class MCPServer implements MCPServerInterface {
 		) {
 			return this.#progress(request, call, progressToken, options)
 		}
-		const result = await this.#execute(request, call, options.signal)
+		const result = await this.#execute(request, call, options)
 		return 'jsonrpc' in result ? result : buildJSONRPCResult(id, result)
 	}
 
@@ -918,7 +918,7 @@ export class MCPServer implements MCPServerInterface {
 			},
 			signal,
 		)
-		const execution = this.#execute(request, call, signal, reporter)
+		const execution = this.#execute(request, call, options, reporter)
 		try {
 			while (true) {
 				const outcome = await Promise.race([reporter.take(), execution])
@@ -940,19 +940,24 @@ export class MCPServer implements MCPServerInterface {
 	async #execute(
 		request: JSONRPCRequest,
 		call: ToolCall,
-		signal: AbortSignal,
+		options: MCPMethodOptions,
 		progress?: MCPProgressReporter,
 	): Promise<MCPCallResult | JSONRPCResponse> {
+		const { signal, caller } = options
 		let result: unknown
 		try {
 			result =
 				this.#options.execution === undefined
-					? await this.#options.tools.execute(call)
+					? await this.#options.tools.execute(call, {
+							signal,
+							...(caller === undefined ? {} : { caller }),
+						})
 					: await this.#options.execution({
 							request,
 							call,
 							tools: this.#options.tools,
 							signal,
+							...(caller === undefined ? {} : { caller }),
 							...(progress === undefined ? {} : { progress }),
 						})
 		} catch (error) {

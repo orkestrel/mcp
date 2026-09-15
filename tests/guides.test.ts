@@ -110,6 +110,8 @@ let createScratch: typeof TestServerRuntime.createScratch
 let createLoopbackTransport: typeof SetupRuntime.createLoopbackTransport
 let createMemoryTransport: typeof SetupRuntime.createMemoryTransport
 let createSubscriptionServer: typeof SetupRuntime.createSubscriptionServer
+let createToolRefresh: typeof SetupRuntime.createToolRefresh
+let refreshTools: typeof SetupRuntime.refreshTools
 let waitForSettlement: typeof SetupRuntime.waitForSettlement
 let findMissingNamedImports: typeof SetupServerRuntime.findMissingNamedImports
 
@@ -1531,6 +1533,122 @@ function registerDuplex(): void {
 	})
 }
 
+/** Drives the refresh fence against a real subscription and serialized duplex pair. */
+function registerToolRefresh(): void {
+	describe('guides/mcp.md — Refresh the tools an agent holds', () => {
+		it('adds remote tools beside the local tool from an initial snapshot', async () => {
+			const fixture = createToolRefresh()
+			try {
+				await fixture.client.connect()
+				const outcome = await refreshTools(fixture.client, fixture.tools, [])
+				expect(outcome).toEqual({ installed: ['remote'], collisions: [], failures: [] })
+				expect(fixture.tools.tools().map((tool) => tool.name)).toEqual(['local', 'remote'])
+				expect(fixture.tools.tool('local')).toBe(fixture.local)
+			} finally {
+				await fixture.close()
+			}
+		})
+
+		it('refuses an initial remote name collision while adding noncolliding tools beside the local tool', async () => {
+			const fixture = createToolRefresh()
+			try {
+				fixture.remote.add(createTool({ name: 'local', execute: () => 'remote collision' }))
+				await fixture.client.connect()
+				const outcome = await refreshTools(fixture.client, fixture.tools, [])
+				expect(outcome).toEqual({ installed: ['remote'], collisions: ['local'], failures: [] })
+				expect(fixture.tools.tools().map((tool) => tool.name)).toEqual(['local', 'remote'])
+				expect(fixture.tools.tool('local')).toBe(fixture.local)
+				expect(
+					await fixture.tools.execute({ id: 'local', name: 'local', arguments: {} }),
+				).toMatchObject({ success: true, value: 'local value' })
+			} finally {
+				await fixture.close()
+			}
+		})
+
+		it('replaces remote tools on list_changed and removes obsolete remote names', async () => {
+			const fixture = createToolRefresh()
+			const subscription = new AbortController()
+			try {
+				await fixture.client.connect()
+				const notifications = fixture.client.listen(
+					{ toolsListChanged: true },
+					{ signal: subscription.signal },
+				)
+				await notifications.next()
+				let outcome = await refreshTools(fixture.client, fixture.tools, [])
+				const previous = fixture.tools.tool('remote')
+				fixture.remote.add(
+					createTool({ name: 'remote', title: 'Replacement', execute: () => 'replacement' }),
+				)
+				fixture.remote.add(createTool({ name: 'added', execute: () => 'added' }))
+				await fixture.writer.write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+				for await (const notification of notifications) {
+					if (notification.method === 'notifications/tools/list_changed') {
+						outcome = await refreshTools(fixture.client, fixture.tools, outcome.installed)
+						break
+					}
+				}
+				expect(outcome).toEqual({ installed: ['remote', 'added'], collisions: [], failures: [] })
+				expect(fixture.tools.tool('remote')).not.toBe(previous)
+				expect(fixture.tools.tool('remote')?.title).toBe('Replacement')
+				expect(
+					await fixture.tools.execute({ id: 'run', name: 'remote', arguments: {} }),
+				).toMatchObject({ success: true, value: 'replacement' })
+				fixture.remote.remove('remote')
+				outcome = await refreshTools(fixture.client, fixture.tools, outcome.installed)
+				expect(outcome).toEqual({ installed: ['added'], collisions: [], failures: [] })
+				expect(fixture.tools.tool('remote')).toBeUndefined()
+				expect(fixture.tools.tool('local')).toBe(fixture.local)
+			} finally {
+				subscription.abort()
+				await fixture.close()
+			}
+		})
+
+		it('records a remote name collision and preserves the local tool', async () => {
+			const fixture = createToolRefresh()
+			try {
+				await fixture.client.connect()
+				const outcome = await refreshTools(fixture.client, fixture.tools, [])
+				fixture.remote.add(createTool({ name: 'local', execute: () => 'remote collision' }))
+				const collision = await refreshTools(fixture.client, fixture.tools, outcome.installed)
+				expect(collision).toEqual({ installed: ['remote'], collisions: ['local'], failures: [] })
+				expect(fixture.tools.tool('local')).toBe(fixture.local)
+				expect(
+					await fixture.tools.execute({ id: 'local', name: 'local', arguments: {} }),
+				).toMatchObject({ success: true, value: 'local value' })
+			} finally {
+				await fixture.close()
+			}
+		})
+
+		it('records a failed tools fetch and keeps the last installed snapshot', async () => {
+			const fixture = createToolRefresh()
+			try {
+				await fixture.client.connect()
+				const outcome = await refreshTools(fixture.client, fixture.tools, [])
+				const previous = fixture.tools.tool('remote')
+				fixture.server.methods.add('tools/list', () => {
+					throw new Error('catalog unavailable')
+				})
+				const failed = await refreshTools(fixture.client, fixture.tools, outcome.installed)
+				expect(failed.installed).toBe(outcome.installed)
+				expect(failed.collisions).toEqual([])
+				expect(failed.failures).toHaveLength(1)
+				expect(failed.failures[0]).toMatchObject({ code: -32603, message: 'Server error' })
+				expect(fixture.tools.tool('remote')).toBe(previous)
+				expect(fixture.tools.tool('local')).toBe(fixture.local)
+				expect(
+					await fixture.tools.execute({ id: 'retained', name: 'remote', arguments: {} }),
+				).toMatchObject({ success: true, value: 'original' })
+			} finally {
+				await fixture.close()
+			}
+		})
+	})
+}
+
 await new GuideCommand({
 	root: new URL('../', import.meta.url),
 	patterns: ['src/**/*.ts', 'tests/**/*.ts', 'guides/*.md', '*.md', 'package.json'],
@@ -1574,6 +1692,8 @@ await new GuideCommand({
 		createLoopbackTransport,
 		createMemoryTransport,
 		createSubscriptionServer,
+		createToolRefresh,
+		refreshTools,
 		waitForSettlement,
 	} = await import('./setup.js'))
 	;({ findMissingNamedImports } = await import('./setupServer.js'))
@@ -1583,4 +1703,5 @@ await new GuideCommand({
 	registerStdioComposition()
 	registerSubscription()
 	registerDuplex()
+	registerToolRefresh()
 })

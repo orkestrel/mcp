@@ -1,6 +1,6 @@
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { SSEParserInterface } from '@orkestrel/sse'
-import type { ToolCall, ToolManagerInterface } from '@orkestrel/tool'
+import type { ToolAnnotations, ToolCall, ToolManagerInterface } from '@orkestrel/tool'
 import type {
 	JSONRPCErrorResponse,
 	JSONRPCId,
@@ -31,6 +31,7 @@ import type {
 	MCPSubscriptionFilter,
 	MCPTextStreamControllerInterface,
 	MCPToolDescriptor,
+	MCPToolAnnotations,
 	MCPTransportInterface,
 	MCPSubscriptionResult,
 	MCPSubscriptionResultMetaObject,
@@ -644,13 +645,11 @@ export function buildCallOutcome(name: string, result: unknown): MCPCallOutcome 
  * Builds the canonical Tool call for one validated MCP `tools/call` request.
  *
  * @param request - The original MCP request
- * @param caller - Optional consumer-asserted caller context
  * @param args - Optional once-validated modern arguments; omission retains legacy normalization
  * @returns The canonical call, or `undefined` when the name is invalid
  */
 export function buildToolCall(
 	request: JSONRPCRequest,
-	caller?: unknown,
 	args?: Readonly<Record<string, unknown>>,
 ): ToolCall | undefined {
 	const name = request.params?.['name']
@@ -660,7 +659,6 @@ export function buildToolCall(
 		id: String(request.id),
 		name,
 		arguments: args ?? (isRecord(rawArguments) ? rawArguments : {}),
-		...(caller === undefined ? {} : { caller }),
 	}
 }
 
@@ -759,7 +757,8 @@ export function buildMethodOptions(
  *
  * @remarks
  * Each {@link import('@orkestrel/tool').ToolDefinition} carries through its
- * `name` and (when present) `description`; its open JSON-Schema `parameters`
+ * `name`, optional `title` and `description`, and mapped annotation hints;
+ * its open JSON-Schema `parameters`
  * becomes `inputSchema`, defaulting to an empty object schema (`{ type: 'object' }`)
  * when a tool declares none (MCP requires an `inputSchema`).
  *
@@ -768,17 +767,56 @@ export function buildMethodOptions(
  */
 export function buildToolDescriptors(manager: ToolManagerInterface): readonly MCPToolDescriptor[] {
 	return manager.definitions().map((definition) => {
-		const descriptor: {
-			name: string
-			description?: string
-			inputSchema: Readonly<Record<string, unknown>>
-		} = {
+		const annotations =
+			definition.annotations === undefined ? {} : toolAnnotationsToMCP(definition.annotations)
+		return {
 			name: definition.name,
 			inputSchema: definition.parameters ?? { type: 'object' },
+			...(definition.title === undefined ? {} : { title: definition.title }),
+			...(definition.description === undefined ? {} : { description: definition.description }),
+			...(Object.keys(annotations).length === 0 ? {} : { annotations }),
 		}
-		if (definition.description !== undefined) descriptor.description = definition.description
-		return descriptor
 	})
+}
+
+/**
+ * Projects domain tool annotations onto MCP wire hints without inventing defaults.
+ *
+ * @param annotations - The authored domain annotations
+ * @returns The mapped hints; `untrusted` has no MCP counterpart
+ *
+ * @example
+ * ```ts
+ * toolAnnotationsToMCP({ pure: true, consequential: false }) // { readOnlyHint: true, destructiveHint: false }
+ * ```
+ */
+export function toolAnnotationsToMCP(annotations: ToolAnnotations): MCPToolAnnotations {
+	return {
+		...(annotations.pure === undefined ? {} : { readOnlyHint: annotations.pure }),
+		...(annotations.consequential === undefined
+			? {}
+			: { destructiveHint: annotations.consequential }),
+	}
+}
+
+/**
+ * Projects MCP wire hints onto domain tool annotations without inventing defaults.
+ *
+ * @param annotations - The validated MCP wire annotations
+ * @returns The mapped annotations; unmapped wire hints are omitted
+ *
+ * @example
+ * ```ts
+ * mcpAnnotationsToTool({ readOnlyHint: false, destructiveHint: true }) // { pure: false, consequential: true }
+ * ```
+ */
+export function mcpAnnotationsToTool(annotations: MCPToolAnnotations): ToolAnnotations {
+	return {
+		...(annotations.readOnlyHint === undefined ? {} : { pure: annotations.readOnlyHint }),
+		...(annotations.destructiveHint === undefined
+			? {}
+			: { consequential: annotations.destructiveHint }),
+	}
 }
 
 /**

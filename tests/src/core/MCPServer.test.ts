@@ -44,6 +44,10 @@ import type { JSONValue } from '@orkestrel/contract'
 import type { EmitterErrorHandler } from '@orkestrel/emitter'
 import type { ToolManagerInterface, ToolSuccess } from '@orkestrel/tool'
 import {
+	bindClient,
+	bindServer,
+	createDuplexClientTransport,
+	createMCPClient,
 	buildJSONRPCResult,
 	createMCPLegacy,
 	createMCPServer,
@@ -75,6 +79,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createRecorder, createRecorders, waitForDelay } from '@orkestrel/test'
 import {
+	createAbortTools,
+	createMemoryTransport,
 	buildNestedRecord,
 	createJSONRPCNotification,
 	createJSONRPCRequest,
@@ -2807,15 +2813,142 @@ describe('MCPServer — tools/list', () => {
 })
 
 describe('MCPServer — tools/call', () => {
+	it('aborts default tool execution on a duplex cancellation and keeps the connection usable', async () => {
+		const probe = createAbortTools()
+		const serverSide = createMemoryTransport()
+		const clientSide = createMemoryTransport()
+		serverSide.connect(clientSide)
+		clientSide.connect(serverSide)
+		const cancellationServer = createMCPServer({
+			identity: { name: 'abort', version: '1' },
+			tools: probe.tools,
+		})
+		const unbindServer = bindServer(cancellationServer, serverSide)
+		const client = createMCPClient({ transport: createDuplexClientTransport(clientSide) })
+		const unbindClient = bindClient(client, clientSide)
+		const controller = new AbortController()
+		try {
+			await client.connect()
+			const pending = client.call('wait', {}, { signal: controller.signal })
+			const rejected = pending.catch((error: unknown) => error)
+			const signal = await probe.entered
+			expect(signal.aborted).toBe(false)
+			controller.abort()
+			expect(await rejected).toMatchObject({ message: expect.stringMatching(/aborted/) })
+			expect(signal.aborted).toBe(true)
+			await probe.aborted
+			expect(await client.call('echo', { value: 'still connected' })).toEqual({
+				resultType: 'complete',
+				value: 'still connected',
+			})
+		} finally {
+			probe.release()
+			controller.abort()
+			await client.disconnect()
+			unbindClient()
+			unbindServer()
+		}
+	})
+
+	it('passes caller identity to a custom execution handler separately from the call envelope', async () => {
+		const caller = Object.freeze({ subject: 'operator' })
+		const seen: unknown[] = []
+		const identityTools = createToolManager()
+		identityTools.add(
+			createTool({
+				name: 'identity',
+				execute: (_args, context) => {
+					expect(Object.hasOwn(context, 'caller')).toBe(context.caller !== undefined)
+					return context.caller ?? 'absent'
+				},
+			}),
+		)
+		const identityServer = createMCPServer({
+			identity: { name: 'identity', version: '1' },
+			tools: identityTools,
+			execution: (context) => {
+				seen.push(context.caller)
+				expect(Object.hasOwn(context, 'caller')).toBe(context.caller !== undefined)
+				expect(Object.hasOwn(context.call, 'caller')).toBe(false)
+				return context.tools.execute(context.call, {
+					signal: context.signal,
+					...(context.caller === undefined ? {} : { caller: context.caller }),
+				})
+			},
+		})
+		const response = responseOf(
+			await identityServer.dispatch(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					id: 'identity',
+					params: { name: 'identity', _meta: MODERN_METADATA },
+				}),
+				{ caller },
+			),
+		)
+		expect(seen).toEqual([caller])
+		expect(resultOf(response)['structuredContent']).toEqual(caller)
+		const absent = responseOf(
+			await identityServer.dispatch(
+				createJSONRPCRequest({
+					method: 'tools/call',
+					params: { name: 'identity', _meta: MODERN_METADATA },
+				}),
+			),
+		)
+		expect(seen).toEqual([caller, undefined])
+		expect(resultOf(absent)['structuredContent']).toBe('absent')
+	})
+
+	it('advertises titles and mapped annotation hints on tools/list', async () => {
+		const metadataTools = createToolManager()
+		metadataTools.add(
+			createTool({
+				name: 'inspect',
+				title: 'Inspect record',
+				annotations: { pure: true, consequential: false, untrusted: true },
+				execute: () => 1,
+			}),
+		)
+		const metadataServer = createMCPServer({
+			identity: { name: 'metadata', version: '1' },
+			tools: metadataTools,
+		})
+		const response = responseOf(await metadataServer.dispatch(modernRequest('tools/list')))
+		expect(resultOf(response)['tools']).toEqual([
+			{
+				name: 'inspect',
+				title: 'Inspect record',
+				inputSchema: { type: 'object' },
+				annotations: { readOnlyHint: true, destructiveHint: false },
+			},
+		])
+	})
+
+	it('omits annotations on tools/list when a tool only declares untrusted', async () => {
+		const metadataTools = createToolManager()
+		metadataTools.add(
+			createTool({ name: 'inspect', annotations: { untrusted: true }, execute: () => 1 }),
+		)
+		const metadataServer = createMCPServer({
+			identity: { name: 'metadata', version: '1' },
+			tools: metadataTools,
+		})
+		const response = responseOf(await metadataServer.dispatch(modernRequest('tools/list')))
+		expect(resultOf(response)['tools']).toEqual([
+			{ name: 'inspect', inputSchema: { type: 'object' } },
+		])
+	})
+
 	it('forwards caller context to real tool bodies in both eras and preserves absence', async () => {
 		const observed: unknown[] = []
 		const manager = createToolManager()
 		manager.add(
 			createTool({
 				name: 'caller',
-				execute: (_args, caller) => {
-					observed.push(caller)
-					return caller === undefined ? 'absent' : caller
+				execute: (_args, context) => {
+					observed.push(context.caller)
+					return context.caller === undefined ? 'absent' : context.caller
 				},
 			}),
 		)
@@ -5226,7 +5359,6 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 			id: 'context-1',
 			name: 'sum',
 			arguments: { a: 2, b: 3 },
-			caller: 'asserted',
 		})
 		expect(tasks.starts[0]?.[1]).toBe(context)
 		expect(tasks.starts[0]?.[2].signal).toBeInstanceOf(AbortSignal)

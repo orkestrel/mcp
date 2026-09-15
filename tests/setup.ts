@@ -4,7 +4,7 @@
 
 import type { SSEEvent } from '@orkestrel/sse'
 import type { RecorderInterface } from '@orkestrel/test'
-import type { ToolManagerInterface } from '@orkestrel/tool'
+import type { ToolInterface, ToolManagerInterface } from '@orkestrel/tool'
 import type {
 	MCPMessageTransportEventMap,
 	MCPMessageTransportInterface,
@@ -36,7 +36,10 @@ import type {
 	MCPTaskManagerInterface,
 } from '@src/core'
 import {
+	bindClient,
 	bindServer,
+	createDuplexClientTransport,
+	createMCPClient,
 	createMCPServer,
 	MCP_EXTENSION_TASKS,
 	MCP_META_CAPABILITIES,
@@ -969,6 +972,115 @@ export function createSubscriptionServer(
 		subscription: { notifications, producer },
 		...(tasks === undefined ? {} : { task: { tasks, deferral: () => undefined } }),
 	})
+}
+
+/** Describes real tools whose handler entry and cancellation can be observed. */
+export interface AbortToolsInterface {
+	readonly tools: ToolManagerInterface
+	readonly entered: Promise<AbortSignal>
+	readonly aborted: Promise<void>
+	release(): void
+}
+
+/** Describes the duplex connection and registries used by the refresh guide. */
+export interface ToolRefreshInterface {
+	readonly client: MCPClientInterface
+	readonly server: MCPServerInterface
+	readonly remote: ToolManagerInterface
+	readonly tools: ToolManagerInterface
+	readonly local: ToolInterface
+	readonly writer: WritableStreamDefaultWriter<JSONRPCNotification>
+	close(): Promise<void>
+}
+
+/** Reports the installed names, refused collisions, and fetch failures from a refresh. */
+export interface ToolRefreshResult {
+	readonly installed: readonly string[]
+	readonly collisions: readonly string[]
+	readonly failures: readonly unknown[]
+}
+
+/** Creates real tools with an observable cancellation boundary and an explicit cleanup release. */
+export function createAbortTools(): AbortToolsInterface {
+	const entered = Promise.withResolvers<AbortSignal>()
+	const aborted = Promise.withResolvers<void>()
+	const release = Promise.withResolvers<void>()
+	const tools = createToolManager()
+	tools.add(
+		createTool({
+			name: 'wait',
+			execute: async (_args, context) => {
+				entered.resolve(context.signal)
+				context.signal.addEventListener('abort', () => aborted.resolve(), { once: true })
+				await Promise.race([aborted.promise, release.promise])
+				return 'finished'
+			},
+		}),
+	)
+	tools.add(createTool({ name: 'echo', execute: (args) => args['value'] }))
+	return { tools, entered: entered.promise, aborted: aborted.promise, release: release.resolve }
+}
+
+/** Transcribes the guide's explicit snapshot replacement for its executed proof. */
+export async function refreshTools(
+	client: MCPClientInterface,
+	tools: ToolManagerInterface,
+	installed: readonly string[],
+): Promise<ToolRefreshResult> {
+	const collisions: string[] = []
+	let snapshot: readonly ToolInterface[]
+	try {
+		snapshot = await client.tools()
+	} catch (error) {
+		return { installed, collisions, failures: [error] }
+	}
+	const accepted = snapshot.filter((tool) => {
+		if (tools.tool(tool.name) !== undefined && !installed.includes(tool.name)) {
+			collisions.push(tool.name)
+			return false
+		}
+		return true
+	})
+	tools.remove(installed)
+	tools.add(accepted)
+	return { installed: accepted.map((tool) => tool.name), collisions, failures: [] }
+}
+
+/** Creates the guide's real duplex server pair and mixed local/remote tool registries. */
+export function createToolRefresh(): ToolRefreshInterface {
+	const remote = createToolManager()
+	remote.add(createTool({ name: 'remote', title: 'Original', execute: () => 'original' }))
+	const tools = createToolManager()
+	const local = createTool({ name: 'local', execute: () => 'local value' })
+	tools.add(local)
+	const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
+	const writer = source.writable.getWriter()
+	const server = createMCPServer({
+		identity: { name: 'refresh', version: '1' },
+		tools: remote,
+		subscription: { notifications: { toolsListChanged: true }, producer: () => source.readable },
+	})
+	const serverSide = createMemoryTransport()
+	const clientSide = createMemoryTransport()
+	serverSide.connect(clientSide)
+	clientSide.connect(serverSide)
+	const unbindServer = bindServer(server, serverSide)
+	const client = createMCPClient({ transport: createDuplexClientTransport(clientSide) })
+	const unbindClient = bindClient(client, clientSide)
+	return {
+		client,
+		server,
+		remote,
+		tools,
+		local,
+		writer,
+		async close() {
+			await client.disconnect()
+			unbindClient()
+			unbindServer()
+			writer.releaseLock()
+		},
+	}
 }
 
 export function createLoopbackTransport(mcp: MCPServerInterface): MCPTestLoopbackInterface {

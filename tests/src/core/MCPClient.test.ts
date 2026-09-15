@@ -12,6 +12,9 @@ import type { ToolManagerInterface } from '@orkestrel/tool'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
+	bindClient,
+	bindServer,
+	createDuplexClientTransport,
 	createMCPClient,
 	createMCPLegacy,
 	createMCPServer,
@@ -34,6 +37,8 @@ import { createServer } from 'node:http'
 import { createSignal, waitForDelay } from '@orkestrel/test'
 import { isRecord } from '@orkestrel/contract'
 import {
+	createAbortTools,
+	createMemoryTransport,
 	createInputServer,
 	createLoopbackTransport,
 	createSubscriptionServer,
@@ -1201,7 +1206,7 @@ describe('MCPClient — tools() (discovery + local-tool wrapping)', () => {
 		const echo = tools.find((tool) => tool.name === 'echo')
 
 		// Running the LOCAL tool drives a remote `tools/call` round-trip.
-		const value = await echo?.execute({ value: 'pong' })
+		const value = await echo?.execute({ value: 'pong' }, { signal: new AbortController().signal })
 
 		expect(value).toEqual({ echoed: 'pong' })
 	})
@@ -2842,6 +2847,129 @@ describe('MCPClient — call() prefers structuredContent', () => {
 		await client.connect()
 
 		await expect(client.call('boom', {})).rejects.toThrow('tool exploded')
+	})
+})
+
+describe('MCPClient — wrapped tool context', () => {
+	it('omits wrapped annotations when the wire descriptor has empty annotations', async () => {
+		const peer = callPeer((request) =>
+			request.method === 'tools/list' && request.id !== undefined
+				? {
+						jsonrpc: '2.0',
+						id: request.id,
+						result: {
+							tools: [{ name: 'inspect', inputSchema: { type: 'object' }, annotations: {} }],
+						},
+					}
+				: undefined,
+		)
+		const client = createMCPClient({ transport: peer })
+		try {
+			await client.connect()
+			const [tool] = await client.tools()
+			expect(tool?.name).toBe('inspect')
+			expect(tool?.annotations).toBeUndefined()
+		} finally {
+			await client.disconnect()
+		}
+	})
+
+	it('maps readOnlyHint while ignoring an unconsumed malformed openWorldHint', async () => {
+		const peer = callPeer((request) =>
+			request.method === 'tools/list' && request.id !== undefined
+				? {
+						jsonrpc: '2.0',
+						id: request.id,
+						result: {
+							tools: [
+								{
+									name: 'inspect',
+									inputSchema: { type: 'object' },
+									annotations: { readOnlyHint: true, openWorldHint: 'yes' },
+								},
+							],
+						},
+					}
+				: undefined,
+		)
+		const client = createMCPClient({ transport: peer })
+		try {
+			await client.connect()
+			const [tool] = await client.tools()
+			expect(tool?.name).toBe('inspect')
+			expect(tool?.annotations).toEqual({ pure: true })
+		} finally {
+			await client.disconnect()
+		}
+	})
+
+	it('forwards a wrapped tool context signal to the server and preserves the connection after abort', async () => {
+		const probe = createAbortTools()
+		const serverSide = createMemoryTransport()
+		const clientSide = createMemoryTransport()
+		serverSide.connect(clientSide)
+		clientSide.connect(serverSide)
+		const server = createMCPServer({
+			identity: { name: 'abort', version: '1' },
+			tools: probe.tools,
+		})
+		const unbindServer = bindServer(server, serverSide)
+		const client = createMCPClient({
+			transport: createDuplexClientTransport(clientSide),
+			timeout: 100,
+		})
+		const unbindClient = bindClient(client, clientSide)
+		const controller = new AbortController()
+		try {
+			await client.connect()
+			const tools = await client.tools()
+			const tool = tools.find((candidate) => candidate.name === 'wait')
+			if (tool === undefined) throw new Error('Missing wait tool')
+			const pending = Promise.resolve(tool.execute({}, { signal: controller.signal }))
+			const rejected = pending.catch((error: unknown) => error)
+			const signal = await probe.entered
+			expect(signal.aborted).toBe(false)
+			controller.abort()
+			expect(await rejected).toMatchObject({ message: expect.stringMatching(/aborted/) })
+			expect(signal.aborted).toBe(true)
+			await probe.aborted
+			expect(await client.call('echo', { value: 'usable' })).toEqual({
+				resultType: 'complete',
+				value: 'usable',
+			})
+		} finally {
+			probe.release()
+			controller.abort()
+			await client.disconnect()
+			unbindClient()
+			unbindServer()
+		}
+	})
+
+	it('carries title and inverse-projected annotations while advertising the authored summary', async () => {
+		const tools = createToolManager()
+		tools.add(
+			createTool({
+				name: 'inspect',
+				title: 'Inspect record',
+				description: 'Full description',
+				summary: 'Short description',
+				annotations: { pure: false, consequential: true, untrusted: true },
+				execute: () => 1,
+			}),
+		)
+		const server = createMCPServer({ identity: { name: 'metadata', version: '1' }, tools })
+		const client = createMCPClient({ transport: createLoopbackTransport(server) })
+		try {
+			await client.connect()
+			const [tool] = await client.tools()
+			expect(tool?.title).toBe('Inspect record')
+			expect(tool?.description).toBe('Short description')
+			expect(tool?.summary).toBeUndefined()
+			expect(tool?.annotations).toEqual({ pure: false, consequential: true })
+		} finally {
+			await client.disconnect()
+		}
 	})
 })
 

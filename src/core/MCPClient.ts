@@ -1,5 +1,5 @@
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { ToolInterface } from '@orkestrel/tool'
+import type { ToolContext, ToolInterface } from '@orkestrel/tool'
 import type {
 	MCPMessageTransportInterface,
 	JSONRPCId,
@@ -51,7 +51,12 @@ import {
 	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from './constants.js'
 import { MCPError, isMCPError } from './errors.js'
-import { buildCallOutcome, buildCancelledNotification, matchesResultType } from './helpers.js'
+import {
+	buildCallOutcome,
+	buildCancelledNotification,
+	matchesResultType,
+	mcpAnnotationsToTool,
+} from './helpers.js'
 import { inferVersion } from './inferers.js'
 import { parseJSONRPCMessage } from './parsers.js'
 import {
@@ -63,6 +68,7 @@ import {
 	isMCPResultMetaObject,
 	isMCPServerCapabilities,
 	isMCPSubscriptionResult,
+	isMCPToolAnnotations,
 } from './validators.js'
 
 /**
@@ -769,23 +775,22 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	// Wrap one remote tool descriptor as a local tool: map `inputSchema` → `parameters`
-	// (the inverse of the server's rename, no `as`), carry `description` when present,
-	// and bind `execute` to a remote `tools/call` through `call`.
+	// (the inverse of the server's rename), carry display metadata and mapped hints,
+	// and bind `execute` and its context signal to a remote `tools/call` through `call`.
 	#tool(name: string, descriptor: Readonly<Record<string, unknown>>): ToolInterface {
 		const inputSchema = descriptor['inputSchema']
 		const description = descriptor['description']
-		const options: {
-			name: string
-			description?: string
-			parameters?: Readonly<Record<string, unknown>>
-			execute: (args: Readonly<Record<string, unknown>>) => Promise<unknown>
-		} = {
+		const title = descriptor['title']
+		const annotations = descriptor['annotations']
+		const projected = isMCPToolAnnotations(annotations) ? mcpAnnotationsToTool(annotations) : {}
+		return new Tool({
 			name,
+			...(isString(title) ? { title } : {}),
+			...(isString(description) ? { description } : {}),
+			...(isRecord(inputSchema) ? { parameters: inputSchema } : {}),
+			...(Object.keys(projected).length === 0 ? {} : { annotations: projected }),
 			execute: this.#execute.bind(this, name),
-		}
-		if (isString(description)) options.description = description
-		if (isRecord(inputSchema)) options.parameters = inputSchema
-		return new Tool(options)
+		})
 	}
 
 	// The agent-facing edge of `call`. A wrapped tool owes its caller a VALUE, and the
@@ -793,8 +798,12 @@ export class MCPClient implements MCPClientInterface {
 	// cannot wait for. Throwing is the one shape an agent's registry already absorbs — it
 	// becomes a `success: false` result the model can read — where returning `undefined`
 	// would read as a tool that succeeded and produced nothing.
-	async #execute(name: string, args: Readonly<Record<string, unknown>>): Promise<unknown> {
-		const outcome = await this.call(name, args)
+	async #execute(
+		name: string,
+		args: Readonly<Record<string, unknown>>,
+		context: ToolContext,
+	): Promise<unknown> {
+		const outcome = await this.call(name, args, { signal: context.signal })
 		if (outcome.resultType !== 'complete') {
 			throw new Error(`MCP tool '${name}' answered '${outcome.resultType}' and has no inline value`)
 		}

@@ -855,12 +855,19 @@ export interface MCPProgressOwnerInterface extends MCPProgressInterface {
  */
 export type MCPProgressHandler = (progress: MCPProgress) => void
 
-/** Represents the explicit, host-neutral context for one modern tool execution. */
+/**
+ * Represents the explicit, host-neutral context for one modern tool execution.
+ *
+ * @remarks
+ * The default execution path forwards the request signal and caller to the tool manager.
+ * A delegating execution handler forwards `signal` and `caller` itself.
+ */
 export interface MCPExecutionContext {
 	readonly request: JSONRPCRequest
 	readonly call: ToolCall
 	readonly tools: ToolManagerInterface
 	readonly signal: AbortSignal
+	readonly caller?: unknown
 	readonly progress?: MCPProgressInterface
 }
 
@@ -1172,7 +1179,7 @@ export interface MCPTaskManagerInterface {
  *
  * The returned string is the stable operation key the manager deduplicates on: the same
  * logical call must produce the same key, and two different calls must not. Mint it from
- * the caller and the canonical call — never from `call.id`, which is the client's own
+ * `options.caller` and the canonical call — never from `call.id`, which is the client's own
  * JSON-RPC request id: a retry of one logical call changes it, so dedup never fires, and
  * two principals whose clients both started counting at 1 collide on it.
  *
@@ -1206,8 +1213,7 @@ export interface MCPTaskOptions {
 }
 
 /**
- * Represents one entry of the MCP `tools/list` result — a tool's `name`, optional
- * `description`, and its JSON-Schema `inputSchema`.
+ * Represents one entry of the MCP `tools/list` result with its display metadata and JSON-Schema input.
  *
  * @remarks
  * The wire renaming of a `ToolDefinition`: `name` / `description` carry through,
@@ -1216,8 +1222,25 @@ export interface MCPTaskOptions {
  */
 export interface MCPToolDescriptor {
 	readonly name: string
+	readonly title?: string
 	readonly description?: string
 	readonly inputSchema: Readonly<Record<string, unknown>>
+	readonly annotations?: MCPToolAnnotations
+}
+
+/**
+ * Describes tool hints using the MCP 2026-07-28 specification's wire field names.
+ *
+ * @remarks
+ * These hints describe behavior; they do not authorize execution. The domain projection
+ * carries `pure` as `readOnlyHint` and `consequential` as `destructiveHint`.
+ */
+export interface MCPToolAnnotations {
+	readonly title?: string
+	readonly readOnlyHint?: boolean
+	readonly destructiveHint?: boolean
+	readonly idempotentHint?: boolean
+	readonly openWorldHint?: boolean
 }
 
 /**
@@ -2140,12 +2163,10 @@ export interface MCPServerOptions {
 	 * Holds the optional explicit execution policy above the canonical live tool registry.
 	 *
 	 * @remarks
-	 * This is also the only way a tool observes cancellation. The default path calls
-	 * {@link ToolManagerInterface.execute}, whose signature takes a call and nothing else, so
-	 * there is no seam to hand a signal through — a server with no `execution` runs its tool to
-	 * completion even after the request that asked for it has ended, and abandons the result.
-	 * An {@link MCPExecutionHandler} receives `signal` on its {@link MCPExecutionContext} and
-	 * can stop the work itself.
+	 * The default path forwards the request signal and optional caller through
+	 * {@link ToolManagerInterface.execute}. An {@link MCPExecutionHandler} receives them on
+	 * its {@link MCPExecutionContext}; a delegating handler forwards `signal` and `caller`
+	 * to the manager itself. Tool handlers observe the signal to stop their work.
 	 *
 	 * A handler returning a complete {@link MCPCallResult} is taken at its word: the server
 	 * bounds it and re-proves its shape, then sends what the handler composed. Nothing stamps
@@ -3028,9 +3049,11 @@ export interface MCPClientInterface {
 	 *
 	 * @remarks
 	 * Runs `tools/list` and maps each descriptor: `name` (narrowed to a string),
-	 * `description`, and `inputSchema` → `parameters` (the inverse of the server's
-	 * `parameters` → `inputSchema` rename). Add the returned tools to an agent's
-	 * {@link ToolManagerInterface} to give it the remote tools.
+	 * `title`, `description`, `inputSchema` → `parameters`, and the mapped annotation hints.
+	 * The wrapped handler forwards its context signal into {@link call}. The result is a
+	 * snapshot; fetch it again to refresh an agent's {@link ToolManagerInterface}.
+	 * A summary authored on the remote tool replaces its advertised description, so the
+	 * separate summary and full description cannot be recovered from this wire view.
 	 *
 	 * @returns The remote tools as local {@link ToolInterface}s, in server order
 	 */

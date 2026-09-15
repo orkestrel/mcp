@@ -64,6 +64,7 @@ import type {
 	MCPTaskResult,
 	MCPTaskStatus,
 	MCPTextResource,
+	MCPToolAnnotations,
 	MCPLegacyVersion,
 	MCPModernVersion,
 	MCPVersion,
@@ -675,6 +676,32 @@ export function isMCPResource(value: unknown): value is MCPResource {
 			(isUndefined(size) || (isInteger(size) && size >= 0)) &&
 			(isUndefined(icons) || (Array.isArray(icons) && icons.every((icon) => isMCPIcon(icon)))) &&
 			(isUndefined(resource['_meta']) || isMCPMetaObject(resource['_meta']))
+		)
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Checks whether a value carries valid consumed MCP 2026-07-28 tool annotation hints.
+ *
+ * @remarks
+ * Validates only `readOnlyHint` and `destructiveHint`; other wire fields are not consumed.
+ *
+ * @param value - The unknown wire annotations
+ * @returns True if consumed annotation fields are optional booleans; false otherwise
+ *
+ * @example
+ * ```ts
+ * isMCPToolAnnotations({ readOnlyHint: false }) // true
+ * ```
+ */
+export function isMCPToolAnnotations(value: unknown): value is MCPToolAnnotations {
+	try {
+		return (
+			isRecord(value) &&
+			(isUndefined(value['readOnlyHint']) || isBoolean(value['readOnlyHint'])) &&
+			(isUndefined(value['destructiveHint']) || isBoolean(value['destructiveHint']))
 		)
 	} catch {
 		return false

@@ -99,6 +99,7 @@ import {
 	isMCPTaskResult,
 	isMCPTaskStatus,
 	isMCPTextResource,
+	isMCPToolAnnotations,
 	isMCPVersion,
 	isModernRequest,
 	isMCPSubscriptionFilter,
@@ -2238,6 +2239,7 @@ const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = 
 	isMCPTaskResult,
 	isMCPTaskStatus,
 	isMCPTextResource,
+	isMCPToolAnnotations,
 	isMCPVersion,
 	isModernRequest,
 	isRFC3339Date,
@@ -2552,5 +2554,35 @@ describe('isMCPHeaderPrimitive — the schema types an annotation may sit on', (
 		expect(isMCPHeaderPrimitive('null')).toBe(false)
 		expect(isMCPHeaderPrimitive(['string'])).toBe(false)
 		expect(isMCPHeaderPrimitive(undefined)).toBe(false)
+	})
+})
+
+describe('isMCPToolAnnotations', () => {
+	it('validates consumed annotation booleans and ignores unconsumed wire fields', () => {
+		expect(isMCPToolAnnotations({})).toBe(true)
+		expect(
+			isMCPToolAnnotations({
+				title: 'Inspect',
+				readOnlyHint: false,
+				destructiveHint: true,
+				idempotentHint: false,
+				openWorldHint: true,
+				extension: 1,
+			}),
+		).toBe(true)
+		expect(isMCPToolAnnotations({ readOnlyHint: 'false' })).toBe(false)
+		expect(isMCPToolAnnotations({ destructiveHint: 0 })).toBe(false)
+		expect(isMCPToolAnnotations({ idempotentHint: null })).toBe(true)
+		expect(isMCPToolAnnotations({ readOnlyHint: true, openWorldHint: 'yes' })).toBe(true)
+		expect(isMCPToolAnnotations({ title: 1 })).toBe(true)
+		expect(isMCPToolAnnotations(null)).toBe(false)
+		expect(isMCPToolAnnotations([])).toBe(false)
+		expect(
+			isMCPToolAnnotations({
+				get readOnlyHint() {
+					throw new Error('hostile')
+				},
+			}),
+		).toBe(false)
 	})
 })

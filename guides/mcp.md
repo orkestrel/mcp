@@ -1146,7 +1146,11 @@ subscription.abort()
 
 `MCPServerOptions.execution` is the explicit modern execution port over the live
 `ToolManagerInterface`. Its input contains the original `request`, canonical `call`,
-real `tools` manager, effective `signal`, and an optional `progress` reporter. Returning
+real `tools` manager, effective `signal`, optional `caller`, and an optional `progress` reporter.
+The default path calls `tools.execute(call, { signal, caller })`; caller identity is omitted
+when absent and never placed on the JSON call envelope. A delegating handler calls
+`tools.execute(context.call, { signal: context.signal, ...(context.caller === undefined ? {} : { caller: context.caller }) })`.
+A tool handler observes `context.signal` to stop work when its request is cancelled. Returning
 a `ToolResult` uses the normal text/structured normalization; returning a validated
 `MCPCallResult` preserves exact text, image, audio, resource-link, and embedded-resource
 content without guessing from an ordinary domain value.
@@ -2254,6 +2258,7 @@ A `Shape` cell holds the constant's declared type.
 | `isMCPContent`                     | function | Determines whether a value is one exact dated-schema MCP tool content block.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `isMCPPaginationParams`            | function | Determines whether a value carries the shared optional pagination cursor.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `isMCPResource`                    | function | Determines whether a value is one `resources/list` descriptor.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `isMCPToolAnnotations`             | function | Checks whether a value carries valid consumed MCP 2026-07-28 tool annotation hints.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `isMCPResourceTemplate`            | function | Determines whether a value is one resource-template descriptor.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `isMCPResourceContents`            | function | Determines whether a value is structurally discriminated resource contents.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `isMCPResourcePage`                | function | Determines whether a value is one consumer-owned resource page.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -2326,6 +2331,8 @@ A `Shape` cell holds the constant's declared type.
 | `buildJSONRPCError`                | function | Builds a JSON-RPC error `JSONRPCErrorResponse` — the `id` echoed, the failure as an `error` object.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `buildMethodOptions`               | function | Resolves the caller-facing dispatch options into the options a dispatched method receives.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `buildToolDescriptors`             | function | Maps a `ToolManagerInterface`'s definitions to MCP `tools/list` descriptors — renaming `parameters` to the wire's `inputSchema`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `toolAnnotationsToMCP`             | function | Projects domain tool annotations onto MCP wire hints without inventing defaults.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `mcpAnnotationsToTool`             | function | Projects MCP wire hints onto domain tool annotations without inventing defaults.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `buildToolCall`                    | function | Builds the canonical Tool call for one validated MCP `tools/call` request.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `buildProgressNotification`        | function | Builds one official progress notification for the original request stream.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `buildCancelledNotification`       | function | Builds one official cancellation notification for a request already sent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -2367,6 +2374,20 @@ A `Shape` cell holds the constant's declared type.
 | `decodeEvent`                      | function | Decodes one SSE event's `data` string into a `JSONRPCMessage`, or `undefined` when it is not one — the per-event step `readEventStream` folds over.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `readEventStream`                  | function | Decodes a `fetch` Response's Server-Sent-Events body into the JSON-RPC messages it carried — the client-side inverse of a server's Streamable-HTTP SSE response.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `buildResponseError`               | function | Builds the error for a non-success HTTP response that carried no JSON-RPC message.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+
+### Project tool annotation hints
+
+The projection keeps explicit false values and omits hints with no counterpart.
+
+```ts
+import { toolAnnotationsToMCP, mcpAnnotationsToTool, isMCPToolAnnotations } from '@orkestrel/mcp'
+
+toolAnnotationsToMCP({ pure: true, consequential: false, untrusted: true })
+// { readOnlyHint: true, destructiveHint: false }
+mcpAnnotationsToTool({ readOnlyHint: false, destructiveHint: true })
+// { pure: false, consequential: true }
+isMCPToolAnnotations({ readOnlyHint: false }) // true
+```
 
 ### Types
 
@@ -2481,10 +2502,11 @@ An extended interface's name comes before `plus`, with the members it adds after
 | `MCPProgress`                      | interface | `{ progress, total?, message? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Represents one official request-scoped progress payload.                                                                                                                                                    |
 | `MCPProgressInterface`             | interface | `{} plus report`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Reports request-scoped progress under backpressure — the reporter supplied to an explicit executor.                                                                                                         |
 | `MCPProgressOwnerInterface`        | interface | `MCPProgressInterface plus take, stop`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Represents the owning half of one progress slot — `MCPProgressInterface` plus the consuming and stopping the slot's owner performs.                                                                         |
-| `MCPExecutionContext`              | interface | `{ request, call, tools, signal, progress? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Represents the explicit, host-neutral context for one modern tool execution.                                                                                                                                |
+| `MCPExecutionContext`              | interface | `{ request, call, tools, signal, caller?, progress? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Represents the explicit, host-neutral context for one modern tool execution.                                                                                                                                |
 | `MCPExecutionHandler`              | type      | `(context: MCPExecutionContext,) => ToolResult \| MCPCallResult \| Promise<ToolResult \| MCPCallResult>`                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Executes one canonical tool call or returns a fully formed complete MCP result.                                                                                                                             |
 | `MCPListResult`                    | type      | `{ tools, resultType: 'complete', ttlMs, cacheScope: 'public' \| 'private', _meta? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Represents the MCP `tools/list` result — tool descriptors plus optional modern result stamps.                                                                                                               |
-| `MCPToolDescriptor`                | interface | `{ name, description?, inputSchema }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Represents one entry of the MCP `tools/list` result — a tool's `name`, optional `description`, and its JSON-Schema `inputSchema`.                                                                           |
+| `MCPToolAnnotations`               | interface | `{ title?, readOnlyHint?, destructiveHint?, idempotentHint?, openWorldHint? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Describes tool hints using the MCP 2026-07-28 specification's wire field names.                                                                                                                             |
+| `MCPToolDescriptor`                | interface | `{ name, title?, description?, inputSchema, annotations? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Represents one entry of the MCP `tools/list` result with its display metadata and JSON-Schema input.                                                                                                        |
 | `MCPHeaderPrimitive`               | type      | `'boolean' \| 'integer' \| 'string'`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Names the JSON Schema types an `x-mcp-header` annotation may sit on.                                                                                                                                        |
 | `MCPHeaderParameter`               | interface | `{ name, path, primitive }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Represents one `x-mcp-header` projection a tool's `inputSchema` declares.                                                                                                                                   |
 | `MCPIdentity`                      | type      | `MCPMetaObject & { name, version, title?, description?, websiteUrl?, icons? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Represents the complete dated identity of an MCP server or client.                                                                                                                                          |
@@ -2595,8 +2617,8 @@ HTTP header validation have all passed, immediately before `mcp.dispatch`. With 
 extractor, or when it returns `undefined`, `caller` is omitted through the
 package's conditional-spread idiom, preserving the former dispatch-options shape
 exactly. A present value flows through both modern and legacy `tools/call` onto
-`ToolCall.caller`; the tool manager then supplies it to the real tool body's
-caller parameter.
+the execution context's `caller` member; the tool manager supplies that context to the
+real tool body's `context` parameter.
 
 This remains an asserted seam, never protocol authentication. A session id names
 an HTTP transport session, not a caller, and the session middleware preserves
@@ -3527,6 +3549,18 @@ closes the connection it owns. Subscribe to client events through `emitter.on`.
 The `tasks` data member is the stable Tasks extension's client half — see
 [`MCPTaskClientInterface`](#mcptaskclientinterface).
 
+`tools()` returns a snapshot. The wire preserves `title`, the advertised `description`,
+`inputSchema` (wrapped as `parameters`), and the mapped `annotations`. The server maps
+`pure` to `readOnlyHint` and `consequential` to `destructiveHint`; the client applies the
+inverse projection. For a schema-less tool, the wire adds `inputSchema: { type: 'object' }`.
+`untrusted` has no MCP counterpart. Unmapped hints remain absent from
+the wrapped tool, and omitted hints receive no invented defaults. These hints do not authorize
+execution. The wire loses `summary` as a separate field and, when a summary was authored,
+the full description: the registry advertises that summary as `description`.
+The wrapped tool forwards `context.signal` into `call`, so agent-side abort reaches the
+remote request. Refresh snapshots explicitly between agent runs; see
+[Refresh the tools an agent holds](#refresh-the-tools-an-agent-holds).
+
 | Method       | Returns                             | Summary                                                                                                                               |
 | ------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | `connect`    | `Promise<void>`                     | Connects to the remote server — opens a connection on the transport and negotiates the modern wire revision.                          |
@@ -3866,6 +3900,70 @@ const listed = await server.handle(
 	'{"jsonrpc":"2.0","method":"tools/list","id":1,"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}',
 )
 // listed → '{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"search","inputSchema":{"type":"object"},"description":"Search the docs"},{"name":"add","inputSchema":{"type":"object"}}],"resultType":"complete","ttlMs":60000,"cacheScope":"private","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"docs","version":"1.0.0"}}}}'
+```
+
+### Refresh the tools an agent holds
+
+Apply each snapshot between agent runs. The refresh owns the names it installed from the
+client and replaces or removes tools by name. You must not register a local tool under a
+name the refresh installed. A collision with a local tool records the remote name and
+keeps the local tool. A failed fetch records the error and leaves the last snapshot installed.
+Open the subscription before fetching the initial snapshot so changes during that fetch stay
+queued. The loop processes notifications serially and performs no polling.
+
+The following example uses an already-connected `client`. The application owns when this loop
+runs relative to its agent and aborts `subscription` when it stops consuming notifications.
+
+```ts
+import type { MCPClientInterface } from '@orkestrel/mcp'
+import type { ToolInterface, ToolManagerInterface } from '@orkestrel/tool'
+import { createTool, createToolManager } from '@orkestrel/tool'
+
+export interface ToolRefreshResult {
+	readonly installed: readonly string[]
+	readonly collisions: readonly string[]
+	readonly failures: readonly unknown[]
+}
+
+export async function refreshTools(
+	client: MCPClientInterface,
+	tools: ToolManagerInterface,
+	installed: readonly string[],
+): Promise<ToolRefreshResult> {
+	const collisions: string[] = []
+	let snapshot: readonly ToolInterface[]
+	try {
+		snapshot = await client.tools()
+	} catch (error) {
+		return { installed, collisions, failures: [error] }
+	}
+	const accepted = snapshot.filter((tool) => {
+		if (tools.tool(tool.name) !== undefined && !installed.includes(tool.name)) {
+			collisions.push(tool.name)
+			return false
+		}
+		return true
+	})
+	tools.remove(installed)
+	tools.add(accepted)
+	return { installed: accepted.map((tool) => tool.name), collisions, failures: [] }
+}
+
+const tools = createToolManager()
+tools.add(createTool({ name: 'local', execute: () => 'local value' }))
+const subscription = new AbortController()
+const notifications = client.listen({ toolsListChanged: true }, { signal: subscription.signal })
+try {
+	await notifications.next() // Consume the subscription acknowledgement.
+	let outcome = await refreshTools(client, tools, [])
+	for await (const notification of notifications) {
+		if (notification.method === 'notifications/tools/list_changed') {
+			outcome = await refreshTools(client, tools, outcome.installed)
+		}
+	}
+} finally {
+	subscription.abort()
+}
 ```
 
 ### Drive the typed core directly
@@ -4318,7 +4416,7 @@ closed — while ordinary upstream completion closes the response without invent
 - [HTTP response lifecycle composition](../tests/src/server/HTTPDisconnect.test.ts)
 - [HTTP handler integration](../tests/src/server/handlers.test.ts)
 - [Session middleware integration](../tests/src/server/middlewares.test.ts)
-- [Guide/source/public-barrel parity; legacy-removability and public-face boundaries; native guide-input, fence-language, summary, titled-example, and README-pitch checks; what the spawned stdio child receives; how the composed stdio server answers a legacy `initialize`; and the client subscription, progress, and transport demonstrations](../tests/guides.test.ts)
+- [Guide/source/public-barrel parity; legacy-removability and public-face boundaries; native guide-input, fence-language, summary, titled-example, and README-pitch checks; what the spawned stdio child receives; how the composed stdio server answers a legacy `initialize`; and the client subscription, progress, transport, and Refresh the tools an agent holds demonstrations](../tests/guides.test.ts)
 - [The packed artifact a consumer installs, across its faces and its ESM and CommonJS builds](../tests/distribution.test.ts)
 
 ## Declared non-goals
@@ -4645,17 +4743,6 @@ after its caller has gone. **The consumer's options:** bound the tool itself, or
 a held-open `MCPStream` from a registered method so the keepalive seam applies.
 **Closer:** none named; the limit is structural to a unary HTTP response.
 
-**A tool run through the default registry cannot observe cancellation.** Dispatch resolves
-one signal per request and hands it to every method, selector, principal resolver, and
-subscription producer the request reaches — but the default execution path calls
-`ToolManagerInterface.execute(call)`, whose signature takes a call and nothing else. There is
-no seam to hand a signal through, so a server configured without `execution` runs its tool to
-completion after the request that asked for it has ended, and abandons the result. **What it
-costs:** a long or expensive tool keeps spending after its caller is gone. **The consumer's
-options:** supply `MCPServerOptions.execution`, whose `MCPExecutionContext` carries `signal`
-and can stop the work; or bound the tool itself. **Closer:** none inside this package — the
-limit is in the `execute` signature, which `@orkestrel/tool` owns.
-
 **A producer that ignores its signal cannot be forced to finish.** A controlled stream
 settles its consumer promptly whatever the producer is doing, and aborts the request's
 signal before delegating cleanup — but JavaScript cannot settle work a generator is
@@ -4670,9 +4757,9 @@ frame as the message-based cancellation path for the transports that still have 
 WebSocket, and `MessagePort`. `bindServer` holds one `AbortController` per live request, keyed
 by request id and retired whenever that request leaves, and supplies its signal to `handle`,
 so an inbound cancellation aborts the named request and the cancelled request writes no
-response. A tool observes that abort only through `MCPServerOptions.execution`, whose
-`MCPExecutionContext` carries `signal`; the default `ToolManagerInterface.execute` path has no
-seam to hand one through, which is a separate declared task limit. **What remains:** on
+response. The default execution path forwards that signal through the tool context. A custom
+`MCPServerOptions.execution` handler receives `signal` and `caller` and forwards them
+when delegating to `ToolManagerInterface.execute`. **What remains:** on
 Streamable HTTP there is no such frame at all — there, closing the response stream is the
 cancellation signal, and only a streamed response has one to close. **Closer:** none possible
 for the HTTP face; the limit is the dated revision's.
@@ -4751,8 +4838,9 @@ surfaces.
 **Not every guide fence is executed.** `tests/guides.test.ts` transcribes and drives the
 flagship ones: the `tools/list` metadata pair, the stdio child's merged environment, its piped
 stderr and the retained evidence tail, the composed stdio server's legacy handshake, the
-consumer-visible client's modern version, and the subscription stream's delivery order and
-capacity refusal. Every other fence carries named-import, symbol, and link parity alone. **What
+consumer-visible client's modern version, the subscription stream's delivery order and
+capacity refusal, and `Refresh the tools an agent holds`. Every other fence carries
+named-import, symbol, and link parity alone. **What
 it costs:** a fence whose comment claims a value nothing asserts is checked for its names and
 not for its answer, so a behaviour that drifts under one of those fences reddens no gate.
 **Closer:** a transcription per fence, added with the claim it pins.
@@ -4878,9 +4966,10 @@ capabilities: { tools: {} }, serverInfo: { name, version } }`, the version negot
    absent one to the shared frozen `EMPTY_MCP_ARGUMENTS`),
    narrowed with `@orkestrel/contract`'s guards (no `as`); a missing /
    non-string `name` → a `-32602` invalid-params error. Otherwise it runs
-   `tools.execute({ id, name, arguments, ...(options.caller === undefined ? {} : { caller: options.caller }) })`
-   under the modern and legacy wire eras, so a present asserted caller reaches the real tool body while
-   absence preserves the former `ToolCall` shape exactly. Because the `ToolManager`
+   `tools.execute(call, context)` under the modern and legacy wire eras. The call carries
+   `{ id, name, arguments }`; the context carries the request's `signal` and the optional
+   `caller` from `options.caller`, omitted when absent. The tool body receives that context.
+   Because the `ToolManager`
    (`@orkestrel/tool`) already isolates a thrown tool (and an unknown name)
    into a `success: false` result, the server adds no try/catch: that branch's
    `error` maps to `{ content: [{ type: 'text', text: <error> }], isError: true }`;
