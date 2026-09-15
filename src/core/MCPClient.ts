@@ -41,6 +41,7 @@ import {
 	DEFAULT_MCP_SUBSCRIPTION_CAPACITY,
 	JSONRPC_INTERNAL_ERROR,
 	JSONRPC_INVALID_PARAMS,
+	JSONRPC_INVALID_REQUEST,
 	JSONRPC_METHOD_NOT_FOUND,
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
@@ -460,9 +461,16 @@ export class MCPClient implements MCPClientInterface {
 				JSONRPC_INVALID_PARAMS,
 			)
 		}
+		const method = 'subscriptions/listen'
+		// The one session-bound write that does NOT travel `#request`: a subscription builds
+		// its own frame so it can own the pending entry's queue, so it carries the refusal at
+		// its own entry. A generator's body runs at its first `next()`, so that is where a
+		// consumer meets this — there is no earlier moment `listen` could refuse at without
+		// making the stream eager.
+		const opening = this.#refuse(method)
+		if (opening !== undefined) throw opening
 		this.#nextId += 1
 		const id = this.#nextId
-		const method = 'subscriptions/listen'
 		const modern = this.#version
 		const request: JSONRPCRequest = {
 			jsonrpc: '2.0',
@@ -523,6 +531,55 @@ export class MCPClient implements MCPClientInterface {
 		}
 	}
 
+	// Refuse a session-bound request while there is no session to correlate it against. Writing
+	// it instead leaves the caller on the request deadline — `DEFAULT_MCP_REQUEST_TIMEOUT`, 30
+	// seconds, unless a caller shortened it — for a connection that has already ended, and a
+	// closed carrier drops the frame without reporting it, so nothing ever answers. The code is
+	// machine-readable because the caller's next move differs from the timeout's: reconnect,
+	// rather than retry.
+	//
+	// It sits at `#request`, the door EVERY correlated request travels, rather than on the
+	// methods that happen to have been written first. `call` and `tools` are two of that door's
+	// callers; the task client is a third, holding the same bound request function; and each
+	// `tasks/*` method would otherwise have had to remember a guard of its own. A door a caller
+	// can be added to without noticing is a door the refusal belongs at.
+	//
+	// `server/discover` is deliberately outside it. It is the round trip a connection is BUILT
+	// from, so refusing it would refuse `connect` itself; an attempt in flight publishes
+	// `#connecting` before `#negotiate` runs, which is what lets the handshake's own requests
+	// through, and a bare `discover()` on a client that has never connected is a probe this
+	// package publishes on purpose.
+	//
+	// An attempt exempts its own requests only while it is the CURRENT one. `connect` is
+	// emitted from inside the attempt, so the attempt is still published when a listener runs,
+	// and a transport that listener loses — a closed port, a stopped page server — invalidates
+	// it at once by bumping the generation while leaving the gate standing. An exemption
+	// reading only whether SOME attempt is in flight would admit every request issued after
+	// that loss, and each would reach a carrier that drops the frame and answer nothing until
+	// its deadline. Comparing the attempt's generation with the live one is the same reading
+	// `#negotiate` and `connect` already take to tell a joinable attempt from a superseded one.
+	//
+	// A `disconnect` issued from that same listener is the OTHER sequence, and this gate is not
+	// what answers it. `#teardown` defers its close through the microtask queue, so the
+	// transport is still open and the generation still current when the listener's next request
+	// is issued: that request is admitted, entered as pending, and rejected by the teardown's
+	// own drain. It settles well inside its deadline rather than refusing, and it never parks.
+	//
+	// It BUILDS the refusal rather than throwing it, because its two doors owe their caller
+	// different shapes: `#request` is declared to reject, which is the contract
+	// `MCPRequestFunction` publishes to whoever holds it, and a generator's entry throws. One
+	// reading, two deliveries, and no second copy of the rule to drift.
+	#refuse(method: string): MCPError | undefined {
+		if (method === 'server/discover') return undefined
+		if (this.#connected) return undefined
+		const inflight = this.#connecting
+		if (inflight !== undefined && inflight.generation === this.#generation) return undefined
+		return new MCPError(
+			`MCP client is not connected, so '${method}' was not issued`,
+			JSONRPC_INVALID_REQUEST,
+		)
+	}
+
 	// Issue a request and await its correlated response, bounded by the per-request
 	// deadline. A monotonic numeric id keys the pending settlers; `AbortSignal.timeout` (never a
 	// raw `setTimeout`) rejects the pending request if the server never answers. The transport
@@ -542,6 +599,8 @@ export class MCPClient implements MCPClientInterface {
 		version?: MCPModernVersion,
 		options?: MCPCallOptions,
 	): Promise<unknown> {
+		const refusal = this.#refuse(method)
+		if (refusal !== undefined) return Promise.reject(refusal)
 		this.#nextId += 1
 		const id = this.#nextId
 		const timeout = deadline

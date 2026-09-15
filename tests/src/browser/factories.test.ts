@@ -1,7 +1,27 @@
-import type { JSONRPCMessage } from '@src/core'
-import type { ScopeInterface } from '@src/browser'
+import type { JSONRPCMessage, MCPClientOptions } from '@src/core'
+import type {
+	ModelContextAdoptOptions,
+	ModelContextEventMap,
+	ModelContextInterface,
+	ModelContextOptions,
+	ModelContextPublishOptions,
+	PageServerInterface,
+	PageServerOptions,
+	ScopeInterface,
+	WebMCPAnnotations,
+	WebMCPDescriptor,
+	WebMCPDocument,
+	WebMCPExecuteHandler,
+	WebMCPExecuteOptions,
+	WebMCPHandlerOptions,
+	WebMCPRegisteredTool,
+	WebMCPRegisterOptions,
+	WebMCPRegistryInterface,
+	WebMCPTool,
+	WebMCPToolsOptions,
+} from '@src/browser'
 import type { ToolManagerInterface } from '@orkestrel/tool'
-import { describe, expect, inject, it, vi } from 'vitest'
+import { describe, expect, expectTypeOf, inject, it, vi } from 'vitest'
 import {
 	bindClient,
 	bindServer,
@@ -10,6 +30,7 @@ import {
 	createMCPServer,
 	DEFAULT_MCP_CACHE_TTL,
 	inferRequestVersion,
+	isMCPError,
 	MCP_META_SERVER,
 	MCP_META_VERSION,
 	MCP_METHOD_HEADER,
@@ -20,11 +41,14 @@ import {
 	MCP_WEBSOCKET_SUBPROTOCOL,
 	parseRequestContext,
 } from '@src/core'
+import type { ModelContext } from '@src/browser'
 import {
 	DEFAULT_MCP_SERVER_NAME,
 	DEFAULT_MCP_SERVER_VERSION,
 	createHTTPClientTransport,
 	createMessagePortTransport,
+	createModelContext,
+	createPageServer,
 	createScopeMessageListener,
 	createScopeServer,
 	createScopeTransport,
@@ -32,7 +56,7 @@ import {
 } from '@src/browser'
 import { isRecord } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { waitForDelay } from '@orkestrel/test'
+import { requireValue, waitForCondition, waitForDelay, waitForEvent } from '@orkestrel/test'
 import {
 	createCalculatorServer,
 	createJSONRPCRequest,
@@ -44,7 +68,14 @@ import {
 	probeDuplex,
 	readMethods,
 } from '../../setup.js'
-import { createScopeCarrier, drainRecorded, recordPort } from '../../setupBrowser.js'
+import {
+	createParkedTool,
+	createScopeCarrier,
+	drainRecorded,
+	recordPort,
+	recordRequests,
+} from '../../setupBrowser.js'
+import { installModelContext } from '../../fixtures/modelContext.js'
 
 // src/browser/factories.ts + src/browser/transports — the browser-face CLIENT
 // transports (`createWebSocketClientTransport` over the native `WebSocket` global,
@@ -1052,5 +1083,336 @@ describe('createScopeMessageListener — one collection carries both the teardow
 		expect([...teardowns.keys()]).toEqual([port1])
 
 		for (const teardown of teardowns.values()) teardown()
+	})
+})
+
+// ── The in-page pair, and the WebMCP bridge's feature detection ──────────────
+//
+// `createPageServer` is the whole MCP round trip with no network under it, so the claim it
+// carries is negative — nothing left the page — and a negative claim needs an instrument that
+// can report the positive. The instrument is the browser's own Resource Timing log, and the
+// scenario asserting an empty drain is followed by a control request that must appear in it.
+
+describe('createPageServer — the MCP pair hosted in the page that calls it', () => {
+	it('completes connect, tools/list, and tools/call with no request leaving the page', async () => {
+		const drain = recordRequests()
+		const page = createPageServer({ tools: createCalculatorTools() })
+
+		await page.client.connect()
+		const tools = await page.client.tools()
+		const value = await page.client.call('add', { x: 2, y: 3 })
+
+		expect(page.client.connected).toBe(true)
+		expect(tools.map((tool) => tool.name)).toEqual(['add'])
+		expect(value).toEqual({ resultType: 'complete', value: 5 })
+		// Every call this scenario makes has settled by here — each one resolved and was
+		// asserted — so a request carrying that traffic would have completed, which is the
+		// population the drain reports on.
+		expect(drain()).toEqual([])
+		page.stop()
+
+		// The control, drawn from outside the population the scenario covers: one real request
+		// to this page's own origin, read while its response is still pending and again after
+		// it completed. The pending reading is empty and the completed one is not — the drain's
+		// bound, and the proof it can report a request at all.
+		const pending = fetch(location.href)
+		expect(drain()).toEqual([])
+		await pending
+		await waitForCondition('the control request to reach the resource log', () => {
+			return drain().length > 0
+		})
+	})
+
+	it('hosts the scope server identity defaults, readable from the client over the channel', async () => {
+		const page = createPageServer({ tools: createCalculatorTools() })
+		await page.client.connect()
+
+		const identity: unknown = (await page.client.discover())['_meta']?.[MCP_META_SERVER]
+
+		expect(identity).toEqual({
+			name: DEFAULT_MCP_SERVER_NAME,
+			version: DEFAULT_MCP_SERVER_VERSION,
+		})
+		page.stop()
+	})
+
+	it('hosts the identity the options named instead of the defaults', async () => {
+		const page = createPageServer({
+			tools: createCalculatorTools(),
+			name: 'page-host',
+			version: '2.0.0',
+		})
+		await page.client.connect()
+
+		const identity: unknown = (await page.client.discover())['_meta']?.[MCP_META_SERVER]
+
+		expect(identity).toEqual({ name: 'page-host', version: '2.0.0' })
+		page.stop()
+	})
+
+	it('forwards the client option group to the client it builds', async () => {
+		const parked = createParkedTool('park')
+		const tools = createToolManager()
+		tools.add(parked.tool)
+		const page = createPageServer({ tools, client: { timeout: 30 } })
+		await page.client.connect()
+
+		// The deadline is the observable the group carries: a tool that never answers rejects on
+		// the configured timeout instead of on the default one.
+		await expect(page.client.call('park', {})).rejects.toThrow(/timed out/)
+
+		page.stop()
+	})
+
+	it('hands back a client that is bound but not yet connected', async () => {
+		const page = createPageServer({ tools: createCalculatorTools() })
+
+		expect(page.client.connected).toBe(false)
+		// The binding is the other half of the title, and this is what observes it: the
+		// handshake is a round trip whose answer reaches the client through `bindClient`
+		// alone, so an unbound client would sit on its deadline here instead of connecting.
+		await page.client.connect()
+
+		expect(page.client.connected).toBe(true)
+		page.stop()
+	})
+
+	it('leaves the client disconnected after stop, and a repeat stops nothing further', async () => {
+		const page = createPageServer({ tools: createCalculatorTools() })
+		await page.client.connect()
+		expect(page.client.connected).toBe(true)
+
+		page.stop()
+		page.stop()
+
+		expect(page.client.connected).toBe(false)
+		expect(page.client.version).toBeUndefined()
+	})
+
+	it('settles calls across page destruction', async () => {
+		const parked = createParkedTool('park')
+		const tools = createCalculatorTools()
+		tools.add(parked.tool)
+		const page = createPageServer({ tools })
+		await page.client.connect()
+
+		// A call in flight when the pair ends, and a call issued after it: the first is settled
+		// by the teardown's own drain, the second is refused before anything is written.
+		const inflight = page.client.call('park', {})
+		await parked.entered
+		page.stop()
+
+		await expect(inflight).rejects.toThrow(/MCP transport closed/)
+		const refused: unknown = await page.client
+			.call('add', { x: 1, y: 2 })
+			.catch((reason: unknown) => reason)
+		expect(isMCPError(refused) && refused.code).toBe(-32600)
+		// A repeat is inert, and the refusal is the same afterwards.
+		page.stop()
+		await expect(page.client.tools()).rejects.toThrow(/not connected/)
+	})
+
+	it('rejects task requests after page stop', async () => {
+		// A short deadline, so a request that reached the wire at all reports the deadline
+		// rather than the refusal — which is exactly the reading this test must not accept.
+		const page = createPageServer({ tools: createCalculatorTools(), client: { timeout: 1_000 } })
+		await page.client.connect()
+		page.stop()
+
+		const detail: unknown = await page.client.tasks
+			.task('missing')
+			.catch((reason: unknown) => reason)
+		const updated: unknown = await page.client.tasks
+			.update('missing', {})
+			.catch((reason: unknown) => reason)
+		const aborted: unknown = await page.client.tasks
+			.abort('missing')
+			.catch((reason: unknown) => reason)
+
+		// Every `tasks/*` method is session-bound and reaches the same door `call` and `tools`
+		// reach, because they are all one request function.
+		expect(isMCPError(detail) && detail.code).toBe(-32600)
+		expect(isMCPError(updated) && updated.code).toBe(-32600)
+		expect(isMCPError(aborted) && aborted.code).toBe(-32600)
+	})
+
+	it('rejects requests issued after stop inside a connect listener', async () => {
+		// A short deadline, so a request that reached the wire reports the deadline rather than
+		// the refusal — which is exactly the reading this test must not accept.
+		const page = createPageServer({ tools: createCalculatorTools(), client: { timeout: 1_000 } })
+		let called: Promise<unknown> | undefined
+		let detailed: Promise<unknown> | undefined
+		let opened: Promise<unknown> | undefined
+		// `connect` is emitted while the attempt that produced it is still the published one, so
+		// a stop issued from the listener leaves that attempt standing. Every request issued
+		// after it belongs to a session the stop has already ended.
+		page.client.emitter.once('connect', () => {
+			page.stop()
+			called = page.client.call('add', { x: 1, y: 2 })
+			detailed = page.client.tasks.task('missing')
+			opened = page.client.listen(undefined, { signal: new AbortController().signal }).next()
+		})
+
+		await page.client.connect()
+
+		// Each reading is asserted as it arrives rather than collected first: a request that
+		// passed the refusal reaches a channel nothing is listening on, so it reports the
+		// 1000 ms deadline, and a subscription that passed it parks on a response that never
+		// comes at all. Reading the parked one last would hide the two that answered.
+		const call = await requireValue(called, 'the connect listener must have issued the call')
+			.then(() => undefined)
+			.catch((reason: unknown) => reason)
+		expect(isMCPError(call) && call.code).toBe(-32600)
+		const task = await requireValue(detailed, 'the connect listener must have issued the task')
+			.then(() => undefined)
+			.catch((reason: unknown) => reason)
+		expect(isMCPError(task) && task.code).toBe(-32600)
+		const subscription = await requireValue(
+			opened,
+			'the connect listener must have opened the subscription',
+		)
+			.then(() => undefined)
+			.catch((reason: unknown) => reason)
+		expect(isMCPError(subscription) && subscription.code).toBe(-32600)
+	})
+
+	it('rejects a subscription started after page stop', async () => {
+		const page = createPageServer({ tools: createCalculatorTools(), client: { timeout: 1_000 } })
+		await page.client.connect()
+		page.stop()
+		const controller = new AbortController()
+
+		// `listen` returns a stream, so the refusal is the first `next()`: the generator's body
+		// does not run until then, and there is no earlier moment this contract could refuse at.
+		const stream = page.client.listen(undefined, { signal: controller.signal })
+		const refused: unknown = await stream.next().catch((reason: unknown) => reason)
+
+		expect(isMCPError(refused) && refused.code).toBe(-32600)
+	})
+
+	it('aborts the hosted handler when the wrapped tool context signal aborts mid-call', async () => {
+		const parked = createParkedTool('park')
+		const tools = createToolManager()
+		tools.add(parked.tool)
+		const page = createPageServer({ tools })
+		await page.client.connect()
+		const wrapped = requireValue(
+			(await page.client.tools())[0],
+			'the parked tool must be advertised',
+		)
+		const controller = new AbortController()
+
+		const call = wrapped.execute({}, { signal: controller.signal })
+		await parked.entered
+		controller.abort()
+
+		await expect(call).rejects.toThrow(/was aborted/)
+		// The claim is what the SERVER-side handler observed: the client's abort travelled the
+		// channel as `notifications/cancelled` and reached the dispatch's own context signal.
+		// `aborted` settles only on that signal, so its resolution is the whole proof.
+		await parked.aborted
+		// The connection survives an aborted call, exactly as it does over every other carrier.
+		expect(page.client.connected).toBe(true)
+		page.stop()
+	})
+})
+
+describe('createModelContext — feature detection is the return value', () => {
+	it('reports undefined for a document exposing no registry', () => {
+		expect(
+			createModelContext({ document: document.implementation.createHTMLDocument() }),
+		).toBeUndefined()
+	})
+
+	it('builds a bridge exactly where this page exposes the property', () => {
+		// The assertion pins the relationship rather than the reading, so it holds on any host: the
+		// factory answers a bridge exactly where the page carries the property. A host shipping the
+		// property under a shape the guard refuses reddens here rather than leaving the native
+		// scenarios in `ModelContext.test.ts` silently uncollected. The dated reading of what
+		// browsers ship lives in the `## WebMCP parity` matrix in `guides/mcp.md`.
+		const bridge = createModelContext()
+
+		expect(bridge !== undefined).toBe('modelContext' in document)
+
+		bridge?.destroy()
+	})
+
+	it('builds a live bridge for a document that does expose one', () => {
+		const host = document.implementation.createHTMLDocument()
+		installModelContext(host)
+
+		const bridge = createModelContext({ document: host })
+
+		expect(bridge?.emitter.destroyed).toBe(false)
+		bridge?.destroy()
+	})
+
+	it('wires the initial emitter hooks the options carry', async () => {
+		const host = document.implementation.createHTMLDocument()
+		const fixture = installModelContext(host)
+		const built: ModelContextInterface[] = []
+		// The claim is about the INITIAL hook, so the listener the wait parks on is the one
+		// `options.on.change` carries rather than a later `emitter.on` subscription.
+		const delivered = waitForEvent<readonly []>((listener) => {
+			const bridge = createModelContext({ document: host, on: { change: listener } })
+			if (bridge !== undefined) built.push(bridge)
+		}, 'the wired change hook')
+
+		await fixture.registry.registerTool({
+			name: 'elsewhere',
+			description: 'Registered by the page itself',
+			execute: async () => 'done',
+		})
+
+		expect(await delivered).toEqual([])
+		requireValue(built[0], 'the bridge the wait built').destroy()
+	})
+})
+
+describe('the browser barrel — what a consumer of @orkestrel/mcp/browser receives', () => {
+	it('publishes the page pair and the WebMCP bridge with their declared contracts', () => {
+		expectTypeOf(createPageServer).parameter(0).toEqualTypeOf<PageServerOptions>()
+		expectTypeOf(createPageServer).returns.toEqualTypeOf<PageServerInterface>()
+		// The client group is the client's own options minus the one member the pair owns, so a
+		// member added to `MCPClientOptions` reaches this factory without an edit here — and a
+		// restatement of its members, which is what this replaced, reddens instead.
+		expectTypeOf<PageServerOptions['client']>().toEqualTypeOf<
+			Omit<MCPClientOptions, 'transport'> | undefined
+		>()
+		expectTypeOf(createModelContext).returns.toEqualTypeOf<ModelContextInterface | undefined>()
+		expectTypeOf<Parameters<typeof createModelContext>[0]>().toEqualTypeOf<
+			ModelContextOptions | undefined
+		>()
+		expectTypeOf<InstanceType<typeof ModelContext>>().toExtend<ModelContextInterface>()
+		expectTypeOf<ModelContextEventMap>().toEqualTypeOf<{ readonly change: readonly [] }>()
+		expectTypeOf<ModelContextPublishOptions>().toEqualTypeOf<{
+			readonly origins?: readonly string[]
+		}>()
+		expectTypeOf<ModelContextAdoptOptions>().toEqualTypeOf<{
+			readonly origins?: readonly string[]
+		}>()
+	})
+
+	it('publishes the WebMCP wire types under the IDL member names', () => {
+		expectTypeOf<WebMCPAnnotations>().toEqualTypeOf<{
+			readonly readOnlyHint?: boolean
+			readonly untrustedContentHint?: boolean
+			readonly consequentialHint?: boolean
+		}>()
+		expectTypeOf<WebMCPRegisterOptions>().toEqualTypeOf<{
+			readonly exposedTo?: readonly string[]
+			readonly signal?: AbortSignal
+		}>()
+		expectTypeOf<WebMCPToolsOptions>().toEqualTypeOf<{
+			readonly fromOrigins?: readonly string[]
+		}>()
+		expectTypeOf<WebMCPExecuteOptions>().toEqualTypeOf<{ readonly signal?: AbortSignal }>()
+		expectTypeOf<WebMCPHandlerOptions>().toEqualTypeOf<{ readonly signal: AbortSignal }>()
+		expectTypeOf<WebMCPTool>().toExtend<WebMCPDescriptor>()
+		expectTypeOf<WebMCPRegisteredTool>().toExtend<WebMCPDescriptor>()
+		expectTypeOf<WebMCPTool['execute']>().toEqualTypeOf<WebMCPExecuteHandler>()
+		expectTypeOf<WebMCPRegisteredTool['window']>().toEqualTypeOf<Window>()
+		expectTypeOf<WebMCPRegisteredTool['origin']>().toEqualTypeOf<string>()
+		expectTypeOf<WebMCPDocument['modelContext']>().toEqualTypeOf<WebMCPRegistryInterface>()
 	})
 })

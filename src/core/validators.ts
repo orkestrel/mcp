@@ -79,6 +79,7 @@ import {
 	isRecord,
 	isString,
 	isUndefined,
+	objectOf,
 } from '@orkestrel/contract'
 import {
 	MCP_META_SUBSCRIPTION,
@@ -686,7 +687,9 @@ export function isMCPResource(value: unknown): value is MCPResource {
  * Checks whether a value carries valid consumed MCP 2026-07-28 tool annotation hints.
  *
  * @remarks
- * Validates only `readOnlyHint` and `destructiveHint`; other wire fields are not consumed.
+ * Validates only `readOnlyHint` and `destructiveHint`; other wire fields are not consumed, so
+ * the open `objectOf` combinator carries them through unread. Every declared member is
+ * optional, a hostile read answers `false` rather than throwing, and an array is refused.
  *
  * @param value - The unknown wire annotations
  * @returns True if consumed annotation fields are optional booleans; false otherwise
@@ -697,15 +700,7 @@ export function isMCPResource(value: unknown): value is MCPResource {
  * ```
  */
 export function isMCPToolAnnotations(value: unknown): value is MCPToolAnnotations {
-	try {
-		return (
-			isRecord(value) &&
-			(isUndefined(value['readOnlyHint']) || isBoolean(value['readOnlyHint'])) &&
-			(isUndefined(value['destructiveHint']) || isBoolean(value['destructiveHint']))
-		)
-	} catch {
-		return false
-	}
+	return objectOf({ readOnlyHint: isBoolean, destructiveHint: isBoolean }, true)(value)
 }
 
 /**

@@ -13,3 +13,10 @@ export const DEFAULT_MCP_SERVER_NAME = '@orkestrel/mcp'
 
 /** Supplies the default server version `createScopeServer` reports (`initialize`'s `serverInfo.version`) when `options.version` is omitted. */
 export const DEFAULT_MCP_SERVER_VERSION = '1.0.0'
+
+// WebMCP registry subscription — the event name `ModelContext` binds on the document's
+// registry. The members `isWebMCPRegistry` requires are the guard shape in `validators.ts`,
+// where `objectOf` reads them, rather than a second list here that could disagree with it.
+
+/** Names the WebMCP registry event the bridge republishes as its own `change`. */
+export const WEBMCP_CHANGE_EVENT = 'toolchange'

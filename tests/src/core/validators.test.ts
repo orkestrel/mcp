@@ -120,6 +120,7 @@ import {
 	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
+import { createHostileValues } from '@orkestrel/test'
 import {
 	createHostileCorpus,
 	createJSONRPCNotification,
@@ -2584,5 +2585,18 @@ describe('isMCPToolAnnotations', () => {
 				},
 			}),
 		).toBe(false)
+	})
+
+	it('answers every adversarial value with a boolean instead of throwing', () => {
+		// Totality is the claim here, not refusal. An object carrying neither consumed hint is
+		// a valid annotation record, so a hostile value whose members read cleanly answers
+		// `true`; refusal on a read that fails is the preceding case's claim.
+		for (const [index, value] of createHostileValues().entries()) {
+			let accepted: boolean | undefined
+			expect(() => {
+				accepted = isMCPToolAnnotations(value)
+			}, `hostile value ${index}`).not.toThrow()
+			expect(typeof accepted, `hostile value ${index}`).toBe('boolean')
+		}
 	})
 })

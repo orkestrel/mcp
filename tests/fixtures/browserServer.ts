@@ -24,13 +24,15 @@ import {
 	upgradeRequestPath,
 } from '@src/server'
 import { isRecord, isString } from '@orkestrel/contract'
+import { createRecorder } from '@orkestrel/test'
 import { createCalculatorServer } from '../setup.js'
 
 // Every raw frame a recording peer has received since the last drain. The browser project
 // cannot see inside this process, so a claim about what the PEER received has to be read
-// back over the wire — that is what `/recorded` is for. Kept module-scope and drained on
-// read so each scenario starts from an empty log.
-const RECORDED: string[] = []
+// back over the wire — that is what `/recorded` is for. Kept module-scope and cleared on
+// read so each scenario starts from an empty log. The recorder is `@orkestrel/test`'s, and
+// its `handler` is the frame sink each peer subscribes directly.
+const RECORDER = createRecorder<readonly [string]>()
 
 /** Describes the running Node fixture exposed to the browser project's global setup. */
 export interface BrowserFixtureInterface {
@@ -83,21 +85,18 @@ export async function applyBrowserCORS(
 }
 
 /**
- * Records one raw frame a fixture peer received.
- *
- * @param text - The frame exactly as it arrived on the wire
- */
-export function recordFrame(text: string): void {
-	RECORDED.push(text)
-}
-
-/**
  * Answers with every recorded frame and clears the log.
+ *
+ * @remarks
+ * The drain is what this fixture adds over the recorder: it builds the HTTP response the
+ * browser project reads the frames back through, and leaves the log empty behind it.
  *
  * @returns The recorded frames as a JSON array, leaving the log empty
  */
 export function drainRecorded(): Response {
-	return Response.json(RECORDED.splice(0, RECORDED.length))
+	const frames = RECORDER.calls.map(([text]) => text)
+	RECORDER.clear()
+	return Response.json(frames)
 }
 
 /**
@@ -140,7 +139,7 @@ export async function recordInbound(
 	_context: MiddlewareContext<MCPSessionState>,
 	next: NextFunction,
 ): Promise<Response> {
-	if (request.method === 'POST') recordFrame(await request.clone().text())
+	if (request.method === 'POST') RECORDER.handler(await request.clone().text())
 	return next()
 }
 
@@ -172,7 +171,7 @@ export function createRecordingWebSocketHandler(mcp: MCPServerInterface): Upgrad
 			head,
 			protocol: MCP_WEBSOCKET_SUBPROTOCOL,
 		})
-		webSocket.emitter.on('message', recordFrame)
+		webSocket.emitter.on('message', RECORDER.handler)
 		const transport = new WebSocketServerTransport(webSocket)
 		bindServer(mcp, createDuplexServerTransport(transport))
 		void transport.start()

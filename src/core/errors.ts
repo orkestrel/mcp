@@ -3,9 +3,12 @@
  * optional structured context.
  *
  * @remarks
- * {@link MCPClient} throws this error for a remote JSON-RPC `error` response and for a
- * locally detected protocol incompatibility. Local lifecycle and transport conditions such
- * as disconnects and request timeouts remain plain `Error`s. For a remote response, `context`
+ * {@link MCPClient} throws this error for a remote JSON-RPC `error` response, for a locally
+ * detected protocol incompatibility, and for a session-bound request refused because the
+ * client holds no connection — that one carries `-32600`, so a caller separates "reconnect"
+ * from "retry" without reading a message. Local lifecycle and transport conditions that
+ * settle a request already in flight, such as a disconnect and a request timeout, remain
+ * plain `Error`s. For a remote response, `context`
  * carries the optional `error.data` unchanged and is `undefined` when the peer omitted it.
  * This includes the modern reserved paths: `-32020` carries no context, `-32021` may carry
  * `requiredCapabilities`, and `-32022` carries the peer's `supported` revisions and

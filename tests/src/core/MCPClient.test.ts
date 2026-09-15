@@ -34,7 +34,7 @@ import { createHTTPClientTransport } from '@src/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
 import { createServer } from 'node:http'
-import { createSignal, waitForDelay } from '@orkestrel/test'
+import { createSignal, requireValue, waitForDelay } from '@orkestrel/test'
 import { isRecord } from '@orkestrel/contract'
 import {
 	createAbortTools,
@@ -1633,6 +1633,175 @@ describe('MCPClient — disconnect', () => {
 		await expect(pending).rejects.toThrow(/disconnected/)
 	})
 
+	it('rejects a request on a client that is not connected', async () => {
+		const loopback = createLoopback(serverWithTools())
+		const client = createMCPClient({ transport: loopback, timeout: 5_000 })
+		await client.connect()
+		await client.disconnect()
+		const issued = loopback.sent.length
+
+		// Both session-bound requests, because each reaches the same guard and a reader who
+		// learns it from `call` must find `tools` answering the same way.
+		const called: unknown = await client.call('greet', {}).catch((reason: unknown) => reason)
+		const listed: unknown = await client.tools().catch((reason: unknown) => reason)
+
+		expect(isMCPError(called) && called.code).toBe(-32600)
+		expect(isMCPError(listed) && listed.code).toBe(-32600)
+		// Nothing was written: a refusal that still sent the frame would leave the peer holding
+		// a request this client has already given up on.
+		expect(loopback.sent.length).toBe(issued)
+	})
+
+	it('rejects a request on a client that has never connected', async () => {
+		const loopback = createLoopback(serverWithTools())
+		const client = createMCPClient({ transport: loopback, timeout: 5_000 })
+
+		const called: unknown = await client.call('greet', {}).catch((reason: unknown) => reason)
+
+		expect(isMCPError(called) && called.code).toBe(-32600)
+		expect(loopback.sent).toEqual([])
+	})
+
+	it('rejects a task request on a client that is not connected', async () => {
+		const loopback = createLoopback(serverWithTools())
+		const client = createMCPClient({ transport: loopback, timeout: 5_000 })
+		await client.connect()
+		await client.disconnect()
+		const issued = loopback.sent.length
+
+		// The task client issues through the same request function `call` and `tools` use, so
+		// the refusal lives at that door rather than at each caller's own.
+		const detail: unknown = await client.tasks.task('missing').catch((reason: unknown) => reason)
+		const updated: unknown = await client.tasks
+			.update('missing', {})
+			.catch((reason: unknown) => reason)
+		const aborted: unknown = await client.tasks.abort('missing').catch((reason: unknown) => reason)
+
+		expect(isMCPError(detail) && detail.code).toBe(-32600)
+		expect(isMCPError(updated) && updated.code).toBe(-32600)
+		expect(isMCPError(aborted) && aborted.code).toBe(-32600)
+		expect(loopback.sent.length).toBe(issued)
+	})
+
+	it('rejects a subscription opened on a client that is not connected', async () => {
+		const loopback = createLoopback(serverWithTools())
+		const client = createMCPClient({ transport: loopback, timeout: 5_000 })
+		await client.connect()
+		await client.disconnect()
+		const issued = loopback.sent.length
+		const controller = new AbortController()
+
+		// A subscription writes its own request rather than going through the request door, so
+		// it carries the same refusal at its own entry — delivered on the first `next()`,
+		// because that is when a stream's body runs.
+		const stream = client.listen(undefined, { signal: controller.signal })
+		const refused: unknown = await stream.next().catch((reason: unknown) => reason)
+
+		expect(isMCPError(refused) && refused.code).toBe(-32600)
+		expect(loopback.sent.length).toBe(issued)
+	})
+
+	it('rejects requests issued after transport loss inside a connect listener', async () => {
+		const loopback = createLoopback(serverWithTools())
+		const client = createMCPClient({ transport: loopback, timeout: 1_000 })
+		let called: Promise<unknown> | undefined
+		let detailed: Promise<unknown> | undefined
+		let opened: Promise<unknown> | undefined
+		let written = 0
+		// `connect` is emitted while the attempt that produced it is still the published one, so
+		// the connection this listener loses leaves that attempt standing. The refusal exempts
+		// the negotiation's own requests, and this is the vector that tells an exemption scoped
+		// to the CURRENT attempt from one that admits any retained attempt at all.
+		client.emitter.once('connect', () => {
+			loopback.emitter.emit('close')
+			written = loopback.sent.length
+			called = client.call('greet', {})
+			detailed = client.tasks.task('missing')
+			opened = client.listen(undefined, { signal: new AbortController().signal }).next()
+		})
+
+		await client.connect()
+
+		// Each reading is asserted as it arrives: a request that passed the refusal reports its
+		// 1000 ms deadline, and a subscription that passed it parks on a response no transport
+		// is left to carry, so reading the parked one last would hide the two that answered.
+		const call = await requireValue(called, 'the connect listener must have issued the call')
+			.then(() => undefined)
+			.catch((reason: unknown) => reason)
+		expect(isMCPError(call) && call.code).toBe(-32600)
+		const task = await requireValue(detailed, 'the connect listener must have issued the task')
+			.then(() => undefined)
+			.catch((reason: unknown) => reason)
+		expect(isMCPError(task) && task.code).toBe(-32600)
+		const subscription = await requireValue(
+			opened,
+			'the connect listener must have opened the subscription',
+		)
+			.then(() => undefined)
+			.catch((reason: unknown) => reason)
+		expect(isMCPError(subscription) && subscription.code).toBe(-32600)
+		// Nothing reached the wire after the loss: a refusal that still wrote the frame would
+		// leave the peer holding a request this client has already given up on.
+		expect(loopback.sent.length).toBe(written)
+	})
+
+	it('settles requests issued after disconnect inside a connect listener', async () => {
+		const deadline = 1_000
+		const loopback = createLoopback(serverWithTools())
+		const client = createMCPClient({ transport: loopback, timeout: deadline })
+		let closing: Promise<void> | undefined
+		let called: Promise<unknown> | undefined
+		let detailed: Promise<unknown> | undefined
+		let opened: Promise<unknown> | undefined
+		// An immediate `-32600` is NOT this contract. `disconnect` defers its teardown through
+		// the microtask queue, so at this instant the transport is open and the attempt that
+		// emitted `connect` is still the published one — these requests are issued onto a live
+		// connection. What answers them is the teardown's own drain, which rejects every
+		// request it finds pending. A transport LOSS is the other reading: it invalidates the
+		// attempt synchronously, and the test above is where every later request refuses.
+		client.emitter.once('connect', () => {
+			closing = client.disconnect()
+			called = client.call('greet', {})
+			detailed = client.tasks.task('missing')
+			opened = client.listen(undefined, { signal: new AbortController().signal }).next()
+		})
+
+		await client.connect()
+
+		// Each reading is asserted as it arrives, against the interval this client's requests
+		// are bounded by: a request the drain missed would report that deadline instead, and a
+		// subscription the drain missed would park on a response nothing is left to carry.
+		const started = performance.now()
+		await expect(
+			requireValue(closing, 'the connect listener must have disconnected'),
+		).resolves.toBeUndefined()
+		const call = await requireValue(called, 'the connect listener must have issued the call')
+			.then(() => undefined)
+			.catch((reason: unknown) => reason)
+		expect(call instanceof Error && call.message).toBe('MCP client disconnected')
+		const task = await requireValue(detailed, 'the connect listener must have issued the task')
+			.then(() => undefined)
+			.catch((reason: unknown) => reason)
+		expect(task instanceof Error && task.message).toBe('MCP client disconnected')
+		const subscription = await requireValue(
+			opened,
+			'the connect listener must have opened the subscription',
+		)
+			.then(() => undefined)
+			.catch((reason: unknown) => reason)
+		expect(subscription instanceof Error && subscription.message).toBe('MCP client disconnected')
+		expect(performance.now() - started).toBeLessThan(deadline)
+	})
+
+	it('answers the discovery probe on a client that has never connected', async () => {
+		const loopback = createLoopback(serverWithTools())
+		const client = createMCPClient({ transport: loopback })
+
+		// The control the refusal must not reach. `discover` is the round trip a connection is
+		// built out of, so a guard that refused it would refuse `connect` itself.
+		await expect(client.discover()).resolves.toMatchObject({ resultType: 'complete' })
+	})
+
 	it('fires the disconnect event and is idempotent', async () => {
 		const loopback = createLoopback(serverWithTools())
 		const client = createMCPClient({ transport: loopback })
@@ -2923,8 +3092,10 @@ describe('MCPClient — wrapped tool context', () => {
 		try {
 			await client.connect()
 			const tools = await client.tools()
-			const tool = tools.find((candidate) => candidate.name === 'wait')
-			if (tool === undefined) throw new Error('Missing wait tool')
+			const tool = requireValue(
+				tools.find((candidate) => candidate.name === 'wait'),
+				'Missing wait tool',
+			)
 			const pending = Promise.resolve(tool.execute({}, { signal: controller.signal }))
 			const rejected = pending.catch((error: unknown) => error)
 			const signal = await probe.entered

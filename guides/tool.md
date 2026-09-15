@@ -45,25 +45,29 @@ interface's data members as bare names in braces, `?` marking an optional member
 introducing its call-signature members, and a type alias's own type literal with a union's arms
 escaped as `\|`. An extended interface's name comes before `plus`, with the members it adds after.
 
-| Name                   | Kind      | Shape                                                                                     | Summary                                                                          |
-| ---------------------- | --------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `ToolDefinition`       | interface | `{ name, title?, description?, parameters?, annotations? }`                               | Describes a tool as advertised to a caller.                                      |
-| `ToolCall`             | interface | `{ id, name, arguments }`                                                                 | Describes one request to run a named tool.                                       |
-| `ToolSuccess`          | interface | `Success<unknown> plus { id, name }`                                                      | Reports the successful outcome of executing a `ToolCall`.                        |
-| `ToolFailure`          | interface | `Failure<string> plus { id, name }`                                                       | Reports the failed outcome of executing a `ToolCall`.                            |
-| `ToolOptions`          | interface | `{ name, title?, description?, summary?, parameters?, contract?, annotations?, execute }` | Configures an executable tool.                                                   |
-| `ToolInterface`        | interface | `ToolDefinition plus { summary? } plus execute`                                           | Represents an executable tool: its advertised definition plus its local handler. |
-| `ToolManagerInterface` | interface | `{ count } plus add, tool, tools, definitions, execute, remove, clear`                    | Represents a registry of executable tools with per-call error isolation.         |
-| `ToolResult`           | type      | `ToolSuccess \| ToolFailure`                                                              | Represents the outcome of executing a `ToolCall`.                                |
-| `ToolContext`          | interface | `{ signal, caller? }`                                                                     | Carries the signal and consumer-asserted identity for an execution.              |
-| `ToolAnnotations`      | interface | `{ pure?, untrusted?, consequential? }`                                                   | Describes the observable effects and content of a tool.                          |
-| `ToolErrorCode`        | type      | `'SCHEMA' \| 'ARGUMENTS'`                                                                 | Identifies a schema conflict or an argument validation failure.                  |
-| `ToolErrorContext`     | interface | `{ faults? }`                                                                             | Carries the structured faults behind an argument validation failure.             |
+| Name                   | Kind      | Shape                                                                                                                                                           | Summary                                                                          |
+| ---------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `ToolDefinition`       | interface | `{ name, title?, description?, parameters?, annotations? }`                                                                                                     | Describes a tool as advertised to a caller.                                      |
+| `ToolCall`             | interface | `{ id, name, arguments }`                                                                                                                                       | Describes one request to run a named tool.                                       |
+| `ToolSuccess`          | interface | `Success<unknown> plus { id, name }`                                                                                                                            | Reports the successful outcome of executing a `ToolCall`.                        |
+| `ToolFailure`          | interface | `Failure<string> plus { id, name }`                                                                                                                             | Reports the failed outcome of executing a `ToolCall`.                            |
+| `ToolOptions`          | interface | `{ name, title?, description?, summary?, parameters?, contract?, annotations?, execute }`                                                                       | Configures an executable tool.                                                   |
+| `ToolInterface`        | interface | `ToolDefinition plus { summary? } plus execute`                                                                                                                 | Represents an executable tool: its advertised definition plus its local handler. |
+| `ToolManagerInterface` | interface | `{ count, emitter } plus add, tool, tools, definitions, execute, remove, clear, destroy`                                                                        | Represents a registry of executable tools with per-call error isolation.         |
+| `ToolManagerEventMap`  | type      | `{ readonly add: readonly [tool: ToolInterface]; readonly remove: readonly [tool: ToolInterface]; readonly clear: readonly [tools: readonly ToolInterface[]] }` | Names the events a tool registry publishes.                                      |
+| `ToolManagerOptions`   | interface | `{ on?, error? }`                                                                                                                                               | Configures a tool registry's initial listeners and error handling.               |
+| `ToolResult`           | type      | `ToolSuccess \| ToolFailure`                                                                                                                                    | Represents the outcome of executing a `ToolCall`.                                |
+| `ToolContext`          | interface | `{ signal, caller? }`                                                                                                                                           | Carries the signal and consumer-asserted identity for an execution.              |
+| `ToolAnnotations`      | interface | `{ pure?, untrusted?, consequential? }`                                                                                                                         | Describes the observable effects and content of a tool.                          |
+| `ToolErrorCode`        | type      | `'SCHEMA' \| 'ARGUMENTS'`                                                                                                                                       | Identifies a schema conflict or an argument validation failure.                  |
+| `ToolErrorContext`     | interface | `{ faults? }`                                                                                                                                                   | Carries the structured faults behind an argument validation failure.             |
 
 `ToolInterface` and `ToolManagerInterface` list every member they declare or inherit. The
 call-signature members of each are documented under [Methods](#methods); the readonly `count` of
 `ToolManagerInterface` reports how many tools are registered and is a Surface member with no
-method row.
+method row. Its readonly `emitter` publishes `add`, `remove`, and `clear` with the payloads
+declared by `ToolManagerEventMap`. The `ToolManagerOptions` fields supply initial `on` hooks
+and an `error` handler for listener throws.
 
 ### Validators
 
@@ -87,10 +91,10 @@ The advertised-definition projection, from [`helpers.ts`](../src/core/helpers.ts
 From [`factories.ts`](../src/core/factories.ts) — the constructor-free way to reach `Tool` and
 `ToolManager`.
 
-| Name                | Kind     | Signature                                 | Summary                                                                                                                                                                                                                    |
-| ------------------- | -------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createTool`        | function | `(options: ToolOptions) => ToolInterface` | Creates an executable tool bound to the supplied handler, returned as a `ToolInterface` so a call site holds the published contract rather than the `Tool` class.                                                          |
-| `createToolManager` | function | `() => ToolManagerInterface`              | Creates an empty registry that advertises definitions and executes calls with per-call error isolation, returned as a `ToolManagerInterface` so a caller holds the published contract rather than the `ToolManager` class. |
+| Name                | Kind     | Signature                                                | Summary                                                                                                                                                                                                                    |
+| ------------------- | -------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createTool`        | function | `(options: ToolOptions) => ToolInterface`                | Creates an executable tool bound to the supplied handler, returned as a `ToolInterface` so a call site holds the published contract rather than the `Tool` class.                                                          |
+| `createToolManager` | function | `(options?: ToolManagerOptions) => ToolManagerInterface` | Creates an empty registry that advertises definitions and executes calls with per-call error isolation, returned as a `ToolManagerInterface` so a caller holds the published contract rather than the `ToolManager` class. |
 
 ### Classes
 
@@ -119,8 +123,8 @@ to the registry that dispatched it. See [`## Methods`](#methods) for its public 
 ### `ToolManager`
 
 The implementing class of `ToolManagerInterface`, from
-[`ToolManager.ts`](../src/core/tools/ToolManager.ts). One name-keyed map is its whole state:
-tools stay in insertion order, `tools()` and `definitions()` return fresh readonly arrays rather
+[`ToolManager.ts`](../src/core/tools/ToolManager.ts). It stores tools in a name-keyed map and owns
+an emitter for registry changes. Tools stay in insertion order, `tools()` and `definitions()` return fresh readonly arrays rather
 than a view of that map, and every projection is computed on demand so a mutation can never
 leave a stale copy behind. It is the only place a call can fail into a result instead of an
 exception. See [`## Methods`](#methods) for its public call surface.
@@ -149,15 +153,16 @@ The public call-signature members of each behavioral interface, one table per in
 
 #### `ToolManagerInterface`
 
-| Method        | Returns                                        | Summary                                        |
-| ------------- | ---------------------------------------------- | ---------------------------------------------- |
-| `add`         | `void`                                         | Registers one tool.                            |
-| `tool`        | `ToolInterface \| undefined`                   | Finds one registered tool by name.             |
-| `tools`       | `readonly ToolInterface[]`                     | Lists the registered tools in insertion order. |
-| `definitions` | `readonly ToolDefinition[]`                    | Lists the definitions advertised to a caller.  |
-| `execute`     | `Promise<ToolResult \| readonly ToolResult[]>` | Executes one call with error isolation.        |
-| `remove`      | `boolean`                                      | Removes one registered tool.                   |
-| `clear`       | `void`                                         | Removes every registered tool.                 |
+| Method        | Returns                                        | Summary                                                  |
+| ------------- | ---------------------------------------------- | -------------------------------------------------------- |
+| `add`         | `void`                                         | Registers one tool.                                      |
+| `tool`        | `ToolInterface \| undefined`                   | Finds one registered tool by name.                       |
+| `tools`       | `readonly ToolInterface[]`                     | Lists the registered tools in insertion order.           |
+| `definitions` | `readonly ToolDefinition[]`                    | Lists the definitions advertised to a caller.            |
+| `execute`     | `Promise<ToolResult \| readonly ToolResult[]>` | Executes one call with error isolation.                  |
+| `remove`      | `boolean`                                      | Removes one registered tool.                             |
+| `clear`       | `void`                                         | Removes every registered tool.                           |
+| `destroy`     | `void`                                         | Removes every tool and releases the emitter's listeners. |
 
 `add`, `execute`, and `remove` each take one value or a readonly batch of them. A batch `add`
 registers every tool, later entries winning over earlier ones with the same name; a batch
@@ -420,6 +425,54 @@ definition.description // 'Echo a value.'
 definition.annotations === annotations // true
 ```
 
+## Patterns
+
+### Observe registry changes
+
+Subscribe through the `on` option or `tools.emitter.on`. Each event describes the registry at the
+moment it is published. A listener that mutates the registry re-enters synchronously; its own
+events publish before the outer call resumes.
+
+An addition publishes `add` with the map holding that exact tool. A replacement keeps its
+registration position and publishes `remove` with the previous instance while the replacement
+is already installed. A listener must not read absence from the map to confirm that removal.
+After the removal listeners return, `add` publishes only if the map still holds that exact
+replacement. Removing a present name publishes `remove` after deletion; a missing name publishes
+nothing. Batches apply their operations in argument order.
+Each `clear` call publishes one `clear` with the removed tools in registration order, including
+an empty array when the registry was empty. Execution publishes no registry events.
+
+Collect event names while registering, replacing, removing, and clearing a tool:
+
+```ts
+import { createTool, createToolManager } from '@orkestrel/tool'
+
+const events: string[] = []
+const tools = createToolManager({
+	on: {
+		add: () => events.push('add'),
+		remove: () => events.push('remove'),
+		clear: () => events.push('clear'),
+	},
+})
+tools.add(createTool({ name: 'echo', execute: (args) => args.value }))
+tools.add(createTool({ name: 'echo', execute: () => 'replacement' }))
+tools.remove('echo')
+tools.clear()
+events // ['add', 'remove', 'add', 'remove', 'clear']
+tools.destroy()
+tools.emitter.destroyed // true
+```
+
+Listeners run synchronously. A listener throw reaches the optional `error` handler as
+`(error, event)` and does not prevent sibling listeners. Without an error handler, the emitter
+swallows listener throws. Destruction clears the registry while listeners remain attached,
+destroys the emitter, then empties the map again without publishing. It returns with an empty
+registry even if a `clear` listener added a tool. An emission already underway delivers to its
+remaining snapshotted listeners, even when a listener destroys the registry before its siblings
+run. A destroyed registry publishes nothing; later additions still update its tool map, and
+later subscriptions do nothing.
+
 ## Callers
 
 The registry's two-sided shape — `definitions()` out, `execute()` back — is all a caller needs,
@@ -439,10 +492,10 @@ registers here unchanged.
 
 ## Tests
 
-- [`guides.test.ts`](../tests/guides.test.ts) — the `## Surface` ↔ `src/core` bijection, the `ToolInterface` ↔ `Tool` and `ToolManagerInterface` ↔ `ToolManager` method bijections, and the equality gate: every `Summary` cell against its declaration's description paragraph, the titled `Anatomy of a tool` fence against the `@example` block of that title (pinned so the titled pair cannot be retired silently), and the README pitch against this guide's tagline. It also runs the flagship fences and asserts the values their comments claim.
+- [`guides.test.ts`](../tests/guides.test.ts) — the `## Surface` ↔ `src/core` bijection, the `ToolInterface` ↔ `Tool` and `ToolManagerInterface` ↔ `ToolManager` method bijections, and the equality gate: every `Summary` cell against its declaration's description paragraph, the titled `Anatomy of a tool` fence against the `@example` block of that title (pinned so the titled pair cannot be retired silently), and the README pitch against this guide's tagline. It also runs the flagship fences, including `Observe registry changes`, and asserts the values their comments claim against byte-equal transcriptions.
 - [`Tool.test.ts`](../tests/src/core/tools/Tool.test.ts) — definition binding, optional-field omission, argument and context identity, contract validation, error diagnostics, return values, and direct error propagation.
-- [`ToolManager.test.ts`](../tests/src/core/tools/ToolManager.test.ts) — insertion order, overwrite and removal lifecycle, definition projection, cancellation, context sharing, and isolated single and batch execution.
-- [`factories.test.ts`](../tests/src/core/factories.test.ts) — factory construction and working instances.
+- [`ToolManager.test.ts`](../tests/src/core/tools/ToolManager.test.ts) — insertion order, overwrite and removal lifecycle, definition projection, cancellation, context sharing, and isolated single and batch execution. Event proofs cover registration before `add`, ordered batch additions, the installed replacement during `remove`, `remove` before replacement `add`, synchronous replacement re-entry, a third instance a removal listener installs during a replacement, deletion before `remove`, silent missing names, ordered batch removals, populated and empty `clear` snapshots by identity, emitter destruction after clearing, an empty registry after teardown listeners re-add a tool, sibling delivery during mid-emission destruction, silent additions after destruction, and execution without registry events.
+- [`factories.test.ts`](../tests/src/core/factories.test.ts) — factory construction, working instances, initial registry hooks in publication order, sibling listener isolation, and listener-error forwarding.
 - [`helpers.test.ts`](../tests/src/core/helpers.test.ts) — definition projection: summary preference, omitted optional keys, projected key order, schema identity, title and annotations forwarding, and a fresh object per call.
 - [`validators.test.ts`](../tests/src/core/validators.test.ts) — tool-call envelope boundaries: incomplete calls, wrong field types, and non-record arguments.
 - [`errors.test.ts`](../tests/src/core/errors.test.ts) — `isToolError` recognition, unrelated-value rejection, and hostile prototype containment.

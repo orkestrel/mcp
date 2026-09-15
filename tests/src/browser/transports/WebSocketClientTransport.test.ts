@@ -142,8 +142,14 @@ describe('WebSocketClientTransport — a send the channel cannot carry rejects',
 
 		// THE CALLER-VISIBLE SYMPTOM. A silent resolve registers the request, writes nothing, and
 		// leaves the caller waiting out `timeout` before reporting a deadline for a channel that
-		// had already gone. The rejection names the channel instead, at once.
+		// had already gone. Both doors refuse at once instead. The closed channel took the
+		// client's connection with it, so the client refuses first and never reaches the
+		// transport; the transport's own refusal stands behind that and is read where a caller
+		// can still reach it.
 		await expect(client.call('add', { a: 1, b: 2 })).rejects.toThrow(
+			"MCP client is not connected, so 'tools/call' was not issued",
+		)
+		await expect(transport.send(createJSONRPCRequest({ method: 'ping', id: 79 }))).rejects.toThrow(
 			'WebSocket transport is not connected',
 		)
 	})

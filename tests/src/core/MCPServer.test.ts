@@ -77,7 +77,7 @@ import {
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { createRecorder, createRecorders, waitForDelay } from '@orkestrel/test'
+import { createRecorder, createRecorders, waitForAbort, waitForDelay } from '@orkestrel/test'
 import {
 	createAbortTools,
 	createMemoryTransport,
@@ -1596,9 +1596,7 @@ describe('MCPServer — W01 modern execution and progress', () => {
 				seen.signal = signal
 				seen.reporter = reporter
 				await reporter.report({ progress: 1 })
-				await new Promise<void>((resolve) =>
-					signal.addEventListener('abort', () => resolve(), { once: true }),
-				)
+				await waitForAbort(signal)
 				return { resultType: 'complete', content: [{ type: 'text', text: 'aborted' }] }
 			},
 		})

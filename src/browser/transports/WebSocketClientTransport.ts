@@ -80,14 +80,13 @@ export class WebSocketClientTransport implements MCPMessageTransportInterface {
 		// Default to MCP_WEBSOCKET_SUBPROTOCOL when `protocols` is omitted; the server selects it
 		// from this offer. An empty array means "no subprotocol",
 		// overriding the default explicitly for foreign servers.
-		this.#protocols =
-			typeof protocols === 'string'
-				? protocols
-				: protocols === undefined
-					? MCP_WEBSOCKET_SUBPROTOCOL
-					: protocols.length === 0
-						? undefined
-						: [...protocols]
+		this.#protocols = isString(protocols)
+			? protocols
+			: protocols === undefined
+				? MCP_WEBSOCKET_SUBPROTOCOL
+				: protocols.length === 0
+					? undefined
+					: [...protocols]
 	}
 
 	get emitter(): EmitterInterface<MCPMessageTransportEventMap> {

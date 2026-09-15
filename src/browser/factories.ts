@@ -6,15 +6,28 @@ import type {
 } from '@src/core'
 import type {
 	MessagePortTransportOptions,
+	ModelContextInterface,
+	ModelContextOptions,
+	PageServerInterface,
+	PageServerOptions,
 	ScopeInterface,
 	ScopeServerInterface,
 	ScopeServerOptions,
 	ScopeTransportInterface,
 	WebSocketClientTransportOptions,
 } from './types.js'
-import { bindServer, createMCPServer, HTTPClientTransport } from '@src/core'
+import {
+	bindClient,
+	bindServer,
+	createDuplexClientTransport,
+	createMCPClient,
+	createMCPServer,
+	HTTPClientTransport,
+} from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { DEFAULT_MCP_SERVER_NAME, DEFAULT_MCP_SERVER_VERSION } from './constants.js'
+import { isWebMCPDocument } from './validators.js'
+import { ModelContext } from './ModelContext.js'
 import { MessagePortTransport } from './transports/MessagePortTransport.js'
 import { WebSocketClientTransport } from './transports/WebSocketClientTransport.js'
 
@@ -317,4 +330,132 @@ export function createScopeTransport(scope: ScopeInterface): ScopeTransportInter
 			onMessage?.(message)
 		},
 	}
+}
+
+/**
+ * Creates an `MCPServer` hosted inside the calling page and hands back the client bound to it
+ * — the page twin of {@link createScopeServer}, and the in-page MCP pair as one call.
+ *
+ * @remarks
+ * The pair is a native `MessageChannel`: the server binds `port1`, the client drives `port2`,
+ * and no byte leaves the page. That is the point of the factory — a consumer assembling it by
+ * hand writes the channel, two transports, `bindServer`, `createDuplexClientTransport`,
+ * `createMCPClient`, and `bindClient`, in an order {@link MessagePortTransport}'s own doc warns
+ * about: a `MessagePort` starts dispatching at construction, so an `await` interleaved between
+ * a transport and its binder drops whatever arrived in the gap. This factory never suspends
+ * between the two.
+ *
+ * The returned client is bound but not connected. Connection is a protocol round trip, so it
+ * stays the consumer's `await client.connect()` rather than a promise this call hides — and a
+ * factory that returned a promise could not return the terminal beside it.
+ *
+ * `stop` closes the client's port first, so the client observes the close and reports
+ * `connected` as `false` with its pending requests rejected, then unbinds both sides and
+ * closes the server's port. It is idempotent, and it takes the twin's verb because it is the
+ * twin's action: {@link createScopeServer} publishes `stop` for ending a hosted server's
+ * bindings, and a consumer who learned one factory reads the other without checking.
+ *
+ * The published `client` outlives the pair and is inert after `stop`: every session-bound
+ * request issued on it — `call`, `tools`, each `tasks/*` method, and a `listen` stream on its
+ * first `next()` — rejects at once with an `MCPError` carrying `-32600`, rather than waiting
+ * out its request deadline against a channel nothing is listening on.
+ *
+ * @param options - The tools, the optional server identity, and the optional client settings;
+ *   see {@link PageServerOptions}
+ * @returns A {@link PageServerInterface} holding the bound client and the pair's `stop`
+ *
+ * @example
+ * ```ts
+ * import { createPageServer } from '@orkestrel/mcp/browser'
+ * import { createTool, createToolManager } from '@orkestrel/tool'
+ *
+ * const tools = createToolManager()
+ * tools.add(createTool({ name: 'add', execute: () => 5 }))
+ *
+ * const page = createPageServer({ tools })
+ * await page.client.connect()
+ * const value = await page.client.call('add', {}) // { resultType: 'complete', value: 5 }
+ * page.stop()
+ * ```
+ */
+export function createPageServer(options: PageServerOptions): PageServerInterface {
+	const { port1, port2 } = new MessageChannel()
+	const server = createMCPServer({
+		tools: options.tools,
+		identity: {
+			name: options.name ?? DEFAULT_MCP_SERVER_NAME,
+			version: options.version ?? DEFAULT_MCP_SERVER_VERSION,
+		},
+	})
+	// Construct and bind each half without suspending: `MessagePortTransport` starts its port
+	// at construction, so an `await` here would drop every frame that arrived in the gap.
+	const hosted = new MessagePortTransport({ port: port1 })
+	const unbindServer = bindServer(server, hosted)
+	const driven = new MessagePortTransport({ port: port2 })
+	const client = createMCPClient({
+		...options.client,
+		transport: createDuplexClientTransport(driven),
+	})
+	const unbindClient = bindClient(client, driven)
+	let stopped = false
+	return {
+		client,
+		stop(): void {
+			if (stopped) return
+			stopped = true
+			// Close before unbinding, in this order: the binder's `closed` handler is what tells
+			// the client its transport is gone, and unbinding first would replace that handler
+			// with a no-op and leave the client reporting a connection nothing carries.
+			driven.close()
+			unbindClient()
+			unbindServer()
+			hosted.close()
+		},
+	}
+}
+
+/**
+ * Creates the bridge between a tool registry and a document's WebMCP registry, or reports that
+ * the document exposes none.
+ *
+ * @remarks
+ * Feature detection is the return value: `undefined` means this document has no
+ * `document.modelContext`, which is the reading every browser gives today — the specification
+ * is incubating in a Community Group, and the chromestatus record, read 2026-09-15 and last
+ * updated 2026-08-12, reports `Proposed` with `"flag": false` and `"origintrial": false`. There
+ * is no `supported` flag to read and no polyfill behind the factory, because a local
+ * implementation of an absent platform feature is one a caller mistakes for the platform.
+ *
+ * The bridge borrows the registry. It aborts only the registrations it made, so a name it
+ * never registered is left exactly as it found it. WebMCP keys a registration by tool name per
+ * document, so releasing a name releases whatever now stands under it — a same-name
+ * registration the page or another bridge made later goes with it.
+ *
+ * @param options - The document to bridge and the emitter's initial wiring; see
+ *   {@link ModelContextOptions}
+ * @returns A {@link ModelContextInterface}, or `undefined` when the document exposes no
+ *   WebMCP registry
+ *
+ * @example
+ * ```ts
+ * import { createModelContext } from '@orkestrel/mcp/browser'
+ * import { createToolManager } from '@orkestrel/tool'
+ *
+ * const bridge = createModelContext()
+ * if (bridge !== undefined) {
+ * 	await bridge.publish(createToolManager())
+ * 	const foreign = await bridge.adopt()
+ * 	bridge.destroy()
+ * }
+ * ```
+ */
+export function createModelContext(
+	options?: ModelContextOptions,
+): ModelContextInterface | undefined {
+	// Typed `unknown` deliberately: the DOM library declares `globalThis.document` as a
+	// `Document`, and it is `undefined` in a Web Worker and a Service Worker, so the guard
+	// rather than the declaration decides.
+	const host: unknown = options?.document ?? globalThis.document
+	if (!isWebMCPDocument(host)) return undefined
+	return new ModelContext(host, options)
 }

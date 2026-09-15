@@ -50,7 +50,7 @@ import {
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
 import { createSSEParser } from '@orkestrel/sse'
-import { createRecorder, waitForDelay } from '@orkestrel/test'
+import { createRecorder, waitForAbort, waitForDelay } from '@orkestrel/test'
 
 /**
  * Narrows an untyped value to an {@link MCPMethodHandler} the way a DYNAMIC registration must.
@@ -1003,7 +1003,6 @@ export interface ToolRefreshResult {
 /** Creates real tools with an observable cancellation boundary and an explicit cleanup release. */
 export function createAbortTools(): AbortToolsInterface {
 	const entered = Promise.withResolvers<AbortSignal>()
-	const aborted = Promise.withResolvers<void>()
 	const release = Promise.withResolvers<void>()
 	const tools = createToolManager()
 	tools.add(
@@ -1011,14 +1010,20 @@ export function createAbortTools(): AbortToolsInterface {
 			name: 'wait',
 			execute: async (_args, context) => {
 				entered.resolve(context.signal)
-				context.signal.addEventListener('abort', () => aborted.resolve(), { once: true })
-				await Promise.race([aborted.promise, release.promise])
+				await Promise.race([waitForAbort(context.signal), release.promise])
 				return 'finished'
 			},
 		}),
 	)
 	tools.add(createTool({ name: 'echo', execute: (args) => args['value'] }))
-	return { tools, entered: entered.promise, aborted: aborted.promise, release: release.resolve }
+	// `aborted` observes the same signal the handler received, so a caller reads the report
+	// without a second deferred beside the handler's own wait.
+	return {
+		tools,
+		entered: entered.promise,
+		aborted: entered.promise.then(waitForAbort),
+		release: release.resolve,
+	}
 }
 
 /** Transcribes the guide's explicit snapshot replacement for its executed proof. */
@@ -1532,11 +1537,7 @@ export class TestTaskManager implements MCPTaskManagerInterface {
 	}
 
 	async #aborted(signal: AbortSignal): Promise<boolean> {
-		if (!signal.aborted) {
-			await new Promise<void>((resolve) =>
-				signal.addEventListener('abort', () => resolve(), { once: true }),
-			)
-		}
+		await waitForAbort(signal)
 		return false
 	}
 

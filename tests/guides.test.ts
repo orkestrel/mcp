@@ -633,6 +633,32 @@ function registerParity({ files, report, rows }: GuideCommandContext): void {
 		})
 	}
 
+	// Every behavioural interface a face publishes owes a `## Methods` table. The per-interface
+	// loop below iterates the tables the GUIDE already carries, so an interface with no table at
+	// all receives no method assertion of any kind: its members are documented nowhere and
+	// nothing reports the hole. This reads the population from the SOURCE instead, which is the
+	// side that can grow, and the membership is asserted non-empty so a mistyped face — two
+	// empty populations differ by nothing — cannot pass it vacuously.
+	for (const face of FACES) {
+		const faceSource = requireValue(
+			SOURCES.get(face.specifier),
+			`Unmapped specifier: ${face.specifier}`,
+		)
+		describe(`${face.specifier} behavioural interfaces`, () => {
+			it('documents a Methods table for every interface declaring call-signature members', () => {
+				const documented = own.guide.methods().map((group) => group.interface)
+				const behavioural = faceSource
+					.surface()
+					.filter((symbol) => symbol.keyword === 'interface')
+					.map((symbol) => symbol.name)
+					.filter((name) => faceSource.methods(name).length > 0)
+
+				expect(behavioural.length).toBeGreaterThan(0)
+				expect(findMissing(behavioural, documented)).toEqual([])
+			})
+		})
+	}
+
 	for (const { entry, guide, source } of rows) {
 		describe(`${entry.concept}`, () => {
 			it('uses only listed fence languages', () => {
