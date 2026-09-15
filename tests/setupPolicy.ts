@@ -81,6 +81,13 @@ export const POLICY_SURFACE_EXPORT_CASES = Object.freeze([
 	{ label: 'interface', text: ' export interface waitForCondition {}' },
 	{ label: 'type', text: ' export type waitForCondition = string' },
 	{ label: 'function', text: ' export function waitForCondition() {}' },
+	{
+		label: 'function overload',
+		text:
+			'export function waitForCondition(value: string): void\n' +
+			'export function waitForCondition(value: number): void\n' +
+			'export function waitForCondition() {}',
+	},
 	{ label: 're-export list', text: "export { other as waitForCondition } from './helpers.js'" },
 	{ label: 'local export list', text: 'const other = 1; export { other as waitForCondition }' },
 ])
@@ -1754,6 +1761,7 @@ export function readPolicyDeclarations(
 			}
 			if (
 				declaration.type === 'FunctionDeclaration' ||
+				declaration.type === 'TSDeclareFunction' ||
 				declaration.type === 'ClassDeclaration' ||
 				declaration.type === 'TSInterfaceDeclaration' ||
 				declaration.type === 'TSTypeAliasDeclaration' ||
@@ -1974,7 +1982,7 @@ export function inspectPolicySurface(root: string): readonly PolicyViolation[] {
 	const seen = new Set<string>()
 	for (const declaration of declarations) {
 		for (const owner of owners.get(declaration.name) ?? []) {
-			const key = `${declaration.path}\n${declaration.line}\n${declaration.name}\n${owner}`
+			const key = `${declaration.path}\n${declaration.name}\n${owner}`
 			if (seen.has(key)) continue
 			seen.add(key)
 			violations.push(
