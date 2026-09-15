@@ -112,7 +112,7 @@
 		"@orkestrel/scaffold": "^0.0.68",
 		"@orkestrel/server": "^0.0.19",
 		"@orkestrel/test": "^0.0.14",
-		"@types/node": "^26.5.1",
+		"@types/node": "^26.6.0",
 		"@vitest/browser-playwright": "^4.1.11",
 		"oxfmt": "^0.68.0",
 		"oxlint": "^1.83.0",
