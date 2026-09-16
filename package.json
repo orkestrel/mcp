@@ -95,22 +95,22 @@
 		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup"
 	},
 	"dependencies": {
-		"@orkestrel/codec": "^0.0.3",
+		"@orkestrel/codec": "^0.0.4",
 		"@orkestrel/contract": "^0.0.17",
 		"@orkestrel/emitter": "^0.0.10",
-		"@orkestrel/process": "^0.0.12",
-		"@orkestrel/sse": "^0.0.7",
-		"@orkestrel/tool": "^0.0.15",
-		"@orkestrel/websocket": "^0.0.12"
+		"@orkestrel/process": "^0.0.13",
+		"@orkestrel/sse": "^0.0.8",
+		"@orkestrel/tool": "^0.0.16",
+		"@orkestrel/websocket": "^0.0.13"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.1",
 		"@modelcontextprotocol/conformance": "0.2.0-alpha.11",
-		"@orkestrel/guide": "^0.0.19",
-		"@orkestrel/probe": "^0.0.14",
-		"@orkestrel/router": "^0.0.14",
-		"@orkestrel/scaffold": "^0.0.69",
-		"@orkestrel/server": "^0.0.19",
+		"@orkestrel/guide": "^0.0.20",
+		"@orkestrel/probe": "^0.0.15",
+		"@orkestrel/router": "^0.0.15",
+		"@orkestrel/scaffold": "^0.0.71",
+		"@orkestrel/server": "^0.0.20",
 		"@orkestrel/test": "^0.0.15",
 		"@types/node": "^26.6.0",
 		"@vitest/browser-playwright": "^4.1.11",
@@ -122,8 +122,8 @@
 		"vitest": "^4.1.11"
 	},
 	"peerDependencies": {
-		"@orkestrel/router": "^0.0.14",
-		"@orkestrel/server": "^0.0.19"
+		"@orkestrel/router": "^0.0.15",
+		"@orkestrel/server": "^0.0.20"
 	},
 	"engines": {
 		"node": ">=22.12.0"
