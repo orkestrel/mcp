@@ -1369,8 +1369,9 @@ leaf and its proof, and the byte-identical root dotfiles. The session-start hook
 split by job. The bench probe reports whether a bench CLI resolves, and the dependency hook installs
 the lockfile's closure in a remote session.
 The Ollama hook invokes `scripts/ollama.sh` only when `CLAUDE_CODE_REMOTE=true`; direct invocation
-remains available for live-service setup. What wires a bench stays in the canon, and a session reads
-it at its primary root.
+remains available for live-service setup. Claude Code Cloud is Linux and has bash: SessionStart
+runs that POSIX script and never a Windows wrapper. What wires a bench stays in the canon, and a
+session reads it at its primary root.
 
 `scripts/ollama.sh` defaults to `http://127.0.0.1:11434` and `qwen3.5:2b-q4_K_M`. It requires Node
 for native URL and JSON handling and curl for the HTTP protocol. The script accepts an HTTP or HTTPS
@@ -1383,12 +1384,22 @@ completion.
 
 When an HTTP loopback endpoint is unreachable, the script may start an installed Ollama executable
 in an owned POSIX process group. A failure sends that owned group `TERM`, then sends `KILL` if it
-does not stop within 5 seconds; a reused daemon remains untouched. Direct reuse works from Git Bash on Windows, but local startup there fails because Bash
-cannot safely terminate the Windows process tree. Automatic installation is limited to Linux cloud
-or CI automation. The official installer download follows only HTTPS redirects, must be nonempty,
-and runs within the remaining setup deadline. The installer may require root or `sudo`, and its own
-platform prerequisites remain authoritative. The full setup deadline is 590 seconds, including a
-60-second local startup allowance, within the hook's 600-second timeout.
+does not stop within 5 seconds; a reused daemon remains untouched. Direct reuse works from Git Bash
+on Windows, but local startup there fails because Bash cannot safely terminate the Windows process
+tree. Automatic installation is limited to Linux cloud or CI automation. The official installer
+download follows only HTTPS redirects, must be nonempty, and runs within the remaining setup
+deadline. The installer may require root or `sudo`, and its own platform prerequisites remain
+authoritative. The full setup deadline is 590 seconds, including a 60-second local startup
+allowance, within the hook's 600-second timeout.
+
+Windows test helpers run the HTTP setup protocol in process. For local startup, they resolve a
+regular-file Ollama executable through `@orkestrel/process` and launch it with `serve`, without
+Bash. An absent executable returns exit `127` when the endpoint needs local startup; a reachable
+daemon needs no executable. Windows fixture protocol tests run without an installed executable.
+The native `serve` launch skips when `resolveExecutable` finds no regular-file Ollama. Fixture
+setup uses an isolated PATH so an unready fixture cannot launch the host daemon. Local hooks
+succeed without making requests; remote hooks run setup. Claude Code Cloud continues to invoke
+`scripts/ollama.sh`.
 
 `CANON_PATHS` is the instruction canon, staged for reading instead: the `AGENTS.md` coding contract,
 the `CLAUDE.md` harness bridge, the `.agents/orchestration.md` agent-operation contract, the rules

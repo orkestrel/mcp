@@ -9,11 +9,11 @@ A coding is a spec-named, stateless mapping with one canonical spelling per inpu
 `encode*` that produces only the canonical form, a `decode*` that accepts exactly that form and
 answers `undefined` for everything else, and an `is*` guard that names the exact set the partial
 direction accepts. Every function is pure ES: no `atob` / `btoa`, no `Buffer`, no `TextEncoder` /
-`TextDecoder`, no `node:*`, and no dependency on another `@orkestrel` package. Totality is
+`TextDecoder`, no `node:*`. Runtime type tests come from `@orkestrel/contract`. Totality is
 implemented rather than caught: codec ships no error type, no options bag, no class, and no type of
 its own. It is not a formats package — it does not compress, frame a stream, escape a document, map
 values into a store, or read JSON. Source: [`src/core`](../src/core), published through
-`@orkestrel/codec` with no runtime dependency.
+`@orkestrel/codec` with a runtime dependency on `@orkestrel/contract`.
 
 ## The families
 
