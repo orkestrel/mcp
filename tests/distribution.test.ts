@@ -73,7 +73,30 @@ const DIAGNOSTIC_PATTERN = /^(.+?)\(\d+,\d+\): error TS\d+: /u
 const PING = ['ping', '--fetch-retries=0', '--fetch-timeout=5000', '--loglevel=silent']
 const ESM_DRIVER = 'drive.mjs'
 const CJS_DRIVER = 'drive.cjs'
-const CONSUMER_MANIFEST = `{ "name": "distribution-consumer", "private": true, "type": "module" }\n`
+const CONSUMER_MANIFEST = `${JSON.stringify(
+	{
+		name: 'distribution-consumer',
+		private: true,
+		type: 'module',
+		overrides: {
+			'@orkestrel/abort': '^0.0.11',
+			'@orkestrel/budget': '^0.0.11',
+			'@orkestrel/codec': '^0.0.4',
+			'@orkestrel/database': '^0.0.15',
+			'@orkestrel/process': '^0.0.13',
+			'@orkestrel/queue': '^0.0.14',
+			'@orkestrel/router': '^0.0.15',
+			'@orkestrel/server': '^0.0.20',
+			'@orkestrel/sse': '^0.0.8',
+			'@orkestrel/timeout': '^0.0.11',
+			'@orkestrel/tool': '^0.0.16',
+			'@orkestrel/websocket': '^0.0.13',
+			'@orkestrel/workspace': '^0.0.9',
+		},
+	},
+	undefined,
+	'\t',
+)}\n`
 const ESM_DRIVER_SOURCE = `const entry = await import(process.argv[2])
 process.stdout.write(JSON.stringify(Object.keys(entry).sort()))
 `
@@ -86,8 +109,10 @@ process.stdout.write(JSON.stringify(Object.keys(entry).sort()))
 // composition nobody chose.
 const COMPOSITION: readonly string[] = [
 	'@orkestrel/agent@^0.0.23',
-	'@orkestrel/tool@^0.0.15',
+	'@orkestrel/tool@^0.0.16',
 	'@orkestrel/ndjson@^0.0.10',
+	'@orkestrel/router@^0.0.15',
+	'@orkestrel/server@^0.0.20',
 ]
 // The installed package whose own module names the root entries the page evaluates.
 const COMPOSED = '@orkestrel/agent'
