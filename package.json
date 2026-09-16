@@ -111,7 +111,7 @@
 		"@orkestrel/router": "^0.0.14",
 		"@orkestrel/scaffold": "^0.0.69",
 		"@orkestrel/server": "^0.0.19",
-		"@orkestrel/test": "^0.0.14",
+		"@orkestrel/test": "^0.0.15",
 		"@types/node": "^26.6.0",
 		"@vitest/browser-playwright": "^4.1.11",
 		"oxfmt": "^0.68.0",

@@ -5,9 +5,9 @@ import type {
 	MCPRequestContext,
 } from './types.js'
 import {
+	isFiniteNumber,
 	isInteger,
 	isJSONValue,
-	isNumber,
 	isRecord,
 	isString,
 	isUndefined,
@@ -172,12 +172,7 @@ export function parseMCPInputState(value: unknown): MCPInputState | undefined {
 		const name = parsed['name']
 		const digest = parsed['digest']
 		const state = parsed['state']
-		if (
-			!isString(principal) ||
-			principal.length === 0 ||
-			!isNumber(expiry) ||
-			!Number.isFinite(expiry)
-		) {
+		if (!isString(principal) || principal.length === 0 || !isFiniteNumber(expiry)) {
 			return undefined
 		}
 		if (!isJSONRPCId(id)) return undefined

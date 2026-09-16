@@ -1,3 +1,5 @@
+import { isInstance } from '@orkestrel/contract'
+
 /**
  * Preserves a Model Context Protocol error's machine-readable numeric code and
  * optional structured context.
@@ -56,11 +58,5 @@ export class MCPError extends Error {
  * ```
  */
 export function isMCPError(value: unknown): value is MCPError {
-	try {
-		// A revoked Proxy or a hostile prototype can make `instanceof` throw — this guard
-		// must stay total, so the check is wrapped rather than left to escape.
-		return value instanceof MCPError
-	} catch {
-		return false
-	}
+	return isInstance(value, MCPError)
 }

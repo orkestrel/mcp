@@ -30,6 +30,7 @@ import {
 	attempt,
 	cloneJSONRecord,
 	isArray,
+	isError,
 	isInteger,
 	isRecord,
 	isString,
@@ -659,7 +660,7 @@ export class MCPClient implements MCPClientInterface {
 				...(report === undefined ? {} : { progress: report }),
 			})
 			this.#transport.send(request).catch((error: unknown) => {
-				this.#settle(id, error instanceof Error ? error : new Error(String(error)), true)
+				this.#settle(id, isError(error) ? error : new Error(String(error)), true)
 			})
 		})
 	}

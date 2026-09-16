@@ -12,7 +12,7 @@ import { randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { deliverMessage, MCP_WEBSOCKET_SUBPROTOCOL } from '@src/core'
-import { isString } from '@orkestrel/contract'
+import { isError, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import {
 	computeWebSocketAccept,
@@ -213,7 +213,7 @@ export class WebSocketClientTransport implements MCPMessageTransportInterface {
 					resolve()
 					return
 				}
-				reject(error instanceof Error ? error : new Error(String(error)))
+				reject(isError(error) ? error : new Error(String(error)))
 			})
 			request.end()
 		})

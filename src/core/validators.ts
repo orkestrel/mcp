@@ -74,6 +74,7 @@ import {
 	arrayOf,
 	attempt,
 	cloneJSONRecord,
+	isArray,
 	isBoolean,
 	isFiniteNumber,
 	isInteger,
@@ -445,8 +446,7 @@ export function isMCPAnnotations(value: unknown): value is MCPAnnotations {
 		const lastModified = annotations['lastModified']
 		if (
 			!isUndefined(audience) &&
-			(!Array.isArray(audience) ||
-				!audience.every((role) => role === 'user' || role === 'assistant'))
+			(!isArray(audience) || !audience.every((role) => role === 'user' || role === 'assistant'))
 		) {
 			return false
 		}
@@ -476,7 +476,7 @@ export function isMCPIcon(value: unknown): value is MCPIcon {
 		const theme = icon['theme']
 		return (
 			(isUndefined(mimeType) || isString(mimeType)) &&
-			(isUndefined(sizes) || (Array.isArray(sizes) && sizes.every((size) => isString(size)))) &&
+			(isUndefined(sizes) || (isArray(sizes) && sizes.every((size) => isString(size)))) &&
 			(isUndefined(theme) || theme === 'light' || theme === 'dark')
 		)
 	} catch {
@@ -501,7 +501,7 @@ export function isMCPIdentity(value: unknown): value is MCPIdentity {
 			(isUndefined(title) || isString(title)) &&
 			(isUndefined(description) || isString(description)) &&
 			(isUndefined(website) || isAbsoluteURI(website)) &&
-			(isUndefined(icons) || (Array.isArray(icons) && icons.every((icon) => isMCPIcon(icon))))
+			(isUndefined(icons) || (isArray(icons) && icons.every((icon) => isMCPIcon(icon))))
 		)
 	} catch {
 		return false
@@ -676,7 +676,7 @@ export function isMCPResource(value: unknown): value is MCPResource {
 			(isUndefined(resource['mimeType']) || isString(resource['mimeType'])) &&
 			(isUndefined(resource['annotations']) || isMCPAnnotations(resource['annotations'])) &&
 			(isUndefined(size) || (isInteger(size) && size >= 0)) &&
-			(isUndefined(icons) || (Array.isArray(icons) && icons.every((icon) => isMCPIcon(icon)))) &&
+			(isUndefined(icons) || (isArray(icons) && icons.every((icon) => isMCPIcon(icon)))) &&
 			(isUndefined(resource['_meta']) || isMCPMetaObject(resource['_meta']))
 		)
 	} catch {
@@ -728,7 +728,7 @@ export function isMCPResourceTemplate(value: unknown): value is MCPResourceTempl
 			(isUndefined(template['description']) || isString(template['description'])) &&
 			(isUndefined(template['mimeType']) || isString(template['mimeType'])) &&
 			(isUndefined(template['annotations']) || isMCPAnnotations(template['annotations'])) &&
-			(isUndefined(icons) || (Array.isArray(icons) && icons.every((icon) => isMCPIcon(icon)))) &&
+			(isUndefined(icons) || (isArray(icons) && icons.every((icon) => isMCPIcon(icon)))) &&
 			(isUndefined(template['_meta']) || isMCPMetaObject(template['_meta']))
 		)
 	} catch {
@@ -775,7 +775,7 @@ export function isMCPResourcePage(value: unknown): value is MCPResourcePage {
 	const resources = owned.value['resources']
 	const cursor = owned.value['nextCursor']
 	return (
-		Array.isArray(resources) &&
+		isArray(resources) &&
 		resources.every((resource) => isMCPResource(resource)) &&
 		(isUndefined(cursor) || isString(cursor))
 	)
@@ -793,7 +793,7 @@ export function isMCPResourceTemplatePage(value: unknown): value is MCPResourceT
 	const templates = owned.value['resourceTemplates']
 	const cursor = owned.value['nextCursor']
 	return (
-		Array.isArray(templates) &&
+		isArray(templates) &&
 		templates.every((template) => isMCPResourceTemplate(template)) &&
 		(isUndefined(cursor) || isString(cursor))
 	)
@@ -845,9 +845,9 @@ export function isMCPPrompt(value: unknown): value is MCPPrompt {
 		(isUndefined(prompt['title']) || isString(prompt['title'])) &&
 		(isUndefined(prompt['description']) || isString(prompt['description'])) &&
 		(isUndefined(argumentsValue) ||
-			(Array.isArray(argumentsValue) &&
+			(isArray(argumentsValue) &&
 				argumentsValue.every((argument) => isMCPPromptArgument(argument)))) &&
-		(isUndefined(icons) || (Array.isArray(icons) && icons.every((icon) => isMCPIcon(icon)))) &&
+		(isUndefined(icons) || (isArray(icons) && icons.every((icon) => isMCPIcon(icon)))) &&
 		(isUndefined(prompt['_meta']) || isMCPMetaObject(prompt['_meta']))
 	)
 }
@@ -879,7 +879,7 @@ export function isMCPPromptPage(value: unknown): value is MCPPromptPage {
 	const prompts = owned.value['prompts']
 	const cursor = owned.value['nextCursor']
 	return (
-		Array.isArray(prompts) &&
+		isArray(prompts) &&
 		prompts.every((prompt) => isMCPPrompt(prompt)) &&
 		(isUndefined(cursor) || isString(cursor))
 	)
@@ -899,7 +899,7 @@ export function isMCPPromptGetResult(value: unknown): value is MCPPromptGetResul
 	return (
 		result['resultType'] === 'complete' &&
 		(isUndefined(result['description']) || isString(result['description'])) &&
-		Array.isArray(messages) &&
+		isArray(messages) &&
 		messages.every((message) => isMCPPromptMessage(message)) &&
 		(isUndefined(result['_meta']) || isMCPResultMetaObject(result['_meta']))
 	)
@@ -963,7 +963,7 @@ export function isMCPCompletion(value: unknown): value is MCPCompletion {
 	const values = completion['values']
 	const total = completion['total']
 	return (
-		Array.isArray(values) &&
+		isArray(values) &&
 		values.every((candidate) => isString(candidate)) &&
 		(isUndefined(total) || (isInteger(total) && total >= 0)) &&
 		(isUndefined(completion['hasMore']) || isBoolean(completion['hasMore']))
@@ -1020,8 +1020,7 @@ export function isMCPContent(value: unknown): value is MCPContent {
 					(isUndefined(content['title']) || isString(content['title'])) &&
 					(isUndefined(content['description']) || isString(content['description'])) &&
 					(isUndefined(content['mimeType']) || isString(content['mimeType'])) &&
-					(isUndefined(icons) ||
-						(Array.isArray(icons) && icons.every((icon) => isMCPIcon(icon)))) &&
+					(isUndefined(icons) || (isArray(icons) && icons.every((icon) => isMCPIcon(icon)))) &&
 					(isUndefined(size) || (isInteger(size) && size >= 0))
 				)
 			}
@@ -1102,7 +1101,7 @@ export function isMCPCallResult(value: unknown): value is MCPCallResult {
 		const error = result['isError']
 		const metadata = result['_meta']
 		return (
-			Array.isArray(content) &&
+			isArray(content) &&
 			content.every((entry) => isMCPContent(entry)) &&
 			(isUndefined(error) || isBoolean(error)) &&
 			(isUndefined(metadata) || isMCPResultMetaObject(metadata))
@@ -1333,7 +1332,7 @@ export function isMCPTaskNotification(value: unknown): value is MCPTaskNotificat
  * ```
  */
 export function isBoundedString(value: unknown, bytes: number): value is string {
-	if (!isString(value) || !Number.isFinite(bytes) || !Number.isInteger(bytes) || bytes < 0) {
+	if (!isString(value) || !isInteger(bytes) || bytes < 0) {
 		return false
 	}
 	let measured = 0
@@ -1553,16 +1552,15 @@ export function isMCPElicitFieldSchema(value: unknown): value is MCPElicitFieldS
 			) {
 				return false
 			}
-			if (!isUndefined(choices) && (!Array.isArray(choices) || !choices.every(isString)))
-				return false
+			if (!isUndefined(choices) && (!isArray(choices) || !choices.every(isString))) return false
 			if (
 				!isUndefined(names) &&
-				(isUndefined(choices) || !Array.isArray(names) || !names.every(isString))
+				(isUndefined(choices) || !isArray(names) || !names.every(isString))
 			)
 				return false
 			return !(
 				!isUndefined(titled) &&
-				(!Array.isArray(titled) ||
+				(!isArray(titled) ||
 					!titled.every(
 						(choice) =>
 							isJSONObject(choice) && isString(choice['const']) && isString(choice['title']),
@@ -1577,7 +1575,7 @@ export function isMCPElicitFieldSchema(value: unknown): value is MCPElicitFieldS
 			(!isUndefined(minimum) && (!isInteger(minimum) || minimum < 0)) ||
 			(!isUndefined(maximum) && (!isInteger(maximum) || maximum < 0)) ||
 			(!isUndefined(fallback) &&
-				(!Array.isArray(fallback) || !fallback.every((item) => isString(item)))) ||
+				(!isArray(fallback) || !fallback.every((item) => isString(item)))) ||
 			!isJSONObject(items)
 		) {
 			return false
@@ -1586,10 +1584,10 @@ export function isMCPElicitFieldSchema(value: unknown): value is MCPElicitFieldS
 		const choices = items['enum']
 		const titled = items['anyOf']
 		if (!isUndefined(itemType) && itemType !== 'string') return false
-		if (!isUndefined(choices) && (!Array.isArray(choices) || !choices.every(isString))) return false
+		if (!isUndefined(choices) && (!isArray(choices) || !choices.every(isString))) return false
 		if (
 			!isUndefined(titled) &&
-			(!Array.isArray(titled) ||
+			(!isArray(titled) ||
 				!titled.every(
 					(choice) =>
 						isJSONObject(choice) && isString(choice['const']) && isString(choice['title']),
@@ -1632,8 +1630,7 @@ export function isMCPElicitSchema(value: unknown): value is MCPElicitSchema {
 		if (!isUndefined(dialect) && !isString(dialect)) return false
 		const required = schema['required']
 		return (
-			(isUndefined(required) ||
-				(Array.isArray(required) && required.every((name) => isString(name)))) &&
+			(isUndefined(required) || (isArray(required) && required.every((name) => isString(name)))) &&
 			Object.values(properties).every((property) => isMCPElicitFieldSchema(property))
 		)
 	} catch {
@@ -1789,7 +1786,7 @@ export function isMCPElicitResult(value: unknown): value is MCPElicitResult {
 				isString(item) ||
 				isFiniteNumber(item) ||
 				isBoolean(item) ||
-				(Array.isArray(item) && item.every((entry) => isString(entry))),
+				(isArray(item) && item.every((entry) => isString(entry))),
 		)
 	} catch {
 		return false
@@ -1849,7 +1846,7 @@ export function isElicitContent(
 		const properties: unknown = declared.value['properties']
 		const required: unknown = declared.value['required']
 		if (!isJSONObject(properties)) return false
-		if (Array.isArray(required)) {
+		if (isArray(required)) {
 			for (const name of required) {
 				if (!isString(name) || !Object.hasOwn(content, name)) return false
 			}
@@ -1859,7 +1856,7 @@ export function isElicitContent(
 				!isString(item) &&
 				!isFiniteNumber(item) &&
 				!isBoolean(item) &&
-				!(Array.isArray(item) && item.every((entry) => isString(entry)))
+				!(isArray(item) && item.every((entry) => isString(entry)))
 			) {
 				return false
 			}
@@ -1876,7 +1873,7 @@ export function isElicitContent(
 				const minimum = field['minimum']
 				const maximum = field['maximum']
 				if (!isFiniteNumber(item)) return false
-				if (declaredType === 'integer' && !Number.isInteger(item)) return false
+				if (declaredType === 'integer' && !isInteger(item)) return false
 				if (isFiniteNumber(minimum) && item < minimum) return false
 				if (isFiniteNumber(maximum) && item > maximum) return false
 				continue
@@ -1888,9 +1885,9 @@ export function isElicitContent(
 				const maximum = field['maxLength']
 				const format = field['format']
 				if (!isString(item)) return false
-				if (Array.isArray(choices) && !choices.includes(item)) return false
+				if (isArray(choices) && !choices.includes(item)) return false
 				if (
-					Array.isArray(titled) &&
+					isArray(titled) &&
 					!titled.some((choice) => isJSONObject(choice) && choice['const'] === item)
 				) {
 					return false
@@ -1908,15 +1905,15 @@ export function isElicitContent(
 			const items = field['items']
 			const minimum = field['minItems']
 			const maximum = field['maxItems']
-			if (!Array.isArray(item) || !item.every((entry) => isString(entry))) return false
+			if (!isArray(item) || !item.every((entry) => isString(entry))) return false
 			if (isInteger(minimum) && item.length < minimum) return false
 			if (isInteger(maximum) && item.length > maximum) return false
 			if (!isJSONObject(items)) return false
 			const choices = items['enum']
 			const titled = items['anyOf']
-			if (Array.isArray(choices) && !item.every((entry) => choices.includes(entry))) return false
+			if (isArray(choices) && !item.every((entry) => choices.includes(entry))) return false
 			if (
-				Array.isArray(titled) &&
+				isArray(titled) &&
 				!item.every((entry) =>
 					titled.some((choice) => isJSONObject(choice) && choice['const'] === entry),
 				)
@@ -1985,7 +1982,7 @@ export function isMCPRootResult(value: unknown): value is MCPRootResult {
 		const result = owned.value
 		const roots = result['roots']
 		const metadata = result['_meta']
-		if (!Array.isArray(roots) || !roots.every((root) => isMCPRoot(root))) return false
+		if (!isArray(roots) || !roots.every((root) => isMCPRoot(root))) return false
 		return isUndefined(metadata) || isMCPMetaObject(metadata)
 	} catch {
 		return false
@@ -2026,7 +2023,7 @@ export function isMCPSampleContent(value: unknown): value is MCPSampleContent {
 		if (block['type'] === 'tool_result') {
 			const carried = block['content']
 			const failed = block['isError']
-			if (!Array.isArray(carried) || !carried.every((entry) => isMCPContent(entry))) return false
+			if (!isArray(carried) || !carried.every((entry) => isMCPContent(entry))) return false
 			if (!isUndefined(failed) && !isBoolean(failed)) return false
 			return isString(block['toolUseId'])
 		}
@@ -2076,7 +2073,7 @@ export function isMCPSampleResult(value: unknown): value is MCPSampleResult {
 		const metadata = result['_meta']
 		if (role !== 'user' && role !== 'assistant') return false
 		if (!isString(result['model'])) return false
-		const blocks = Array.isArray(content) ? content : [content]
+		const blocks = isArray(content) ? content : [content]
 		if (!blocks.every((block) => isMCPSampleContent(block))) return false
 		if (!isUndefined(reason) && !isString(reason)) return false
 		return isUndefined(metadata) || isMCPMetaObject(metadata)

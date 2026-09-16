@@ -48,6 +48,9 @@ import type {
 } from './types.js'
 import { Emitter } from '@orkestrel/emitter'
 import {
+	isArray,
+	isFiniteNumber,
+	isInteger,
 	isJSONValue,
 	isRecord,
 	isString,
@@ -558,10 +561,7 @@ export class MCPServer implements MCPServerInterface {
 			const input: MCPInputResult = captured[0]
 			return this.#forward(input, request)
 		}
-		if (
-			!Array.isArray(captured[0]) ||
-			!captured[0].every((entry) => isMCPResourceContents(entry))
-		) {
+		if (!isArray(captured[0]) || !captured[0].every((entry) => isMCPResourceContents(entry))) {
 			return buildJSONRPCError(
 				request.id,
 				JSONRPC_INTERNAL_ERROR,
@@ -744,7 +744,7 @@ export class MCPServer implements MCPServerInterface {
 			return buildJSONRPCError(request.id, JSONRPC_INVALID_PARAMS, 'Completion reference not found')
 		}
 		const candidate: unknown = generated
-		if (!isRecord(candidate) || !Array.isArray(candidate['values'])) {
+		if (!isRecord(candidate) || !isArray(candidate['values'])) {
 			return buildJSONRPCError(
 				request.id,
 				JSONRPC_INTERNAL_ERROR,
@@ -817,8 +817,7 @@ export class MCPServer implements MCPServerInterface {
 		const progressToken = isRecord(token) ? token['progressToken'] : undefined
 		if (
 			this.#options.execution !== undefined &&
-			(isString(progressToken) ||
-				(typeof progressToken === 'number' && Number.isInteger(progressToken)))
+			(isString(progressToken) || isInteger(progressToken))
 		) {
 			return this.#progress(request, call, progressToken, options)
 		}
@@ -1289,7 +1288,7 @@ export class MCPServer implements MCPServerInterface {
 			context === undefined ||
 			!isString(principal) ||
 			principal.length === 0 ||
-			!Number.isFinite(configured.ttl) ||
+			!isFiniteNumber(configured.ttl) ||
 			configured.ttl <= 0
 		) {
 			return buildJSONRPCError(

@@ -43,8 +43,11 @@ import {
 	cloneJSONRecord,
 	isArray,
 	isBoolean,
+	isFiniteNumber,
+	isInteger,
 	isJSONValue,
 	isNumber,
+	isObject,
 	isRecord,
 	isString,
 	parseJSON,
@@ -226,13 +229,9 @@ export function serializeJSON(value: unknown, limits: MCPJSONLimitOptions): stri
 		const limit = limits.bytes
 		const depth = limits.depth
 		const breadth = limits.keys
-		if (!Number.isFinite(limit) || !Number.isInteger(limit) || limit < 0) return undefined
-		if (!Number.isFinite(depth) || !Number.isInteger(depth) || depth < 0) return undefined
-		if (
-			breadth !== undefined &&
-			(!Number.isFinite(breadth) || !Number.isInteger(breadth) || breadth < 0)
-		)
-			return undefined
+		if (!isInteger(limit) || limit < 0) return undefined
+		if (!isInteger(depth) || depth < 0) return undefined
+		if (breadth !== undefined && (!isInteger(breadth) || breadth < 0)) return undefined
 
 		let bytes = 0
 		let keys = 0
@@ -343,7 +342,7 @@ export function serializeJSON(value: unknown, limits: MCPJSONLimitOptions): stri
 				continue
 			}
 			if (isNumber(entry)) {
-				if (!Number.isFinite(entry)) return undefined
+				if (!isFiniteNumber(entry)) return undefined
 				const text = JSON.stringify(entry)
 				if (!isString(text)) return undefined
 				bytes += text.length
@@ -355,14 +354,14 @@ export function serializeJSON(value: unknown, limits: MCPJSONLimitOptions): stri
 				pending.push({ operation: 'string', value: entry, output: chunks })
 				continue
 			}
-			if (typeof entry !== 'object' || ancestors.has(entry)) return undefined
-			if (Array.isArray(entry)) {
+			if (!isObject(entry) || ancestors.has(entry)) return undefined
+			if (isArray(entry)) {
 				const lengthDescriptor = Reflect.getOwnPropertyDescriptor(entry, 'length')
 				if (
 					lengthDescriptor === undefined ||
 					!Object.hasOwn(lengthDescriptor, 'value') ||
 					!isNumber(lengthDescriptor.value) ||
-					!Number.isInteger(lengthDescriptor.value) ||
+					!isInteger(lengthDescriptor.value) ||
 					lengthDescriptor.value < 0 ||
 					lengthDescriptor.value > 0xffff_ffff ||
 					lengthDescriptor.enumerable === true ||
@@ -385,7 +384,7 @@ export function serializeJSON(value: unknown, limits: MCPJSONLimitOptions): stri
 						continue
 					}
 					const index = Number(name)
-					if (!Number.isInteger(index) || index < 0 || index >= length || String(index) !== name)
+					if (!isInteger(index) || index < 0 || index >= length || String(index) !== name)
 						return undefined
 				}
 				if (!foundLength) return undefined
@@ -631,11 +630,8 @@ export function buildCallOutcome(name: string, result: unknown): MCPCallOutcome 
 	if (isRecord(result) && Object.hasOwn(result, 'structuredContent')) {
 		value = result['structuredContent']
 	} else if (text.length > 0) {
-		try {
-			value = JSON.parse(text)
-		} catch {
-			value = text
-		}
+		const parsed = parseJSON(text)
+		value = parsed === undefined ? text : parsed
 	}
 	const outcome: MCPCallOutcome = { resultType: 'complete', value }
 	return Object.freeze(outcome)
@@ -653,7 +649,7 @@ export function buildToolCall(
 	args?: Readonly<Record<string, unknown>>,
 ): ToolCall | undefined {
 	const name = request.params?.['name']
-	if (typeof name !== 'string') return undefined
+	if (!isString(name)) return undefined
 	const rawArguments = request.params?.['arguments']
 	return {
 		id: String(request.id),
@@ -896,7 +892,7 @@ export function modernResultToLegacy(
 	const projected: Record<string, unknown> = {}
 	for (const [key, value] of Object.entries(result)) {
 		if (key === 'resultType' || key === 'ttlMs' || key === 'cacheScope') continue
-		if (key === 'content' && Array.isArray(value)) {
+		if (key === 'content' && isArray(value)) {
 			projected[key] = value.map((entry) =>
 				isRecord(entry) && entry['type'] === 'text' && isString(entry['text'])
 					? { type: 'text', text: entry['text'] }
@@ -1049,7 +1045,7 @@ export function matchesSubscriptionNotification(
 	}
 	if (notification.method === 'notifications/resources/updated') {
 		const uri = notification.params?.['uri']
-		return typeof uri === 'string' && filter.resourceSubscriptions?.includes(uri) === true
+		return isString(uri) && filter.resourceSubscriptions?.includes(uri) === true
 	}
 	if (notification.method === 'notifications/tasks') {
 		return (
@@ -1888,7 +1884,7 @@ export function bindServer(
 			if (answer === undefined) return
 			// A cancelled request writes nothing — and a held-open answer is RELEASED rather
 			// than dropped, because dropping one is exactly the abandonment this binder owns.
-			if (typeof answer === 'string') {
+			if (isString(answer)) {
 				if (!request.signal.aborted) await transport.send(answer)
 			} else if (request.signal.aborted) await answer[Symbol.asyncDispose]()
 			else await sendStream(answer, transport)
