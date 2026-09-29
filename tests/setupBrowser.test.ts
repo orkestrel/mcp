@@ -1,27 +1,25 @@
 // Proof of `tests/setupBrowser.ts` — the peer-observation helpers the duplex claims are read
 // through.
 //
-// The `setup` project runs in Node with the browser disabled, so this proof reaches the
-// module's host-independent exports: `createScopeCarrier` wires two real
-// `createScopeTransport` halves and never touches a document, `recordPort` taps a real
-// `MessagePort` (Node's is the same `EventTarget` contract the page's is), and `drainRecorded`
-// reads frames back over a real socket from the real Node fixture. `createBridge`,
-// `buildRegistry`, and `recordRequests` read a `Document` and the page's Resource Timing log,
-// and `recordRegistration` and the parked-handler pair exist to be driven through a live
-// registry, so `tests/src/browser` drives every one of those inside Chromium instead.
+// The `setup:browser` project runs this proof in Chromium over the module's instrument exports:
+// `createScopeCarrier` wires two real `createScopeTransport` halves, `recordPort` taps a real
+// `MessagePort`, and `drainRecorded` reads frames back over a real socket from the Node fixture
+// that `tests/setupGlobal.ts` starts for the project and provides as `server`, because a browser
+// test cannot start a Node server for itself. `createBridge`, `buildRegistry`, and
+// `recordRequests` read a `Document` and the page's Resource Timing log, and
+// `recordRegistration` and the parked-handler pair exist to be driven through a live registry,
+// so `tests/src/browser` drives every one of those against a real page.
 //
-// The carrier and the tap are also driven end to end by `tests/src/browser/factories.test.ts`
-// inside Chromium. That suite proves what they carry for a real page; this one proves what they
-// promise as instruments — what enters a drain, what a drain clears, and what a decode drops.
+// The carrier and the tap are also driven end to end by `tests/src/browser/factories.test.ts`.
+// That suite proves what they carry for a real page; this one proves what they promise as
+// instruments — what enters a drain, what a drain clears, and what a decode drops.
 
-import { beforeAll, afterAll, describe, expect, it } from 'vitest'
-import type { BrowserFixtureInterface } from './fixtures/browserServer.js'
+import { describe, expect, inject, it } from 'vitest'
 import { buildJSONRPCResult } from '@src/core'
 import { createMessagePortTransport } from '@src/browser'
 import { createRecorder } from '@orkestrel/test'
 import { createScopeCarrier, drainRecorded, recordPort } from './setupBrowser.js'
 import { createJSONRPCRequest, postJSON, waitForSettlement } from './setup.js'
-import { start } from './fixtures/browserServer.js'
 
 describe('createScopeCarrier', () => {
 	it('carries a frame each way and drains only what the server half received', () => {
@@ -94,26 +92,18 @@ describe('recordPort', () => {
 })
 
 describe('drainRecorded', () => {
-	let fixture: BrowserFixtureInterface
-
-	beforeAll(async () => {
-		fixture = await start()
-	})
-
-	afterAll(async () => {
-		await fixture.stop()
-	})
+	const base = inject('server')
 
 	it('reads the peer-recorded frames back over the wire and clears them', async () => {
-		await drainRecorded(fixture.base)
+		await drainRecorded(base)
 		const request = createJSONRPCRequest({ method: 'tools/list', id: 11 })
 
-		await postJSON(fixture.base, request)
-		await postJSON(fixture.base, { hello: 'world' })
+		await postJSON(base, request)
+		await postJSON(base, { hello: 'world' })
 
 		// Every POST body reaches the fixture's recorder, so the second one is a frame the
 		// decode refuses rather than a frame that never arrived.
-		expect(await drainRecorded(fixture.base)).toEqual([request])
-		expect(await drainRecorded(fixture.base)).toEqual([])
+		expect(await drainRecorded(base)).toEqual([request])
+		expect(await drainRecorded(base)).toEqual([])
 	})
 })
