@@ -16,13 +16,14 @@ import type {
 import { Emitter } from '@orkestrel/emitter'
 import { createTool } from '@orkestrel/tool'
 import { attempt } from '@orkestrel/contract'
-import { WEBMCP_CHANGE_EVENT } from './constants.js'
+import { WEBMCP_ABORT_EVENT, WEBMCP_ACTIVATED_EVENT, WEBMCP_CHANGE_EVENT } from './constants.js'
 import {
 	buildWebMCPProjections,
 	collectWebMCPProjections,
 	matchesDescriptor,
 	webMCPToTool,
 } from './helpers.js'
+import { isWebMCPToolEvent } from './validators.js'
 
 /**
  * Bridges a `ToolManagerInterface` and a document's WebMCP tool registry — the
@@ -112,6 +113,8 @@ export class ModelContext implements ModelContextInterface {
 		}
 	>()
 	readonly #listener: () => void
+	readonly #activated: (event: Event) => void
+	readonly #aborted: (event: Event) => void
 	// The manager this handle is following, with the exact handler reference `off` needs to
 	// release it. Genuinely private glue: the subscription is an implementation of `publish`'s
 	// contract rather than a member a consumer reads, and one handler serves all three events
@@ -127,7 +130,7 @@ export class ModelContext implements ModelContextInterface {
 	#destroyed = false
 
 	/**
-	 * Binds a narrowed document's registry and arms the `toolchange` subscription.
+	 * Binds a narrowed document's registry and arms its change and execution subscriptions.
 	 *
 	 * @param document - The document whose `modelContext` this handle bridges
 	 * @param options - The emitter's initial hooks and listener-error handler; see
@@ -144,6 +147,10 @@ export class ModelContext implements ModelContextInterface {
 		// so `destroy` removes the same listener it added.
 		this.#listener = this.#republish.bind(this)
 		this.#registry.addEventListener(WEBMCP_CHANGE_EVENT, this.#listener)
+		this.#activated = this.#republishTool.bind(this, 'activate')
+		this.#aborted = this.#republishTool.bind(this, 'abort')
+		this.#registry.addEventListener(WEBMCP_ACTIVATED_EVENT, this.#activated)
+		this.#registry.addEventListener(WEBMCP_ABORT_EVENT, this.#aborted)
 	}
 
 	get emitter(): EmitterInterface<ModelContextEventMap> {
@@ -178,9 +185,9 @@ export class ModelContext implements ModelContextInterface {
 		const registered = await this.#registry.getTools(
 			options?.origins === undefined ? {} : { fromOrigins: options.origins },
 		)
-		return registered.map((tool) =>
-			createTool({ ...webMCPToTool(tool), execute: this.#execute.bind(this, tool) }),
-		)
+		return registered
+			.filter((tool) => options?.debugging === true || tool.annotations?.debugging !== true)
+			.map((tool) => createTool({ ...webMCPToTool(tool), execute: this.#execute.bind(this, tool) }))
 	}
 
 	destroy(): void {
@@ -189,6 +196,8 @@ export class ModelContext implements ModelContextInterface {
 		this.#unfollow()
 		this.#pendingManager = undefined
 		this.#registry.removeEventListener(WEBMCP_CHANGE_EVENT, this.#listener)
+		this.#registry.removeEventListener(WEBMCP_ACTIVATED_EVENT, this.#activated)
+		this.#registry.removeEventListener(WEBMCP_ABORT_EVENT, this.#aborted)
 		for (const held of this.#registrations.values()) held.controller.abort()
 		this.#registrations.clear()
 		this.#emitter.destroy()
@@ -198,6 +207,10 @@ export class ModelContext implements ModelContextInterface {
 	// method so `addEventListener` and `removeEventListener` receive one stable reference.
 	#republish(): void {
 		this.#emitter.emit('change')
+	}
+
+	#republishTool(name: 'activate' | 'abort', event: Event): void {
+		if (isWebMCPToolEvent(event)) this.#emitter.emit(name, event.toolName)
 	}
 
 	// Subscribes to a manager's own registry events, releasing whatever was followed before.

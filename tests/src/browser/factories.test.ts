@@ -18,6 +18,7 @@ import type {
 	WebMCPRegisterOptions,
 	WebMCPRegistryInterface,
 	WebMCPTool,
+	WebMCPToolEvent,
 	WebMCPToolsOptions,
 } from '@src/browser'
 import type { ToolManagerInterface } from '@orkestrel/tool'
@@ -1386,12 +1387,17 @@ describe('the browser barrel — what a consumer of @orkestrel/mcp/browser recei
 			ModelContextOptions | undefined
 		>()
 		expectTypeOf<InstanceType<typeof ModelContext>>().toExtend<ModelContextInterface>()
-		expectTypeOf<ModelContextEventMap>().toEqualTypeOf<{ readonly change: readonly [] }>()
+		expectTypeOf<ModelContextEventMap>().toEqualTypeOf<{
+			readonly change: readonly []
+			readonly activate: readonly [name: string]
+			readonly abort: readonly [name: string]
+		}>()
 		expectTypeOf<ModelContextPublishOptions>().toEqualTypeOf<{
 			readonly origins?: readonly string[]
 		}>()
 		expectTypeOf<ModelContextAdoptOptions>().toEqualTypeOf<{
 			readonly origins?: readonly string[]
+			readonly debugging?: boolean
 		}>()
 	})
 
@@ -1400,6 +1406,7 @@ describe('the browser barrel — what a consumer of @orkestrel/mcp/browser recei
 			readonly readOnlyHint?: boolean
 			readonly untrustedContentHint?: boolean
 			readonly consequentialHint?: boolean
+			readonly debugging?: boolean
 		}>()
 		expectTypeOf<WebMCPRegisterOptions>().toEqualTypeOf<{
 			readonly exposedTo?: readonly string[]
@@ -1410,6 +1417,7 @@ describe('the browser barrel — what a consumer of @orkestrel/mcp/browser recei
 		}>()
 		expectTypeOf<WebMCPExecuteOptions>().toEqualTypeOf<{ readonly signal?: AbortSignal }>()
 		expectTypeOf<WebMCPHandlerOptions>().toEqualTypeOf<{ readonly signal: AbortSignal }>()
+		expectTypeOf<WebMCPToolEvent>().toEqualTypeOf<{ readonly toolName: string }>()
 		expectTypeOf<WebMCPTool>().toExtend<WebMCPDescriptor>()
 		expectTypeOf<WebMCPRegisteredTool>().toExtend<WebMCPDescriptor>()
 		expectTypeOf<WebMCPTool['execute']>().toEqualTypeOf<WebMCPExecuteHandler>()

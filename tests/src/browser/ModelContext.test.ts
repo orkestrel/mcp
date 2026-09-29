@@ -6,6 +6,7 @@ import { createTool, createToolManager } from '@orkestrel/tool'
 import {
 	createRecorder,
 	createRecorders,
+	readProperty,
 	requireValue,
 	waitForCondition,
 	waitForDelay,
@@ -832,11 +833,9 @@ describe('a published tool, run by the registry as a foreign agent would run it'
 		const registered = await fixture.registry.getTools()
 		const controller = new AbortController()
 
-		void fixture.registry.executeTool(
-			readOne(registered, 'registered tool'),
-			{},
-			{ signal: controller.signal },
-		)
+		fixture.registry
+			.executeTool(readOne(registered, 'registered tool'), {}, { signal: controller.signal })
+			.catch(() => undefined)
 		await parked.entered
 		controller.abort()
 
@@ -847,6 +846,39 @@ describe('a published tool, run by the registry as a foreign agent would run it'
 })
 
 describe('adopt — reading the registry back as locally executable tools', () => {
+	it('excludes debugging tools by default and includes them only when requested', async () => {
+		const { fixture, bridge } = createBridge()
+		try {
+			await fixture.registry.registerTool({
+				...recordRegistration('debugger', 'diagnostic').tool,
+				annotations: { debugging: true, readOnlyHint: true },
+			})
+			await fixture.registry.registerTool({
+				...recordRegistration('ordinary', 'ordinary').tool,
+				annotations: { debugging: false },
+			})
+			await fixture.registry.registerTool(recordRegistration('unmarked', 'unmarked').tool)
+
+			expect((await bridge.adopt()).map((tool) => tool.name)).toEqual(['ordinary', 'unmarked'])
+			expect((await bridge.adopt({ debugging: false })).map((tool) => tool.name)).toEqual([
+				'ordinary',
+				'unmarked',
+			])
+			const included = await bridge.adopt({ debugging: true })
+			expect(included.map((tool) => tool.name)).toEqual(['debugger', 'ordinary', 'unmarked'])
+			const debugging = requireValue(
+				included.find((tool) => tool.name === 'debugger'),
+				'the debugging tool',
+			)
+			expect(debugging.annotations).toEqual({ pure: true })
+			expect(await debugging.execute({}, { signal: new AbortController().signal })).toBe(
+				'diagnostic',
+			)
+		} finally {
+			bridge.destroy()
+		}
+	})
+
 	it('reads each registered tool as a tool advertising the inverse projection', async () => {
 		const { fixture, bridge } = createBridge()
 		// Three booleans cannot be pairwise distinct, so one tool alone leaves one swap
@@ -926,7 +958,9 @@ describe('adopt — reading the registry back as locally executable tools', () =
 		const adopted = await bridge.adopt()
 		const controller = new AbortController()
 
-		void adopted[0]?.execute({}, { signal: controller.signal })
+		void Promise.resolve(adopted[0]?.execute({}, { signal: controller.signal })).catch(
+			() => undefined,
+		)
 		await parked.entered
 		controller.abort()
 
@@ -980,13 +1014,170 @@ describe('change — the registry event this handle republishes', () => {
 			execute: async () => 'done',
 		})
 
-		expect(subscribed).toHaveLength(1)
+		expect(subscribed).toHaveLength(3)
 		expect(fixture.listeners()).toEqual([])
 		expect(recorders.change.count).toBe(0)
 	})
 })
 
+describe('execution events — the registry events this handle republishes', () => {
+	it('republishes toolactivated before the tool callback runs', async () => {
+		const { fixture, bridge } = createBridge()
+		const names = createRecorder<readonly [string]>()
+		bridge.emitter.on('activate', names.handler)
+		try {
+			await fixture.registry.registerTool({
+				name: 'lookup',
+				description: 'Looks up a record',
+				execute: async () => names.calls.map(([name]) => name),
+			})
+			const tool = readOne(await fixture.registry.getTools(), 'registered tool')
+			expect(await fixture.registry.executeTool(tool)).toEqual(['lookup'])
+			expect(names.calls).toEqual([['lookup']])
+		} finally {
+			bridge.destroy()
+		}
+	})
+
+	it('republishes toolcancel when the caller aborts an in-flight execution', async () => {
+		const { fixture, bridge } = createBridge()
+		const names = createRecorder<readonly [string]>()
+		bridge.emitter.on('abort', names.handler)
+		const parked = createParkedRegistration('park')
+		const caller = new AbortController()
+		try {
+			await fixture.registry.registerTool(parked.tool)
+			const tool = readOne(await fixture.registry.getTools(), 'registered tool')
+			const pending = fixture.registry.executeTool(tool, {}, { signal: caller.signal })
+			await parked.entered
+			expect(names.calls).toEqual([])
+			const reason = new Error('caller stopped')
+			caller.abort(reason)
+			await expect(pending).rejects.toBe(reason)
+			expect(names.calls).toEqual([['park']])
+		} finally {
+			caller.abort()
+			bridge.destroy()
+		}
+	})
+
+	it('ignores a toolactivated event that carries no toolName', () => {
+		const { fixture, bridge } = createBridge()
+		const names = createRecorder<readonly [string]>()
+		bridge.emitter.on('activate', names.handler)
+		try {
+			fixture.registry.dispatchEvent(new Event('toolactivated'))
+			expect(names.calls).toEqual([])
+		} finally {
+			bridge.destroy()
+		}
+	})
+
+	it('removes the execution subscriptions at destroy', () => {
+		const { fixture, bridge } = createBridge()
+		const subscribed = fixture.listeners()
+		bridge.destroy()
+		expect(subscribed).toHaveLength(3)
+		expect(fixture.listeners()).toEqual([])
+	})
+
+	it('reports no abort after an execution settles', async () => {
+		const { fixture, bridge } = createBridge()
+		const names = createRecorder<readonly [string]>()
+		bridge.emitter.on('abort', names.handler)
+		try {
+			await fixture.registry.registerTool(recordRegistration('lookup', 'done').tool)
+			const tool = readOne(await fixture.registry.getTools(), 'registered tool')
+			const caller = new AbortController()
+			expect(await fixture.registry.executeTool(tool, {}, { signal: caller.signal })).toBe('done')
+			caller.abort()
+			expect(names.calls).toEqual([])
+		} finally {
+			bridge.destroy()
+		}
+	})
+})
+
 describe('the IDL surface the double publishes, read as the specification declares it', () => {
+	it('rejects with the reason and dispatches nothing for an already-aborted caller', async () => {
+		const fixture = installModelContext(document.implementation.createHTMLDocument())
+		const events = createRecorder<readonly [Event]>()
+		let ran = false
+		await fixture.registry.registerTool({
+			name: 'never',
+			description: 'Never runs',
+			execute: async () => {
+				ran = true
+				return 'ran'
+			},
+		})
+		const tool = readOne(await fixture.registry.getTools(), 'registered tool')
+		fixture.registry.addEventListener('toolactivated', events.handler)
+		fixture.registry.addEventListener('toolcancel', events.handler)
+		const reason = new Error('already stopped')
+		await expect(
+			fixture.registry.executeTool(tool, {}, { signal: AbortSignal.abort(reason) }),
+		).rejects.toBe(reason)
+		expect(events.calls).toEqual([])
+		expect(ran).toBe(false)
+	})
+
+	it('aborts the tool signal before it dispatches toolcancel', async () => {
+		const fixture = installModelContext(document.implementation.createHTMLDocument())
+		const order: string[] = []
+		await fixture.registry.registerTool({
+			name: 'park',
+			description: 'Parks until aborted',
+			execute: (_input, { signal }) =>
+				new Promise<never>(() => {
+					signal.addEventListener('abort', () => order.push('tool'), { once: true })
+				}),
+		})
+		const tool = readOne(await fixture.registry.getTools(), 'registered tool')
+		fixture.registry.addEventListener('toolcancel', () => order.push('cancel'))
+		const caller = new AbortController()
+		const pending = fixture.registry.executeTool(tool, {}, { signal: caller.signal })
+		caller.abort()
+		await expect(pending).rejects.toBeInstanceOf(DOMException)
+		expect(order).toEqual(['tool', 'cancel'])
+	})
+
+	it('assigns, replaces, and releases the execution event handlers', async () => {
+		const fixture = installModelContext(document.implementation.createHTMLDocument())
+		const first = createRecorder<readonly [Event]>()
+		const second = createRecorder<readonly [Event]>()
+		const parked = createParkedRegistration('park')
+		await fixture.registry.registerTool(parked.tool)
+		const tool = readOne(await fixture.registry.getTools(), 'registered tool')
+		try {
+			for (const handler of [first.handler, second.handler, null]) {
+				fixture.registry.ontoolactivated = handler
+				fixture.registry.ontoolcancel = handler
+				expect(fixture.registry.ontoolactivated).toBe(handler)
+				expect(fixture.registry.ontoolcancel).toBe(handler)
+				const caller = new AbortController()
+				const pending = fixture.registry.executeTool(tool, {}, { signal: caller.signal })
+				await parked.entered
+				caller.abort()
+				await expect(pending).rejects.toBeInstanceOf(DOMException)
+			}
+			expect(first.calls.map(([event]) => event.type)).toEqual(['toolactivated', 'toolcancel'])
+			expect(second.calls.map(([event]) => event.type)).toEqual(['toolactivated', 'toolcancel'])
+			for (const [event] of [...first.calls, ...second.calls]) {
+				expect(event).toBeInstanceOf(Event)
+				expect(readProperty<unknown>(event, 'toolName')).toBe('park')
+			}
+			expect(first.calls.map(([event]) => event.constructor.name)).toEqual([
+				'ToolActivatedEvent',
+				'ToolCancelEvent',
+			])
+			expect(fixture.listeners()).toEqual([])
+		} finally {
+			fixture.registry.ontoolactivated = null
+			fixture.registry.ontoolcancel = null
+		}
+	})
+
 	it('dispatches the IDL ontoolchange handler', async () => {
 		const fixture = installModelContext(document.implementation.createHTMLDocument())
 		const first = createRecorder<readonly [Event]>()

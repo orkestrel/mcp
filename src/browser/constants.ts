@@ -20,3 +20,9 @@ export const DEFAULT_MCP_SERVER_VERSION = '1.0.0'
 
 /** Names the WebMCP registry event the bridge republishes as its own `change`. */
 export const WEBMCP_CHANGE_EVENT = 'toolchange'
+
+/** Names the WebMCP IDL `toolactivated` event the bridge republishes as `activate`. */
+export const WEBMCP_ACTIVATED_EVENT = 'toolactivated'
+
+/** Names the WebMCP IDL `toolcancel` event the bridge republishes as `abort`. */
+export const WEBMCP_ABORT_EVENT = 'toolcancel'

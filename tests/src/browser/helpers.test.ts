@@ -21,6 +21,18 @@ import { readOne } from '../../setupBrowser.js'
 // `consequentialHint` where MCP spells it `destructiveHint`.
 
 describe('toolAnnotationsToWebMCP — the projection WebMCP takes and the MCP wire cannot', () => {
+	it('never invents a debugging hint without a domain counterpart', () => {
+		expect(toolAnnotationsToWebMCP({})).not.toHaveProperty('debugging')
+		expect(
+			toolAnnotationsToWebMCP({ pure: true, untrusted: true, consequential: true }),
+		).not.toHaveProperty('debugging')
+	})
+
+	it('ignores debugging while projecting the supported hints', () => {
+		expect(webMCPAnnotationsToTool({ debugging: true, readOnlyHint: true })).toEqual({ pure: true })
+		expect(webMCPAnnotationsToTool({ debugging: true })).toEqual({})
+	})
+
 	it('carries untrusted onto untrustedContentHint, which the MCP wire drops entirely', () => {
 		const annotations = { pure: true, untrusted: true, consequential: false }
 

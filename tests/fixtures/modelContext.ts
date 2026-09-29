@@ -10,7 +10,7 @@
 // `createModelContext`, and what this file supplies is only the thing the browser does not.
 //
 // `ModelContextRegistry` therefore declares exactly the IDL's own operations, its
-// `ontoolchange` event-handler attribute, and inherits `EventTarget` for `toolchange`. The
+// event-handler attributes, and inherits `EventTarget` for the 2026-09-29 draft's events. The
 // recorders a test reads registrations and live subscriptions through are NOT registry
 // members: they sit on the fixture handle beside the registry, over the same state, so the
 // object installed on the document stays the shape a user agent would install.
@@ -21,6 +21,7 @@ import type {
 	WebMCPRegistryInterface,
 	WebMCPExecuteOptions,
 	WebMCPTool,
+	WebMCPToolEvent,
 	WebMCPToolsOptions,
 } from '@src/browser'
 
@@ -49,7 +50,7 @@ export type ModelContextEventHandler = ((event: Event) => unknown) | null
 export interface ModelContextState {
 	/** Every live registration, keyed by the tool name the registry keys registration on. */
 	readonly tools: Map<string, ModelContextRegistration>
-	/** Every `toolchange` listener subscribed and not yet removed, in subscription order. */
+	/** Every registry listener subscribed and not yet removed, in subscription order. */
 	readonly listeners: EventListenerOrEventListenerObject[]
 	/** Holds `registerTool` before it records anything, while a scenario is suspending it. */
 	gate: Promise<void> | undefined
@@ -67,7 +68,7 @@ export interface ModelContextFixtureInterface {
 	readonly origin: string
 	/** Every registration the registry holds, in registration order. */
 	registrations(): readonly ModelContextRegistration[]
-	/** Every `toolchange` listener subscribed and not yet removed, in subscription order. */
+	/** Every registry listener subscribed and not yet removed, in subscription order. */
 	listeners(): readonly EventListenerOrEventListenerObject[]
 	/**
 	 * Holds every later `registerTool` at its entry and returns the release that lets them run.
@@ -98,12 +99,39 @@ export interface ModelContextFixtureInterface {
 	refuse(name: string): () => void
 }
 
+/** Transliterates the 2026-09-29 WebMCP draft's execution event initialization dictionaries. */
+export interface ModelContextToolEventInit extends EventInit {
+	readonly toolName?: string
+}
+
+/** Implements the 2026-09-29 WebMCP draft's activation event interface. */
+export class ToolActivatedEvent extends Event implements WebMCPToolEvent {
+	readonly toolName: string
+
+	constructor(type: string, options: ModelContextToolEventInit = {}) {
+		super(type, options)
+		this.toolName = options.toolName ?? ''
+	}
+}
+
+/** Implements the 2026-09-29 WebMCP draft's cancellation event interface. */
+export class ToolCancelEvent extends Event implements WebMCPToolEvent {
+	readonly toolName: string
+
+	constructor(type: string, options: ModelContextToolEventInit = {}) {
+		super(type, options)
+		this.toolName = options.toolName ?? ''
+	}
+}
+
 /** Implements the WebMCP `ModelContext` interface over an injected state record. */
 export class ModelContextRegistry extends EventTarget implements WebMCPRegistryInterface {
 	readonly #state: ModelContextState
 	readonly #window: Window
 	readonly #origin: string
 	#handler: ModelContextEventHandler = null
+	#activated: ModelContextEventHandler = null
+	#aborted: ModelContextEventHandler = null
 
 	constructor(state: ModelContextState, host: Window, origin: string) {
 		super()
@@ -122,10 +150,28 @@ export class ModelContextRegistry extends EventTarget implements WebMCPRegistryI
 	}
 
 	set ontoolchange(handler: ModelContextEventHandler) {
-		const previous = this.#handler
-		if (previous !== null) this.removeEventListener('toolchange', previous)
+		this.#replaceHandler('toolchange', this.#handler, handler)
 		this.#handler = handler
-		if (handler !== null) this.addEventListener('toolchange', handler)
+	}
+
+	/** Holds the draft's replaceable `ontoolactivated` event-handler attribute. */
+	get ontoolactivated(): ModelContextEventHandler {
+		return this.#activated
+	}
+
+	set ontoolactivated(handler: ModelContextEventHandler) {
+		this.#replaceHandler('toolactivated', this.#activated, handler)
+		this.#activated = handler
+	}
+
+	/** Holds the draft's replaceable `ontoolcancel` event-handler attribute. */
+	get ontoolcancel(): ModelContextEventHandler {
+		return this.#aborted
+	}
+
+	set ontoolcancel(handler: ModelContextEventHandler) {
+		this.#replaceHandler('toolcancel', this.#aborted, handler)
+		this.#aborted = handler
 	}
 
 	// The subscription pair records into the injected state before delegating, because an
@@ -136,8 +182,9 @@ export class ModelContextRegistry extends EventTarget implements WebMCPRegistryI
 		listener: EventListenerOrEventListenerObject | null,
 		options?: AddEventListenerOptions | boolean,
 	): void {
-		if (listener !== null) this.#state.listeners.push(listener)
-		super.addEventListener(type, listener, options)
+		const callback = listener
+		if (callback !== null) this.#state.listeners.push(callback)
+		super.addEventListener(type, callback, options)
 	}
 
 	override removeEventListener(
@@ -145,9 +192,10 @@ export class ModelContextRegistry extends EventTarget implements WebMCPRegistryI
 		listener: EventListenerOrEventListenerObject | null,
 		options?: EventListenerOptions | boolean,
 	): void {
-		const index = listener === null ? -1 : this.#state.listeners.indexOf(listener)
+		const callback = listener
+		const index = callback === null ? -1 : this.#state.listeners.indexOf(callback)
 		if (index !== -1) this.#state.listeners.splice(index, 1)
-		super.removeEventListener(type, listener, options)
+		super.removeEventListener(type, callback, options)
 	}
 
 	async registerTool(tool: WebMCPTool, options?: WebMCPRegisterOptions): Promise<void> {
@@ -189,14 +237,43 @@ export class ModelContextRegistry extends EventTarget implements WebMCPRegistryI
 	): Promise<unknown> {
 		const registration = this.#state.tools.get(tool.name)
 		if (registration === undefined) throw new Error(`No registered tool named '${tool.name}'`)
-		// The registry mints the signal the callback receives and follows the caller's own,
-		// which is what `ToolExecuteCallbackOptions` declaring a REQUIRED signal means.
-		// `AbortSignal.any` is the platform's own composition, so an already-aborted caller and
-		// a later abort take the same path, and an omitted caller yields a signal that never
-		// fires.
 		const caller = options?.signal
-		const signal = AbortSignal.any(caller === undefined ? [] : [caller])
-		return registration.tool.execute(input ?? {}, { signal })
+		if (caller?.aborted === true) throw caller.reason
+		this.dispatchEvent(new ToolActivatedEvent('toolactivated', { toolName: tool.name }))
+		// The registry mints the signal the callback receives, which is what
+		// `ToolExecuteCallbackOptions` declaring a REQUIRED signal means. A caller abort runs
+		// the tool's abort steps first, then dispatches `toolcancel`, then rejects the call.
+		const controller = new AbortController()
+		const cancel =
+			caller === undefined ? undefined : this.#cancel.bind(this, controller, tool.name, caller)
+		if (cancel !== undefined) caller?.addEventListener('abort', cancel, { once: true })
+		try {
+			const result = registration.tool.execute(input ?? {}, { signal: controller.signal })
+			if (caller === undefined) return await result
+			return await Promise.race([
+				result,
+				new Promise<never>((_, reject) => {
+					if (caller.aborted) reject(caller.reason)
+					else caller.addEventListener('abort', () => reject(caller.reason), { once: true })
+				}),
+			])
+		} finally {
+			if (cancel !== undefined) caller?.removeEventListener('abort', cancel)
+		}
+	}
+
+	#replaceHandler(
+		type: string,
+		previous: ModelContextEventHandler,
+		handler: ModelContextEventHandler,
+	): void {
+		if (previous !== null) this.removeEventListener(type, previous)
+		if (handler !== null) this.addEventListener(type, handler)
+	}
+
+	#cancel(controller: AbortController, name: string, caller: AbortSignal): void {
+		controller.abort(caller.reason)
+		this.dispatchEvent(new ToolCancelEvent('toolcancel', { toolName: name }))
 	}
 
 	// Projects one registered dictionary onto the `RegisteredTool` the IDL reports back: the

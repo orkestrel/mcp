@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { isWebMCPDocument, isWebMCPRegistry } from '@src/browser'
+import { isWebMCPDocument, isWebMCPRegistry, isWebMCPToolEvent } from '@src/browser'
 import { isRecord } from '@orkestrel/contract'
 import { createHostileValues } from '@orkestrel/test'
 import { buildRegistry, REGISTRY_MEMBERS } from '../../setupBrowser.js'
-import { installModelContext } from '../../fixtures/modelContext.js'
+import { installModelContext, ToolActivatedEvent } from '../../fixtures/modelContext.js'
 
 // src/browser/validators.ts — the WebMCP feature detection, run against a REAL `Document`.
 // The population that matters is platform class instances, not plain objects: a `Document`
@@ -108,5 +108,14 @@ describe('isWebMCPDocument — the feature detection a page runs before building
 			}, `hostile value ${index}`).not.toThrow()
 			expect(accepted, `hostile value ${index}`).toBe(false)
 		}
+	})
+})
+
+describe('isWebMCPToolEvent — narrowing a dispatched event onto the toolName shape', () => {
+	it('accepts a ToolActivatedEvent and refuses a plain Event', () => {
+		expect(isWebMCPToolEvent(new ToolActivatedEvent('toolactivated', { toolName: 'lookup' }))).toBe(
+			true,
+		)
+		expect(isWebMCPToolEvent(new Event('toolactivated'))).toBe(false)
 	})
 })

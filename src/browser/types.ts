@@ -206,7 +206,7 @@ export interface PageServerInterface {
 
 // ── The WebMCP bridge ────────────────────────────────────────────────────────
 //
-// The `WebMCP*` types transliterate the WebMCP WebIDL (`document.modelContext`) member for
+// The `WebMCP*` types transliterate the 2026-09-29 WebMCP draft (`document.modelContext`) member for
 // member, because TypeScript's DOM library declares none of it: the specification is
 // incubating in a Community Group and no browser ships the global (the chromestatus record,
 // read 2026-09-15 and last updated 2026-08-12, reports `Proposed` with `"flag": false` and
@@ -219,17 +219,20 @@ export interface PageServerInterface {
  * Describes a tool's observable effects as the WebMCP registry declares them.
  *
  * @remarks
- * Transliterates the WebMCP `ToolAnnotations` dictionary. The IDL defaults each member to
+ * Transliterates the 2026-09-29 WebMCP draft's `ToolAnnotations` dictionary. The IDL defaults each member to
  * `false`; this declaration keeps every member optional instead, because the bridge projects
  * from `@orkestrel/tool`'s `ToolAnnotations` and never invents a hint the author omitted. The
  * mapping is `pure` to `readOnlyHint`, `untrusted` to `untrustedContentHint`, and
  * `consequential` to `consequentialHint` — a fuller correspondence than the MCP wire's, which
  * has no counterpart for `untrusted` and spells the consequence `destructiveHint`.
+ * The `debugging` hint has no domain counterpart: publication omits it and adoption filters it before
+ * projecting the remaining hints.
  */
 export interface WebMCPAnnotations {
 	readonly readOnlyHint?: boolean
 	readonly untrustedContentHint?: boolean
 	readonly consequentialHint?: boolean
+	readonly debugging?: boolean
 }
 
 /**
@@ -338,12 +341,25 @@ export interface WebMCPExecuteOptions {
 }
 
 /**
+ * Carries the tool name a WebMCP execution event reports.
+ *
+ * @remarks
+ * Transliterates the `toolName` attribute of `ToolActivatedEvent` and `ToolCancelEvent` in
+ * the 2026-09-29 WebMCP draft, the only event member the bridge reads. The `isWebMCPToolEvent`
+ * guard narrows a dispatched `Event` onto this shape.
+ */
+export interface WebMCPToolEvent {
+	readonly toolName: string
+}
+
+/**
  * Represents the WebMCP tool registry a document exposes as `document.modelContext`.
  *
  * @remarks
- * Transliterates the WebMCP `ModelContext` interface, which extends `EventTarget`: the
- * operations plus the `toolchange` subscription the bridge republishes as
- * {@link ModelContextEventMap}'s `change`. Only the members the bridge touches are declared,
+ * Transliterates the 2026-09-29 WebMCP draft's `ModelContext` interface, which extends
+ * `EventTarget`: the operations plus the `toolchange`, `toolactivated`, and `toolcancel`
+ * subscriptions the bridge republishes as {@link ModelContextEventMap}'s `change`,
+ * `activate`, and `abort`. Only the members the bridge touches are declared,
  * exactly as {@link ScopeInterface} declares only what `createScopeServer` touches, so a real
  * `ModelContext` satisfies this structurally and an IDL-faithful double satisfies it without
  * implementing the whole of `EventTarget`.
@@ -367,8 +383,11 @@ export interface WebMCPRegistryInterface {
 	): Promise<unknown>
 	/** Subscribes to the registry's `toolchange` event. */
 	addEventListener(type: 'toolchange', listener: () => void): void
+	// The execution events carry the IDL's toolName attribute.
+	addEventListener(type: 'toolactivated' | 'toolcancel', listener: (event: Event) => void): void
 	/** Drops a `toolchange` subscription. */
 	removeEventListener(type: 'toolchange', listener: () => void): void
+	removeEventListener(type: 'toolactivated' | 'toolcancel', listener: (event: Event) => void): void
 }
 
 /**
@@ -400,17 +419,23 @@ export interface WebMCPProjection {
 }
 
 /**
- * Reports the moments a WebMCP registry's contents changed.
+ * Reports changes and execution events from a WebMCP registry.
  *
  * @remarks
  * Declared as a `type` alias rather than an interface, so the type-literal satisfies
- * `EventMap` structurally. One event, because the registry publishes one: WebMCP's
+ * `EventMap` structurally. The 2026-09-29 WebMCP draft's
  * `toolchange` names no tool and carries no payload, so the bridge republishes it as a bare
  * signal and a listener re-reads {@link ModelContextInterface.adopt} to learn what changed.
+ * `toolactivated` and `toolcancel` carry the tool name; cancellation uses the bridge's
+ * lifecycle verb `abort`.
  */
 export type ModelContextEventMap = {
 	/** Reports that the document's registry changed — re-read it to learn how. */
 	readonly change: readonly []
+	/** Reports the tool whose execution begins. */
+	readonly activate: readonly [name: string]
+	/** Reports the tool whose pending execution is aborted. */
+	readonly abort: readonly [name: string]
 }
 
 /**
@@ -444,14 +469,17 @@ export interface ModelContextPublishOptions {
 }
 
 /**
- * Options for {@link ModelContextInterface.adopt} — the origins whose tools are read.
+ * Options for {@link ModelContextInterface.adopt} — the origins and debugging tools to include.
  *
  * @remarks
  * `origins` is this package's one-word name for WebMCP's `fromOrigins`, forwarded unchanged.
  * Omitting it reads this document's own registrations.
+ * If `debugging` is `true`, tools carrying `annotations.debugging: true` are included;
+ * if `false` or omitted, they are excluded. Default: `false`.
  */
 export interface ModelContextAdoptOptions {
 	readonly origins?: readonly string[]
+	readonly debugging?: boolean
 }
 
 /**
@@ -470,7 +498,7 @@ export interface ModelContextAdoptOptions {
  * never registered are untouched.
  */
 export interface ModelContextInterface {
-	/** Holds the emitter republishing the registry's `toolchange` as `change`. */
+	/** Holds the emitter republishing registry changes, activation, and aborts. */
 	readonly emitter: EmitterInterface<ModelContextEventMap>
 	/**
 	 * Registers every tool the manager holds at this moment, then follows it.
@@ -532,9 +560,12 @@ export interface ModelContextInterface {
 	 */
 	publish(tools: ToolManagerInterface, options?: ModelContextPublishOptions): Promise<void>
 	/**
-	 * Reads the document's registered tools as locally executable tools.
+	 * Reads the document's registered tools as locally executable tools, excluding debugging tools unless requested.
 	 *
 	 * @remarks
+	 * Tools carrying `annotations.debugging: true` are excluded unless `options.debugging`
+	 * is `true`. Tools with a false or omitted hint are included either way.
+	 *
 	 * Each returned tool's `execute` runs the registry's `executeTool` and forwards its
 	 * `ToolContext.signal` as WebMCP's `signal`, so an agent-side abort reaches the foreign
 	 * tool. The value resolves unchanged: WebMCP's own sources disagree about whether a tool
@@ -545,8 +576,8 @@ export interface ModelContextInterface {
 	 * unreadable or hostile schema refuse the whole `adopt` call, and the arguments reach a
 	 * handler in another document that has to validate them anyway.
 	 *
-	 * @param options - The optional origin filter; see {@link ModelContextAdoptOptions}
-	 * @returns The registry's tools, in registry order
+	 * @param options - The origin and debugging filters; see {@link ModelContextAdoptOptions}
+	 * @returns The included registry tools, in registry order
 	 */
 	adopt(options?: ModelContextAdoptOptions): Promise<readonly ToolInterface[]>
 	/**

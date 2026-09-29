@@ -1,5 +1,5 @@
-import type { WebMCPDocument, WebMCPRegistryInterface } from './types.js'
-import { isFunction, objectOf } from '@orkestrel/contract'
+import type { WebMCPDocument, WebMCPRegistryInterface, WebMCPToolEvent } from './types.js'
+import { isFunction, isString, objectOf } from '@orkestrel/contract'
 
 // The browser face's guards. Both narrow a FOREIGN surface no TypeScript library declares, so
 // each enforces the published WebMCP contract and no more: the operations the bridge calls and
@@ -58,4 +58,23 @@ export function isWebMCPRegistry(value: unknown): value is WebMCPRegistryInterfa
  */
 export function isWebMCPDocument(value: unknown): value is WebMCPDocument {
 	return objectOf({ modelContext: isWebMCPRegistry })(value)
+}
+
+/**
+ * Determines whether an unknown value is a WebMCP execution event.
+ *
+ * @remarks
+ * Reads the IDL's `toolName` attribute and nothing else, so it admits a `ToolActivatedEvent`
+ * and a `ToolCancelEvent` and refuses a plain `Event`.
+ *
+ * @param value - The unknown value to inspect
+ * @returns True if the value carries a string `toolName`; false otherwise
+ *
+ * @example
+ * ```ts
+ * isWebMCPToolEvent(new Event('toolactivated')) // false
+ * ```
+ */
+export function isWebMCPToolEvent(value: unknown): value is WebMCPToolEvent {
+	return objectOf({ toolName: isString })(value)
 }
