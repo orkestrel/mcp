@@ -72,7 +72,7 @@
 		"format": "oxfmt --config .oxfmtrc.json --write .",
 		"format:check": "oxfmt --config .oxfmtrc.json --check .",
 		"lint:check": "oxlint --config .oxlintrc.json --deny-warnings .",
-		"test": "npm run test:src && npm run test:policy && npm run test:config && npm run test:setup && npm run test:guides && npm run test:conformance && npm run test:integration",
+		"test": "npm run test:src && npm run test:policy && npm run test:config && npm run test:setup && npm run test:setup:browser && npm run test:guides && npm run test:conformance && npm run test:integration",
 		"test:src": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:core --project src:browser --project src:server",
 		"test:src:core": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:core",
 		"test:src:browser": "vitest run --config vite.config.ts --no-cache --reporter=dot --project src:browser",
@@ -92,7 +92,8 @@
 		"prepack": "npm run build",
 		"prepublishOnly": "npm run format:check && npm run lint:check && npm run check && npm run build && npm test && npm run test:distribution -- --mode release",
 		"test:bench": "vitest bench --config vite.config.ts --no-cache --project probe",
-		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup"
+		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup",
+		"test:setup:browser": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup:browser"
 	},
 	"dependencies": {
 		"@orkestrel/codec": "^0.0.4",
