@@ -41,18 +41,16 @@ import { resolveBrowser, resolvePinnedBrowser } from '../configs/browsers.js'
 import { afterAll, describe, expect, it } from 'vitest'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+// npm's JavaScript entry, run by this Node with no shell between: a Windows shell reads `^` in a
+// range argument as its escape character and drops it, so a caret spec reached npm as an exact
+// version and no longer matched the consumer's override for the same package.
+const NPM_CLI = resolveNpmCli()
 // The compiler this workspace installs, run as a command rather than called in
 // process: the command and its plain-text diagnostics are the same across the
 // compiler majors this toolchain supports, and its in-process API is not. It is
 // resolved from the workspace under proof, so a consumer of the packed artifact is
 // checked by the same compiler that workspace's own `check` script runs.
 const TSC = createRequire(join(ROOT, 'package.json')).resolve('typescript/bin/tsc')
-// Windows needs a shell to launch a `.cmd`: Node refuses one directly since the
-// batch-argument hardening, and `spawnSync` returns `EINVAL` with a null status
-// rather than an exit code a caller can read. Every following argument is a literal or
-// a path this file built, so the shell has nothing to escape.
-const SHELL = process.platform === 'win32'
 // `prepublishOnly` runs this proof as `npm run test:distribution -- --mode release`.
 // Release is the publish gate, so evidence it cannot obtain fails there and skips
 // everywhere else: a gate that passes on missing evidence proves nothing.
@@ -79,19 +77,21 @@ const CONSUMER_MANIFEST = `${JSON.stringify(
 		private: true,
 		type: 'module',
 		overrides: {
-			'@orkestrel/abort': '^0.0.11',
-			'@orkestrel/budget': '^0.0.11',
-			'@orkestrel/codec': '^0.0.4',
-			'@orkestrel/database': '^0.0.15',
-			'@orkestrel/process': '^0.0.13',
-			'@orkestrel/queue': '^0.0.14',
-			'@orkestrel/router': '^0.0.15',
-			'@orkestrel/server': '^0.0.20',
-			'@orkestrel/sse': '^0.0.8',
-			'@orkestrel/timeout': '^0.0.11',
-			'@orkestrel/tool': '^0.0.16',
-			'@orkestrel/websocket': '^0.0.13',
-			'@orkestrel/workspace': '^0.0.9',
+			'@orkestrel/abort': '^0.0.12',
+			'@orkestrel/budget': '^0.0.12',
+			'@orkestrel/codec': '^0.0.5',
+			'@orkestrel/contract': '^0.0.18',
+			'@orkestrel/database': '^0.0.16',
+			'@orkestrel/emitter': '^0.0.11',
+			'@orkestrel/process': '^0.0.14',
+			'@orkestrel/queue': '^0.0.15',
+			'@orkestrel/router': '^0.0.16',
+			'@orkestrel/server': '^0.0.21',
+			'@orkestrel/sse': '^0.0.9',
+			'@orkestrel/timeout': '^0.0.12',
+			'@orkestrel/tool': '^0.0.17',
+			'@orkestrel/websocket': '^0.0.14',
+			'@orkestrel/workspace': '^0.0.10',
 		},
 	},
 	undefined,
@@ -109,10 +109,10 @@ process.stdout.write(JSON.stringify(Object.keys(entry).sort()))
 // composition nobody chose.
 const COMPOSITION: readonly string[] = [
 	'@orkestrel/agent@^0.0.23',
-	'@orkestrel/tool@^0.0.16',
-	'@orkestrel/ndjson@^0.0.10',
-	'@orkestrel/router@^0.0.15',
-	'@orkestrel/server@^0.0.20',
+	'@orkestrel/tool@^0.0.17',
+	'@orkestrel/ndjson@^0.0.11',
+	'@orkestrel/router@^0.0.16',
+	'@orkestrel/server@^0.0.21',
 ]
 // The installed package whose own module names the root entries the page evaluates.
 const COMPOSED = '@orkestrel/agent'
@@ -311,12 +311,31 @@ function readOutput(result: SpawnSyncReturns<string>): string {
 	return `${result.stdout ?? ''}${result.stderr ?? ''}`.trim()
 }
 
+// npm_execpath names the entry when an npm script launched this run; otherwise the entry sits
+// beside a Windows Node and under the POSIX prefix's lib directory.
+function resolveNpmCli(): string {
+	const candidates = [
+		process.env.npm_execpath,
+		join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+		join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+	]
+	const entry = candidates.find(
+		(candidate) => candidate !== undefined && /\.c?js$/u.test(candidate) && existsSync(candidate),
+	)
+	if (entry === undefined) throw new Error('No npm JavaScript entry sits beside this Node')
+	return entry
+}
+
 function runNpm(args: readonly string[], cwd: string): SpawnSyncReturns<string> {
-	return spawnSync(NPM, [...args], {
+	// A Windows environment block folds names by case, so an inherited NPM_CONFIG_CACHE would
+	// outrank the scratch cache this proof adds.
+	const inherited = Object.entries(process.env).filter(
+		([name]) => name.toLowerCase() !== 'npm_config_cache',
+	)
+	return spawnSync(process.execPath, [NPM_CLI, ...args], {
 		cwd,
 		encoding: 'utf8',
-		env: { ...process.env, npm_config_cache: CACHE },
-		shell: SHELL,
+		env: { ...Object.fromEntries(inherited), npm_config_cache: CACHE },
 		windowsHide: true,
 	})
 }
