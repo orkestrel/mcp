@@ -76,8 +76,9 @@ and the browser face (`./browser`), which is ESM only.
 
 `npm run test:conformance` starts the real Streamable HTTP server from this
 package's source and runs
-`@modelcontextprotocol/conformance@0.2.0-alpha.10` against MCP revision
-`2026-07-28`. The recorded result is **23 passed / 0 failed**. That is a
+`@modelcontextprotocol/conformance@0.2.0-alpha.11` against MCP revision
+`2026-07-28`. The recorded result is **147 passed / 0 failed**, from the run on
+2026-09-29 against the built `dist/`. That is a
 genuine foreign MCP client driving this server end to end, and it is
 evidence about the wire. It resolves the runner from `node_modules` and
 drives a loopback socket, so the run is offline and `npm test` gates it.

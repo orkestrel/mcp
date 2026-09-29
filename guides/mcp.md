@@ -4797,6 +4797,12 @@ closed — while ordinary upstream completion closes the response without invent
 - [Client-side durable tasks and the absent poll loop](../tests/src/core/MCPTaskClient.test.ts)
 - [A task transition filtered, stamped, and carried to a subscribed client](../tests/src/core/MCPClient.test.ts)
 - [What the shared HTTP client transport owes on release, on headers, and on a non-success reply](../tests/src/core/transports/HTTPClientTransport.test.ts)
+- [The browser bridge to the WebMCP registry, published, adopted, and republished against the IDL-faithful double](../tests/src/browser/ModelContext.test.ts)
+- [The browser transports, scope server, page server, and feature detection composed against the Node-face servers](../tests/src/browser/factories.test.ts)
+- [The WebMCP projections and descriptor matching a bridge reconciles against](../tests/src/browser/helpers.test.ts)
+- [The WebMCP registry, document, and tool-event narrowing guards](../tests/src/browser/validators.test.ts)
+- [The message-port transport contract over a real `MessageChannel`](../tests/src/browser/transports/MessagePortTransport.test.ts)
+- [The WebSocket client transport releasing its socket on close and rejecting a send the channel cannot carry](../tests/src/browser/transports/WebSocketClientTransport.test.ts)
 - [The server face composed end to end over a real `node:http` listener](../tests/src/server/integration.test.ts)
 - [HTTP response lifecycle composition](../tests/src/server/HTTPDisconnect.test.ts)
 - [HTTP handler integration](../tests/src/server/handlers.test.ts)
@@ -4958,7 +4964,8 @@ A reproducible run is `npm run test:conformance`: it starts the real Streamable 
 server from this package's source and runs `@modelcontextprotocol/conformance` — the
 release `package.json` pins as a development dependency — against specification revision
 `2026-07-28`. That is a genuine foreign MCP client driving this surface end to end, and the
-recorded server-mode result is **110 passed / 0 failed**, the `dns-rebinding-protection`
+recorded server-mode result is **147 passed / 0 failed** at runner `0.2.0-alpha.11`, from
+the run on 2026-09-29 against the built `dist/`, the `dns-rebinding-protection`
 security regression guard (2 passed) included. `tests/conformance.test.ts` records that
 result scenario by scenario, so a scenario that stops running reddens instead of vanishing
 into a total. `http-custom-header-server-validation` is green at 9 passed: SEP-2243 wants a
@@ -5053,7 +5060,7 @@ scope:
 
 **The browser face's honest proof is a real host, not a foreign client.** There is no cheap
 foreign browser MCP client to point at it, and inventing one would be a worse instrument
-than naming the limit — a fixture we wrote agreeing with code we wrote is not independent
+than naming the limit — a fixture this package's authors wrote agreeing with code they wrote is not independent
 evidence. So the browser claims are proven by Playwright driving real Chromium: a real
 `WebSocket`, a real `fetch`, and a real `MessageChannel`, against a real Node server running
 outside the page's module graph. That is a real **host** exercising the real platform APIs,
@@ -5335,7 +5342,8 @@ omission, and a consumer meets each of them at install time rather than in a bui
 
 **IDE integration is not claimed.** A real foreign protocol client drives the Streamable
 HTTP surface end to end — `@modelcontextprotocol/conformance` against revision
-`2026-07-28`, recorded at 110 passed / 0 failed — and that is a claim about the
+`2026-07-28`, recorded at 147 passed / 0 failed by runner `0.2.0-alpha.11` in the run on
+2026-09-29 against the built `dist/` — and that is a claim about the
 wire. No IDE, editor, or agent host has driven this server. The rule is this repository's
 own: a claim about an external client stays unproven until one representative real client
 of that class drives it end to end, and no client of the IDE class has. **What it costs:**
