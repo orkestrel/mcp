@@ -80,7 +80,7 @@ const CONSUMER_MANIFEST = `${JSON.stringify(
 			'@orkestrel/abort': '^0.0.12',
 			'@orkestrel/budget': '^0.0.12',
 			'@orkestrel/codec': '^0.0.5',
-			'@orkestrel/contract': '^0.0.18',
+			'@orkestrel/contract': '^0.0.19',
 			'@orkestrel/database': '^0.0.16',
 			'@orkestrel/emitter': '^0.0.11',
 			'@orkestrel/process': '^0.0.14',
@@ -89,7 +89,7 @@ const CONSUMER_MANIFEST = `${JSON.stringify(
 			'@orkestrel/server': '^0.0.21',
 			'@orkestrel/sse': '^0.0.9',
 			'@orkestrel/timeout': '^0.0.12',
-			'@orkestrel/tool': '^0.0.17',
+			'@orkestrel/tool': '^0.0.18',
 			'@orkestrel/websocket': '^0.0.14',
 			'@orkestrel/workspace': '^0.0.10',
 		},
@@ -109,7 +109,7 @@ process.stdout.write(JSON.stringify(Object.keys(entry).sort()))
 // composition nobody chose.
 const COMPOSITION: readonly string[] = [
 	'@orkestrel/agent@^0.0.23',
-	'@orkestrel/tool@^0.0.17',
+	'@orkestrel/tool@^0.0.18',
 	'@orkestrel/ndjson@^0.0.11',
 	'@orkestrel/router@^0.0.16',
 	'@orkestrel/server@^0.0.21',
