@@ -111,7 +111,7 @@
 		"@orkestrel/probe": "^0.0.19",
 		"@orkestrel/router": "^0.0.16",
 		"@orkestrel/scaffold": "^0.0.82",
-		"@orkestrel/server": "^0.0.21",
+		"@orkestrel/server": "^0.0.22",
 		"@orkestrel/test": "^0.0.24",
 		"@types/node": "^26.6.3",
 		"@vitest/browser-playwright": "^4.1.11",
@@ -124,7 +124,7 @@
 	},
 	"peerDependencies": {
 		"@orkestrel/router": "^0.0.16",
-		"@orkestrel/server": "^0.0.21"
+		"@orkestrel/server": "^0.0.22"
 	},
 	"engines": {
 		"node": ">=22.12.0"
