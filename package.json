@@ -97,11 +97,11 @@
 	},
 	"dependencies": {
 		"@orkestrel/codec": "^0.0.5",
-		"@orkestrel/contract": "^0.0.18",
+		"@orkestrel/contract": "^0.0.19",
 		"@orkestrel/emitter": "^0.0.11",
 		"@orkestrel/process": "^0.0.14",
 		"@orkestrel/sse": "^0.0.9",
-		"@orkestrel/tool": "^0.0.17",
+		"@orkestrel/tool": "^0.0.18",
 		"@orkestrel/websocket": "^0.0.14"
 	},
 	"devDependencies": {
