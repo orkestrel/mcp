@@ -281,10 +281,13 @@ export const POLICY_TEST_GLOB = 'tests/{app,src}/**/*.test.ts'
 // Compose suppression tokens so the instrument does not report its own definitions or controls.
 export const POLICY_SUPPRESSION_DIRECTIVE = ['oxlint', '-disable'].join('')
 
-/** Matches the source, test, config, and script files inspected for lint suppression directives. */
+/** Names the formatter directive the text sweep refuses, composed so the instrument does not report itself. */
+export const POLICY_FORMATTER_DIRECTIVE = ['prettier', '-ignore'].join('')
+
+/** Matches the source, test, config, script, and sheet files inspected for lint and formatter suppression directives. */
 export const POLICY_SUPPRESSION_GLOB: readonly string[] = Object.freeze([
-	'{src,app,tests,configs,scripts}/**/*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}',
-	'*.{cjs,cts,js,jsx,mjs,mts,ts,tsx,vue}',
+	'{src,app,tests,configs,scripts}/**/*.{cjs,css,cts,js,jsx,mjs,mts,scss,ts,tsx,vue}',
+	'*.{cjs,css,cts,js,jsx,mjs,mts,scss,ts,tsx,vue}',
 ])
 
 /** Lists the rules whose workspace-wide lint wiring must not be weakened by configuration. */
@@ -305,9 +308,11 @@ export const POLICY_WIRING_ROOTS: readonly string[] = Object.freeze([
 	'configs',
 ])
 
-/** Matches either lint suppression token the text sweep refuses. */
+/** Matches either lint suppression token or the formatter directive the text sweep refuses. */
 export const POLICY_SUPPRESSION_PATTERN = new RegExp(
-	[['eslint', '-disable'].join(''), POLICY_SUPPRESSION_DIRECTIVE].join('|'),
+	[['eslint', '-disable'].join(''), POLICY_SUPPRESSION_DIRECTIVE, POLICY_FORMATTER_DIRECTIVE].join(
+		'|',
+	),
 	'u',
 )
 
@@ -577,7 +582,7 @@ export function inspectPolicySetup(root: string): readonly PolicyViolation[] {
 }
 
 /**
- * Inspects code-shaped workspace files for lint suppression directives.
+ * Inspects code-shaped and sheet workspace files for lint and formatter suppression directives.
  *
  * @param root - The workspace root to inspect.
  * @returns Every suppression occurrence in path and line order.
@@ -594,7 +599,7 @@ export function inspectPolicySuppressions(root: string): readonly PolicyViolatio
 					createPolicyViolation(
 						'suppression',
 						path,
-						'file carries a lint suppression directive',
+						'file carries a lint or formatter suppression directive',
 						index + 1,
 					),
 				)
@@ -2684,6 +2689,17 @@ export const POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 			{
 				path: 'probeRoot.tsx',
 				content: `// ${POLICY_SUPPRESSION_DIRECTIVE}\ndebugger\n`,
+			},
+		],
+	},
+	{
+		label: 'rejects a formatter directive in a sheet partial',
+		membership: 'sheet files in the suppression population',
+		rule: 'suppression',
+		files: [
+			{
+				path: 'src/styles/_control.scss',
+				content: `// ${POLICY_FORMATTER_DIRECTIVE}\n.control {\n\tcolor: red;\n}\n`,
 			},
 		],
 	},

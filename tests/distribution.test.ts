@@ -86,7 +86,7 @@ const CONSUMER_MANIFEST = `${JSON.stringify(
 			'@orkestrel/process': '^0.0.14',
 			'@orkestrel/queue': '^0.0.15',
 			'@orkestrel/router': '^0.0.16',
-			'@orkestrel/server': '^0.0.21',
+			'@orkestrel/server': '^0.0.22',
 			'@orkestrel/sse': '^0.0.9',
 			'@orkestrel/timeout': '^0.0.12',
 			'@orkestrel/tool': '^0.0.18',
@@ -112,7 +112,7 @@ const COMPOSITION: readonly string[] = [
 	'@orkestrel/tool@^0.0.18',
 	'@orkestrel/ndjson@^0.0.11',
 	'@orkestrel/router@^0.0.16',
-	'@orkestrel/server@^0.0.21',
+	'@orkestrel/server@^0.0.22',
 ]
 // The installed package whose own module names the root entries the page evaluates.
 const COMPOSED = '@orkestrel/agent'
