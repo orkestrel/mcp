@@ -11,7 +11,8 @@
 //
 // What is proven here is the narrowing that stands between the runner and the fixture, asserted
 // against the real module `setup` loads — reached by a second route, a direct import instead of
-// the isolated Vite runner's `ssrLoadModule`.
+// the isolated Vite runner's `ssrLoadModule` — and that each fixture the admitted `start`
+// returns drains only the frames it recorded.
 
 import { describe, expect, it } from 'vitest'
 import { isBrowserFixtureModule } from './setupGlobal.js'
@@ -35,6 +36,27 @@ describe('isBrowserFixtureModule', () => {
 			expect(await answered.json()).toEqual([])
 		} finally {
 			await running.stop()
+		}
+	})
+
+	it('starts every fixture the admitted start returns with a frame log of its own', async () => {
+		const posting = await fixtureModule.start()
+		const watching = await fixtureModule.start()
+		try {
+			const body = '{"jsonrpc":"2.0","method":"tools/list","id":"record-1"}'
+			const answered = await fetch(`${posting.base}/headers`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body,
+			})
+			expect(answered.status).toBe(200)
+			// The `setup` project shares one module graph across the files a worker runs, so a
+			// frame one fixture recorded must never surface on another fixture's drain.
+			expect(await (await fetch(`${watching.base}/recorded`)).json()).toEqual([])
+			expect(await (await fetch(`${posting.base}/recorded`)).json()).toEqual([body])
+		} finally {
+			await watching.stop()
+			await posting.stop()
 		}
 	})
 

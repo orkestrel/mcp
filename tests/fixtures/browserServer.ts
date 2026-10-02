@@ -1,5 +1,11 @@
 // This external fixture server is loaded in its own SSR context by tests/setupGlobal.ts.
-import type { MiddlewareContext, NextFunction, UpgradeHandler } from '@orkestrel/server'
+import type {
+	MiddlewareContext,
+	MiddlewareHandler,
+	NextFunction,
+	UpgradeHandler,
+} from '@orkestrel/server'
+import type { RecorderInterface } from '@orkestrel/test'
 import type { MCPServerInterface } from '@src/core'
 import type { MCPOriginOptions, MCPSessionState } from '@src/server'
 import {
@@ -26,13 +32,6 @@ import {
 import { isRecord, isString } from '@orkestrel/contract'
 import { createRecorder } from '@orkestrel/test'
 import { createCalculatorServer } from '../setup.js'
-
-// Every raw frame a recording peer has received since the last drain. The browser project
-// cannot see inside this process, so a claim about what the PEER received has to be read
-// back over the wire — that is what `/recorded` is for. Kept module-scope and cleared on
-// read so each scenario starts from an empty log. The recorder is `@orkestrel/test`'s, and
-// its `handler` is the frame sink each peer subscribes directly.
-const RECORDER = createRecorder<readonly [string]>()
 
 /** Describes the running Node fixture exposed to the browser project's global setup. */
 export interface BrowserFixtureInterface {
@@ -85,17 +84,18 @@ export async function applyBrowserCORS(
 }
 
 /**
- * Answers with every recorded frame and clears the log.
+ * Answers with every frame a fixture's recorder holds and clears the log.
  *
  * @remarks
  * The drain is what this fixture adds over the recorder: it builds the HTTP response the
  * browser project reads the frames back through, and leaves the log empty behind it.
  *
+ * @param recorder - The frame log of the fixture that serves `/recorded`
  * @returns The recorded frames as a JSON array, leaving the log empty
  */
-export function drainRecorded(): Response {
-	const frames = RECORDER.calls.map(([text]) => text)
-	RECORDER.clear()
+export function drainRecorded(recorder: RecorderInterface<readonly [string]>): Response {
+	const frames = recorder.calls.map(([text]) => text)
+	recorder.clear()
 	return Response.json(frames)
 }
 
@@ -127,20 +127,22 @@ export async function echoHeaders(request: Request): Promise<Response> {
 }
 
 /**
- * Records every JSON-RPC body POSTed to the fixture before the route handles it.
+ * Creates the middleware that records every JSON-RPC body POSTed to the fixture before the
+ * route handles it.
  *
- * @param request - The inbound request (cloned, so the route still reads its body)
- * @param _context - The unused per-request middleware context
- * @param next - The rest of the chain
- * @returns Whatever the rest of the chain answered
+ * @remarks
+ * The middleware reads a clone of the request, so the route still reads its body.
+ *
+ * @param recorder - The frame log of the fixture that registers the middleware
+ * @returns The middleware that records each POST body, then answers with the rest of the chain
  */
-export async function recordInbound(
-	request: Request,
-	_context: MiddlewareContext<MCPSessionState>,
-	next: NextFunction,
-): Promise<Response> {
-	if (request.method === 'POST') RECORDER.handler(await request.clone().text())
-	return next()
+export function createInboundRecorder(
+	recorder: RecorderInterface<readonly [string]>,
+): MiddlewareHandler<MCPSessionState> {
+	return async (request, _context, next) => {
+		if (request.method === 'POST') recorder.handler(await request.clone().text())
+		return next()
+	}
 }
 
 /**
@@ -155,9 +157,13 @@ export async function recordInbound(
  * the peer received a client-initiated notification is then readable from `/recorded`.
  *
  * @param mcp - The MCP server every accepted connection is bound to
+ * @param recorder - The frame log of the fixture that registers the handler
  * @returns The upgrade handler to register for the `/record` path
  */
-export function createRecordingWebSocketHandler(mcp: MCPServerInterface): UpgradeHandler {
+export function createRecordingWebSocketHandler(
+	mcp: MCPServerInterface,
+	recorder: RecorderInterface<readonly [string]>,
+): UpgradeHandler {
 	return (request, socket, head) => {
 		if (upgradeRequestPath(request) !== '/record') return false
 		const upgrade = request.headers['upgrade']
@@ -171,7 +177,7 @@ export function createRecordingWebSocketHandler(mcp: MCPServerInterface): Upgrad
 			head,
 			protocol: MCP_WEBSOCKET_SUBPROTOCOL,
 		})
-		webSocket.emitter.on('message', RECORDER.handler)
+		webSocket.emitter.on('message', recorder.handler)
 		const transport = new WebSocketServerTransport(webSocket)
 		bindServer(mcp, createDuplexServerTransport(transport))
 		void transport.start()
@@ -206,6 +212,10 @@ export function createRawWebSocketHandler(): UpgradeHandler {
  */
 export async function start(): Promise<BrowserFixtureInterface> {
 	const mcp = createCalculatorServer()
+	// The browser project cannot see inside this process, so a claim about what the peer
+	// received is read back over the wire from `/recorded`. Each fixture owns its log, because
+	// the Node `setup` project shares one module graph across the files a worker runs.
+	const recorder = createRecorder<readonly [string]>()
 	// applyBrowserCORS is a permissive test double: it approves every requesting Origin, so
 	// this fixture explicitly delegates the built-in enforcement sites to that upstream layer.
 	const origin: MCPOriginOptions = { enabled: false }
@@ -227,7 +237,7 @@ export async function start(): Promise<BrowserFixtureInterface> {
 		method: 'GET',
 		path: '/recorded',
 		name: 'recorded',
-		handler: drainRecorded,
+		handler: () => drainRecorded(recorder),
 	})
 	const server = createServer<MCPSessionState>({
 		dispatcher,
@@ -235,10 +245,10 @@ export async function start(): Promise<BrowserFixtureInterface> {
 		host: '127.0.0.1',
 	})
 	server.use(applyBrowserCORS)
-	server.use(recordInbound)
+	server.use(createInboundRecorder(recorder))
 	server.use(createMCPSession<MCPSessionState>({ origin }))
 	server.upgrade(createWebSocketServer(mcp, { emitter: server.emitter }))
-	server.upgrade(createRecordingWebSocketHandler(mcp))
+	server.upgrade(createRecordingWebSocketHandler(mcp, recorder))
 	server.upgrade(createRawWebSocketHandler())
 	const port = await server.start()
 	return {
