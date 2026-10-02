@@ -3,8 +3,9 @@
 // Each case asserts a contract a consuming suite relies on, and derives what it expects by a
 // route the module cannot share: an envelope goes through the shipped wire parser rather than
 // back through the factory that built it, the header table's own `parsed` column is checked
-// against the real `parseRequestContext`, a nesting depth is walked rather than recomputed, and
-// every instrument is calibrated against the outcome its own documentation names.
+// against the real `parseRequestContext`, a nesting depth is walked rather than recomputed, the
+// timer lead is measured against real host timers on `performance.now()`, and every instrument
+// is calibrated against the outcome its own documentation names.
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { BrowserFixtureInterface } from './fixtures/browserServer.js'
@@ -32,7 +33,7 @@ import {
 } from '@src/core'
 import { createToolManager } from '@orkestrel/tool'
 import { isRecord } from '@orkestrel/contract'
-import { collect, createRecorder, waitForDelay } from '@orkestrel/test'
+import { collect, createRecorder, retryUntil, waitForDelay } from '@orkestrel/test'
 import {
 	buildNestedRecord,
 	collectSSE,
@@ -66,8 +67,10 @@ import {
 	TASK_CAPABILITIES,
 	TestTaskManager,
 	throwOnRead,
+	TIMER_LEAD,
 	waitForSettlement,
 } from './setup.js'
+import { alignLoopClock } from './setupServer.js'
 import { start } from './fixtures/browserServer.js'
 
 const METHOD_OPTIONS: MCPMethodOptions = { signal: new AbortController().signal }
@@ -621,6 +624,29 @@ describe('createManualClock', () => {
 
 		expect(clock.now()).toBe(1_075)
 		expect(createManualClock().now()).toBe(0)
+	})
+})
+
+describe('TIMER_LEAD', () => {
+	it('covers a real timer that ends short of its duration when armed late in a loop-clock millisecond', async () => {
+		const spans: number[] = []
+		// The control: the full duration fails as a lower bound on at least one aligned span.
+		await retryUntil(
+			'a 10 ms timer armed late in a loop-clock millisecond ending short of 10 ms',
+			async () => {
+				alignLoopClock(0.9)
+				const started = performance.now()
+				const delayed = waitForDelay(10)
+				alignLoopClock()
+				await delayed
+				const span = performance.now() - started
+				spans.push(span)
+				return span
+			},
+			(span) => span < 10,
+			{ attempts: 50, budget: 5_000 },
+		)
+		for (const span of spans) expect(span).toBeGreaterThanOrEqual(10 - TIMER_LEAD)
 	})
 })
 

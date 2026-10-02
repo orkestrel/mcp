@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { basename, delimiter, dirname, join } from 'node:path'
 import { isRecord } from '@orkestrel/contract'
 import { PROCESS_DRAIN, PROCESS_EVIDENCE } from '@orkestrel/process'
-import { createJSONRPCRequest, waitForSettlement } from '../../../setup.js'
+import { createJSONRPCRequest, TIMER_LEAD, waitForSettlement } from '../../../setup.js'
 import { requireValue, waitForCondition, waitForDelay, waitForEvent } from '@orkestrel/test'
 import { createScratch, destroyScratch, isRunning } from '@orkestrel/test/server'
 import { DEFAULT_MCP_REQUEST_TIMEOUT } from '@src/core'
@@ -205,7 +205,7 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 			expect(isRunning(pid)).toBe(true)
 			expect(errors).toEqual([])
 			expect(closes).toBe(0)
-			expect(elapsed).toBeGreaterThanOrEqual(delivery)
+			expect(elapsed).toBeGreaterThanOrEqual(delivery - TIMER_LEAD)
 		} finally {
 			await transport.close()
 		}
@@ -235,7 +235,7 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 			const elapsed = performance.now() - opened
 
 			expect(isRunning(pid)).toBe(true)
-			expect(elapsed).toBeGreaterThanOrEqual(DEFAULT_MCP_DELIVERY)
+			expect(elapsed).toBeGreaterThanOrEqual(DEFAULT_MCP_DELIVERY - TIMER_LEAD)
 		} finally {
 			await transport.close()
 		}

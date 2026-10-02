@@ -1,9 +1,10 @@
 // Proof of `tests/setupServer.ts` — the Node-only harnesses the server suites are driven over.
 //
-// Every case here uses the real resource the helper exists to provide: real `node:stream`
-// duplexes, real listeners on `127.0.0.1` ephemeral ports, real RFC 6455 handshakes, and a real
-// `@orkestrel/guide` source view. Nothing is simulated, because a harness that only works
-// against a simulation is a harness that proves nothing about the suites it carries.
+// Every case here uses the real resource the helper exists to provide: real host timers measured
+// on `performance.now()`, real `node:stream` duplexes, real listeners on `127.0.0.1` ephemeral
+// ports, real RFC 6455 handshakes, and a real `@orkestrel/guide` source view. Nothing is
+// simulated, because a harness that only works against a simulation is a harness that proves
+// nothing about the suites it carries.
 //
 // `findMissingNamedImports` also has a fence-grammar battery in `tests/guides.test.ts`, which is
 // the suite that consumes it; what it owns here is its boundary — which specifier is checked
@@ -27,6 +28,7 @@ import {
 	waitForSettlement,
 } from './setup.js'
 import {
+	alignLoopClock,
 	closeResource,
 	createClockMiddleware,
 	createDelayMiddleware,
@@ -38,6 +40,7 @@ import {
 	isIncomingMessage,
 	openClientSocket,
 	readClientFrames,
+	readLoopClock,
 	startServer,
 	startUpgradeServer,
 	upgradeRequest,
@@ -379,5 +382,33 @@ describe('the request middlewares', () => {
 		} finally {
 			await closeResource(handle)
 		}
+	})
+})
+
+describe('readLoopClock', () => {
+	it('advances in whole milliseconds by the time performance.now() measures between readings', () => {
+		const opened = performance.now()
+		const before = readLoopClock()
+		const inner = performance.now()
+		alignLoopClock(5)
+		const outer = performance.now()
+		const after = readLoopClock()
+		const closed = performance.now()
+		expect(Number.isInteger(before)).toBe(true)
+		expect(Number.isInteger(after)).toBe(true)
+		// Each reading truncates by under 1 ms and a coarse clock trails by under 1 ms more.
+		expect(after - before).toBeGreaterThan(outer - inner - 2)
+		expect(after - before).toBeLessThan(closed - opened + 2)
+	})
+})
+
+describe('alignLoopClock', () => {
+	it('returns after the loop clock ticks and the offset elapses on performance.now()', () => {
+		const before = readLoopClock()
+		const opened = performance.now()
+		alignLoopClock(0.5)
+		const closed = performance.now()
+		expect(readLoopClock()).toBeGreaterThan(before)
+		expect(closed - opened).toBeGreaterThanOrEqual(0.5)
 	})
 })
