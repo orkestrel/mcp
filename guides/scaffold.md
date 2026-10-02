@@ -124,6 +124,8 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `BASE_DEV_DEPENDENCIES`           | const | Holds the tooling versions scaffold and every generated workspace share.                               |
 | `BIN_CONFIGS`                     | const | Lists the configuration files a workspace that ships its own executable adds, frozen.                  |
 | `BIN_ENTRY_PATH`                  | const | Names the executable entry whose presence makes a workspace `bin`.                                     |
+| `BROWSE_DEV_DEPENDENCIES`         | const | Names the development dependency a browser or styles surface adds.                                     |
+| `BROWSE_UPSTREAM`                 | const | Lists the packages `@orkestrel/browser` depends on at runtime, directly or transitively, frozen.       |
 | `CANON_PATHS`                     | const | Lists the instruction-canon paths staged for reading rather than for a target, frozen.                 |
 | `CATALOG_AGENT_PATH`              | const | Names the agent file whose marker-bounded package table the catalog verb alone owns.                   |
 | `CATALOG_CLOSING_MARKER`          | const | Names the marker closing the package table inside `CATALOG_AGENT_PATH`.                                |
@@ -664,6 +666,10 @@ and `configs/agents/tsconfig.skills.json` selects `skills`. A containing directo
 any of those facts by itself. `tests/distribution.test.ts` selects nothing: the published `src`
 axis and the sheet faces the target ships already decide the `distribution` project, and the file is
 planned from that.
+
+A target whose `package.json` file names the `@orkestrel/scaffold` package is this package's own
+checkout, the source the vendored host is staged from. The `repair` and `overwrite` verbs refuse it
+with the `TARGET` code before either writes, and the `audit` verb reads it like any other target.
 
 `vendors` is not reconstructed. Its artifact, `scripts/service.sh`, is a birth-owned inventory
 skeleton rather than a working installer, so edited script text is not a trustworthy declaration of
@@ -1216,7 +1222,9 @@ Object.keys(exports) // ['./styles', './styles/scss', './styles/themes', './styl
 ```
 
 Each sheet face adds its `check:src:<face>`, `build:src:<face>`, and `test:src:<face>` scripts, and
-`test:src:<face>` builds the face before it runs the face's project. With themes, `build:src:styles`
+`test:src:<face>` builds the face before it runs the face's project. The face's
+`tests/src/<face>/index.test.ts` imports the built `dist/src/<face>/index.css` with `?raw` by a
+path relative to the test file. With themes, `build:src:styles`
 builds the themes target after the base face. The root configuration registers each face's project
 by its wrapper, and the wrapper composes it through the root `sheetProject` factory, which runs it
 in Playwright Chromium with `isolate: false` and loads `tests/setup.ts`, `tests/setupBrowser.ts`,
