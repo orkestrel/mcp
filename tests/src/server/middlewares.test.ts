@@ -11,6 +11,8 @@ import {
 	createMCPClient,
 	createMCPLegacy,
 	createMCPLegacyClientTransport,
+	createMCPServer,
+	MCPError,
 	MCP_FALLBACK_VERSION,
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
@@ -21,6 +23,7 @@ import {
 } from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
+import { createToolManager } from '@orkestrel/tool'
 import { createHTTPClientTransport, createMCPRoutes, createMCPSession } from '@src/server'
 import { createTeardown, waitForDelay } from '@orkestrel/test'
 import {
@@ -59,6 +62,74 @@ interface AppState extends MCPSessionState {
 
 const teardown = createTeardown()
 afterEach(() => teardown.destroy())
+
+describe('handshake HTTP session acceptance', () => {
+	it.each(['application/json', 'application/json, text/event-stream'])(
+		'handshake refusal stores no session and success mints one for %s',
+		async (accept) => {
+			let refused = true
+			let candidate: string | undefined
+			const mcp = createMCPServer({
+				identity: { name: 'ready', version: '1.0.0' },
+				tools: createToolManager(),
+				async handshake() {
+					if (refused) throw new MCPError('not ready', -32000, { code: 'NOT_READY' })
+				},
+			})
+			const dispatcher = createDispatcher<MCPSessionState>()
+			dispatcher.add(createMCPRoutes<MCPSessionState>(createMCPLegacy(mcp)))
+			const server = createServer<MCPSessionState>({ dispatcher, state: () => ({}) })
+			server.use(createMCPSession())
+			server.use((_request, context, next) => {
+				candidate = context.state.session?.id
+				return next()
+			})
+			const handle = await startServer(server)
+			teardown.add(() => handle.stop())
+			const failure = await postJSON(handle.base, createJSONRPCRequest(), { headers: { accept } })
+			expect(failure.status).toBe(200)
+			expect(await failure.text()).toContain(
+				'"error":{"code":-32000,"message":"not ready","data":{"code":"NOT_READY"}}',
+			)
+			expect(failure.headers.get(MCP_SESSION_HEADER)).toBeNull()
+			expect(candidate).toEqual(expect.any(String))
+			const absent = await fetch(`${handle.base}/mcp`, {
+				method: 'DELETE',
+				headers: { [MCP_SESSION_HEADER]: candidate ?? '' },
+			})
+			expect(absent.status).toBe(404)
+			refused = false
+			const success = await postJSON(handle.base, createJSONRPCRequest(), { headers: { accept } })
+			expect(success.status).toBe(200)
+			expect(success.headers.get('content-type')).toContain(
+				accept.includes('text/event-stream') ? 'text/event-stream' : 'application/json',
+			)
+			expect(await success.text()).toContain('"result":{"protocolVersion"')
+			expect(success.headers.get(MCP_SESSION_HEADER)).toBe(candidate)
+			const stored = await fetch(`${handle.base}/mcp`, {
+				method: 'DELETE',
+				headers: { [MCP_SESSION_HEADER]: candidate ?? '' },
+			})
+			expect(stored.status).toBe(204)
+		},
+	)
+
+	it('handshake omitted still mints a session for an SSE initialize result', async () => {
+		const handle = await startSession()
+		const response = await postJSON(handle.base, createJSONRPCRequest(), {
+			headers: { accept: 'application/json, text/event-stream' },
+		})
+		expect(response.headers.get('content-type')).toContain('text/event-stream')
+		expect(await response.text()).toContain('data:')
+		const id = response.headers.get(MCP_SESSION_HEADER)
+		expect(id).toEqual(expect.any(String))
+		const stored = await fetch(`${handle.base}/mcp`, {
+			method: 'DELETE',
+			headers: { [MCP_SESSION_HEADER]: id ?? '' },
+		})
+		expect(stored.status).toBe(204)
+	})
+})
 
 // The in-request PUSH pattern as a tiny app middleware: on a POST carrying `x-push-now`, read the
 // session off `context.state` (set by `createMCPSession` for a validated request) and push the

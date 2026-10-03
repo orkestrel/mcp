@@ -86,7 +86,11 @@ export function createMCPServer(options: MCPServerOptions): MCPServerInterface {
  * @returns A dispatcher accepting both modern and legacy invocations
  */
 export function createMCPLegacy(server: MCPServerInterface): MCPDispatcherInterface {
-	return new MCPLegacy({ dispatcher: server, identity: server.identity })
+	return new MCPLegacy({
+		dispatcher: server,
+		identity: server.identity,
+		...(server.handshake === undefined ? {} : { handshake: server.handshake }),
+	})
 }
 
 /**

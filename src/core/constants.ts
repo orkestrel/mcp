@@ -301,6 +301,8 @@ export const JSONRPC_INTERNAL_ERROR = -32603
  * Retained for the legacy branch alone. A modern fault answers
  * {@link JSONRPC_INTERNAL_ERROR}; this code survives only where an old-wire peer was
  * already characterized against it.
+ * A `handshake` hook that rejects with an `MCPError` answers the legacy `initialize`
+ * with that error's own code and data.
  */
 export const JSONRPC_SERVER_ERROR = -32000
 

@@ -13,6 +13,7 @@ import type {
 	MCPCompletionInterface,
 	MCPCompletionParams,
 	MCPDispatchOptions,
+	MCPHandshakeHandler,
 	MCPIdentity,
 	MCPInputRequestMap,
 	MCPInputResponse,
@@ -204,6 +205,10 @@ export class MCPServer implements MCPServerInterface {
 
 	get identity(): MCPIdentity {
 		return this.#options.identity
+	}
+
+	get handshake(): MCPHandshakeHandler | undefined {
+		return this.#options.handshake
 	}
 
 	get methods(): MCPMethodManagerInterface {

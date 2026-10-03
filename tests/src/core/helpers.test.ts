@@ -1464,6 +1464,7 @@ describe('bindServer — exchange ownership and inbound cancellation', () => {
 		const stub: MCPServerInterface = {
 			emitter: real.emitter,
 			identity: real.identity,
+			handshake: real.handshake,
 			methods: real.methods,
 			limit: real.limit,
 			dispatch: real.dispatch.bind(real),

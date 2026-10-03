@@ -21,6 +21,18 @@ import { createMemoryTransport } from '../../setup.js'
 // tools, and the emitter through to a working instance.
 
 describe('createMCPServer', () => {
+	it('exposes the configured handshake by identity and leaves omission undefined', () => {
+		const options = {
+			identity: { name: 'ready', version: '1.0.0' },
+			tools: createToolManager(),
+			handshake: async () => {},
+		}
+		expect(createMCPServer(options).handshake).toBe(options.handshake)
+		expect(
+			createMCPServer({ identity: options.identity, tools: options.tools }).handshake,
+		).toBeUndefined()
+	})
+
 	it('returns a server exposing the configured identity', () => {
 		const server = createMCPServer({
 			identity: { name: 'demo', version: '2.0.0' },

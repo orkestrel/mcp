@@ -19,7 +19,7 @@ import {
 	parseRequestContext,
 	parseJSONRPCMessage,
 } from '@src/core'
-import { isRecord, isString, parseJSON } from '@orkestrel/contract'
+import { isObject, isRecord, isString, parseJSON } from '@orkestrel/contract'
 import { createStream } from '@orkestrel/server'
 import { SSE_BUFFERING_DISABLED, SSE_BUFFERING_HEADER } from './constants.js'
 import { acceptsEventStream, allowsOrigin, sendEventStream } from './helpers.js'
@@ -203,6 +203,16 @@ export function createMCPPostHandler<TState = unknown>(
 			stream.response.headers.set(SSE_BUFFERING_HEADER, SSE_BUFFERING_DISABLED)
 			queueMicrotask(() => void sendEventStream(response, stream))
 			return disconnect.bridge(stream)
+		}
+		if (
+			era === 'legacy' &&
+			invocation.method === 'initialize' &&
+			isObject(context?.state) &&
+			'session' in context.state
+		) {
+			if (!Reflect.set(context.state, 'initialization', response)) {
+				throw new Error('MCP initialization state is not writable')
+			}
 		}
 		const status = inferStatus(response, era)
 		if (response === undefined) return new Response(null, { status })

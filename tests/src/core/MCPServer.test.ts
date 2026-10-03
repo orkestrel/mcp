@@ -411,6 +411,7 @@ function server(error?: EmitterErrorHandler, subscription?: MCPSubscriptionOptio
 	})
 	return Object.assign(createMCPLegacy(mcp), {
 		identity: mcp.identity,
+		handshake: mcp.handshake,
 		methods: mcp.methods,
 	})
 }

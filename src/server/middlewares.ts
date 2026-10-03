@@ -49,8 +49,11 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  *   live-session request. It then
  *   forwards a fresh `Request` carrying the buffered `text` (`next(forwarded)`) — never the
  *   already-consumed original — so the route re-reads the same body, and stamps the response
- *   with {@link MCP_SESSION_HEADER}. The entry's `touched` instant is read after that
- *   downstream response, because it means the last access: a request slower than `ttl` would
+ *   with {@link MCP_SESSION_HEADER}. A candidate entry is stored and advertised only when
+ *   `context.state.initialization` carries a result; an initialization error stores no session
+ *   and adds no session header. The POST handler records that dispatch response before JSON or
+ *   SSE framing. The entry's `touched` instant is read after the downstream response, because it
+ *   means the last access: a request slower than `ttl` would
  *   otherwise store a session that is already expired, and the write-back RE-ASKS the store, so
  *   a `DELETE` arriving while the request was suspended is not undone.
  * - **`GET {path}`.** Resolves the session the same way (no mint — only `initialize` mints);
@@ -214,7 +217,7 @@ export function createMCPSession<TState extends MCPSessionState>(
 		})
 		const response = await next(forwarded)
 		if (created !== undefined) {
-			if (!response.ok) return response
+			if (!response.ok || context.state.initialization?.result === undefined) return response
 			// `touched` is the instant of the LAST ACCESS, so it is read AFTER the suspension. The
 			// mint stamp was taken before a whole `initialize` round trip that the middleware has no
 			// bound on: a handshake slower than `ttl` used to insert a session that was already

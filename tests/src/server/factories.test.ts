@@ -18,6 +18,7 @@ import {
 	MCP_MODERN_VERSION,
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
+	MCPError,
 } from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -61,6 +62,149 @@ import { closeResource, openClientSocket, startServer, upgradeRequest } from '..
 // closes is one a FAILING assertion cannot leave attached to the server it then has to stop.
 const teardown = createTeardown()
 afterEach(() => teardown.destroy())
+
+describe('handshake acceptance over stdio', () => {
+	it.each(['ping', 'tools/list', 'server/discover'])(
+		'handshake pending permits %s before initialize',
+		async (method) => {
+			const readiness = Promise.withResolvers<void>()
+			const input = new PassThrough()
+			const output = new PassThrough()
+			const chunks: string[] = []
+			let calls = 0
+			const mcp = createMCPServer({
+				identity: { name: 'ready', version: '1.0.0' },
+				tools: createToolManager(),
+				handshake: () => {
+					calls += 1
+					return readiness.promise
+				},
+			})
+			const handle = createStdioServer(createMCPLegacy(mcp), { input, output })
+			teardown.add(() => {
+				readiness.resolve()
+				handle.stop()
+				input.destroy()
+				output.destroy()
+			})
+			output.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
+			handle.start()
+			input.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
+			await waitForDelay()
+			expect(calls).toBe(1)
+			expect(chunks).toEqual([])
+			input.write(
+				`${JSON.stringify({
+					jsonrpc: '2.0',
+					id: 2,
+					method,
+					...(method === 'server/discover' ? { params: { _meta: MODERN_METADATA } } : {}),
+				})}\n`,
+			)
+			await waitForDelay()
+			expect(chunks).toHaveLength(1)
+			expect(JSON.parse(chunks[0] ?? '')).toMatchObject({ id: 2, result: {} })
+			expect(calls).toBe(1)
+			readiness.resolve()
+			await waitForDelay()
+			expect(chunks).toHaveLength(2)
+			expect(chunks[1]).toBe(
+				'{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2025-11-25","serverInfo":{"name":"ready","version":"1.0.0"}}}\n',
+			)
+		},
+	)
+
+	it.each([true, false])('handshake rejection preserves MCPError=%s', async (protocol) => {
+		const input = new PassThrough()
+		const output = new PassThrough()
+		const chunks: string[] = []
+		const errors: unknown[] = []
+		const failure = protocol
+			? new MCPError('not ready', -32000, { code: 'NOT_READY' })
+			: new Error('private setup failure')
+		const mcp = createMCPServer({
+			identity: { name: 'ready', version: '1.0.0' },
+			tools: createToolManager(),
+			handshake: () => Promise.reject(failure),
+			on: { error: (error) => errors.push(error) },
+		})
+		const handle = createStdioServer(createMCPLegacy(mcp), { input, output })
+		teardown.add(() => {
+			handle.stop()
+			input.destroy()
+			output.destroy()
+		})
+		output.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
+		handle.start()
+		input.write('{"jsonrpc":"2.0","id":"setup","method":"initialize"}\n')
+		await waitForDelay()
+		expect(JSON.parse(chunks.join(''))).toEqual({
+			jsonrpc: '2.0',
+			id: 'setup',
+			error: protocol
+				? { code: -32000, message: 'not ready', data: { code: 'NOT_READY' } }
+				: { code: -32603, message: 'Server error' },
+		})
+		expect(errors).toEqual(protocol ? [] : [failure])
+	})
+
+	it('handshake input end aborts the hook without output or errors', async () => {
+		const input = new PassThrough()
+		const output = new PassThrough()
+		const chunks: string[] = []
+		const errors: unknown[] = []
+		let signal: AbortSignal | undefined
+		const mcp = createMCPServer({
+			identity: { name: 'ready', version: '1.0.0' },
+			tools: createToolManager(),
+			async handshake(options) {
+				signal = options.signal
+				await waitForAbort(options.signal)
+				throw new Error('aborted setup')
+			},
+			on: { error: (error) => errors.push(error) },
+		})
+		const handle = createStdioServer(createMCPLegacy(mcp), { input, output })
+		teardown.add(() => {
+			handle.stop()
+			input.destroy()
+			output.destroy()
+		})
+		output.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
+		handle.start()
+		input.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
+		await waitForDelay()
+		expect(signal?.aborted).toBe(false)
+		input.end()
+		await waitForDelay()
+		expect(signal?.aborted).toBe(true)
+		expect(chunks).toEqual([])
+		expect(errors).toEqual([])
+	})
+
+	it('handshake omitted preserves the 0.0.35 response bytes', async () => {
+		const input = new PassThrough()
+		const output = new PassThrough()
+		const chunks: string[] = []
+		const mcp = createMCPServer({
+			identity: { name: 'ready', version: '1.0.0' },
+			tools: createToolManager(),
+		})
+		const handle = createStdioServer(createMCPLegacy(mcp), { input, output })
+		teardown.add(() => {
+			handle.stop()
+			input.destroy()
+			output.destroy()
+		})
+		output.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
+		handle.start()
+		input.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
+		await waitForDelay()
+		expect(chunks.join('')).toBe(
+			'{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2025-11-25","serverInfo":{"name":"ready","version":"1.0.0"}}}\n',
+		)
+	})
+})
 
 describe('teardown failure handling', () => {
 	it('runs every real server disposer after one fails', async () => {

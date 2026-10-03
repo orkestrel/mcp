@@ -2,6 +2,7 @@ import type {
 	JSONRPCId,
 	JSONRPCInvocation,
 	JSONRPCResponse,
+	MCPMethodOptions,
 	MCPStream,
 	MCPStreamControllerInterface,
 } from '@src/core'
@@ -16,8 +17,11 @@ import {
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
 	MCP_MODERN_VERSION,
+	MCPLegacy,
+	MCPError,
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
+import { waitForAbort } from '@orkestrel/test'
 import {
 	createCalculatorServer,
 	createJSONRPCNotification,
@@ -26,6 +30,54 @@ import {
 	TestTaskManager,
 	waitForSettlement,
 } from '../../setup.js'
+
+describe('handshake method options', () => {
+	it('carries caller identity and closes the request lifetime after readiness', async () => {
+		const observed: MCPMethodOptions[] = []
+		const caller = { subject: 'reader' }
+		const server = createMCPServer({
+			identity: { name: 'ready', version: '1.0.0' },
+			tools: createToolManager(),
+			async handshake(options) {
+				expect(options.signal.aborted).toBe(false)
+				observed.push(options)
+			},
+		})
+		const signal = new AbortController().signal
+		const response = await createMCPLegacy(server).dispatch(createJSONRPCRequest(), {
+			signal,
+			caller,
+		})
+		expect(response).toHaveProperty('result')
+		expect(observed).toHaveLength(1)
+		expect(observed[0]?.caller).toBe(caller)
+		expect(observed[0]?.signal.aborted).toBe(true)
+		expect(signal.aborted).toBe(false)
+	})
+
+	it('rethrows an aborted handshake rejection at the direct decorator boundary', async () => {
+		const controller = new AbortController()
+		const failure = new MCPError('setup ended', -32000, { code: 'ENDED' })
+		const errors: unknown[] = []
+		const server = createMCPServer({
+			identity: { name: 'ready', version: '1.0.0' },
+			tools: createToolManager(),
+			on: { error: (error) => errors.push(error) },
+		})
+		const legacy = new MCPLegacy({
+			dispatcher: server,
+			identity: server.identity,
+			async handshake(options) {
+				await waitForAbort(options.signal)
+				throw failure
+			},
+		})
+		const answer = legacy.dispatch(createJSONRPCRequest(), { signal: controller.signal })
+		controller.abort()
+		await expect(answer).rejects.toBe(failure)
+		expect(errors).toEqual([])
+	})
+})
 
 // Captured before the W07-A production edit; divergences remain explicit named rows.
 

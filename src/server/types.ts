@@ -30,7 +30,12 @@
 // / `MCPMessageTransportInterface` the HTTP pair does — the wire framing differs, the dispatch
 // core does not.
 
-import type { JSONRPCMessage, MCPMessageTransportInterface, MCPVersion } from '@src/core'
+import type {
+	JSONRPCMessage,
+	JSONRPCResponse,
+	MCPMessageTransportInterface,
+	MCPVersion,
+} from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { RouteContext } from '@orkestrel/router'
 import type { ServerEventMap, StreamInterface } from '@orkestrel/server'
@@ -262,6 +267,8 @@ export interface MCPSessionInterface {
  */
 export interface MCPSessionState {
 	readonly session?: MCPSessionInterface
+	/** Holds the initialization dispatch response before HTTP framing, used to admit a session. */
+	readonly initialization?: JSONRPCResponse
 }
 
 /**

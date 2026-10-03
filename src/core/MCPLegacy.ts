@@ -16,6 +16,7 @@ import type {
 import { isInteger, isRecord, isString, parseJSON } from '@orkestrel/contract'
 import {
 	JSONRPC_INVALID_PARAMS,
+	JSONRPC_INTERNAL_ERROR,
 	JSONRPC_INVALID_REQUEST,
 	JSONRPC_METHOD_NOT_FOUND,
 	JSONRPC_SERVER_ERROR,
@@ -33,6 +34,7 @@ import {
 } from './helpers.js'
 
 import { MCPStreamController } from './MCPStreamController.js'
+import { isMCPError } from './errors.js'
 import { MCPTextStreamController } from './MCPTextStreamController.js'
 import { parseJSONRPCMessage } from './parsers.js'
 import {
@@ -138,6 +140,22 @@ export class MCPLegacy implements MCPDispatcherInterface {
 		}
 		switch (invocation.method) {
 			case 'initialize': {
+				if (this.#options.handshake !== undefined) {
+					const closure = new AbortController()
+					const resolved = buildMethodOptions(options ?? {}, closure.signal)
+					try {
+						await this.#options.handshake(resolved)
+					} catch (error) {
+						if (resolved.signal.aborted) throw error
+						if (isMCPError(error)) {
+							return buildJSONRPCError(id, error.code, error.message, error.context)
+						}
+						this.emitter.emit('error', error)
+						return buildJSONRPCError(id, JSONRPC_INTERNAL_ERROR, 'Server error')
+					} finally {
+						closure.abort()
+					}
+				}
 				const requested = invocation.params?.['protocolVersion']
 				return buildJSONRPCResult(
 					id,

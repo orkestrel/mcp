@@ -1757,6 +1757,19 @@ export interface MCPMethodOptions {
 }
 
 /**
+ * Gates a legacy `initialize` response on consumer readiness.
+ *
+ * @remarks
+ * Only legacy initialization awaits this hook. An `MCPError` rejection preserves its
+ * code, message, and context; another rejection emits `error` and answers `Server error`.
+ * Observe `options.signal` to stop when the request ends.
+ *
+ * @param options - The resolved request lifetime and optional caller context
+ * @returns Completion when initialization may answer
+ */
+export type MCPHandshakeHandler = (options: MCPMethodOptions) => Promise<void>
+
+/**
  * Produces notifications for one honoured `subscriptions/listen` filter.
  *
  * @remarks
@@ -2169,6 +2182,8 @@ export interface MCPServerOptions {
 	/** Holds the emitter's listener-error handler — a listener throw routes here, not to a domain event. */
 	readonly error?: EmitterErrorHandler
 	readonly identity: MCPIdentity
+	/** Holds the optional readiness hook awaited only by legacy initialization. */
+	readonly handshake?: MCPHandshakeHandler
 	/** Holds the live tool registry the server exposes over `tools/list` / `tools/call`. */
 	readonly tools: ToolManagerInterface
 	/**
@@ -2234,6 +2249,8 @@ export interface MCPLegacyOptions {
 	readonly dispatcher: MCPDispatcherInterface
 	/** Holds the identity returned by the legacy `initialize` handshake. */
 	readonly identity: MCPIdentity
+	/** Holds the optional readiness hook awaited before the initialization result. */
+	readonly handshake?: MCPHandshakeHandler
 }
 
 /**
@@ -2322,6 +2339,8 @@ export interface MCPDispatcherInterface {
  */
 export interface MCPServerInterface extends MCPDispatcherInterface {
 	readonly identity: MCPIdentity
+	/** Holds the readiness hook consumed by the legacy decorator. */
+	readonly handshake: MCPHandshakeHandler | undefined
 	/** Holds the modern method registry this server dispatches through (built-ins included). */
 	readonly methods: MCPMethodManagerInterface
 	/**
