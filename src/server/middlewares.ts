@@ -50,9 +50,10 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  *   forwards a fresh `Request` carrying the buffered `text` (`next(forwarded)`) — never the
  *   already-consumed original — so the route re-reads the same body, and stamps the response
  *   with {@link MCP_SESSION_HEADER}. A candidate entry is stored and advertised only when
- *   `context.state.initialization` carries a result; an initialization error stores no session
- *   and adds no session header. The POST handler records that dispatch response before JSON or
- *   SSE framing. The entry's `touched` instant is read after the downstream response, because it
+ *   `context.state.initialization` carries a result. An `initialize` that would mint a session
+ *   stores none and advertises none when refused; a live session's header is returned unchanged.
+ *   The POST handler records that dispatch response before JSON or SSE framing.
+ *   The entry's `touched` instant is read after the downstream response, because it
  *   means the last access: a request slower than `ttl` would
  *   otherwise store a session that is already expired, and the write-back RE-ASKS the store, so
  *   a `DELETE` arriving while the request was suspended is not undone.

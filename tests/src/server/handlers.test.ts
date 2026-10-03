@@ -35,6 +35,7 @@ import {
 	createCalculatorServer,
 	createJSONRPCNotification,
 	createJSONRPCRequest,
+	postJSON,
 	readSSEStream,
 } from '../../setup.js'
 import { startServer } from '../../setupServer.js'
@@ -81,6 +82,22 @@ async function* callerEvents(
 
 const teardown = createTeardown()
 afterEach(() => teardown.destroy())
+
+describe('legacy initialization state', () => {
+	it.each([true, false])('records the response only with a session member: %s', async (session) => {
+		const state: Record<string, unknown> = session ? { session: undefined } : {}
+		const dispatcher = createDispatcher<Record<string, unknown>>()
+		dispatcher.add(createMCPRoutes(createMCPLegacy(createCalculatorServer()), { streaming: false }))
+		const handle = await startServer(createServer({ dispatcher, state: () => state }))
+		teardown.add(() => handle.stop())
+		const response = await postJSON(handle.base, createJSONRPCRequest())
+		expect(response.status).toBe(200)
+		const answer: unknown = await response.json()
+		expect(answer).toHaveProperty('result')
+		expect(Object.hasOwn(state, 'initialization')).toBe(session)
+		expect(state['initialization']).toEqual(session ? answer : undefined)
+	})
+})
 
 function createMCPPostHandler<TState = unknown>(
 	mcp: MCPServerInterface,

@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
 	buildCancelledNotification,
+	bindServer,
 	createMCPClient,
 	createMCPLegacy,
 	createMCPLegacyClientTransport,
@@ -25,11 +26,13 @@ import { createTool, createToolManager } from '@orkestrel/tool'
 import { createServer } from '@orkestrel/server'
 import {
 	DEFAULT_MCP_PATH,
+	createDuplexServerTransport,
 	createMCPContinuation,
 	createMCPRoutes,
 	createStdioServer,
 	createWebSocketClientTransport,
 	createWebSocketServer,
+	StdioServerTransport,
 } from '@src/server'
 import { WEBSOCKET_CLOSE_NORMAL, WEBSOCKET_OPCODE_CLOSE } from '@orkestrel/websocket'
 import { createTeardown, waitForAbort, waitForDelay } from '@orkestrel/test'
@@ -114,73 +117,101 @@ describe('handshake acceptance over stdio', () => {
 		},
 	)
 
-	it.each([true, false])('handshake rejection preserves MCPError=%s', async (protocol) => {
-		const input = new PassThrough()
-		const output = new PassThrough()
-		const chunks: string[] = []
-		const errors: unknown[] = []
-		const failure = protocol
-			? new MCPError('not ready', -32000, { code: 'NOT_READY' })
-			: new Error('private setup failure')
-		const mcp = createMCPServer({
-			identity: { name: 'ready', version: '1.0.0' },
-			tools: createToolManager(),
-			handshake: () => Promise.reject(failure),
-			on: { error: (error) => errors.push(error) },
-		})
-		const handle = createStdioServer(createMCPLegacy(mcp), { input, output })
-		teardown.add(() => {
-			handle.stop()
-			input.destroy()
-			output.destroy()
-		})
-		output.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
-		handle.start()
-		input.write('{"jsonrpc":"2.0","id":"setup","method":"initialize"}\n')
-		await waitForDelay()
-		expect(JSON.parse(chunks.join(''))).toEqual({
-			jsonrpc: '2.0',
-			id: 'setup',
-			error: protocol
-				? { code: -32000, message: 'not ready', data: { code: 'NOT_READY' } }
-				: { code: -32603, message: 'Server error' },
-		})
-		expect(errors).toEqual(protocol ? [] : [failure])
-	})
+	it.each(['protocol', 'bigint', 'cycle', 'unexpected'])(
+		'handshake rejection preserves %s',
+		async (scenario) => {
+			const input = new PassThrough()
+			const output = new PassThrough()
+			const chunks: string[] = []
+			const errors: unknown[] = []
+			const protocol = scenario !== 'unexpected'
+			const context: Record<string, unknown> = { code: 'NOT_READY' }
+			if (scenario === 'bigint') context['value'] = 1n
+			if (scenario === 'cycle') context['self'] = context
+			const failure = protocol
+				? new MCPError('not ready', -32042, context)
+				: new Error('private setup failure')
+			const mcp = createMCPServer({
+				identity: { name: 'ready', version: '1.0.0' },
+				tools: createToolManager(),
+				handshake: () => Promise.reject(failure),
+				on: { error: (error) => errors.push(error) },
+			})
+			const handle = createStdioServer(createMCPLegacy(mcp), { input, output })
+			teardown.add(() => {
+				handle.stop()
+				input.destroy()
+				output.destroy()
+			})
+			output.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
+			handle.start()
+			input.write('{"jsonrpc":"2.0","id":"setup","method":"initialize"}\n')
+			await waitForDelay()
+			expect(chunks).toHaveLength(1)
+			expect(JSON.parse(chunks.join(''))).toEqual({
+				jsonrpc: '2.0',
+				id: 'setup',
+				error: protocol
+					? {
+							code: -32042,
+							message: 'not ready',
+							...(scenario === 'protocol' ? { data: { code: 'NOT_READY' } } : {}),
+						}
+					: { code: -32603, message: 'Server error' },
+			})
+			expect(errors).toEqual(protocol ? [] : [failure])
+		},
+	)
 
-	it('handshake input end aborts the hook without output or errors', async () => {
-		const input = new PassThrough()
-		const output = new PassThrough()
-		const chunks: string[] = []
-		const errors: unknown[] = []
-		let signal: AbortSignal | undefined
-		const mcp = createMCPServer({
-			identity: { name: 'ready', version: '1.0.0' },
-			tools: createToolManager(),
-			async handshake(options) {
-				signal = options.signal
-				await waitForAbort(options.signal)
-				throw new Error('aborted setup')
-			},
-			on: { error: (error) => errors.push(error) },
-		})
-		const handle = createStdioServer(createMCPLegacy(mcp), { input, output })
-		teardown.add(() => {
-			handle.stop()
-			input.destroy()
-			output.destroy()
-		})
-		output.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
-		handle.start()
-		input.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
-		await waitForDelay()
-		expect(signal?.aborted).toBe(false)
-		input.end()
-		await waitForDelay()
-		expect(signal?.aborted).toBe(true)
-		expect(chunks).toEqual([])
-		expect(errors).toEqual([])
-	})
+	it.each(['input end', 'handle stop', 'transport close'])(
+		'handshake %s aborts the hook without output or errors',
+		async (closure) => {
+			const input = new PassThrough()
+			const output = new PassThrough()
+			const chunks: string[] = []
+			const errors: unknown[] = []
+			let signal: AbortSignal | undefined
+			const mcp = createMCPServer({
+				identity: { name: 'ready', version: '1.0.0' },
+				tools: createToolManager(),
+				async handshake(options) {
+					signal = options.signal
+					await waitForAbort(options.signal)
+					throw new Error('aborted setup')
+				},
+				on: { error: (error) => errors.push(error) },
+			})
+			const legacy = createMCPLegacy(mcp)
+			const transport =
+				closure === 'transport close' ? new StdioServerTransport(input, output) : undefined
+			const unbind =
+				transport === undefined
+					? undefined
+					: bindServer(legacy, createDuplexServerTransport(transport))
+			const handle =
+				transport === undefined ? createStdioServer(legacy, { input, output }) : undefined
+			teardown.add(async () => {
+				handle?.stop()
+				unbind?.()
+				await transport?.close()
+				input.destroy()
+				output.destroy()
+			})
+			output.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
+			if (transport === undefined) handle?.start()
+			else await transport.start()
+			input.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
+			await waitForDelay()
+			expect(signal?.aborted).toBe(false)
+			if (closure === 'handle stop') handle?.stop()
+			else if (closure === 'transport close') await transport?.close()
+			else input.end()
+			await waitForDelay()
+			expect(signal?.aborted).toBe(true)
+			expect(chunks).toEqual([])
+			expect(errors).toEqual([])
+		},
+	)
 
 	it('handshake omitted preserves the 0.0.35 response bytes', async () => {
 		const input = new PassThrough()

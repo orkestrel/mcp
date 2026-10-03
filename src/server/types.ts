@@ -260,10 +260,11 @@ export interface MCPSessionInterface {
  * a server-initiated message onto the session's resumable stream.
  *
  * @remarks
- * `session` is set on `initialize` (the minted session) and on every validated
+ * `session` is set on `initialize` (the candidate or resolved live session) and on every validated
  * non-`initialize` `POST` (the resolved one); absent when the request never
  * reached a resolved session (the middleware short-circuits those as a `404`
- * before calling `next`).
+ * before calling `next`). A refused candidate remains in request state but is never
+ * stored or advertised. A live session's response header is returned unchanged.
  */
 export interface MCPSessionState {
 	readonly session?: MCPSessionInterface

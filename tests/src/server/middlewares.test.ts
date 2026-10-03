@@ -73,7 +73,7 @@ describe('handshake HTTP session acceptance', () => {
 				identity: { name: 'ready', version: '1.0.0' },
 				tools: createToolManager(),
 				async handshake() {
-					if (refused) throw new MCPError('not ready', -32000, { code: 'NOT_READY' })
+					if (refused) throw new MCPError('not ready', -32042, { code: 'NOT_READY' })
 				},
 			})
 			const dispatcher = createDispatcher<MCPSessionState>()
@@ -89,7 +89,7 @@ describe('handshake HTTP session acceptance', () => {
 			const failure = await postJSON(handle.base, createJSONRPCRequest(), { headers: { accept } })
 			expect(failure.status).toBe(200)
 			expect(await failure.text()).toContain(
-				'"error":{"code":-32000,"message":"not ready","data":{"code":"NOT_READY"}}',
+				'"error":{"code":-32042,"message":"not ready","data":{"code":"NOT_READY"}}',
 			)
 			expect(failure.headers.get(MCP_SESSION_HEADER)).toBeNull()
 			expect(candidate).toEqual(expect.any(String))
@@ -106,6 +106,15 @@ describe('handshake HTTP session acceptance', () => {
 			)
 			expect(await success.text()).toContain('"result":{"protocolVersion"')
 			expect(success.headers.get(MCP_SESSION_HEADER)).toBe(candidate)
+			const live = candidate
+			refused = true
+			const repeated = await postJSON(handle.base, createJSONRPCRequest(), {
+				headers: { accept, [MCP_SESSION_HEADER]: live ?? '' },
+			})
+			expect(repeated.status).toBe(200)
+			expect(await repeated.text()).toContain('"error":{"code":-32042')
+			expect(repeated.headers.get(MCP_SESSION_HEADER)).toBe(live)
+			expect(candidate).toBe(live)
 			const stored = await fetch(`${handle.base}/mcp`, {
 				method: 'DELETE',
 				headers: { [MCP_SESSION_HEADER]: candidate ?? '' },

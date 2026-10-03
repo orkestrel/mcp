@@ -2156,6 +2156,9 @@ export interface MCPJSONLimitOptions {
  *
  * @remarks
  * `identity` identifies the server in the `initialize` handshake (`serverInfo`).
+ * `handshake` is the optional readiness hook that the legacy decorator awaits before
+ * answering `initialize`; it receives the request signal and optional caller context.
+ * The hook must observe the signal to stop pending work. Other methods do not await it.
  * `tools` is the live registry the server dispatches `tools/list` / `tools/call`
  * over — its `definitions()` advertise the tools and its `execute()` runs a call
  * (the manager already isolates a tool throw into a `success: false` result, so

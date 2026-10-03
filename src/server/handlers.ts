@@ -47,6 +47,8 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  * handler through `MCPDispatchOptions.signal`. After every transport validation and immediately
  * before dispatch, the optional synchronous `caller` extractor reads front-middleware state; a
  * defined value is added to `MCPDispatchOptions`, while `undefined` is omitted.
+ * For legacy `initialize`, the dispatch response is recorded as `initialization` before
+ * JSON or SSE framing only when consumer state is an object with `'session' in context.state`.
  *
  * @typeParam TState - The consumer's opaque per-request route state type
  * @param mcp - The transport-agnostic MCP dispatcher to dispatch through

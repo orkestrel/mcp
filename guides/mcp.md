@@ -1987,12 +1987,15 @@ server-side one on `server.emitter`'s `error` event, a client-side one on
 The optional `MCPServerOptions.handshake` hook gates only the legacy `initialize` response.
 `MCPServerInterface.handshake` exposes it, and `createMCPLegacy` passes it into
 `MCPLegacyOptions.handshake`. The `MCPHandshakeHandler` receives `MCPMethodOptions`, including
-the request's abort signal and optional caller context. `ping`, forwarded legacy methods,
-and modern `server/discover` remain available while the hook waits. Omitting the hook preserves
-the response bytes from 0.0.35.
+the request's abort signal and optional caller context. On the binder carriers (stdio,
+WebSocket, and `MessagePort`), `ping`, forwarded legacy methods, and modern `server/discover`
+remain available while the hook waits. Omitting the hook preserves the dispatcher's answer
+bytes from 0.0.35. For the session-header change on refused HTTP initialization, see
+[HTTP transport](#http-transport).
 
 An `MCPError` rejection preserves its code, message, and context as JSON-RPC `error.data`
-under the initialization request id. Any other rejection emits `error` on the shared server
+under the initialization request id. If the context cannot be serialized, the answer retains
+the code and message and omits `data`. Any other rejection emits `error` on the shared server
 emitter and answers `-32603` with `Server error`. A rejection after request cancellation is
 re-thrown; the stdio binder writes nothing and emits no error. The hook must observe its
 signal to stop pending work.
@@ -2588,7 +2591,7 @@ An extended interface's name comes before `plus`, with the members it adds after
 | `MCPTaskClientInterface`           | interface | `{} plus task, update, abort`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Reads, answers, and stops a durable task the peer created — the client half of the stable Tasks extension.                                                                                                  |
 | `MCPClientInterface`               | interface | `{ emitter, connected, version, transport, tasks } plus connect, discover, disconnect, tools, listen, call`                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Connects to a remote MCP server over any injected `MCPMessageTransportInterface`, negotiates the modern wire revision, and exposes the server's tools as local `ToolInterface`s an agent can run.           |
 
-The `emitter`, `identity`, `methods`, and `limit` members of `MCPServerInterface` are
+The `emitter`, `identity`, `handshake`, `methods`, and `limit` members of `MCPServerInterface` are
 `readonly` data members in the Surface rows — its call-signature methods
 are documented under [Methods](#methods), and the registry `methods` exposes
 has its own method table there. Likewise the `emitter` /
@@ -2601,11 +2604,12 @@ members; their methods are under [Methods](#methods). The `id` member of
 ### HTTP transport
 
 For legacy initialization, `createMCPPostHandler` records the dispatch response in
-`MCPSessionState.initialization` before framing it as JSON or SSE. `createMCPSession` stores
-and advertises a candidate session only when that response contains a result. A refused
-initialization stores no session and returns no `Mcp-Session-Id`, including when the error
-travels in an HTTP 200 SSE event. A successful SSE initialization mints a session with or
-without a hook.
+`MCPSessionState.initialization` before framing it as JSON or SSE only when consumer state is
+an object with `'session' in context.state`. `createMCPSession` stores and advertises a candidate
+session only when that response contains a result. An `initialize` that would mint a session
+stores none and advertises no `Mcp-Session-Id` when refused, including when the error travels
+in an HTTP 200 SSE event. A live session's header is returned unchanged, including on a refused
+`initialize`. A successful SSE initialization mints a session with or without a hook.
 
 The [MCP 2025-11-25 Streamable HTTP specification, Session Management](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management)
 places the session header "on the HTTP response containing the `InitializeResult`".

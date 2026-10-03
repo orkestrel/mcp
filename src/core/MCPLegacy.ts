@@ -13,7 +13,7 @@ import type {
 	MCPStreamControllerInterface,
 	MCPTextStreamControllerInterface,
 } from './types.js'
-import { isInteger, isRecord, isString, parseJSON } from '@orkestrel/contract'
+import { attempt, isInteger, isRecord, isString, parseJSON } from '@orkestrel/contract'
 import {
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_INTERNAL_ERROR,
@@ -148,7 +148,14 @@ export class MCPLegacy implements MCPDispatcherInterface {
 					} catch (error) {
 						if (resolved.signal.aborted) throw error
 						if (isMCPError(error)) {
-							return buildJSONRPCError(id, error.code, error.message, error.context)
+							// Own the JSON value so later framing cannot re-run a consumer's serializer.
+							const context = attempt(() => parseJSON(JSON.stringify(error.context)))
+							return buildJSONRPCError(
+								id,
+								error.code,
+								error.message,
+								context.success ? context.value : undefined,
+							)
 						}
 						this.emitter.emit('error', error)
 						return buildJSONRPCError(id, JSONRPC_INTERNAL_ERROR, 'Server error')
