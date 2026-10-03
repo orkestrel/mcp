@@ -1326,6 +1326,38 @@ export function createManualClock(start = 0): ManualClockInterface {
  */
 export const TIMER_LEAD = 2
 
+/**
+ * Samples elapsed spans of 50 real 10 ms timers armed late in a loop-clock millisecond.
+ *
+ * @remarks
+ * The fixed sample covers repeated loop-clock ticks for 500 ms of requested timer time,
+ * retaining every span even after a short timer appears. Absence of a span below 10 ms means
+ * only that this run did not observe early delivery, not that the host can never deliver early.
+ * The caller supplies clock alignment so this module stays host-independent.
+ *
+ * @param align - Aligns the host loop clock, then spins for the supplied millisecond offset.
+ * @returns Every elapsed span in milliseconds, measured with `performance.now()`.
+ * @example
+ * ```ts
+ * const spans = await sampleTimerSpans(alignLoopClock)
+ * const short = spans.some((span) => span < 10)
+ * ```
+ */
+export async function sampleTimerSpans(
+	align: (offset: number) => void,
+): Promise<readonly number[]> {
+	const spans: number[] = []
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		align(0.9)
+		const started = performance.now()
+		const delayed = waitForDelay(10)
+		align(0)
+		await delayed
+		spans.push(performance.now() - started)
+	}
+	return spans
+}
+
 // ── Durable task manager fixture (the Tasks extension's consumer half) ───────
 //
 // A REAL implementation of the published `MCPTaskManagerInterface`, not a fake of

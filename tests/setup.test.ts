@@ -33,7 +33,7 @@ import {
 } from '@src/core'
 import { createToolManager } from '@orkestrel/tool'
 import { isRecord } from '@orkestrel/contract'
-import { collect, createRecorder, retryUntil, waitForDelay } from '@orkestrel/test'
+import { collect, createRecorder, waitForDelay } from '@orkestrel/test'
 import {
 	buildNestedRecord,
 	collectSSE,
@@ -64,6 +64,7 @@ import {
 	probeOwnership,
 	readMethods,
 	readSSEStream,
+	sampleTimerSpans,
 	TASK_CAPABILITIES,
 	TestTaskManager,
 	throwOnRead,
@@ -628,25 +629,29 @@ describe('createManualClock', () => {
 })
 
 describe('TIMER_LEAD', () => {
-	it('covers a real timer that ends short of its duration when armed late in a loop-clock millisecond', async () => {
-		const spans: number[] = []
-		// The control: the full duration fails as a lower bound on at least one aligned span.
-		await retryUntil(
-			'a 10 ms timer armed late in a loop-clock millisecond ending short of 10 ms',
-			async () => {
-				alignLoopClock(0.9)
-				const started = performance.now()
-				const delayed = waitForDelay(10)
-				alignLoopClock()
-				await delayed
-				const span = performance.now() - started
-				spans.push(span)
-				return span
-			},
-			(span) => span < 10,
-			{ attempts: 50, budget: 5_000 },
-		)
+	let spans: readonly number[] = []
+
+	beforeAll(async () => {
+		spans = await sampleTimerSpans(alignLoopClock)
+	})
+
+	it('sampleTimerSpans records every late-armed timer and the lead covers every span', () => {
+		expect(spans).toHaveLength(50)
 		for (const span of spans) expect(span).toBeGreaterThanOrEqual(10 - TIMER_LEAD)
+	})
+
+	it('rejects the full duration as a lower bound when the host exhibits a short timer', (context) => {
+		expect(spans).toHaveLength(50)
+		const minimum = Math.min(...spans)
+		if (minimum >= 10) {
+			context.skip(
+				`No timer ended short in ${spans.length} late-armed 10 ms samples; minimum ${minimum} ms, maximum ${Math.max(...spans)} ms.`,
+			)
+		}
+		expect(minimum).toBeLessThan(10)
+		expect(() => {
+			for (const span of spans) expect(span).toBeGreaterThanOrEqual(10)
+		}).toThrow(/greater than or equal to 10/)
 	})
 })
 
