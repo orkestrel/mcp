@@ -11,6 +11,7 @@ import type { MCPOriginOptions, MCPSessionState } from '@src/server'
 import {
 	bindServer,
 	buildJSONRPCResult,
+	createMCPLegacy,
 	isJSONRPCId,
 	MCP_METHOD_HEADER,
 	MCP_NAME_HEADER,
@@ -220,7 +221,9 @@ export async function start(): Promise<BrowserFixtureInterface> {
 	// this fixture explicitly delegates the built-in enforcement sites to that upstream layer.
 	const origin: MCPOriginOptions = { enabled: false }
 	const dispatcher = createDispatcher<MCPSessionState>()
-	dispatcher.add(createMCPRoutes<MCPSessionState>(mcp, { origin }))
+	// A legacy client's `initialize` succeeds only through the legacy dispatcher, and the session
+	// middleware mints a session only for a successful `initialize`.
+	dispatcher.add(createMCPRoutes<MCPSessionState>(createMCPLegacy(mcp), { origin }))
 	dispatcher.add({
 		method: 'POST',
 		path: '/broken',
