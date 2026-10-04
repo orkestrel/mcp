@@ -36,6 +36,11 @@ import { dispatchLines } from '../helpers.js'
  *   including any pending input flush. Only after that wait does the supervisor terminate a child
  *   that remains alive. Teardown freezes `evidence`, closes the reader, and settles `exit`, then
  *   fires `close` once (idempotent).
+ *   A child that exits on input end within the grace receives no termination signal, so it must
+ *   end its own child processes on input end; only escalation reaches its process tree.
+ *   If an `MCPClient` request `timeout` is shorter than the grace and the close outlasts that
+ *   timeout, `disconnect()` rejects with `MCP transport close timed out after <timeout>ms`.
+ *   The close keeps running, and a later caller joins it while it remains pending.
  *   A line already framed behind the one being delivered is dropped rather than
  *   emitted onto a transport whose teardown has begun. A `close()` issued while that teardown runs
  *   joins it rather than opening a second one, so it resolves only after `close` has fired, and a

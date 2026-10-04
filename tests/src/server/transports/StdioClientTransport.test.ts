@@ -32,7 +32,9 @@ describe('StdioClientTransport — EOF shutdown', () => {
 			const pid = Number(requireValue(scratch.read('pid')))
 			expect(isRunning(pid)).toBe(true)
 			expect(scratch.has('ended')).toBe(false)
+			const opened = performance.now()
 			await client.disconnect()
+			expect(performance.now() - opened).toBeLessThan(MCP_STDIO_GRACE / 2)
 			expect(scratch.read('ended')).toBe('completed')
 			expect(isRunning(pid)).toBe(false)
 			expect(client.connected).toBe(false)
@@ -60,7 +62,8 @@ describe('StdioClientTransport — EOF shutdown', () => {
 			const pid = Number(requireValue(scratch.read('pid')))
 			expect(isRunning(pid)).toBe(true)
 			const opened = performance.now()
-			await waitForSettlement(client.disconnect(), MCP_STDIO_GRACE + 5_000, 'EOF shutdown hung')
+			await waitForSettlement(client.disconnect(), MCP_STDIO_GRACE * 1.5, 'EOF shutdown hung')
+			expect(performance.now() - opened).toBeLessThan(MCP_STDIO_GRACE * 1.5)
 			expect(performance.now() - opened).toBeGreaterThanOrEqual(MCP_STDIO_GRACE - TIMER_LEAD)
 			expect(scratch.read('ended')).toBe('ended')
 			expect(isRunning(pid)).toBe(false)
@@ -113,7 +116,7 @@ setInterval(() => {}, 1000)
 `
 
 // The child reports a descendant pid and exits. The detached descendant inherits stdout, keeping
-// the supervisor's line iterator outstanding after the child has gone.
+// the readline reader open after the child has gone, until the supervisor's drain bound closes it.
 const DESCENDANT_PIPE_SCRIPT = `
 const { spawn } = require('node:child_process')
 const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
@@ -543,11 +546,11 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 //
 // The host facts below decide how these tests wait and what they can assert:
 //
-// - `Process` reaches ONE terminal moment, where `evidence` freezes, `lines` ends, and `exit`
-//   settles together. It arrives when the child's stdio streams close, or when the `drain` bound
-//   armed by the native exit or by an initiated termination elapses first; `ProcessExit.drained`
-//   reports which. Node delivers each `data` event before a stream closes, so a tail read after
-//   this transport's `close` event is complete rather than raced.
+// - `Supervisor` freezes `evidence` and settles `exit` at its terminal moment, after the child's
+//   stdio streams close or the drain bound expires. Its close and teardown callbacks close the
+//   readline reader; stdout end can close that reader earlier. `ProcessExit.drained` distinguishes
+//   stream close from the cutoff, so a tail read after the transport's `close` event is frozen,
+//   but can be incomplete when a descendant keeps a pipe open.
 // - `Supervisor.destroy()` resolves past that moment, so the tail this transport reports off the held
 //   child is already frozen when `close()` returns. A descendant holding the inherited `stderr`
 //   cannot hold that barrier open beyond `drain`, and a tail cut off there is the reading
@@ -676,9 +679,9 @@ const timer = setInterval(() => {
 `
 
 // The FIRST child under this command hands its `stderr` down to a detached descendant, reports that
-// descendant's pid, and ends. Its own `stdout` is left to the supervisor, so the line pump still
-// ends with the child. Every later child under the same command reads the claim file the first one
-// wrote and instead stays alive writing nothing — a replacement lifetime respawns the same command,
+// descendant's pid, and ends. The descendant inherits no stdout, so the readline reader can close
+// on stdout end while the supervisor still drains stderr. Every later child reads the first child's
+// claim file and stays alive writing nothing — a replacement lifetime respawns the same command,
 // so without that branch the replacement would spawn a second descendant and write the same marker
 // into ITS own tail, and a reading meant to report the superseded child would report the live one.
 const DESCENDANT_STDERR_SCRIPT = `
@@ -853,8 +856,8 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		await transport.send(createJSONRPCRequest({ method: 'write', id: 1 }))
 		await waitForEvidence(transport, EVIDENCE_SENTINEL)
 
-		// The child is alive and the tail is live here. `close()` terminates it, and the reading
-		// afterwards is the value the supervisor froze at that child's terminal moment.
+		// The child is alive and the tail is live here. `close()` ends its input, letting it exit;
+		// the reading afterwards is the value frozen at the supervisor's terminal moment.
 		await transport.close()
 
 		expect(transport.evidence).toBe(EVIDENCE_SENTINEL)
@@ -1558,7 +1561,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			await waitForEvidence(transport, EVIDENCE_SENTINEL)
 
 			// The same `close()` over a child that holds no descendant: its streams close under the
-			// termination, the terminal moment arrives drained, and the tail is complete. So the
+			// input-end path, the terminal moment arrives drained, and the tail is complete. So the
 			// notice above reports the cutoff rather than every close this transport runs.
 			await transport.close()
 

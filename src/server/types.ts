@@ -425,6 +425,11 @@ export interface StdioClientTransportOptions {
  * Closing ends the child's input, waits up to {@link import('./constants.js').MCP_STDIO_GRACE}
  * for native exit, and then uses the supervisor's bounded termination if the child remains alive.
  * The input flush shares that bound; the supervisor's stream-drain bound follows native exit.
+ * A child that exits on input end within the grace receives no termination signal and must end
+ * its own child processes on input end; only escalation reaches its process tree. If an
+ * `MCPClient` request `timeout` is shorter than the grace and the close outlasts that timeout,
+ * `disconnect()` rejects with `MCP transport close timed out after <timeout>ms`. The close keeps
+ * running, and a later caller joins it while it remains pending.
  */
 export interface StdioClientTransportInterface extends MCPMessageTransportInterface {
 	/**

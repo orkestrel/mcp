@@ -3071,8 +3071,13 @@ The specification leaves the duration open; `MCP_STDIO_GRACE` gives EOF cleanup 
 existing 5,000 ms process signal grace, or 2,500 ms, before escalation gets its full window.
 This bounds disconnect without adding another full signal grace before termination. No transport option
 is needed by a consumer. The input flush shares that deadline, so a child that stops reading
-cannot hold closure open. A child that exits within the bound receives no termination signal.
+cannot hold closure open. A child that exits on input end within the bound receives no termination signal.
+That child must end its own child processes on input end; only escalation reaches its process tree.
 Escalation sends `SIGTERM` and then `SIGKILL` on POSIX; Windows uses `taskkill /F /T`.
+
+If an `MCPClient` request `timeout` is shorter than the grace and the close outlasts that timeout,
+`disconnect()` rejects with `MCP transport close timed out after <timeout>ms`. The close keeps
+running, and a later caller joins it while it remains pending.
 
 Teardown reaches the child's terminal moment: the supervisor freezes `evidence`, closes the
 line reader, and settles the child's exit. The supervisor's separate `drain` window bounds the
@@ -3133,10 +3138,10 @@ const tools = await client.tools()
 
 A `Shape` cell holds the constant's declared type.
 
-| Constant               | Kind  | Shape   | Summary                                                                                                                                                                                    |
-| ---------------------- | ----- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DEFAULT_MCP_DELIVERY` | const | `10000` | Sets the default bound in milliseconds on one unconfirmed write to a stdio client transport's child `stdin` — the `delivery` a `createStdioClientTransport` caller who supplies none gets. |
-| `MCP_STDIO_GRACE`      | const | `2500`  | Sets the bound in milliseconds for a stdio server to exit after the client ends its input.                                                                                                 |
+| Constant               | Kind  | Shape    | Summary                                                                                                                                                                                    |
+| ---------------------- | ----- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DEFAULT_MCP_DELIVERY` | const | `10000`  | Sets the default bound in milliseconds on one unconfirmed write to a stdio client transport's child `stdin` — the `delivery` a `createStdioClientTransport` caller who supplies none gets. |
+| `MCP_STDIO_GRACE`      | const | `number` | Sets the bound in milliseconds for a stdio server to exit after the client ends its input.                                                                                                 |
 
 #### Helpers
 
