@@ -7,8 +7,71 @@ import { PROCESS_DRAIN, PROCESS_EVIDENCE } from '@orkestrel/process'
 import { createJSONRPCRequest, TIMER_LEAD, waitForSettlement } from '../../../setup.js'
 import { requireValue, waitForCondition, waitForDelay, waitForEvent } from '@orkestrel/test'
 import { createScratch, destroyScratch, isRunning } from '@orkestrel/test/server'
-import { DEFAULT_MCP_REQUEST_TIMEOUT } from '@src/core'
-import { DEFAULT_MCP_DELIVERY, StdioClientTransport } from '@src/server'
+import {
+	createMCPClient,
+	createMCPLegacyClientTransport,
+	DEFAULT_MCP_REQUEST_TIMEOUT,
+} from '@src/core'
+import { DEFAULT_MCP_DELIVERY, MCP_STDIO_GRACE, StdioClientTransport } from '@src/server'
+import { STDIO_CLOSE_SCRIPT, STDIO_FRAME_SCRIPT } from '../../../setupServer.js'
+
+describe('StdioClientTransport — EOF shutdown', () => {
+	it('disconnect lets the server record input end and exit without termination', async () => {
+		const scratch = createScratch()
+		const transport = new StdioClientTransport({
+			command: process.execPath,
+			args: ['-e', STDIO_CLOSE_SCRIPT],
+			env: {
+				MCP_CLOSE_PID: join(scratch.path, 'pid'),
+				MCP_CLOSE_MARKER: join(scratch.path, 'ended'),
+			},
+		})
+		const client = createMCPClient({ transport: createMCPLegacyClientTransport(transport) })
+		try {
+			await client.connect()
+			const pid = Number(requireValue(scratch.read('pid')))
+			expect(isRunning(pid)).toBe(true)
+			expect(scratch.has('ended')).toBe(false)
+			await client.disconnect()
+			expect(scratch.read('ended')).toBe('completed')
+			expect(isRunning(pid)).toBe(false)
+			expect(client.connected).toBe(false)
+		} finally {
+			await client.disconnect()
+			await transport.close()
+			await destroyScratch(scratch)
+		}
+	})
+
+	it('disconnect bounds a server that records input end but refuses to exit', async () => {
+		const scratch = createScratch()
+		const transport = new StdioClientTransport({
+			command: process.execPath,
+			args: ['-e', STDIO_CLOSE_SCRIPT],
+			env: {
+				MCP_CLOSE_PID: join(scratch.path, 'pid'),
+				MCP_CLOSE_MARKER: join(scratch.path, 'ended'),
+				MCP_CLOSE_IGNORE: 'true',
+			},
+		})
+		const client = createMCPClient({ transport: createMCPLegacyClientTransport(transport) })
+		try {
+			await client.connect()
+			const pid = Number(requireValue(scratch.read('pid')))
+			expect(isRunning(pid)).toBe(true)
+			const opened = performance.now()
+			await waitForSettlement(client.disconnect(), MCP_STDIO_GRACE + 5_000, 'EOF shutdown hung')
+			expect(performance.now() - opened).toBeGreaterThanOrEqual(MCP_STDIO_GRACE - TIMER_LEAD)
+			expect(scratch.read('ended')).toBe('ended')
+			expect(isRunning(pid)).toBe(false)
+			expect(client.connected).toBe(false)
+		} finally {
+			await client.disconnect()
+			await transport.close()
+			await destroyScratch(scratch)
+		}
+	}, 15_000)
+})
 
 // src/server/transports/StdioClientTransport.ts — the stdio CLIENT transport, driven END TO
 // END against a REAL spawned child process (a tiny inline `node -e` script standing in for a
@@ -19,7 +82,7 @@ import { DEFAULT_MCP_DELIVERY, StdioClientTransport } from '@src/server'
 // becomes the parsed `message` event; a malformed reply line surfaces `error` and is dropped
 // (never throws); `send` writes one newline-terminated line per message to the child's stdin and
 // settles only on the host's answer, so a line the channel never delivered REJECTS instead of
-// resolving; `close()` kills the child and fires `close` (idempotent).
+// resolving; `close()` ends the child and fires `close` (idempotent).
 
 // A tiny newline-delimited JSON-RPC child: for each line, `ping` replies with a fixed result,
 // `boom` replies with a deliberately malformed (non-JSON) line, anything else replies nothing.
@@ -67,10 +130,8 @@ const BURST_FIRST = 'first'
 /** The second of those lines — the one already framed and queued behind the first. */
 const BURST_SECOND = 'second'
 
-// A child that answers one request with TWO complete lines in ONE write, so the supervisor frames
-// both out of one chunk: the first resolves the pump's outstanding read and the second is left in
-// the supervisor's own queue. That queued line is what a listener calling `close()` from the first
-// line's delivery races, because the supervisor answers the next read out of the queue at once.
+// A child that answers one request with complete lines in one write. A listener calling `close()`
+// from the first delivery must prevent the remaining line in that chunk from being delivered.
 const BURST_SCRIPT = `
 const readline = require('node:readline')
 const rl = readline.createInterface({ input: process.stdin })
@@ -113,6 +174,26 @@ function spawnBurstClient(): StdioClientTransport {
 }
 
 describe('StdioClientTransport — drives a real child process over stdio', () => {
+	it('preserves split UTF-8, CRLF, and a final unterminated reply', async () => {
+		const transport = new StdioClientTransport({
+			command: process.execPath,
+			args: ['-e', STDIO_FRAME_SCRIPT],
+		})
+		const messages: JSONRPCMessage[] = []
+		transport.emitter.on('message', (message) => messages.push(message))
+		const closed = waitForClose(transport, 'the framing fixture exits')
+		try {
+			await transport.start()
+			await closed
+			expect(messages).toEqual([
+				{ jsonrpc: '2.0', id: 1, result: { value: '雪' } },
+				{ jsonrpc: '2.0', id: 2, result: { value: 'final' } },
+			])
+		} finally {
+			await transport.close()
+		}
+	})
+
 	it('keeps the default delivery bound below the request deadline', () => {
 		expect(DEFAULT_MCP_DELIVERY).toBeLessThan(DEFAULT_MCP_REQUEST_TIMEOUT)
 	})
@@ -266,7 +347,7 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		await expect(write).rejects.toThrow(/^stdio transport could not deliver the message$/)
 	})
 
-	it('close() kills the child and fires the close event (idempotent)', async () => {
+	it('close() ends the child and fires the close event (idempotent)', async () => {
 		const transport = spawnClient()
 		let closed = 0
 		transport.emitter.on('close', () => (closed += 1))
@@ -347,10 +428,8 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 			{ budget: 10_000 },
 		)
 
-		// The teardown began INSIDE the first line's delivery, and the second line was already sitting
-		// in the supervisor's queue by then. The supervisor delivers a queued line before it ends the
-		// stream, so the stream's own end does not stop that second delivery — the transport's closed
-		// state is what drops it.
+		// Teardown began inside the first delivery. The reader still holds the remaining line from
+		// that chunk, so the transport's closed state must stop its delivery before the stream ends.
 		await requireValue(closing)
 		await waitForDelay(300)
 
@@ -469,7 +548,7 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 //   armed by the native exit or by an initiated termination elapses first; `ProcessExit.drained`
 //   reports which. Node delivers each `data` event before a stream closes, so a tail read after
 //   this transport's `close` event is complete rather than raced.
-// - `Process.destroy()` resolves past that moment, so the tail this transport reports off the held
+// - `Supervisor.destroy()` resolves past that moment, so the tail this transport reports off the held
 //   child is already frozen when `close()` returns. A descendant holding the inherited `stderr`
 //   cannot hold that barrier open beyond `drain`, and a tail cut off there is the reading
 //   `drained: false` names.
@@ -552,7 +631,8 @@ const write = () => { if (payload !== undefined) process.stderr.write(payload) }
 if (process.env.MCP_EVIDENCE_WAIT === 'true') {
 	const readline = require('node:readline')
 	readline.createInterface({ input: process.stdin }).on('line', write)
-	setInterval(() => {}, 1000)
+	const timer = setInterval(() => {}, 1000)
+	process.stdin.on('end', () => clearInterval(timer))
 } else {
 	write()
 	if (code !== undefined) process.exitCode = Number(code)

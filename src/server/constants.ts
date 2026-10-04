@@ -6,6 +6,18 @@
 // against the same spelling the client wrote, and `createWebSocketServer` echoes the same
 // subprotocol token the browser face offers.
 
+import { PROCESS_GRACE } from '@orkestrel/process'
+
+/**
+ * Sets the bound in milliseconds for a stdio server to exit after the client ends its input.
+ *
+ * @remarks
+ * Gives EOF cleanup half the process supervisor's 5,000 ms signal grace before escalation gets
+ * its existing full window. This bounds the MCP lifecycle's reasonable-time wait without spending
+ * another full signal grace before termination. Pending input flushes share this bound.
+ */
+export const MCP_STDIO_GRACE = PROCESS_GRACE / 2
+
 /** Names the reverse-proxy response header controlling buffering of an SSE response. */
 export const SSE_BUFFERING_HEADER = 'x-accel-buffering'
 

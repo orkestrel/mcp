@@ -2822,24 +2822,24 @@ A `Shape` cell holds the constant's declared type.
 
 #### Helpers
 
-| API                       | Kind     | Summary                                                                                                                                                                                                                                                                                                           |
-| ------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `acceptsEventStream`      | function | Checks whether the request's `Accept` header opts into a Server-Sent-Events response.                                                                                                                                                                                                                             |
-| `allowsOrigin`            | function | Checks whether an HTTP request satisfies the endpoint's origin gate.                                                                                                                                                                                                                                              |
-| `inferHeaderIssue`        | function | Infers the first required MCP HTTP header a request's own body contradicts.                                                                                                                                                                                                                                       |
-| `inferSessionHeaderIssue` | function | Infers the protocol header issue an active legacy session's pinned revision diagnoses.                                                                                                                                                                                                                            |
-| `inferHeaderTarget`       | function | Infers the target one modern request's `Mcp-Name` header must carry.                                                                                                                                                                                                                                              |
-| `inferParameterRefusal`   | function | Infers the refusal one `tools/call` earns for a `Mcp-Param-*` header the body contradicts.                                                                                                                                                                                                                        |
-| `inferLegacyVersion`      | function | Infers the legacy revision an `initialize` request negotiates.                                                                                                                                                                                                                                                    |
-| `inferStatus`             | function | Infers the HTTP status for one MCP dispatch outcome without changing its JSON-RPC body.                                                                                                                                                                                                                           |
-| `readSessionHeader`       | function | Reads the request's `mcp-session-id` header — the session id a stateful transport validates, or `undefined` when absent.                                                                                                                                                                                          |
-| `readLastEventId`         | function | Reads the request's `Last-Event-ID` header — the SSE resume cursor a client sends when it reconnects to the resumable `GET {path}` stream, or `undefined` when absent.                                                                                                                                            |
-| `rejectUnknownSession`    | function | Builds the stateful transport's "unknown session" rejection — an HTTP `404` carrying a JSON-RPC error body.                                                                                                                                                                                                       |
-| `sendEventStream`         | function | Pumps a controlled held-open exchange onto an open SSE stream — one `data:` event per notification in order, then the terminating response — and end the exchange however the pump leaves.                                                                                                                        |
-| `upgradeRequestPath`      | function | Reads the path (without the query string) of a raw `node:http` protocol-upgrade request — the `createWebSocketServer` upgrade-path match.                                                                                                                                                                         |
-| `extractLines`            | function | Folds one more chunk of raw stdio bytes into a newline-framed buffer — the shared line-framing step both stdio transports (client and server) read their inbound newline-delimited JSON-RPC messages through.                                                                                                     |
-| `writeLine`               | function | Writes one line to a Node writable stream and waits for its completion callback.                                                                                                                                                                                                                                  |
-| `dispatchLines`           | function | Decodes and delivers each complete newline-framed line onto a `MCPMessageTransportEventMap` emitter — the shared per-chunk dispatch step both stdio transports run their framed lines through: the server transport frames with `extractLines`, the client transport takes its lines from the process supervisor. |
+| API                       | Kind     | Summary                                                                                                                                                                                                                                                                                                                     |
+| ------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `acceptsEventStream`      | function | Checks whether the request's `Accept` header opts into a Server-Sent-Events response.                                                                                                                                                                                                                                       |
+| `allowsOrigin`            | function | Checks whether an HTTP request satisfies the endpoint's origin gate.                                                                                                                                                                                                                                                        |
+| `inferHeaderIssue`        | function | Infers the first required MCP HTTP header a request's own body contradicts.                                                                                                                                                                                                                                                 |
+| `inferSessionHeaderIssue` | function | Infers the protocol header issue an active legacy session's pinned revision diagnoses.                                                                                                                                                                                                                                      |
+| `inferHeaderTarget`       | function | Infers the target one modern request's `Mcp-Name` header must carry.                                                                                                                                                                                                                                                        |
+| `inferParameterRefusal`   | function | Infers the refusal one `tools/call` earns for a `Mcp-Param-*` header the body contradicts.                                                                                                                                                                                                                                  |
+| `inferLegacyVersion`      | function | Infers the legacy revision an `initialize` request negotiates.                                                                                                                                                                                                                                                              |
+| `inferStatus`             | function | Infers the HTTP status for one MCP dispatch outcome without changing its JSON-RPC body.                                                                                                                                                                                                                                     |
+| `readSessionHeader`       | function | Reads the request's `mcp-session-id` header — the session id a stateful transport validates, or `undefined` when absent.                                                                                                                                                                                                    |
+| `readLastEventId`         | function | Reads the request's `Last-Event-ID` header — the SSE resume cursor a client sends when it reconnects to the resumable `GET {path}` stream, or `undefined` when absent.                                                                                                                                                      |
+| `rejectUnknownSession`    | function | Builds the stateful transport's "unknown session" rejection — an HTTP `404` carrying a JSON-RPC error body.                                                                                                                                                                                                                 |
+| `sendEventStream`         | function | Pumps a controlled held-open exchange onto an open SSE stream — one `data:` event per notification in order, then the terminating response — and end the exchange however the pump leaves.                                                                                                                                  |
+| `upgradeRequestPath`      | function | Reads the path (without the query string) of a raw `node:http` protocol-upgrade request — the `createWebSocketServer` upgrade-path match.                                                                                                                                                                                   |
+| `extractLines`            | function | Folds one more chunk of raw stdio bytes into a newline-framed buffer — the shared line-framing step both stdio transports (client and server) read their inbound newline-delimited JSON-RPC messages through.                                                                                                               |
+| `writeLine`               | function | Writes one line to a Node writable stream and waits for its completion callback.                                                                                                                                                                                                                                            |
+| `dispatchLines`           | function | Decodes and delivers each complete newline-framed line onto a `MCPMessageTransportEventMap` emitter — the shared per-chunk dispatch step both stdio transports run their framed lines through: the server transport frames with `extractLines`, the client transport frames the supervisor's stdout with Node's `readline`. |
 
 _This face declares no `decodeEvent`, `readEventStream`, or `buildResponseError`. Those SSE
 decoders and the response-error builder are host-independent and ship from `@orkestrel/mcp`; see
@@ -3003,7 +3003,7 @@ case non-flowing with `readableFlowing === false`. Attaching a later `data` list
 resume that stream; the caller must call `resume()` before the listener receives data.
 
 `createStdioClientTransport` is the egress mirror — it builds one supervised
-`@orkestrel/process` `Process` over `options.command` / `options.args` /
+`@orkestrel/process` `Supervisor` over `options.command` / `options.args` /
 `options.env`, and that supervisor spawns the child with
 `stdio: ['pipe', 'pipe', 'pipe']`: `stdin`/`stdout` carry the JSON-RPC channel
 and `stderr` is piped and retained as a bounded tail on the supervisor, not
@@ -3031,7 +3031,7 @@ replacing it: each named key overrides the inherited value, every unlisted key
 is still inherited, and the child therefore receives every secret this process
 holds. The server side frames its own input with `extractLines` (fold a
 raw chunk into complete lines + a carried remainder); the client side takes its
-frames from the supervisor's `readline`-backed `lines` iterable instead. Both
+frames from Node's `readline` over the supervisor's stdout instead. Both
 decode through `dispatchLines` (decode + emit each complete line as `message` or
 `error`) — documented under [HTTP transport § Helpers](#helpers-1) because it
 lives in the shared `helpers.ts`.
@@ -3064,21 +3064,25 @@ landed draws no reply either. `DEFAULT_MCP_DELIVERY` is shorter than
 `DEFAULT_MCP_REQUEST_TIMEOUT`; that ordering distinguishes a default-bound
 undeliverable write from the later deadline for a peer that did not answer.
 
-Closing the client runs the supervisor's bounded process teardown, which reaches the child's
-terminal moment: the supervisor freezes `evidence`, ends `lines`, and settles the child's exit
-together there. That ladder is signal-first — the supervisor terminates the child, then destroys
-its `stdin` — rather than the stdin-close-and-wait the specification asks a stdio client for.
-The posture and its cost are stated under
-[Declared conformance gaps](#declared-conformance-gaps). The transport's line pump therefore needs no release of its own — the stream ends
-under it. The wait for the child's streams is bounded by the supervisor's `drain` window, so a
-descendant that inherited the child's stdout pipe cannot keep the transport's `close` call pending
-past it. Inbound delivery ends at the call rather than at the stream's end: a line the supervisor
-had already framed behind the one being delivered is dropped rather than emitted onto a transport
+Closing the client ends the child's input, waits up to `MCP_STDIO_GRACE` for native exit,
+and only then terminates a child that remains alive through the supervisor's bounded stop.
+This follows the [MCP 2025-11-25 lifecycle shutdown order](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#stdio).
+The specification leaves the duration open; `MCP_STDIO_GRACE` gives EOF cleanup half the
+existing 5,000 ms process signal grace, or 2,500 ms, before escalation gets its full window.
+This bounds disconnect without adding another full signal grace before termination. No transport option
+is needed by a consumer. The input flush shares that deadline, so a child that stops reading
+cannot hold closure open. A child that exits within the bound receives no termination signal.
+Escalation sends `SIGTERM` and then `SIGKILL` on POSIX; Windows uses `taskkill /F /T`.
+
+Teardown reaches the child's terminal moment: the supervisor freezes `evidence`, closes the
+line reader, and settles the child's exit. The supervisor's separate `drain` window bounds the
+wait for inherited output pipes after native exit. Inbound delivery ends at the call rather than
+at the stream's end: a line already framed behind the one being delivered is dropped rather than emitted onto a transport
 whose teardown has begun. A `close()` issued while that teardown is running joins it rather than
 opening a second one, so it resolves only after the `close` event has fired.
 
 The tail frozen at that moment is what the supervisor had received by then, not the child's
-complete output. On Windows the supervisor ends the tree with `taskkill /F /T`, which nothing in
+complete output. On Windows, after the input grace expires, the supervisor ends the tree with `taskkill /F /T`, which nothing in
 the child can intercept: a `SIGTERM` handler never runs there, so the bytes it would have written
 never exist. A child that ends on its own closes its `stderr` first, and that tail is complete.
 When the terminal moment arrived at the `drain` bound instead — a detached descendant holding the
@@ -3132,6 +3136,7 @@ A `Shape` cell holds the constant's declared type.
 | Constant               | Kind  | Shape   | Summary                                                                                                                                                                                    |
 | ---------------------- | ----- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `DEFAULT_MCP_DELIVERY` | const | `10000` | Sets the default bound in milliseconds on one unconfirmed write to a stdio client transport's child `stdin` — the `delivery` a `createStdioClientTransport` caller who supplies none gets. |
+| `MCP_STDIO_GRACE`      | const | `2500`  | Sets the bound in milliseconds for a stdio server to exit after the client ends its input.                                                                                                 |
 
 #### Helpers
 
@@ -3886,8 +3891,8 @@ the Node one also destroys an upgrade request still on the wire.
 `WebSocketServerTransport` unsubscribes before it runs the close handshake, so a
 frame already in flight cannot re-emit on a
 transport that has closed. `StdioClientTransport` stops its own line
-dispatch at the call, terminates its child through the supervisor's bounded group
-kill, and tears the supervisor down within the `drain` bound that caps a
+dispatch at the call, ends the child's input, waits up to `MCP_STDIO_GRACE` for exit,
+and then terminates any remaining child through the supervisor. Teardown uses the `drain` bound that caps a
 descendant-held stdout pipe.
 `StdioServerTransport` removes the listeners it put on `input` and `output`, rejects pending
 sends, preserves the caller's flowing or non-flowing state and listeners, and does not destroy
@@ -5204,19 +5209,6 @@ listing keeps projecting. Arrival order cannot merge two listings into one table
 another cursorless `tools/list` supersedes before its answer arrives is still delivered to
 the caller, exclusions and all, and caches nothing.
 
-**The stdio client shuts a child down signal-first, not stdin-first — a declared `SHOULD`
-departure owned by another package.** The stdio page says a client `SHOULD` close the child's
-`stdin`, wait for it to exit, and terminate it only if it does not. `StdioClientTransport.close`
-runs `@orkestrel/process`'s bounded teardown, whose ladder is the other way round: the
-supervisor signals the child (`SIGTERM`, then `SIGKILL` after the grace window; on Windows a
-`taskkill /F /T` over the tree), and destroys `stdin` after that. **What it costs:** a child
-that would have exited cleanly on EOF is signalled instead, so its own shutdown work runs
-against a deadline and, on Windows, does not run at all — a `SIGTERM` handler never fires there,
-and the diagnostics it would have written never exist. **Closer:** `@orkestrel/process`. The
-ladder belongs to the supervisor that owns the child, not to a transport reaching around it, so
-this package adopts a cooperative stop as soon as `Process` offers one; the improvement is
-recorded against that package.
-
 **Tool-invocation rate limiting — not satisfied, and no unit will close it.**
 2025-11-25's `server/tools` § Security Considerations binds a server to validate tool
 inputs, implement access controls, **rate limit tool invocations**, and sanitize tool
@@ -5972,7 +5964,7 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     later `data` listener does not resume that stream; the caller must call
     `resume()` before the listener receives data.
     `createStdioClientTransport(options)` builds one supervised
-    `@orkestrel/process` `Process` over `options.command` and `options.args`.
+    `@orkestrel/process` `Supervisor` over `options.command` and `options.args`.
     That supervisor spawns with `stdio: ['pipe', 'pipe', 'pipe']`, so the
     child's `stderr` is piped and retained as a bounded tail rather than
     inherited by the parent. A provided `env` merges over `process.env` rather
@@ -5997,7 +5989,7 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     again, so a detached descendant holding the inherited `stderr` can write
     after `close()` resolves and those bytes reach no reading this transport
     reports. What the frozen tail holds is what the supervisor had received by
-    that moment, rather than the child's complete output: Windows ends the tree
+    that moment, rather than the child's complete output: after the input grace, Windows ends the tree
     with `taskkill /F /T`, which nothing in the child can intercept, so a
     `SIGTERM` handler never runs there and the bytes it would have written never
     exist. A child that exits on its own closes its `stderr` first, so that tail
@@ -6042,18 +6034,17 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     deadline for a peer that did not answer; an explicit `0` removes the bound
     and leaves such a write pending on the channel until teardown settles it as
     the same rejection.
-    The child's `stdout` is drained through the supervisor's
-    `readline`-framed `lines` iterable and every complete line is decoded onto
+    The child's `stdout` is drained through Node's `readline` and every complete line is decoded onto
     `message` through the shared `dispatchLines` helper (a malformed line emits
     `error`); the child's exit bridges to the transport's `close`. `close()`
-    runs the supervisor's bounded termination and teardown, which ends that
-    `lines` stream at the child's terminal moment rather than throwing at the
-    pump, and fires `close` once. A line already framed behind the one being
+    ends stdin and waits up to `MCP_STDIO_GRACE` for native exit before the supervisor
+    terminates a child that remains alive. The input flush shares that bound. Teardown closes
+    the reader at the child's terminal moment and fires `close` once. A line already framed behind the one being
     delivered is dropped rather than emitted after the teardown began, and the
     wait for a descendant-held stdout pipe is capped by the supervisor's `drain`
     bound; a `close()` issued while that teardown runs joins it and resolves only
     after `close` has fired. The
-    termination is the host's — a POSIX host signals the child's own process
+    escalation is the host's — a POSIX host signals the child's own process
     group `SIGTERM`, waits the grace window, then `SIGKILL`s through the same
     route, while Windows ends the tree with `taskkill /F /T`.
     The stdio transports'

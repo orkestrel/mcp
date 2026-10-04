@@ -279,7 +279,7 @@ export function writeLine(output: NodeJS.WritableStream, line: string): Promise<
  * Decodes and delivers each complete newline-framed line onto a {@link
  * MCPMessageTransportEventMap} emitter — the shared per-chunk dispatch step both stdio
  * transports run their framed lines through: the server transport frames with {@link
- * extractLines}, the client transport takes its lines from the process supervisor.
+ * extractLines}, the client transport frames the supervisor's stdout with Node's `readline`.
  *
  * @remarks
  * A blank line is skipped (a stray trailing newline). Every other line runs through the

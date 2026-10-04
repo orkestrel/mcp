@@ -20,6 +20,44 @@ import {
 	WEBSOCKET_OPCODE_TEXT,
 } from '@orkestrel/websocket'
 
+/** Runs a legacy stdio peer that records EOF and either exits or keeps its timer alive. */
+export const STDIO_CLOSE_SCRIPT = `
+const { writeFileSync } = require('node:fs')
+const { createInterface } = require('node:readline')
+const timer = setInterval(() => {}, 1000)
+writeFileSync(process.env.MCP_CLOSE_PID, String(process.pid))
+process.stdin.on('end', () => {
+	writeFileSync(process.env.MCP_CLOSE_MARKER, 'ended')
+	if (process.env.MCP_CLOSE_IGNORE !== 'true') setTimeout(() => {
+		writeFileSync(process.env.MCP_CLOSE_MARKER, 'completed')
+		clearInterval(timer)
+	}, 100)
+})
+createInterface({ input: process.stdin }).on('line', (line) => {
+	const message = JSON.parse(line)
+	if (message.id === undefined) return
+	const response = message.method === 'initialize'
+		? { jsonrpc: '2.0', id: message.id, result: {
+			protocolVersion: '2025-11-25', capabilities: {},
+			serverInfo: { name: 'stdio-close-peer', version: '1.0.0' },
+		} }
+		: { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'Method not found' } }
+	process.stdout.write(JSON.stringify(response) + '\\n')
+})
+`
+
+/** Emits split UTF-8, CRLF framing, and a final unterminated JSON-RPC response. */
+export const STDIO_FRAME_SCRIPT = `
+const bytes = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { value: '雪' } }) + '\\r\\n')
+const boundary = bytes.indexOf(Buffer.from('雪')) + 1
+process.stdout.write(bytes.subarray(0, boundary), () => {
+	setTimeout(() => {
+		process.stdout.write(bytes.subarray(boundary))
+		process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { value: 'final' } }))
+	}, 20)
+})
+`
+
 /**
  * Finds the imports Guide surfaces from a projected fence that are absent from their exact public
  * face.

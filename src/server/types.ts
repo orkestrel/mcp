@@ -422,6 +422,9 @@ export interface StdioClientTransportOptions {
  * of them answers `undefined` to forever is a stdio detail rather than a shared contract. A
  * consumer that widens this value back to {@link MCPMessageTransportInterface}, including by
  * reading `client.transport`, loses the reader and must keep the original reference.
+ * Closing ends the child's input, waits up to {@link import('./constants.js').MCP_STDIO_GRACE}
+ * for native exit, and then uses the supervisor's bounded termination if the child remains alive.
+ * The input flush shares that bound; the supervisor's stream-drain bound follows native exit.
  */
 export interface StdioClientTransportInterface extends MCPMessageTransportInterface {
 	/**
@@ -455,7 +458,8 @@ export interface StdioClientTransportInterface extends MCPMessageTransportInterf
 	 *   would have read.
 	 * - **What the close path carries.** The frozen value is what the supervisor had received by
 	 *   that terminal moment, not the child's complete output.
-	 *   Windows ends the tree with `taskkill /F /T`, which nothing in the child can intercept: a
+	 *   After the input grace expires, Windows ends the tree with `taskkill /F /T`, which nothing
+	 *   in the child can intercept: a
 	 *   `SIGTERM` handler never runs there, so the bytes it would have written never exist. A
 	 *   child that ends on its own closes its stderr first, and that tail is complete.
 	 *   Where that moment arrived at the supervisor's `drain` bound rather than at the child's

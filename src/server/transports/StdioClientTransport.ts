@@ -2,10 +2,11 @@ import type { MCPMessageTransportEventMap, JSONRPCMessage } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { ProcessExit } from '@orkestrel/process'
 import type { StdioClientTransportInterface, StdioClientTransportOptions } from '../types.js'
-import { Process } from '@orkestrel/process/server'
+import { createInterface } from 'node:readline'
+import { Supervisor } from '@orkestrel/process/server'
 import { PROCESS_GRACE } from '@orkestrel/process'
 import { Emitter } from '@orkestrel/emitter'
-import { DEFAULT_MCP_DELIVERY } from '../constants.js'
+import { DEFAULT_MCP_DELIVERY, MCP_STDIO_GRACE } from '../constants.js'
 import { dispatchLines } from '../helpers.js'
 
 /**
@@ -16,32 +17,32 @@ import { dispatchLines } from '../helpers.js'
  *
  * @remarks
  * - **Composes `@orkestrel/process`.** `start()` builds one supervised
- *   {@link import('@orkestrel/process/server').Process} with `writable: true`, so the child's
+ *   {@link import('@orkestrel/process/server').Supervisor} with `writable: true`, so the child's
  *   `stdin`/`stdout` are the JSON-RPC channel and its `stderr` is retained as bounded evidence
- *   rather than parsed as protocol. The supervisor owns spawn, framing, and termination.
- * - **Inbound (`message`).** Standard output is drained eagerly through the supervisor's
- *   `readline`-framed `lines` iterable, so a multi-byte UTF-8 sequence split across two reads is
+ *   rather than parsed as protocol. The supervisor owns spawn and termination.
+ * - **Inbound (`message`).** Standard output is drained eagerly through Node's `readline`,
+ *   so a multi-byte UTF-8 sequence split across two reads is
  *   decoded whole and a final line written without a trailing newline still arrives. Each framed
  *   line is decoded and delivered through the shared {@link dispatchLines} helper — a well-formed
  *   {@link JSONRPCMessage} emits `message`, a malformed line emits `error` (never throws).
  * - **Outbound (`send`).** `send(message)` writes one newline-terminated `JSON.stringify`d line
- *   through the supervisor's `send` and awaits its answer, so this promise settles only after the
+ *   through the supervisor's `deliver` and awaits its answer, so this promise settles only after the
  *   host reports the line handled rather than the moment the write is queued. The supervisor never
  *   rejects — it answers `false` for a channel that was closed, destroyed, or ended, for a write
  *   that failed, or for one that remained unconfirmed through `delivery`. A call made without a
  *   live child rejects as not connected; a `false` answer from a live child rejects as unable to
  *   deliver. The supervisor does not disclose which cause produced that answer.
- * - **`close()`** runs the supervisor's bounded termination and teardown, then fires `close` once
- *   (idempotent). That teardown reaches the child's terminal moment, where the supervisor freezes
- *   `evidence`, ends `lines`, and settles `exit` together, so this transport needs no release of
- *   its own to get its line pump back: the stream ends under the pump rather than throwing at it.
- *   A line the supervisor had already framed behind the one being delivered is dropped rather than
+ * - **`close()`** ends the child's input and waits up to {@link MCP_STDIO_GRACE} for native exit,
+ *   including any pending input flush. Only after that wait does the supervisor terminate a child
+ *   that remains alive. Teardown freezes `evidence`, closes the reader, and settles `exit`, then
+ *   fires `close` once (idempotent).
+ *   A line already framed behind the one being delivered is dropped rather than
  *   emitted onto a transport whose teardown has begun. A `close()` issued while that teardown runs
  *   joins it rather than opening a second one, so it resolves only after `close` has fired, and a
  *   `start()` issued while it runs waits behind the same barrier, so lifetimes never overlap. A
  *   descendant can retain an inherited stdout pipe after the child exits; the supervisor's `drain`
- *   bound cuts that wait off, so this transport's `close()` settles within that bound rather than
- *   on the descendant. The termination itself belongs to the host: a POSIX host signals the
+ *   bound cuts that wait off independently of the input grace. Escalation belongs to the host:
+ *   a POSIX host signals the
  *   child's own process group `SIGTERM`, waits the grace window, then `SIGKILL`s through the same
  *   route, so the kill reaches grandchildren rather than orphaning them, while Windows ends the
  *   tree with `taskkill /F /T`, which nothing in the child can intercept.
@@ -71,7 +72,7 @@ export class StdioClientTransport implements StdioClientTransportInterface {
 	readonly #args: readonly string[]
 	readonly #env: Readonly<Record<string, string>> | undefined
 	readonly #delivery: number
-	#process: Process | undefined = undefined
+	#process: Supervisor | undefined = undefined
 	#closing: Promise<void> | undefined = undefined
 	#closed = false
 
@@ -137,21 +138,34 @@ export class StdioClientTransport implements StdioClientTransportInterface {
 		// does, and a held ended child is exactly what a replacement replaces.
 		if (this.#process !== undefined && !this.#closed) return
 		this.#closed = false
-		const child = new Process({
-			command: {
-				file: this.#command,
-				arguments: [...this.#args],
-				...(this.#env === undefined ? {} : { environment: this.#env }),
+		const child = new Supervisor(
+			{
+				command: {
+					file: this.#command,
+					arguments: [...this.#args],
+					...(this.#env === undefined ? {} : { environment: this.#env }),
+				},
+				workspace: process.cwd(),
+				grace: PROCESS_GRACE,
+				delivery: this.#delivery,
+				writable: true,
 			},
-			workspace: process.cwd(),
-			grace: PROCESS_GRACE,
-			delivery: this.#delivery,
-			writable: true,
-		})
+			{
+				// The supervisor retains stderr; this transport exposes it through evidence.
+				chunk: () => undefined,
+				fault: (cause) => this.#emitter.emit('error', cause),
+				close: () => reader.close(),
+				terminal: () => undefined,
+				teardown: () => reader.close(),
+			},
+		)
+		const reader = createInterface({ input: child.stdout, crlfDelay: Infinity })
 		this.#process = child
-		child.emitter.on('error', (cause) => this.#emitter.emit('error', cause))
+		reader.on('line', (line: string) => {
+			if (this.#closed || this.#process !== child) return
+			dispatchLines(this.#emitter, [line])
+		})
 		void child.exit.then((exit) => this.#onExit(child, exit))
-		void this.#pump(child)
 	}
 
 	/**
@@ -171,11 +185,11 @@ export class StdioClientTransport implements StdioClientTransportInterface {
 		// on the supervisor to answer for a channel it has already torn down.
 		const child = this.#closed ? undefined : this.#process
 		if (child === undefined) throw new Error('stdio transport is not connected')
-		// The supervisor's `send` never rejects: it ANSWERS `false` when the channel was closed,
+		// The supervisor's `deliver` never rejects: it ANSWERS `false` when the channel was closed,
 		// destroyed, ended, the write failed, or the delivery bound elapsed. Awaiting that answer is
 		// what keeps a dead peer from vanishing — an unawaited call resolves this `send` before the
 		// line reaches the host. The answer does not disclose which cause produced it.
-		const delivered = await child.send(JSON.stringify(message))
+		const delivered = await child.deliver(Buffer.from(`${JSON.stringify(message)}\n`, 'utf8'))
 		if (!delivered) throw new Error('stdio transport could not deliver the message')
 	}
 
@@ -197,34 +211,31 @@ export class StdioClientTransport implements StdioClientTransportInterface {
 		await this.#closing
 	}
 
-	// Run the supervisor's bounded teardown and report `close` once. That teardown resolves at the
-	// child's terminal moment, so `evidence` is frozen and `lines` has ended by the time this
+	// End input before the supervisor's bounded teardown and report `close` once. Teardown resolves
+	// at the child's terminal moment, so `evidence` is frozen and the reader is closed when this
 	// resumes. The child's own exit ends the lifetime the same way.
 	async #teardown(): Promise<void> {
 		if (this.#closed) return
 		this.#closed = true
 		const child = this.#process
 		if (child !== undefined) {
+			// end() can wait indefinitely on a full pipe. Start it without awaiting the flush:
+			// the same bound covers input delivery and native exit, independently of drain.
+			const expired = Promise.withResolvers<void>()
+			const timer = setTimeout(expired.resolve, MCP_STDIO_GRACE)
+			try {
+				void child.end()
+				await Promise.race([child.ending, expired.promise])
+			} finally {
+				clearTimeout(timer)
+			}
 			// The child stays HELD past this point. Its frozen tail is what `evidence` answers for
 			// the ended lifetime, and only the next `start()` replaces the reference.
+			// The supervisor skips signalling a child whose native exit was already observed.
 			await child.destroy()
 			this.#report(await child.exit)
 		}
 		this.#emitter.emit('close')
-	}
-
-	// Drain the supervisor's newline-framed stdout lines, decoding + delivering every complete line
-	// onto this transport's emitter. The stream ENDS at the child's terminal moment rather than
-	// throwing there, so this loop needs no release of its own — the supervisor's own teardown is
-	// what releases it. A teardown that has begun and a replacement that superseded this child each
-	// stop the dispatch before that end: the closed state is what drops a line the supervisor had
-	// already framed behind the one being delivered, and peer identity is what keeps a stale
-	// iteration from emitting onto a live child.
-	async #pump(child: Process): Promise<void> {
-		for await (const line of child.lines) {
-			if (this.#closed || this.#process !== child) return
-			dispatchLines(this.#emitter, [line])
-		}
 	}
 
 	// The current child process reached its terminal moment — report a cut-off tail, then fire this
@@ -232,7 +243,7 @@ export class StdioClientTransport implements StdioClientTransportInterface {
 	// `start()` has installed a replacement; peer identity keeps that old exit from reporting on a
 	// tail no reader can reach any more or emitting a second close. A teardown already reported
 	// this lifetime, so the closed state stops the second report rather than the first.
-	#onExit(child: Process, exit: ProcessExit): void {
+	#onExit(child: Supervisor, exit: ProcessExit): void {
 		if (this.#process !== child) return
 		if (this.#closed) return
 		this.#closed = true
