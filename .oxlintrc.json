@@ -109,6 +109,7 @@
 				"policy/no-malformed-constant": "error",
 				"policy/no-misnamed-parser": "error",
 				"policy/no-misnamed-factory": "error",
+				"policy/no-misnamed-plugin": "error",
 				"policy/no-malformed-domain": "error"
 			}
 		},

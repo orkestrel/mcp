@@ -31,6 +31,13 @@ export interface PolicyExpression extends PolicyNode {
 	readonly source?: PolicyExpression
 	readonly specifiers?: readonly PolicyExpression[]
 	readonly imported?: PolicyExpression
+	readonly exported?: PolicyExpression
+}
+
+/** Pairs a name-form kind file's name pattern with the message id a misnamed export reports. */
+export interface PolicyNameForm {
+	readonly pattern: RegExp
+	readonly messageId: string
 }
 
 /** Pairs one declared module function with the name a prefix rule reads. */
@@ -145,6 +152,7 @@ export const CENTRAL_SOURCE_FILES: readonly string[] = Object.freeze([
 	'inferers.ts',
 	'middlewares.ts',
 	'parsers.ts',
+	'plugins.ts',
 	'relations.ts',
 	'routes.ts',
 	'schemas.ts',
@@ -167,6 +175,7 @@ export const FUNCTION_SOURCE_FILES: readonly string[] = Object.freeze([
 	'inferers.ts',
 	'middlewares.ts',
 	'parsers.ts',
+	'plugins.ts',
 	'relations.ts',
 	'schemas.ts',
 	'seeders.ts',
@@ -273,6 +282,16 @@ export const POLICY_TAG_PATTERN = /\{@(?:linkcode|linkplain|link|inheritDoc)\b[^
 
 /** Matches a URL, whose segments are an address rather than prose. */
 export const POLICY_URL_PATTERN = /https?:\/\/\S+/gu
+
+/** Maps each name-form kind file to the form every function it exports must take. */
+export const POLICY_NAME_FORMS: Readonly<Record<string, PolicyNameForm>> = Object.freeze({
+	'parsers.ts': Object.freeze({ pattern: /^parse/u, messageId: 'parser' }),
+	'factories.ts': Object.freeze({ pattern: /^create/u, messageId: 'factory' }),
+	'plugins.ts': Object.freeze({
+		pattern: /^create[A-Z][A-Za-z0-9]*Plugins?$/u,
+		messageId: 'plugin',
+	}),
+})
 
 /**
  * Lists the words ending in `s` that open a sentence without being a third-person verb.
@@ -992,24 +1011,44 @@ export function reportConstant(context: PolicyContext, node: PolicyExpression): 
 	}
 }
 
-/** Reports a parsers.ts function whose name lacks the parse prefix. */
-export function reportParser(context: PolicyContext, node: PolicyExpression): void {
-	if (isPolicyAmbient(context.filename) || !isPolicyTop(node)) return
-	if (pathToPolicyFile(context.filename) !== 'parsers.ts') return
-	for (const binding of statementToPolicyBindings(node)) {
-		if (binding.name === undefined || !binding.name.startsWith('parse')) {
-			context.report({ node: binding.node, messageId: 'parser' })
-		}
+/**
+ * Reports a function in the named kind file whose name breaks that file's form, an export specifier
+ * or exported import alias there that publishes a name outside it, and a star re-export there, whose
+ * names the form cannot read.
+ */
+export function reportName(context: PolicyContext, node: PolicyExpression, file: string): void {
+	const form = POLICY_NAME_FORMS[file]
+	if (form === undefined || pathToPolicyFile(context.filename) !== file) return
+	if (node.type === 'ExportAllDeclaration') {
+		context.report({ node, messageId: form.messageId })
+		return
 	}
-}
-
-/** Reports a factories.ts function whose name lacks the create prefix. */
-export function reportFactory(context: PolicyContext, node: PolicyExpression): void {
-	if (isPolicyAmbient(context.filename) || !isPolicyTop(node)) return
-	if (pathToPolicyFile(context.filename) !== 'factories.ts') return
+	if (node.type === 'ExportNamedDeclaration') {
+		const alias = node.declaration
+		if (alias?.type === 'TSImportEqualsDeclaration') {
+			const name = identifierToPolicyName(alias.id)
+			if (name === undefined || !form.pattern.test(name)) {
+				context.report({ node: alias, messageId: form.messageId })
+			}
+		}
+		for (const specifier of node.specifiers ?? []) {
+			const exported = specifier.exported
+			const name =
+				typeof exported?.name === 'string'
+					? exported.name
+					: typeof exported?.value === 'string'
+						? exported.value
+						: undefined
+			if (name === undefined || !form.pattern.test(name)) {
+				context.report({ node: specifier, messageId: form.messageId })
+			}
+		}
+		return
+	}
+	if (!isPolicyTop(node)) return
 	for (const binding of statementToPolicyBindings(node)) {
-		if (binding.name === undefined || !binding.name.startsWith('create')) {
-			context.report({ node: binding.node, messageId: 'factory' })
+		if (binding.name === undefined || !form.pattern.test(binding.name)) {
+			context.report({ node: binding.node, messageId: form.messageId })
 		}
 	}
 }
@@ -1252,44 +1291,73 @@ export const CONSTANT_RULE: PolicyRuleInterface = {
 	},
 }
 
-/** Bans a parsers.ts function whose name lacks the parse prefix. */
+/** Bans a parsers.ts function or export whose name lacks the parse prefix. */
 export const PARSER_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
 		docs: {
-			description: 'Disallow a parsers.ts function whose name does not start with parse.',
+			description: 'Disallow a parsers.ts function or export whose name does not start with parse.',
 		},
 		messages: {
 			parser:
-				'Name this parsers.ts function with the parse prefix, or move it to its own kind file.',
+				'Name this parsers.ts function or export with the parse prefix, or move it to its own kind file.',
 		},
 	},
 	create(context) {
 		return {
-			FunctionDeclaration: (node) => reportParser(context, node),
-			TSDeclareFunction: (node) => reportParser(context, node),
-			VariableDeclaration: (node) => reportParser(context, node),
+			ExportAllDeclaration: (node) => reportName(context, node, 'parsers.ts'),
+			ExportNamedDeclaration: (node) => reportName(context, node, 'parsers.ts'),
+			FunctionDeclaration: (node) => reportName(context, node, 'parsers.ts'),
+			TSDeclareFunction: (node) => reportName(context, node, 'parsers.ts'),
+			VariableDeclaration: (node) => reportName(context, node, 'parsers.ts'),
 		}
 	},
 }
 
-/** Bans a factories.ts function whose name lacks the create prefix. */
+/** Bans a factories.ts function or export whose name lacks the create prefix. */
 export const FACTORY_RULE: PolicyRuleInterface = {
 	meta: {
 		type: 'problem',
 		docs: {
-			description: 'Disallow a factories.ts function whose name does not start with create.',
+			description:
+				'Disallow a factories.ts function or export whose name does not start with create.',
 		},
 		messages: {
 			factory:
-				'Name this factories.ts function with the create prefix, or move it to its own kind file.',
+				'Name this factories.ts function or export with the create prefix, or move it to its own kind file.',
 		},
 	},
 	create(context) {
 		return {
-			FunctionDeclaration: (node) => reportFactory(context, node),
-			TSDeclareFunction: (node) => reportFactory(context, node),
-			VariableDeclaration: (node) => reportFactory(context, node),
+			ExportAllDeclaration: (node) => reportName(context, node, 'factories.ts'),
+			ExportNamedDeclaration: (node) => reportName(context, node, 'factories.ts'),
+			FunctionDeclaration: (node) => reportName(context, node, 'factories.ts'),
+			TSDeclareFunction: (node) => reportName(context, node, 'factories.ts'),
+			VariableDeclaration: (node) => reportName(context, node, 'factories.ts'),
+		}
+	},
+}
+
+/** Bans a plugins.ts function or export whose name is not a create-prefixed plugin or plugins form. */
+export const PLUGIN_RULE: PolicyRuleInterface = {
+	meta: {
+		type: 'problem',
+		docs: {
+			description:
+				'Disallow a plugins.ts function or export whose name is not create…Plugin or create…Plugins.',
+		},
+		messages: {
+			plugin:
+				'Name this plugins.ts function or export create…Plugin, or create…Plugins for a collection, or move it to its own kind file.',
+		},
+	},
+	create(context) {
+		return {
+			ExportAllDeclaration: (node) => reportName(context, node, 'plugins.ts'),
+			ExportNamedDeclaration: (node) => reportName(context, node, 'plugins.ts'),
+			FunctionDeclaration: (node) => reportName(context, node, 'plugins.ts'),
+			TSDeclareFunction: (node) => reportName(context, node, 'plugins.ts'),
+			VariableDeclaration: (node) => reportName(context, node, 'plugins.ts'),
 		}
 	},
 }
@@ -1392,6 +1460,7 @@ export default {
 		'no-malformed-constant': CONSTANT_RULE,
 		'no-misnamed-parser': PARSER_RULE,
 		'no-misnamed-factory': FACTORY_RULE,
+		'no-misnamed-plugin': PLUGIN_RULE,
 		'no-malformed-domain': DOMAIN_RULE,
 		'no-host-line-endings': ENDING_RULE,
 		'no-malformed-summary': VOICE_RULE,

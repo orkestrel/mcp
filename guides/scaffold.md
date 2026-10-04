@@ -306,6 +306,7 @@ Exported from `@orkestrel/scaffold`, and reachable from
 | `blueprintToTestArtifacts`          | function | Compiles every artifact in the `tests` group that is not vendored from the host.                         |
 | `blueprintToWritableScripts`        | function | Projects a blueprint into the manifest scripts a region write may replace.                               |
 | `dependenciesToQuestions`           | function | Measures one declared package list against the name and range syntax it accepts.                         |
+| `insertManifestDependencies`        | function | Inserts dependencies a package manifest does not declare into the section each one names.                |
 | `overridesToQuestions`              | function | Measures a blueprint's overrides against the artifacts drafted for it.                                   |
 | `pathToCondition`                   | function | Builds one `exports` condition block for a built environment.                                            |
 | `planToFindings`                    | function | Compares a plan against a target's current content.                                                      |
@@ -539,7 +540,7 @@ option grants a write.
 | `audit`     | Nothing                                                                                    |
 | `repair`    | Each planned path the target is missing or has let drift, and the range and script regions |
 | `catalog`   | The package table, the guide mirrors, and the range region                                 |
-| `overwrite` | Everything `repair` and `catalog` write, plus deletions                                    |
+| `overwrite` | Everything `repair` and `catalog` write, deletions, and missing planned dependencies       |
 
 ### Baselines
 
@@ -589,7 +590,7 @@ scaffold <verb> [options]
   scaffold catalog [--all] [--from <path>] [--target <path>] [--json]
       regenerate the package table and refresh the guide mirrors
   scaffold overwrite [--groups <list>] [--dirty] [--offline] [--from <path>] [--target <path>] [--json]
-      do everything repair and catalog do, then delete what the plan does not own and re-declare the dependency ranges
+      do everything repair and catalog do, then delete what the plan does not own, re-declare the dependency ranges, and declare each planned dependency the manifest lacks
 
 options
   --src <list>                   the published library environments to build: core, browser, server
@@ -802,9 +803,20 @@ live in either section, and how current a declared range is belongs to the regis
 Dependency floors describes rather than to this question. A present section that is not an object
 produces a question instead of a crash. This question belongs to `configs` and `tests`. `audit`
 reports it only when its selection includes either group, without changing its exit semantics.
-`repair` and `overwrite` refuse before writing a selected `configs` or `tests` group. A selection
-that excludes those groups proceeds, and no verb adds the declaration for you: `package.json` is
-birth-owned, and the range and script regions are the only parts of it a verb rewrites.
+`repair` refuses before writing a selected `configs` or `tests` group, and a selection that
+excludes those groups proceeds: `package.json` is birth-owned, and `repair` rewrites only its range
+and script regions. `overwrite` declares each missing package instead, in the `devDependencies` map
+the plan assigns it, at its planned range, before the first declared key that sorts after it. A
+manifest with no `devDependencies` map gets one: `overwrite` creates it as one top-level key after
+`dependencies`, or last in the manifest object when `dependencies` is absent too, in the indentation
+of the manifest's first key. The declaration lands with the repair, before the catalog step, so a
+partial run keeps it. The JSON result names each declaration in `additions`, and the human report
+prints one `Declared "<name>": "<range>" in devDependencies. Run npm install to install it.` line
+per declaration, because the lockfile does not carry the package until the next install. A
+`devDependencies` value that is not an object, or an entry in that map whose value is not a version
+string, leaves `overwrite` no map to declare in. `overwrite` refuses that manifest before any write,
+whatever `--groups` selects, and names the section or each malformed entry. A malformed section
+refuses `repair` as well.
 
 `audit` reports a further non-blocking question, on the `setup` field.
 
@@ -843,6 +855,17 @@ proof that module wants. The question belongs to the `tests` group, so a scoped 
 write: a writing verb reports it in the terminal audit it prints, because refusing `repair` over a
 gap no write can close would block every write. Run across a fleet, the question is the list of
 packages carrying a filled, exporting setup module that no proof covers.
+
+`audit` reports a non-blocking question on the `tests` field for each planned sheet test the target
+holds that imports by a root-relative specifier. A sheet test is birth-owned, so a target born
+before the template imported the built sheet by a relative path keeps the
+`'/dist/src/<name>/index.css?raw'` import, and the content-owned `.oxlintrc.json` refuses it under
+`--deny-warnings` through `import/no-absolute-path`. The message names the file and each
+root-relative specifier beside the relative one to write: one `../` per directory between the file
+and the workspace root, so `tests/src/styles/index.test.ts` writes
+`'../../../dist/src/styles/index.css?raw'`. Scaffold never rewrites the file. The question belongs to
+the `tests` group, and `repair` and `overwrite` report it in their terminal audit without
+refusing a write.
 
 `audit` reads the instruction canon as findings rather than as a question. Each `CANON_PATHS` member
 the target holds enters the comparison, by file where the member is a directory, and a path the plan
@@ -886,12 +909,14 @@ standard error, so a piped value is never polluted.
 | `audit`     | `Audit` — `findings` and `questions` — plus `releases` and `provenance`; findings carry `ownership`                                                           |
 | `repair`    | `MaterializeResult` plus `audit`, the terminal audit taken after the write, `releases`, and `provenance`                                                      |
 | `catalog`   | `MaterializeResult` plus `mirrors`, `provenance`, optional `membership` with `entries`, `dropped`, and `releases`, and an explanatory `note` on a partial run |
-| `overwrite` | The `catalog` value plus `audit` and top-level `releases` from its version read; `note` explains a partial run                                                |
+| `overwrite` | The `catalog` value plus `audit`, top-level `releases` from its version read, and `additions`; `note` explains a partial run                                  |
 
 The `membership` entity is present only when the catalog read completes. Its `entries` holds the
 package table, `dropped` names packages the preceding table carried that the registry no longer
 lists, and `releases` measures declared fleet ranges against the catalog read. The `overwrite`
-result also retains top-level `releases` from its separate version read, including foreign tools.
+result also retains top-level `releases` from its separate version read, including foreign tools,
+and `additions`, the `DependencyPinSet` of planned dependencies it declared, empty when the
+manifest lacked none.
 An absent `membership` identifies an incomplete catalog read; `note` explains the cause.
 
 The following JSON excerpt shows the membership evidence in a completed catalog result:
@@ -2042,6 +2067,12 @@ read or write that file.
 
 ## Generated workspace
 
+The generated factories name unnamed browser instances after merging the caller's override, using
+the merged project label and browser. An override setting the label to `widgets` produces
+`widgets (chromium)`, including for an instance added by the override. Explicit instance names stay
+unchanged. Vue and journey factories discard inherited instance names before applying their own
+labels. Vitest reports the same names when a wrapper runs alone and when the root registers it.
+
 A workspace's file set is a function of its axes, its structural facts, and its extensions.
 Nothing is fixed except the manifest.
 
@@ -2059,7 +2090,8 @@ Nothing is fixed except the manifest.
   `dist/`, and `npm run check` would wait on `npm run build`. Every subpath is written before the
   bare specifier, because `vite.config.ts` derives its `alias` record from these entries in order and
   a bare specifier also matches its own subpaths. An `app` environment publishes nothing and maps no
-  such entry.
+  such entry. Browser and Vue scoped configurations exclude Node globals. Browser setup helpers
+  read CDP sessions as `unknown` and guard the members they use.
 - One template artifact, `configs/browsers.ts`, for a workspace selecting `browser` on either
   environment axis or in its setup runtime list.
   It resolves the Chromium the Playwright provider launches, and the root `vite.config.ts` calls it
@@ -2085,7 +2117,8 @@ Nothing is fixed except the manifest.
   journey per application of a journey workspace. Surfaces and extensions lists each face.
 - One template artifact, `tests/distribution.test.ts`, for a workspace publishing any `src`
   environment or sheet face. It is the packed-package proof, and it is claimed by presence rather
-  than birth, so a workspace that replaces it keeps its replacement. A published browser environment
+  than birth, so a workspace that replaces it keeps its replacement. The suite stages its consumer
+  during setup; listing the project creates no distribution staging directory. A published browser environment
   adds the
   real-browser stage to it: the stage bundles the installed package with the workspace's own
   `configs/browsers.ts` resolution, serves the bundle over a loopback server, and drives it in
@@ -2584,7 +2617,9 @@ The generated guide index lists each occupied Vue face with its source, tests, a
 - [`tests/src/core/cloners.test.ts`](../tests/src/core/cloners.test.ts) — ownership of a snapshot
   taken from a hostile value.
 - [`tests/src/core/templates.test.ts`](../tests/src/core/templates.test.ts) — the frozen template
-  definitions.
+  definitions and generated configurations under live Vitest. The isolated `templates` project runs
+  through `test:templates` in `prepublishOnly`; its compiler and Chromium processes run apart from
+  the `src:core` project.
 - [`tests/src/core/constants.test.ts`](../tests/src/core/constants.test.ts) — the seeded rows named
   as a set, the floor form every shared table and this manifest carry, and the emitted TypeScript
   bound.
