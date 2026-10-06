@@ -5453,11 +5453,11 @@ the exact statement:
 1. **doc ↔ source bijection.** Every `function` / `class` / `const` /
    `interface` / `type` row in the `## Surface` tables (the core dispatch
    tables and the `### HTTP transport` + `### WebSocket transport` + `### stdio
-transport` tables) is a real export of the mcp layer (`src/core` or
+   transport` tables) is a real export of the mcp layer (`src/core` or
    `src/server`), and every export of either appears as a Surface row —
    exhaustive, both directions.
 2. **JSON-RPC 2.0 envelope.** A `dispatch` response is always `{ jsonrpc:
-'2.0', … }` with exactly one of `result` / `error`. The success arm always
+   '2.0', … }` with exactly one of `result` / `error`. The success arm always
    carries an `id`, echoing the request's, because a result answers a request and
    a request always has one. The error arm is the only arm whose `id` may be
    missing, and it is then omitted — the member is absent from the envelope, never
@@ -5489,7 +5489,7 @@ transport` tables) is a real export of the mcp layer (`src/core` or
    metadata, run through the same dispatcher, and are projected back unstamped — so
    they inherit the modern engine's execution port, cancellation, bounds, and
    validation rather than running beside them. `initialize` → `{ protocolVersion,
-capabilities: { tools: {} }, serverInfo: { name, version } }`, the version negotiated over the
+   capabilities: { tools: {} }, serverInfo: { name, version } }`, the version negotiated over the
    legacy subset only: the client's `params.protocolVersion` is echoed when it is a
    supported legacy revision, and every other request — the modern `'2026-07-28'`,
    an unsupported revision, a non-string, or an absent one — falls back to the
@@ -5514,7 +5514,7 @@ capabilities: { tools: {} }, serverInfo: { name, version } }`, the version negot
    into a `success: false` result, the server adds no try/catch: that branch's
    `error` maps to `{ content: [{ type: 'text', text: <error> }], isError: true }`;
    a valued `success: true` branch maps to `{ content: [{ type: 'text', text:
-JSON.stringify(value) }], structuredContent: value }`, carrying the value unchanged
+   JSON.stringify(value) }], structuredContent: value }`, carrying the value unchanged
    alongside the backwards-compatible text. A value-less success retains the required
    empty text block and omits `structuredContent`.
 6. **One modern seam, subscriptions included, and `-32601` for anything off it.**
@@ -5548,7 +5548,7 @@ JSON.stringify(value) }], structuredContent: value }`, carrying the value unchan
    carries the same stamp. Ending the consumer's producer closes gracefully when the
    honoured filter omits `toolsListChanged`, with
    `{ resultType: 'complete', _meta: { 'io.modelcontextprotocol/subscriptionId': id,
-… } }`. A stream honouring the tools family stays open until failure or signal abort.
+   … } }`. A stream honouring the tools family stays open until failure or signal abort.
    The request id is only stream identity: a later request does not supersede
    an earlier one. The legacy method remains absent and answers `-32601`.
 7. **`handle` maps the boundary failures.** A `JSON.parse` throw (malformed
@@ -5599,7 +5599,7 @@ JSON.stringify(value) }], structuredContent: value }`, carrying the value unchan
     continuation, or principal — carrying the caught value the wire never sees; the
     emitter isolates a listener throw, routing it
     to its own `error` handler (the `error` option, surfaced as `(error,
-event)`, not a domain event) — so a buggy observer can never corrupt a
+    event)`, not a domain event) — so a buggy observer can never corrupt a
     dispatch, and a throwing `error` handler neither escapes nor recurses.
 11. **doc ↔ source method bijection.** The `## Methods` tables list exactly
     the public methods of each behavioral interface — `MCPServerInterface`,
@@ -5644,7 +5644,7 @@ event)`, not a domain event) — so a buggy observer can never corrupt a
     own JSON-parse `try`/`catch`) and draws a sharp line: a TRANSPORT-level
     failure — malformed JSON (`-32700`) or a parsed value that is not a
     JSON-RPC request (`-32600`, narrowed with `parseJSONRPCMessage` + `'method'
-in request`, no `as`) — is HTTP **400** with a JSON-RPC error body carrying no
+    in request`, no `as`) — is HTTP **400** with a JSON-RPC error body carrying no
     `id` member. A legacy dispatch result — success or in-band JSON-RPC error — is
     HTTP **200**. A modern result is **400** for `-32020` / `-32021` / `-32022`
     / `-32602`, **404** for `-32601`, and **200** otherwise; every notification
@@ -5699,7 +5699,7 @@ in request`, no `as`) — is HTTP **400** with a JSON-RPC error body carrying no
     consumer-provided list.
 13. **The client is the modern-only egress mirror (`src/core`).**
     `createMCPClient({ transport, identity?, capabilities?, version?, timeout?,
-on? })` drives a remote server over an injected `MCPMessageTransportInterface`
+    on? })` drives a remote server over an injected `MCPMessageTransportInterface`
     (transport-abstract, like the server). `connect()` issues a modern
     `server/discover` carrying `_meta` with the offered revision,
     client capabilities, and client identity. It intersects the peer's
@@ -5787,9 +5787,9 @@ on? })` drives a remote server over an injected `MCPMessageTransportInterface`
     `error` option, not a domain event). Consumers subscribe through `emitter.on`.
 15. **The HTTP client transport drives a remote server over `fetch`
     (`src/server`).** `createHTTPClientTransport({ url, headers?, fetch?,
-timeout? })` returns a `MCPMessageTransportInterface` whose `send` POSTs one
+    timeout? })` returns a `MCPMessageTransportInterface` whose `send` POSTs one
     JSON-serialized message to `url` with `content-type:
-application/json` and an `Accept` of both `application/json` and
+    application/json` and an `Accept` of both `application/json` and
     `text/event-stream` (plus any `headers`), then decodes the reply and
     emits each carried `JSONRPCMessage` on the `message` event: an
     `application/json` body is narrowed with `parseJSONRPCMessage`; a
@@ -5841,7 +5841,7 @@ application/json` and an `Accept` of both `application/json` and
     (`upgradeRequestPath`) is not `options.path` (default `DEFAULT_MCP_PATH`),
     the `Sec-WebSocket-Key` is absent, or the `Sec-WebSocket-Version` is not
     `13`. Otherwise it claims (returns `true`): `createNodeWebSocket({
-socket, key, head, protocol })` (server mode → writes the `101` handshake,
+    socket, key, head, protocol })` (server mode → writes the `101` handshake,
     selecting the configured subprotocol only when the client's offer contains it,
     and sends unmasked frames), wraps it in a `WebSocketServerTransport`, and
     pumps — each inbound `JSONRPCMessage` that `isJSONRPCRequest` runs
@@ -5910,7 +5910,7 @@ socket, key, head, protocol })` (server mode → writes the `101` handshake,
     (`src/server`).** `createMCPSession({ path?, ttl?, session?, clock?, origin?, keepalive? })`
     returns a `MiddlewareHandler<TState>` (`TState extends MCPSessionState`)
     that owns its own closure `Map<string, { session: MCPSession; touched:
-number; version: MCPVersion }>` — no dependency on `@orkestrel/middleware` and no shared
+    number; version: MCPVersion }>` — no dependency on `@orkestrel/middleware` and no shared
     session primitive; the store, mint, and validation are all native to
     this package. Compose it with `router.use(createMCPSession())` in front
     of a session-agnostic `createMCPRoutes(mcp)`; it owns its `path` (default
@@ -5958,7 +5958,7 @@ number; version: MCPVersion }>` — no dependency on `@orkestrel/middleware` and
     the log under a monotone base36 event id (returned), evicting the oldest
     past `capacity` + any entry older than the per-event TTL, and fans the
     message out to every `attach`ed open stream as `stream.write({ id, data:
-JSON.stringify(message) })`. `session.replay(afterId)` returns every
+    JSON.stringify(message) })`. `session.replay(afterId)` returns every
     retained log entry strictly after `afterId` in append order — an unknown
     / evicted cursor replays nothing. The `createMCPSession` middleware
     serves the resumable `GET {path}`: it validates the `mcp-session-id`
@@ -6081,7 +6081,7 @@ JSON.stringify(message) })`. `session.replay(afterId)` returns every
     contract over native host APIs (`src/browser`).**
     `createWebSocketClientTransport({ url, protocols? })` returns a
     `MCPMessageTransportInterface` whose `start()` opens `new WebSocket(url,
-protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
+    protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     is the host's concern; a connection failure — the native `'error'` event
     while not yet `OPEN` — rejects `start()`); `send` writes each message as
     one text frame once `OPEN`, queuing (in order) any message sent before —
@@ -6133,7 +6133,7 @@ protocols)` and awaits the native `'open'` event (the RFC 6455 handshake
     (the implicit, portless channel — bound once, for the whole lifetime of
     the returned handle, so a dedicated worker's very first portless message
     needs no first-use setup), and registers one `scope.addEventListener(
-'message', …)` listener built by `createScopeMessageListener`. That one
+    'message', …)` listener built by `createScopeMessageListener`. That one
     listener handles every shape uniformly, per event, with no upfront
     detection flag: `event.ports.length > 0` spawns a fresh
     `createMessagePortTransport` + `bindServer` for that port (tracked for
