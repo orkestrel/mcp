@@ -64,6 +64,57 @@ const teardown = createTeardown()
 afterEach(() => teardown.destroy())
 
 describe('handshake HTTP session acceptance', () => {
+	it.each(['session', 'stateless'])(
+		'handshake pending answers a sessionless %s ping before initialize',
+		async (composition) => {
+			const readiness = Promise.withResolvers<void>()
+			const entered = Promise.withResolvers<void>()
+			let calls = 0
+			const observations: MCPSessionState[] = []
+			const protocols: Array<string | null> = []
+			const mcp = createMCPServer({
+				identity: { name: 'ready', version: '1.0.0' },
+				tools: createToolManager(),
+				handshake: () => {
+					calls += 1
+					entered.resolve()
+					return readiness.promise
+				},
+			})
+			const dispatcher = createDispatcher<MCPSessionState>()
+			dispatcher.add(createMCPRoutes<MCPSessionState>(createMCPLegacy(mcp)))
+			const server = createServer<MCPSessionState>({ dispatcher, state: () => ({}) })
+			if (composition === 'session') server.use(createMCPSession())
+			server.use((input, context, next) => {
+				observations.push(context.state)
+				protocols.push(input.headers.get(MCP_PROTOCOL_VERSION_HEADER))
+				return next()
+			})
+			const handle = await startServer(server)
+			teardown.add(() => {
+				readiness.resolve()
+				return handle.stop()
+			})
+			const initializing = postJSON(handle.base, createJSONRPCRequest())
+			await entered.promise
+			const ping = await postJSON(handle.base, { jsonrpc: '2.0', id: 2, method: 'ping' })
+			expect(ping.status).toBe(200)
+			expect(await ping.json()).toEqual({ jsonrpc: '2.0', id: 2, result: {} })
+			expect(ping.headers.get(MCP_SESSION_HEADER)).toBeNull()
+			expect(observations).toHaveLength(2)
+			expect(observations[1]).not.toHaveProperty('session')
+			expect(protocols[1]).toBeNull()
+			expect(calls).toBe(1)
+			readiness.resolve()
+			const initialized = await initializing
+			expect(initialized.status).toBe(200)
+			expect(await initialized.json()).toMatchObject({
+				result: { protocolVersion: '2025-11-25' },
+			})
+			expect(initialized.headers.has(MCP_SESSION_HEADER)).toBe(composition === 'session')
+		},
+	)
+
 	it.each(['application/json', 'application/json, text/event-stream'])(
 		'handshake refusal stores no session and success mints one for %s',
 		async (accept) => {

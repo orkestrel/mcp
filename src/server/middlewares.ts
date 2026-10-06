@@ -7,6 +7,7 @@ import {
 	MCP_SESSION_HEADER,
 	buildJSONRPCError,
 	isInitializeRequest,
+	isPingRequest,
 	isModernRequest,
 	parseJSONRPCMessage,
 } from '@src/core'
@@ -43,7 +44,9 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  *   readSessionHeader}: a valid id touches the entry and sets `context.state.session`; an
  *   absent / unknown id whose (guarded) body parses to an `initialize` request ({@link
  *   isInitializeRequest}) mints a fresh {@link MCPSession} (`crypto.randomUUID()`, the `session`
- *   options group) and sets `context.state.session`; neither → {@link rejectUnknownSession}
+ *   options group) and sets `context.state.session`. An id-bearing legacy `ping` with no
+ *   session header passes through without session state, a supplied protocol header, or a
+ *   response stamp. Other unresolved requests → {@link rejectUnknownSession}
  *   (`404`). The
  *   minted entry pins the negotiated legacy revision, which is supplied to a later headerless
  *   live-session request. It then
@@ -191,6 +194,15 @@ export function createMCPSession<TState extends MCPSessionState>(
 				})
 				created = { session, touched: clock(), version: inferLegacyVersion(parsed) }
 				entry = created
+			} else if (id === undefined && isPingRequest(parsed)) {
+				return next(
+					new Request(context.url, {
+						method: 'POST',
+						headers: request.headers,
+						body: text,
+						signal: request.signal,
+					}),
+				)
 			} else {
 				return rejectUnknownSession()
 			}

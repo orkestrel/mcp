@@ -21,6 +21,7 @@ import {
 	MCP_UNSUPPORTED_VERSION,
 	decodeSentinel,
 	isInitializeRequest,
+	isPingRequest,
 	isMCPLegacyVersion,
 	isModernRequest,
 	renderHeaderValue,
@@ -72,8 +73,8 @@ export function inferHeaderTarget(request: JSONRPCInvocation): string | undefine
  * {@link import('@orkestrel/mcp').decodeSentinel} before the comparison, so a peer that had
  * to encode its value still matches; a sentinel whose payload is invalid decodes to nothing
  * and therefore mismatches, which is how an invalid header value is refused. A legacy request
- * body requires a protocol header after initialization. Messages name the expected value but
- * never echo the client-supplied one.
+ * body requires a protocol header except for `initialize` and an id-bearing legacy `ping`.
+ * Messages name the expected value but never echo the client-supplied one.
  *
  * The expectation a live session supplies is a different rule over a different input, so it
  * is {@link inferSessionHeaderIssue} rather than a second arm of this one.
@@ -94,7 +95,8 @@ export function inferHeaderIssue(
 ): MCPHeaderIssue | undefined {
 	const protocol = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
 	if (!isModernRequest(invocation)) {
-		if (isInitializeRequest(invocation) || protocol !== null) return undefined
+		if (isInitializeRequest(invocation) || isPingRequest(invocation) || protocol !== null)
+			return undefined
 		return {
 			header: 'MCP-Protocol-Version',
 			reason: 'missing',

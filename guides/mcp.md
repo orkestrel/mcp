@@ -258,10 +258,20 @@ from an absent header. Defaulting one is licensed only for a server that still s
 pre-`2025-06-18` clients, and this package does not:
 
 - `initialize` — legitimately headerless; nothing is negotiated yet. Accepted.
+- An id-bearing legacy `ping` — answered with `{}` even before `initialize` returns.
+  With no session header, it passes through without minting a session, writing session state,
+  supplying a protocol header, or stamping the response. An unknown session id remains `404`.
 - A post-`initialize` legacy request on a **live session** — accepted, under the
   revision pinned at that session's `initialize`. That is a negotiated fact, not a
   default.
 - Anything else — nothing identifies the revision, so HTTP `400` + `-32020`.
+
+The sessionless `ping` exception follows the pre-initialization allowance in the
+[MCP 2025-11-25 lifecycle specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization)
+and deliberately departs from the missing-session `400` recommendation in the
+[Streamable HTTP session management specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#session-management).
+A client cannot hold the assigned session id before the `InitializeResult`. This exception
+admits only a valid legacy `ping` request; notifications and modern-shaped pings do not qualify.
 
 A header naming an unsupported revision is a separate failure: HTTP `400` + `-32022`,
 carrying `{ supported, requested }`.
@@ -1997,6 +2007,10 @@ remain available while the hook waits. Omitting the hook preserves the dispatche
 bytes from 0.0.35. For the session-header change on refused HTTP initialization, see
 [HTTP transport](#http-transport).
 
+Over HTTP, a separate legacy `ping` POST also completes while the hook waits, without a
+session id or negotiated protocol header. The session middleware passes that request through
+without publishing the pending initialization's candidate session.
+
 An `MCPError` rejection preserves its code, message, and context as JSON-RPC `error.data`
 under the initialization request id. If the context cannot be serialized, the answer retains
 the code and message and omits `data`. Any other rejection emits `error` on the shared server
@@ -2100,6 +2114,7 @@ remaining survivor has its own consumer, and they are not the same one:
 | `inferEra`              | Nothing inside `src`. It is the published era helper, and it reads `isMCPModernVersion` then `isMCPLegacyVersion` rather than restating either set.                                           |
 | `inferRequestEra`       | `MCPServer`'s `request` event and the HTTP ingress in `src/server/handlers.ts` — both report or route on the era a request's own structure selects, and neither reads a revision set.         |
 | `isInitializeRequest`   | Legacy server ingress: `src/server/middlewares.ts` mints and validates a session from it, and `src/server/inferers.ts` exempts a headerless `initialize` from the header demand.              |
+| `isPingRequest`         | Legacy server ingress: admits an id-bearing, non-modern ping without a protocol or session header.                                                                                            |
 | `MCPLegacyResult`       | The unstamped result arm of `JSONRPCResponse` in `src/core/types.ts`, its guard `isMCPLegacyResult`, and the decorator's projection.                                                          |
 | `MCP_HANDSHAKE_VERSION` | Client-adapter egress in `src/core/MCPLegacyClientTransport.ts`, the legacy handshake anchor in `src/core/helpers.ts` and `src/server/inferers.ts`, and `SUPPORTED_LEGACY_PROTOCOL_VERSIONS`. |
 | `MCP_FALLBACK_VERSION`  | `SUPPORTED_LEGACY_PROTOCOL_VERSIONS` plus an explicit `MCPLegacyClientTransportOptions.version` pin.                                                                                          |
@@ -2333,6 +2348,7 @@ A `Shape` cell holds the constant's declared type.
 | `isMCPResult`                      | function | Determines whether a value is one modern MCP result.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `isMCPLegacyResult`                | function | Determines whether a value is one legacy-era MCP result.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `isInitializeRequest`              | function | Determines whether a parsed value is an MCP `initialize` invocation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `isPingRequest`                    | function | Determines whether a parsed value is a legacy MCP `ping` request.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `isMCPVersion`                     | function | Determines whether a value is a supported `MCPVersion`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `isMCPSubscriptionFilter`          | function | Determines whether a value is an MCP `MCPSubscriptionFilter`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `isMCPConsumerFilter`              | function | Checks whether a subscription filter leaves the built-in tools family to the server.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -2747,7 +2763,7 @@ accounting for inbound traffic subtracts a `('tools/list', 0, 'modern')` that pr
 `tools/list` under id `0` is not told apart on that event.
 
 Headerless
-legacy `initialize` is accepted; a headerless post-initialize legacy request is
+legacy `initialize` and id-bearing legacy `ping` are accepted; another headerless legacy request is
 accepted only through a live session, whose pinned negotiated version the session
 middleware supplies; every other headerless request is HTTP `400` + `-32020`.
 `GET` / `DELETE` to the path fall through to whatever the router does with an
@@ -2759,8 +2775,8 @@ live in the session middleware).
 (`@orkestrel/server`); compose it with `router.use(createMCPSession())` in
 front of a session-agnostic `createMCPRoutes(mcp)`. It owns a closure
 `Map<string, { session, touched, version }>`, mints a session on an `initialize` POST
-(`crypto.randomUUID()`), validates the `mcp-session-id` header on every other
-legacy verb, and adds the resumable `GET` SSE stream — all native to this package.
+(`crypto.randomUUID()`), permits a legacy `ping` request without a session header,
+validates the session on other legacy requests, and adds the resumable `GET` SSE stream.
 A modern-shaped POST passes straight through without session lookup and ignores
 any `mcp-session-id`; the layer otherwise pins the negotiated legacy revision and
 supplies it on a headerless live-session request. The same default-on origin validation
@@ -5652,7 +5668,7 @@ in request`, no `as`) — is HTTP **400** with a JSON-RPC error body carrying no
     The lookup follows `nextCursor` through at most `MCP_LOOKUP_PAGES` pages, so a
     replacement `tools/list` that pages the named tool further in than that recognizes
     none either; each page dispatched fires the `request` event under the reserved id `0`.
-    Headerless `initialize` is accepted; a live-session legacy request uses its
+    Headerless `initialize` and id-bearing legacy `ping` are accepted; a live-session legacy request uses its
     pinned negotiated revision; every other headerless request is **400** +
     `-32020`. A request without `Origin` is allowed; a canonical `localhost`, `[::1]`,
     or `127.0.0.0/8` literal origin is allowed by default; every other present
@@ -5912,7 +5928,9 @@ number; version: MCPVersion }>` — no dependency on `@orkestrel/middleware` and
     parses to an `initialize` request (`isInitializeRequest`) mints a fresh
     `MCPSession` (`crypto.randomUUID()`, the `session` knobs), pins the negotiated legacy
     revision, and sets
-    `context.state.session`; neither → `rejectUnknownSession()` (`404`). The candidate is stored
+    `context.state.session`. A legacy `ping` request with no session header passes through
+    without a session state write, protocol-header supply, store write-back, or response stamp.
+    Other unresolved requests return `rejectUnknownSession()` (`404`). The candidate is stored
     and advertised only after `context.state.initialization` records a successful dispatch
     result, independently of JSON or SSE framing. It
     then forwards a fresh `Request` carrying the buffered text

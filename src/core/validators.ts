@@ -2362,6 +2362,32 @@ export function isInitializeRequest(value: unknown): value is JSONRPCInvocation 
 }
 
 /**
+ * Determines whether a parsed value is a legacy MCP `ping` request.
+ *
+ * @remarks
+ * Requires a valid request id and excludes the modern per-request wire shape.
+ * Notifications and hostile or malformed values return false.
+ *
+ * @param value - The already-parsed value to test
+ * @returns True if `value` is a legacy `ping` request; false otherwise
+ *
+ * @example
+ * ```ts
+ * isPingRequest({ jsonrpc: '2.0', method: 'ping', id: 1 }) // true
+ * isPingRequest({ jsonrpc: '2.0', method: 'ping' }) // false
+ * ```
+ */
+export function isPingRequest(value: unknown): value is JSONRPCRequest {
+	const owned = attempt(() => cloneJSONRecord(value))
+	return (
+		owned.success &&
+		isJSONRPCRequest(owned.value) &&
+		owned.value.method === 'ping' &&
+		!isModernRequest(owned.value)
+	)
+}
+
+/**
  * Determines whether a JSON-RPC invocation uses the modern per-request MCP wire shape.
  *
  * @remarks

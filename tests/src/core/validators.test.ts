@@ -44,6 +44,7 @@ import {
 	isMCPElicitResult,
 	isMCPElicitSchema,
 	isInitializeRequest,
+	isPingRequest,
 	isMCPInputRequestMap,
 	isMCPInputResponse,
 	isMCPInputResult,
@@ -1867,6 +1868,30 @@ describe('isInitializeRequest', () => {
 	})
 })
 
+describe('isPingRequest', () => {
+	it('accepts an id-bearing legacy ping', () => {
+		expect(isPingRequest({ jsonrpc: '2.0', method: 'ping', id: 1 })).toBe(true)
+	})
+
+	it('refuses notifications, other methods, invalid ids, and non-records', () => {
+		expect(isPingRequest({ jsonrpc: '2.0', method: 'ping' })).toBe(false)
+		expect(isPingRequest({ jsonrpc: '2.0', method: 'tools/list', id: 1 })).toBe(false)
+		expect(isPingRequest({ jsonrpc: '2.0', method: 'ping', id: null })).toBe(false)
+		expect(isPingRequest(undefined)).toBe(false)
+	})
+
+	it('refuses a modern-shaped ping', () => {
+		expect(
+			isPingRequest({
+				jsonrpc: '2.0',
+				method: 'ping',
+				id: 1,
+				params: { _meta: { [MCP_META_VERSION]: '2026-07-28' } },
+			}),
+		).toBe(false)
+	})
+})
+
 describe('isModernRequest', () => {
 	it('routes a request with the reserved protocol-version key as modern', () => {
 		expect(
@@ -2206,6 +2231,7 @@ const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = 
 	isElicitContent: (value) => isElicitContent(value, TOTALITY_SCHEMA),
 	isFieldToken,
 	isInitializeRequest,
+	isPingRequest,
 	isJSONObject,
 	isJSONRPCError,
 	isJSONRPCErrorResponse,

@@ -36,8 +36,8 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  * comparison; a missing, mismatched, or invalidly encoded value returns HTTP `400` + `-32020`.
  * A protocol header naming a modern revision holds the request to that revision whatever shape
  * its body arrived in, so a body with no parsable modern `_meta` returns HTTP `400` + `-32602`.
- * Headerless `initialize` is accepted, while every other headerless request needs a live legacy
- * session to supply its pinned version. A legacy-shaped request carrying a protocol header is
+ * Headerless `initialize` and id-bearing legacy `ping` are accepted; other headerless requests
+ * need a live legacy session to supply its pinned version. A legacy-shaped request carrying a protocol header is
  * otherwise admitted only for a legacy revision; a revision this server does not implement
  * returns HTTP `400` + `-32022` whose `supported` names the legacy revisions this door accepts.
  * A present origin must occur in `origin.origins` unless validation is
