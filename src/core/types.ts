@@ -781,11 +781,17 @@ export type MCPPrincipalHandler = (
 	options: MCPMethodOptions,
 ) => string | Promise<string>
 
-/** Configures the consumer policy for the server's multi-round-trip input mechanism. */
+/**
+ * Configures the consumer policy for the server's multi-round-trip input mechanism.
+ * The injected clock is trusted and must return finite epoch milliseconds.
+ */
 export interface MCPInputOptions {
 	/** Holds the host-neutral integrity/storage port for the opaque continuation carrier. */
 	readonly continuation: MCPContinuationInterface
-	/** Supplies epoch milliseconds for continuation expiry checks. Default: `Date.now`. */
+	/**
+	 * Supplies epoch milliseconds for continuation expiry checks.
+	 * The injected clock is trusted and must return finite epoch milliseconds. Default: `Date.now`.
+	 */
 	readonly clock?: () => number
 	/**
 	 * Sets the continuation lifetime in milliseconds; required so MCP never invents an expiry policy.

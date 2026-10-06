@@ -5232,11 +5232,59 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(probe.executions).toHaveLength(1)
 	})
 
+	it('refuses an expired continuation before retry selection', async () => {
+		const clock = createManualClock(2 * Date.now())
+		const probe = inputProbe({ ttl: 20, clock: clock.now })
+		const round = roundOf(responseOf(await probe.server.dispatch(formCall('admission-1'))))
+		clock.advance(20)
+
+		const retry = responseOf(
+			await probe.server.dispatch(
+				formCall('admission-2', {
+					requestState: round.requestState,
+					inputResponses: { [round.key]: { action: 'accept' } },
+				}),
+			),
+		)
+
+		expect(retry?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(probe.selections).toHaveLength(1)
+		expect(probe.executions).toHaveLength(0)
+	})
+
+	it('refuses a continuation that expires before resealing reaches the provider', async () => {
+		const clock = createManualClock(2 * Date.now())
+		const probe = inputProbe({
+			rounds: 2,
+			ttl: 4,
+			// A ticking source lets the prior window lapse between selection and sealing.
+			clock: () => {
+				clock.advance(1)
+				return clock.now()
+			},
+		})
+		const round = roundOf(responseOf(await probe.server.dispatch(formCall('preseal-1'))))
+
+		const retry = responseOf(
+			await probe.server.dispatch(
+				formCall('preseal-2', {
+					requestState: round.requestState,
+					inputResponses: { [round.key]: { action: 'accept' } },
+				}),
+			),
+		)
+
+		expect(retry?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(probe.selections).toHaveLength(2)
+		expect(probe.continuation.sealed).toHaveLength(1)
+		expect(probe.executions).toHaveLength(0)
+	})
+
 	// Expiry is rechecked after the selector's await — the LAST provider await
 	// before execution — so a continuation that lapsed while the selector was parked never
 	// reaches the tool.
 	it('rechecks expiry after the selector’s await, so an expired continuation never executes', async () => {
-		const clock = createManualClock()
+		const clock = createManualClock(2 * Date.now())
 		const probe = inputProbe({
 			ttl: 20,
 			clock: clock.now,
@@ -5265,7 +5313,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// that seal — a port that took longer than the window it was extending must not hand back
 	// a round built on a continuation that has already lapsed.
 	it('rechecks the prior expiry after the seal await', async () => {
-		const clock = createManualClock()
+		const clock = createManualClock(2 * Date.now())
 		const probe = inputProbe({
 			rounds: 2,
 			ttl: 25,
@@ -5297,7 +5345,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// has sent one request and been told its state "could not be verified for this retry" is
 	// being pointed at a round it never made, and will go looking for a carrier it never had.
 	it('tells a first-round caller its state expired rather than naming a retry', async () => {
-		const clock = createManualClock()
+		const clock = createManualClock(2 * Date.now())
 		const probe = inputProbe({ ttl: 20, clock: clock.now, seal: () => clock.advance(21) })
 
 		const first = responseOf(await probe.server.dispatch(formCall('unissued-1')))
@@ -5312,7 +5360,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// Its counterpart, and the reason the branch is a branch: a caller that DID send a retry
 	// still gets the retry wording, so the split names the round the caller is actually in.
 	it('still names the retry when a further round reseals past the prior window', async () => {
-		const clock = createManualClock()
+		const clock = createManualClock(2 * Date.now())
 		const probe = inputProbe({
 			rounds: 2,
 			ttl: 25,

@@ -1877,6 +1877,9 @@ describe('isPingRequest', () => {
 		expect(isPingRequest({ jsonrpc: '2.0', method: 'ping' })).toBe(false)
 		expect(isPingRequest({ jsonrpc: '2.0', method: 'tools/list', id: 1 })).toBe(false)
 		expect(isPingRequest({ jsonrpc: '2.0', method: 'ping', id: null })).toBe(false)
+		expect(isPingRequest({ jsonrpc: '1.0', method: 'ping', id: 1 })).toBe(false)
+		expect(isPingRequest({ jsonrpc: '2.0', method: 'ping', id: 1, params: [] })).toBe(false)
+		expect(isPingRequest([{ jsonrpc: '2.0', method: 'ping', id: 1 }])).toBe(false)
 		expect(isPingRequest(undefined)).toBe(false)
 	})
 
