@@ -88,6 +88,7 @@ import {
 } from '@orkestrel/test'
 import {
 	createAbortTools,
+	createManualClock,
 	createRegistrySubscription,
 	createProducerScript,
 	REGISTRY_CHANGES,
@@ -119,14 +120,17 @@ const MCP_EVENTS = ['request'] as const
 
 // The one continuation fixture: a real integrity port over an in-process map, plus the
 // observations an MRTR proof needs from it — the exact canonical payloads it was asked to
-// seal, and a settable stall so a test can make a provider await outlive a short TTL without
-// replacing the host clock.
+// seal, with a callback that lets a test advance its injected clock during sealing.
 class MemoryContinuation implements MCPContinuationInterface {
 	readonly #values = new Map<string, string>()
 	readonly #sealed: string[] = []
 	readonly #opened: string[] = []
-	#delay = 0
+	readonly #seal: ((count: number) => void) | undefined
 	#payload: string | undefined
+
+	constructor(seal?: (count: number) => void) {
+		this.#seal = seal
+	}
 
 	/** Every canonical payload the server asked this port to protect, in order. */
 	get sealed(): readonly string[] {
@@ -138,11 +142,6 @@ class MemoryContinuation implements MCPContinuationInterface {
 		return this.#opened
 	}
 
-	/** Make `seal` await `ms` before answering — a real await that can outlive a short TTL. */
-	stall(ms: number): void {
-		this.#delay = ms
-	}
-
 	/** Make `open` succeed while handing back a payload the server never authored. */
 	corrupt(payload: string): void {
 		this.#payload = payload
@@ -150,7 +149,7 @@ class MemoryContinuation implements MCPContinuationInterface {
 
 	async seal(value: string): Promise<string> {
 		this.#sealed.push(value)
-		if (this.#delay > 0) await waitForDelay(this.#delay)
+		await this.#seal?.(this.#sealed.length)
 		const key = crypto.randomUUID()
 		this.#values.set(key, value)
 		return key
@@ -4518,14 +4517,15 @@ function inputProbe(
 		readonly rounds?: number
 		readonly schema?: MCPElicitSchema
 		readonly ttl?: number
-		/** Milliseconds the selector awaits before answering. */
-		readonly stall?: number
+		readonly clock?: () => number
+		readonly selector?: (context: MCPInputContext) => void
+		readonly seal?: (count: number) => void
 	} = {},
 ): InputProbeInterface {
 	const principals: MCPMethodOptions[] = []
 	const selections: MCPInputContext[] = []
 	const executions: Array<Readonly<Record<string, unknown>>> = []
-	const continuation = new MemoryContinuation()
+	const continuation = new MemoryContinuation(options.seal)
 	const rounds = options.rounds ?? 1
 	const schema: MCPElicitSchema = options.schema ?? { type: 'object', properties: {} }
 	const manager = createToolManager()
@@ -4543,6 +4543,7 @@ function inputProbe(
 		tools: manager,
 		input: {
 			continuation,
+			...(options.clock === undefined ? {} : { clock: options.clock }),
 			ttl: options.ttl ?? 1_000,
 			principal: (_request, resolved) => {
 				principals.push(resolved)
@@ -4550,7 +4551,7 @@ function inputProbe(
 			},
 			selector: async (context) => {
 				selections.push(context)
-				if (options.stall !== undefined) await waitForDelay(options.stall)
+				await options.selector?.(context)
 				return selections.length > rounds
 					? undefined
 					: createRound(
@@ -5235,7 +5236,14 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// before execution — so a continuation that lapsed while the selector was parked never
 	// reaches the tool.
 	it('rechecks expiry after the selector’s await, so an expired continuation never executes', async () => {
-		const probe = inputProbe({ ttl: 20, stall: 60 })
+		const clock = createManualClock()
+		const probe = inputProbe({
+			ttl: 20,
+			clock: clock.now,
+			selector: (context) => {
+				if (context.responses !== undefined) clock.advance(21)
+			},
+		})
 		const first = responseOf(await probe.server.dispatch(formCall('expiry-1')))
 		const round = roundOf(first)
 
@@ -5257,10 +5265,18 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// that seal — a port that took longer than the window it was extending must not hand back
 	// a round built on a continuation that has already lapsed.
 	it('rechecks the prior expiry after the seal await', async () => {
-		const probe = inputProbe({ rounds: 2, ttl: 25 })
+		const clock = createManualClock()
+		const probe = inputProbe({
+			rounds: 2,
+			ttl: 25,
+			clock: clock.now,
+			seal: (count) => {
+				if (count === 2) clock.advance(16)
+			},
+		})
 		const first = responseOf(await probe.server.dispatch(formCall('reseal-1')))
 		const round = roundOf(first)
-		probe.continuation.stall(60)
+		clock.advance(10)
 
 		const second = responseOf(
 			await probe.server.dispatch(
@@ -5273,6 +5289,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 
 		expect(second?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
 		expect(isMCPInputResult(second?.result)).toBe(false)
+		expect(probe.continuation.sealed).toHaveLength(2)
 	})
 
 	// A FIRST round has no retry to refuse. When the port takes longer to protect the state
@@ -5280,8 +5297,8 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// has sent one request and been told its state "could not be verified for this retry" is
 	// being pointed at a round it never made, and will go looking for a carrier it never had.
 	it('tells a first-round caller its state expired rather than naming a retry', async () => {
-		const probe = inputProbe({ ttl: 20 })
-		probe.continuation.stall(60)
+		const clock = createManualClock()
+		const probe = inputProbe({ ttl: 20, clock: clock.now, seal: () => clock.advance(21) })
 
 		const first = responseOf(await probe.server.dispatch(formCall('unissued-1')))
 
@@ -5295,10 +5312,18 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// Its counterpart, and the reason the branch is a branch: a caller that DID send a retry
 	// still gets the retry wording, so the split names the round the caller is actually in.
 	it('still names the retry when a further round reseals past the prior window', async () => {
-		const probe = inputProbe({ rounds: 2, ttl: 25 })
+		const clock = createManualClock()
+		const probe = inputProbe({
+			rounds: 2,
+			ttl: 25,
+			clock: clock.now,
+			seal: (count) => {
+				if (count === 2) clock.advance(16)
+			},
+		})
 		const first = responseOf(await probe.server.dispatch(formCall('named-1')))
 		const round = roundOf(first)
-		probe.continuation.stall(60)
+		clock.advance(10)
 
 		const second = responseOf(
 			await probe.server.dispatch(
@@ -5312,6 +5337,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		expect(second?.error?.message).toBe(
 			'Invalid params: request state could not be verified for this retry',
 		)
+		expect(probe.continuation.sealed).toHaveLength(2)
 	})
 
 	// The NEGATIVE CONTROL for a rule this package deliberately does NOT have. There

@@ -1161,7 +1161,7 @@ export class MCPServer implements MCPServerInterface {
 			return this.#contain(new Error('Continuation port opened a malformed protected payload'), id)
 		}
 		if (
-			state.expiry <= Date.now() ||
+			state.expiry <= (configured.clock ?? Date.now)() ||
 			state.id === id ||
 			state.version !== context.version ||
 			state.method !== request.method ||
@@ -1207,7 +1207,7 @@ export class MCPServer implements MCPServerInterface {
 		// The recheck after the LAST provider await, and so also the one immediately before
 		// execution: a continuation that lapsed while a provider was parked must not reach the
 		// tool, and the window is a wall-clock deadline rather than a one-time admission.
-		if (state.expiry <= Date.now()) {
+		if (state.expiry <= (configured.clock ?? Date.now)()) {
 			return buildJSONRPCError(
 				id,
 				JSONRPC_INVALID_PARAMS,
@@ -1302,14 +1302,14 @@ export class MCPServer implements MCPServerInterface {
 				'Invalid params: input policy returned an invalid round or continuation context',
 			)
 		}
-		if (previous !== undefined && previous <= Date.now()) {
+		if (previous !== undefined && previous <= (configured.clock ?? Date.now)()) {
 			return buildJSONRPCError(
 				id,
 				JSONRPC_INVALID_PARAMS,
 				'Invalid params: request state could not be verified for this retry',
 			)
 		}
-		const expiry = Date.now() + configured.ttl
+		const expiry = (configured.clock ?? Date.now)() + configured.ttl
 		const protectedState = {
 			principal,
 			expiry,
@@ -1357,7 +1357,10 @@ export class MCPServer implements MCPServerInterface {
 		// must not hand the client a round already dead on arrival. The windows are also
 		// different things to say: a FIRST round has no retry to refuse, and telling that caller
 		// its state failed verification points it at a round it never made.
-		if (expiry <= Date.now() || (previous !== undefined && previous <= Date.now())) {
+		if (
+			expiry <= (configured.clock ?? Date.now)() ||
+			(previous !== undefined && previous <= (configured.clock ?? Date.now)())
+		) {
 			return buildJSONRPCError(
 				id,
 				JSONRPC_INVALID_PARAMS,

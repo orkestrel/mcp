@@ -785,6 +785,8 @@ export type MCPPrincipalHandler = (
 export interface MCPInputOptions {
 	/** Holds the host-neutral integrity/storage port for the opaque continuation carrier. */
 	readonly continuation: MCPContinuationInterface
+	/** Supplies epoch milliseconds for continuation expiry checks. Default: `Date.now`. */
+	readonly clock?: () => number
 	/**
 	 * Sets the continuation lifetime in milliseconds; required so MCP never invents an expiry policy.
 	 */
