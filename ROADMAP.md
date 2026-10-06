@@ -12,3 +12,5 @@
 12. Read the wrapped tool's own key set in the page fixture's tool projection rather than a fixed field list, so a field a projection invents outside that list cannot pass unseen. The nearest live case is the field the wire loses as a separate one.
 
 15\. Reconcile the 404 response for a legacy request without a session header in `createMCPSession` (`src/server/middlewares.ts`) with the MCP 2025-11-25 Streamable HTTP recommendation to answer 400. Preserve the sessionless legacy `ping` exception and the 404 response for an unknown or expired session id.
+
+16\. Replace the fixed `waitForDelay(300)` waits in `tests/src/server/transports/StdioClientTransport.test.ts` (lines 212, 226, 241, 248, 343, and 413) with waits on the event or the reply each one stands for. `.claude/rules/tests.md` forbids a fixed delay that waits on another process. On 2026-10-06, 5 of its cases failed in one `npm run test:src` while another checkout's unit held the host under heavy CPU load, and all 48 passed alone in 77.0 s (record: `tmp/codex/items13-14fix-last.md`). Keep each case's claim, and show each replaced wait red without the event it now reads.
