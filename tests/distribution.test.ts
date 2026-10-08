@@ -1593,7 +1593,7 @@ describe('installed artifacts composed in a page', () => {
 			content: 'the note is recorded',
 			partial: false,
 			roles: ['user', 'assistant', 'tool', 'assistant'],
-			tool: ['"receipt-1"'],
+			tool: ['receipt-1'],
 		})
 		expect(reading.requests).toStrictEqual([])
 		expect(reading.fetches).toBe(0)
@@ -1729,7 +1729,7 @@ describe('installed artifacts composed in a page', () => {
 			content: 'the note is recorded',
 			partial: false,
 			roles: ['user', 'assistant', 'tool', 'assistant'],
-			tool: ['"receipt-1"'],
+			tool: ['receipt-1'],
 		})
 		expect(reading.requests).toStrictEqual([relay, relay])
 		expect(reading.fetches).toBe(2)
