@@ -3136,7 +3136,7 @@ export interface MCPClientInterface {
 	 * `resultType`; the `'complete'` arm carries the tool's `value` — the peer's
 	 * `structuredContent` when it sent one, otherwise its concatenated `text` parsed as
 	 * JSON (falling back to the raw string). A remote tool failure (`isError: true`)
-	 * throws an `Error` carrying the error text instead, so an agent's
+	 * throws an `MCPToolError` (an `Error`) carrying the error text instead, so an agent's
 	 * {@link ToolManagerInterface} isolates it into a `success: false` result exactly as
 	 * it would a local tool throw. A `resultType` this client cannot name is refused.
 	 *

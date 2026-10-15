@@ -30,6 +30,7 @@ import {
 	buildJSONRPCResult,
 	computeMissingCapabilities,
 	isMCPError,
+	isMCPToolError,
 	isMCPInputRequest,
 	isAbsoluteURI,
 	isBoundedJSON,
@@ -2228,6 +2229,7 @@ const TOTALITY_REQUEST: MCPInputRequest = Object.freeze({
 // Every published guard as a unary call. The guards taking a second argument are given a
 // real one, because a guard starved of its bound would be answering a different question.
 const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = Object.freeze({
+	isMCPToolError,
 	isAbsoluteURI,
 	isBoundedJSON: (value) => isBoundedJSON(value, { bytes: 4_096, keys: 64, depth: 16 }),
 	isBoundedString: (value) => isBoundedString(value, 4_096),

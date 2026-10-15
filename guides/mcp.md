@@ -34,8 +34,11 @@ boundary that wraps it with `JSON.parse` / `JSON.stringify` plus the parse
 the `id` it could not read. The client mirrors it: `connect` negotiates the modern revision, `tools()`
 exposes the remote tools as local `ToolInterface`s, and `call` runs one — a
 remote failure throws locally, so an agent's `ToolManager` isolates it exactly
-like a local throw. A remote JSON-RPC error rejects with `MCPError`, preserving
-its numeric `code` and optional `error.data` as `context`.
+like a local throw. A remote tool result with `isError: true` throws `MCPToolError`
+(an `Error` subclass with `code` `'TOOL'`, recognized by `isMCPToolError`), so a
+caller separates a tool refusal from a transport failure. A remote JSON-RPC error
+rejects with `MCPError`, preserving its numeric `code` and optional `error.data`
+as `context`.
 
 **The wire lives one layer out.** [`src/server`](../src/server) carries the
 Node transports and [`src/browser`](../src/browser) the browser face.
@@ -2246,6 +2249,7 @@ Passing a legacy revision to
 | `MCPClient`                | class | Connects to a remote MCP server over any injected `MCPMessageTransportInterface`, negotiates the modern revision, and exposes the server's tools as local `ToolInterface`s an agent can run.                                                                                                                                                                                       |
 | `MCPTaskClient`            | class | Issues the `tasks/*` methods over one correlated-request door — the client half of the stable Tasks extension, exposed as an `MCPClientInterface`'s `tasks`.                                                                                                                                                                                                                       |
 | `HTTPClientTransport`      | class | Drives a remote Streamable-HTTP MCP server over `fetch` — a client `MCPMessageTransportInterface` for the Model Context Protocol, the egress mirror of the server's `createMCPRoutes`.                                                                                                                                                                                             |
+| `MCPToolError`             | class | Distinguishes a completed remote tool call that the peer itself reported as failed.                                                                                                                                                                                                                                                                                                |
 | `MCPError`                 | class | Preserves a Model Context Protocol error's machine-readable numeric code and optional structured context.                                                                                                                                                                                                                                                                          |
 
 ### Constants
@@ -2379,6 +2383,7 @@ A `Shape` cell holds the constant's declared type.
 | `isModernRequest`                  | function | Determines whether a JSON-RPC invocation uses the modern per-request MCP wire shape.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `isMCPModernVersion`               | function | Determines whether a value is a modern protocol revision accepted by a bare server.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `isMCPLegacyVersion`               | function | Determines whether a value is a revision accepted by the optional legacy decorator.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `isMCPToolError`                   | function | Determines whether an unknown value is an `MCPToolError`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `isMCPError`                       | function | Determines whether an unknown value is an `MCPError`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `parseJSONRPCMessage`              | function | Narrows an already-parsed value to a `JSONRPCMessage`, or `undefined` when it is not one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `parseRequestContext`              | function | Parses the reserved modern request metadata into an `MCPRequestContext`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -4502,7 +4507,9 @@ import {
 	isJSONRPCMessage,
 	isJSONRPCResponse,
 	isMCPError,
+	isMCPToolError,
 	MCPError,
+	MCPToolError,
 } from '@orkestrel/mcp'
 import { createToolManager } from '@orkestrel/tool'
 
@@ -4519,6 +4526,11 @@ const remote = new MCPError('Method not found', -32601, { method: 'missing' })
 isMCPError(remote) // true
 remote.code // -32601
 remote.context // { method: 'missing' }
+
+const refusal = new MCPToolError('tool exploded')
+isMCPToolError(refusal) // true
+isMCPError(refusal) // false
+refusal.code // 'TOOL'
 ```
 
 ### Route a request by era and build a modern result

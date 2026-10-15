@@ -19,6 +19,7 @@ import {
 	createMCPLegacy,
 	createMCPServer,
 	isMCPError,
+	isMCPToolError,
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_METHOD_NOT_FOUND,
 	MCP_META_CAPABILITIES,
@@ -1412,6 +1413,10 @@ describe('MCPClient — call() (the content round-trip)', () => {
 		await client.connect()
 
 		await expect(client.call('boom', {})).rejects.toThrow('tool exploded')
+		const refusal: unknown = await client.call('boom', {}).catch((error: unknown) => error)
+		expect(isMCPToolError(refusal)).toBe(true)
+		expect(isMCPError(refusal)).toBe(false)
+		expect(refusal).toMatchObject({ message: 'tool exploded', code: 'TOOL' })
 	})
 
 	it('rejects a tools/call for an unknown remote tool (the manager not-found error)', async () => {
@@ -3016,6 +3021,8 @@ describe('MCPClient — call() prefers structuredContent', () => {
 		await client.connect()
 
 		await expect(client.call('boom', {})).rejects.toThrow('tool exploded')
+		const refusal: unknown = await client.call('boom', {}).catch((error: unknown) => error)
+		expect(isMCPToolError(refusal)).toBe(true)
 	})
 })
 

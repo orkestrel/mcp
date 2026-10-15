@@ -70,7 +70,7 @@ import {
 	MCP_HANDSHAKE_VERSION,
 	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from './constants.js'
-import { MCPError } from './errors.js'
+import { MCPError, MCPToolError } from './errors.js'
 import { parseJSONRPCMessage } from './parsers.js'
 import {
 	isBoundedString,
@@ -585,14 +585,15 @@ export function extractContentText(result: unknown): string {
  *   mere presence decides — an explicit `null` is a value the tool returned, not an absence.
  * - With no structured value the legacy shape applies: the value was JSON-serialized into
  *   the text block(s), so parse them and fall back to the raw string when they are not JSON.
- * - A remote tool failure (`isError: true`) throws the error text, so an agent's tool
- *   registry isolates it into a failure result exactly as it would a local throw.
+ * - A remote tool failure (`isError: true`) throws an {@link MCPToolError} carrying the
+ *   error text, so an agent's tool registry isolates it into a failure result exactly as it
+ *   would a local throw, while a caller separates it from a transport failure by its type.
  *
  * @param name - The tool's name, used only to describe a failure that carried no text
  * @param result - The already-owned result payload the peer answered with
  * @returns The arm the peer answered with, frozen
  * @throws MCPError when a task or input arm's payload does not match its schema
- * @throws Error when the remote tool failed
+ * @throws MCPToolError when the remote tool failed
  *
  * @example
  * ```ts
@@ -624,7 +625,7 @@ export function buildCallOutcome(name: string, result: unknown): MCPCallOutcome 
 	}
 	const text = extractContentText(result)
 	if (isRecord(result) && result['isError'] === true) {
-		throw new Error(text.length > 0 ? text : `MCP tool '${name}' failed`)
+		throw new MCPToolError(text.length > 0 ? text : `MCP tool '${name}' failed`)
 	}
 	let value: unknown
 	if (isRecord(result) && Object.hasOwn(result, 'structuredContent')) {

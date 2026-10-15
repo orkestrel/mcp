@@ -60,3 +60,53 @@ export class MCPError extends Error {
 export function isMCPError(value: unknown): value is MCPError {
 	return isInstance(value, MCPError)
 }
+
+/**
+ * Distinguishes a completed remote tool call that the peer itself reported as failed.
+ *
+ * @remarks
+ * {@link MCPClient} throws this error when a `tools/call` answer arrives with
+ * `isError: true`. Its message is the result's text, or a fallback naming the tool when the
+ * result carried none, so an agent's tool registry still isolates it as an ordinary failure.
+ * It is not an {@link MCPError}: the peer answered, so no JSON-RPC `error` response and no
+ * numeric code exist, and a transport failure or request timeout stays a plain `Error`.
+ * It carries no copy of the result; `code` is the one discriminant.
+ *
+ * @example
+ * ```ts
+ * const error = new MCPToolError('tool exploded')
+ * error.code // 'TOOL'
+ * error.message // 'tool exploded'
+ * ```
+ */
+export class MCPToolError extends Error {
+	override readonly name = 'MCPToolError'
+	readonly code: 'TOOL'
+
+	/**
+	 * Creates a remote tool refusal error.
+	 *
+	 * @param message - The remote tool's error text, or the fallback naming the tool
+	 */
+	constructor(message: string) {
+		super(message)
+		this.code = 'TOOL'
+	}
+}
+
+/**
+ * Determines whether an unknown value is an {@link MCPToolError}.
+ *
+ * @param value - The unknown value to inspect
+ * @returns True if the value is an `MCPToolError`; false otherwise
+ *
+ * @example
+ * ```ts
+ * isMCPToolError(new MCPToolError('tool exploded')) // true
+ * isMCPToolError(new MCPError('Method not found', -32601)) // false
+ * isMCPToolError(new Error('tool exploded')) // false
+ * ```
+ */
+export function isMCPToolError(value: unknown): value is MCPToolError {
+	return isInstance(value, MCPToolError)
+}

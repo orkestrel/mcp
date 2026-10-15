@@ -59,8 +59,11 @@ import {
 	decodeEvent,
 	legacyInvocationToModern,
 	legacyResultToModern,
+	isMCPToolError,
 	matchesResultType,
 	matchesSubscriptionNotification,
+	MCPError,
+	MCPToolError,
 	modernInvocationToLegacy,
 	modernResultToLegacy,
 	MCPStreamController,
@@ -75,6 +78,7 @@ import {
 	supportsTask,
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
+import { attempt } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import * as MCP from '@src/core'
 import { waitForAbort, waitForDelay } from '@orkestrel/test'
@@ -1790,6 +1794,65 @@ describe('buildCallOutcome', () => {
 		expect(() => buildCallOutcome('boom', { isError: true, content: [] })).toThrow(
 			"MCP tool 'boom' failed",
 		)
+	})
+
+	it('throws a remote failure with text as an MCPToolError carrying the TOOL code', () => {
+		const result = {
+			isError: true,
+			content: [
+				{ type: 'text', text: 'tool exploded' },
+				{ type: 'text', text: 'badly' },
+			],
+		}
+
+		const attempted = attempt(() => buildCallOutcome('boom', result))
+
+		expect(attempted.success).toBe(false)
+		if (attempted.success) return
+		expect(attempted.error).toBeInstanceOf(MCPToolError)
+		expect(attempted.error).toBeInstanceOf(Error)
+		expect(isMCPToolError(attempted.error)).toBe(true)
+		expect(attempted.error).toMatchObject({
+			message: 'tool exploded\nbadly',
+			code: 'TOOL',
+			name: 'MCPToolError',
+		})
+	})
+
+	it('throws a remote failure without text as an MCPToolError naming the tool', () => {
+		for (const result of [{ isError: true, content: [] }, { isError: true }]) {
+			const attempted = attempt(() => buildCallOutcome('boom', result))
+
+			expect(attempted.success).toBe(false)
+			if (attempted.success) return
+			expect(isMCPToolError(attempted.error)).toBe(true)
+			expect(attempted.error).toMatchObject({ message: "MCP tool 'boom' failed", code: 'TOOL' })
+		}
+	})
+
+	it('keeps success, task, input, and malformed arms outside the refusal', () => {
+		const task = {
+			resultType: 'task',
+			taskId: 'task-1',
+			status: 'working',
+			createdAt: '2026-07-28T00:00:00Z',
+			lastUpdatedAt: '2026-07-28T00:00:00Z',
+			ttlMs: null,
+		}
+
+		expect(buildCallOutcome('echo', { isError: false, content: [] })).toEqual({
+			resultType: 'complete',
+			value: undefined,
+		})
+		expect(buildCallOutcome('slow', task)).toEqual(task)
+		for (const result of [{ resultType: 'task', taskId: 'x' }, { resultType: 'input_required' }]) {
+			const attempted = attempt(() => buildCallOutcome('slow', result))
+
+			expect(attempted.success).toBe(false)
+			if (attempted.success) return
+			expect(attempted.error).toBeInstanceOf(MCPError)
+			expect(isMCPToolError(attempted.error)).toBe(false)
+		}
 	})
 })
 
