@@ -81,17 +81,7 @@ export function isMCPError(value: unknown): value is MCPError {
  */
 export class MCPToolError extends Error {
 	override readonly name = 'MCPToolError'
-	readonly code: 'TOOL'
-
-	/**
-	 * Creates a remote tool refusal error.
-	 *
-	 * @param message - The remote tool's error text, or the fallback naming the tool
-	 */
-	constructor(message: string) {
-		super(message)
-		this.code = 'TOOL'
-	}
+	readonly code = 'TOOL' as const
 }
 
 /**
