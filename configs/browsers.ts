@@ -269,11 +269,11 @@ export function resolveSystemBrowser(
  * verified system channel, then the platform default channel. An operator override outranks
  * discovery and is returned exactly as given: none of those environment values is checked
  * against the filesystem, because verifying an override would defeat the override. The pinned
- * managed revision outranks anything found on the host because it is deterministic. The installed
- * pinned revision returns empty options unless `PLAYWRIGHT_SCROLLBARS=classic` is set. Only a
- * discovered system channel is verified before it is named. The platform default is unverified
- * as well and exists only as a last resort: Windows takes `msedge`, which ships with the OS and
- * never collides with a foreground Chrome.
+ * managed revision outranks anything found on the host because it is deterministic. Every resolved
+ * managed path names the full Chromium executable so headless launches retain browser permissions.
+ * Only a discovered system channel is verified before it is named. The platform default is
+ * unverified as well and exists only as a last resort: Windows takes `msedge`, which ships with the
+ * OS and never collides with a foreground Chrome.
  *
  * Set `PLAYWRIGHT_SCROLLBARS=classic` only for runs that measure scrollbar compensation, never
  * for a standing gate. Every Chromium launch in that run omits Playwright's `--hide-scrollbars`
@@ -320,7 +320,6 @@ export function resolveBrowser(
 	}
 	const managed = pinned === undefined ? undefined : resolveManagedBrowser(pinned)
 	if (managed !== undefined) {
-		if (managed === pinned) return scrollbars === 'classic' ? { launchOptions: launch } : {}
 		return { launchOptions: { executablePath: managed, ...launch } }
 	}
 	const bundled = resolveBundledBrowser(platform, root)
