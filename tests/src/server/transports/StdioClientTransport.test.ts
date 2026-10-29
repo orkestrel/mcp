@@ -1,11 +1,14 @@
 import type { JSONRPCMessage } from '@src/core'
-import type { ScratchInterface } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
-import { basename, delimiter, dirname, join } from 'node:path'
-import { isRecord } from '@orkestrel/contract'
+import { delimiter, join } from 'node:path'
 import { PROCESS_DRAIN, PROCESS_EVIDENCE } from '@orkestrel/process'
-import { createJSONRPCRequest, TIMER_LEAD, waitForSettlement } from '../../../setup.js'
-import { requireValue, waitForCondition, waitForDelay, waitForEvent } from '@orkestrel/test'
+import {
+	MCPFixtureCell,
+	createJSONRPCRequest,
+	TIMER_LEAD,
+	waitForSettlement,
+} from '../../../setup.js'
+import { requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch, destroyScratch, isRunning } from '@orkestrel/test/server'
 import {
 	createMCPClient,
@@ -13,7 +16,45 @@ import {
 	DEFAULT_MCP_REQUEST_TIMEOUT,
 } from '@src/core'
 import { DEFAULT_MCP_DELIVERY, MCP_STDIO_GRACE, StdioClientTransport } from '@src/server'
-import { STDIO_CLOSE_SCRIPT, STDIO_FRAME_SCRIPT } from '../../../setupServer.js'
+import {
+	STDIO_CLOSE_SCRIPT,
+	STDIO_FRAME_SCRIPT,
+	DEAF_CHILD_SCRIPT,
+	BURST_FIRST,
+	BURST_SECOND,
+	UNREAD_PAYLOAD,
+	CLOSE_SLACK,
+	spawnClient,
+	spawnDeafClient,
+	spawnDescendantClient,
+	spawnBurstClient,
+	EVIDENCE_SENTINEL,
+	EVIDENCE_HEAD,
+	EVIDENCE_TAIL,
+	MULTIBYTE,
+	MULTIBYTE_BYTES,
+	UNEVEN,
+	UNEVEN_BYTES,
+	REPLACEMENT,
+	HANDLED_SENTINEL,
+	HANDLED_FILE,
+	FORCED,
+	ABSENT_COMMAND,
+	EVIDENCE_CODE,
+	DESCENDANT_EARLY,
+	DESCENDANT_LATE,
+	TRIGGER_FILE,
+	DONE_FILE,
+	EVIDENCE_DIRECTORY,
+	spawnEvidenceClient,
+	spawnResolvedEvidenceClient,
+	spawnHandledEvidenceClient,
+	spawnDescendantStderrClient,
+	waitForStdioClose,
+	waitForEvidence,
+	readDescendantPid,
+	collectEvidence,
+} from '../../../setupServer.js'
 
 describe('StdioClientTransport — EOF shutdown', () => {
 	it('disconnect lets the server record input end and exit without termination', async () => {
@@ -89,93 +130,6 @@ describe('StdioClientTransport — EOF shutdown', () => {
 
 // A tiny newline-delimited JSON-RPC child: for each line, `ping` replies with a fixed result,
 // `boom` replies with a deliberately malformed (non-JSON) line, anything else replies nothing.
-const CHILD_SCRIPT = `
-const readline = require('node:readline')
-const rl = readline.createInterface({ input: process.stdin })
-rl.on('line', (line) => {
-	let msg
-	try {
-		msg = JSON.parse(line)
-	} catch {
-		return
-	}
-	if (msg.method === 'ping') {
-		process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { pong: true } }) + '\\n')
-	} else if (msg.method === 'boom') {
-		process.stdout.write('{ not json\\n')
-	}
-})
-`
-
-// A child that reports its pid, never reads its stdin, and stays alive on a timer. A line larger
-// than the host's pipe buffer therefore sits undelivered in the channel for as long as the child
-// lives, which makes the delivery bound and the child's liveness observable at the same rejection.
-const DEAF_CHILD_SCRIPT = `
-process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'ready', result: { pid: process.pid } }) + '\\n')
-setInterval(() => {}, 1000)
-`
-
-// The child reports a descendant pid and exits. The detached descendant inherits stdout, keeping
-// the readline reader open after the child has gone, until the supervisor's drain bound closes it.
-const DESCENDANT_PIPE_SCRIPT = `
-const { spawn } = require('node:child_process')
-const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-	detached: true,
-	stdio: ['ignore', 'inherit', 'ignore'],
-})
-descendant.unref()
-process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'descendant', result: { pid: descendant.pid } }) + '\\n')
-`
-
-/** The first of the two lines the burst child writes in one write. */
-const BURST_FIRST = 'first'
-
-/** The second of those lines — the one already framed and queued behind the first. */
-const BURST_SECOND = 'second'
-
-// A child that answers one request with complete lines in one write. A listener calling `close()`
-// from the first delivery must prevent the remaining line in that chunk from being delivered.
-const BURST_SCRIPT = `
-const readline = require('node:readline')
-const rl = readline.createInterface({ input: process.stdin })
-rl.on('line', () => {
-	const first = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { burst: ${JSON.stringify(BURST_FIRST)} } })
-	const second = JSON.stringify({ jsonrpc: '2.0', id: 2, result: { burst: ${JSON.stringify(BURST_SECOND)} } })
-	process.stdout.write(first + '\\n' + second + '\\n')
-})
-`
-
-// Comfortably above both a Windows stdio pipe buffer and a 64 KiB POSIX one, so the write below
-// cannot be swallowed whole by the host and answered before the child has read anything.
-const UNREAD_PAYLOAD = 'x'.repeat(256 * 1024)
-
-/** How long past the supervisor's `drain` bound a bounded `close()` is waited for, in milliseconds. */
-const CLOSE_SLACK = 2_000
-
-function spawnClient(): StdioClientTransport {
-	return new StdioClientTransport({ command: process.execPath, args: ['-e', CHILD_SCRIPT] })
-}
-
-function spawnDeafClient(): StdioClientTransport {
-	return new StdioClientTransport({
-		command: process.execPath,
-		args: ['-e', DEAF_CHILD_SCRIPT],
-		// This fixture is the unbounded control: teardown, not a delivery window, settles its write.
-		delivery: 0,
-	})
-}
-
-function spawnDescendantClient(): StdioClientTransport {
-	return new StdioClientTransport({
-		command: process.execPath,
-		args: ['-e', DESCENDANT_PIPE_SCRIPT],
-	})
-}
-
-function spawnBurstClient(): StdioClientTransport {
-	return new StdioClientTransport({ command: process.execPath, args: ['-e', BURST_SCRIPT] })
-}
-
 describe('StdioClientTransport — drives a real child process over stdio', () => {
 	it('preserves split UTF-8, CRLF, and a final unterminated reply', async () => {
 		const transport = new StdioClientTransport({
@@ -184,7 +138,7 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		})
 		const messages: JSONRPCMessage[] = []
 		transport.emitter.on('message', (message) => messages.push(message))
-		const closed = waitForClose(transport, 'the framing fixture exits')
+		const closed = waitForStdioClose(transport, 'the framing fixture exits')
 		try {
 			await transport.start()
 			await closed
@@ -269,9 +223,9 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 			transport.emitter.on('message', resolve)
 		})
 		const errors: unknown[] = []
-		let closes = 0
+		const closes = new MCPFixtureCell(0)
 		transport.emitter.on('error', (error) => errors.push(error))
-		transport.emitter.on('close', () => (closes += 1))
+		transport.emitter.on('close', () => (closes.value += 1))
 		try {
 			await transport.start()
 			const pid = readDescendantPid(
@@ -288,7 +242,7 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 
 			expect(isRunning(pid)).toBe(true)
 			expect(errors).toEqual([])
-			expect(closes).toBe(0)
+			expect(closes.value).toBe(0)
 			expect(elapsed).toBeGreaterThanOrEqual(delivery - TIMER_LEAD)
 		} finally {
 			await transport.close()
@@ -335,13 +289,13 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		const write = transport.send(
 			createJSONRPCRequest({ method: 'ping', id: 1, params: { payload: UNREAD_PAYLOAD } }),
 		)
-		let settled = false
+		const settled = new MCPFixtureCell(false)
 		const outcome = write.then(
-			() => (settled = true),
-			() => (settled = true),
+			() => (settled.value = true),
+			() => (settled.value = true),
 		)
 		await waitForDelay(300)
-		expect(settled).toBe(false)
+		expect(settled.value).toBe(false)
 
 		// Closing destroys the channel with the line still undelivered — a dead channel surfaces at
 		// the caller instead of resolving as a delivered write.
@@ -352,15 +306,15 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 
 	it('close() ends the child and fires the close event (idempotent)', async () => {
 		const transport = spawnClient()
-		let closed = 0
-		transport.emitter.on('close', () => (closed += 1))
+		const closed = new MCPFixtureCell(0)
+		transport.emitter.on('close', () => (closed.value += 1))
 		await transport.start()
 
 		await transport.close()
 		await waitForDelay(60)
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 		await transport.close()
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 	})
 
 	it('close() settles inside the supervisor drain bound while a descendant retains the child stdout pipe', async () => {
@@ -368,10 +322,10 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		const arrived = new Promise<JSONRPCMessage>((resolve) => {
 			transport.emitter.on('message', resolve)
 		})
-		let pid: number | undefined
+		const pid = new MCPFixtureCell<number | undefined>(undefined)
 		try {
 			await transport.start()
-			pid = readDescendantPid(
+			pid.value = readDescendantPid(
 				await waitForSettlement(arrived, 5_000, 'Timed out waiting for the descendant report'),
 			)
 
@@ -388,9 +342,9 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 			).resolves.toBeUndefined()
 		} finally {
 			await transport.close()
-			if (pid !== undefined) {
+			if (pid.value !== undefined) {
 				try {
-					process.kill(pid)
+					process.kill(pid.value)
 				} catch {}
 			}
 		}
@@ -399,16 +353,16 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 	it('ignores the old child close after a new child has replaced it', async () => {
 		const transport = spawnClient()
 		const messages: JSONRPCMessage[] = []
-		let closed = 0
+		const closed = new MCPFixtureCell(0)
 		transport.emitter.on('message', (message) => messages.push(message))
-		transport.emitter.on('close', () => (closed += 1))
+		transport.emitter.on('close', () => (closed.value += 1))
 		await transport.start()
 
 		await transport.close()
 		await transport.start()
 		await waitForDelay(60)
 
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 		await transport.send(createJSONRPCRequest({ method: 'ping', id: 2 }))
 		await waitForDelay(300)
 		expect(messages).toEqual([{ jsonrpc: '2.0', id: 2, result: { pong: true } }])
@@ -418,22 +372,22 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 	it('emits nothing more after a message listener closed the transport', async () => {
 		const transport = spawnBurstClient()
 		const messages: JSONRPCMessage[] = []
-		let closing: Promise<void> | undefined
+		const closing = new MCPFixtureCell<Promise<void> | undefined>(undefined)
 		transport.emitter.on('message', (message) => {
 			messages.push(message)
-			closing ??= transport.close()
+			closing.value ??= transport.close()
 		})
 		await transport.start()
 		await transport.send(createJSONRPCRequest({ method: 'burst', id: 1 }))
 		await waitForCondition(
 			'the first of the two framed lines reaches the message listener',
-			() => closing !== undefined,
+			() => closing.value !== undefined,
 			{ budget: 10_000 },
 		)
 
 		// Teardown began inside the first delivery. The reader still holds the remaining line from
 		// that chunk, so the transport's closed state must stop its delivery before the stream ends.
-		await requireValue(closing)
+		await requireValue(closing.value)
 		await waitForDelay(300)
 
 		expect(messages).toEqual([{ jsonrpc: '2.0', id: 1, result: { burst: BURST_FIRST } }])
@@ -458,58 +412,76 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 		await transport.close()
 	})
 
-	it('holds a stale start() behind the newer teardown a close() opened while it was parked', async () => {
-		const transport = spawnDeafClient()
-		let closes = 0
-		transport.emitter.on('close', () => (closes += 1))
+	it('joins the predecessor teardown while a replacement is waiting to open', async () => {
+		const transport = spawnClient()
+		const closes = new MCPFixtureCell(0)
+		transport.emitter.on('close', () => (closes.value += 1))
 		try {
-			// An explicit `close()` over a LIVE child runs a REAL teardown, and the barrier that
-			// teardown ran under stays assigned once it settles: `close()` clears no barrier, and the
-			// exit bridge clears only the one it installed itself. That settled barrier is what both
-			// `start()` calls below capture, so each parks on it rather than opening a child here.
 			await transport.start()
-			await transport.close()
-			expect(closes).toBe(1)
-
-			// The interleaving. Both `start()` calls capture that barrier in this one turn, and each
-			// queued microtask lands between their two resumptions: the first closes the replacement
-			// the earlier `start()` installed, which opens a real teardown over a LIVE child, and the
-			// second asks for a teardown while the later `start()` is parked on that newer barrier.
+			const tearing = transport.close()
 			const opening = transport.start()
-			let tearing: Promise<void> | undefined
-			queueMicrotask(() => {
-				tearing = transport.close()
-			})
-			const stale = transport.start()
-			let joining: Promise<void> | undefined
-			queueMicrotask(() => {
-				joining = transport.close()
-			})
-			await Promise.all([opening, stale])
+			const joining = transport.close()
 
-			// The stale continuation resumed against a NEWER barrier than the one it awaited, and it
-			// waited that one out before installing its own child, so that teardown had reported its
-			// `close` by the time this resolved. A `start()` that waited once and cleared whatever it
-			// found would have discarded the newer barrier and spawned over a teardown still running.
-			expect(closes).toBe(2)
+			await opening
+			expect(closes.value).toBe(1)
+			await joining
+			await tearing
+			expect(closes.value).toBe(1)
 
-			// The joining `close()` reports THAT teardown's completion rather than resolving through a
-			// no-op, so this lifetime's `close` has already fired when it resolves rather than firing
-			// after it. The teardown call itself reads the same, and neither adds a second report.
-			await requireValue(joining)
-			expect(closes).toBe(2)
-			await requireValue(tearing)
-			expect(closes).toBe(2)
-
-			// The child the stale `start()` installed is live and untorn, so closing it runs a real
-			// teardown and reports it: the barrier walk left the replacement closable rather than
-			// stranding it behind a barrier a later `close()` resolves through.
 			await transport.close()
-			expect(closes).toBe(3)
+			expect(closes.value).toBe(2)
 		} finally {
 			await transport.close()
 		}
-	}, 30_000)
+	})
+
+	it('joins two starts during teardown into one writable replacement', async () => {
+		const transport = spawnClient()
+		const closes = new MCPFixtureCell(0)
+		const messages: JSONRPCMessage[] = []
+		transport.emitter.on('close', () => (closes.value += 1))
+		transport.emitter.on('message', (message) => messages.push(message))
+		try {
+			await transport.start()
+			const tearing = transport.close()
+			const opening = transport.start()
+			const joining = transport.start()
+			await Promise.all([tearing, opening, joining])
+
+			expect(closes.value).toBe(1)
+			await transport.send(createJSONRPCRequest({ method: 'ping', id: 1 }))
+			await waitForCondition('the replacement answers the request', () => messages.length > 0)
+			expect(messages).toEqual([{ jsonrpc: '2.0', id: 1, result: { pong: true } }])
+
+			await transport.close()
+			expect(closes.value).toBe(2)
+		} finally {
+			await transport.close()
+		}
+	})
+
+	it('emits close once before any start and permits a later start', async () => {
+		const transport = spawnClient()
+		const closes = new MCPFixtureCell(0)
+		transport.emitter.on('close', () => (closes.value += 1))
+		try {
+			await transport.close()
+			await transport.close()
+
+			expect(closes.value).toBe(1)
+			expect(transport.evidence).toBeUndefined()
+			await expect(transport.send(createJSONRPCRequest())).rejects.toThrow(
+				/^stdio transport is not connected$/,
+			)
+
+			await transport.start()
+			await transport.send(createJSONRPCRequest({ method: 'ping', id: 1 }))
+			await transport.close()
+			expect(closes.value).toBe(2)
+		} finally {
+			await transport.close()
+		}
+	})
 
 	it('the session is undefined for the stateless v1', async () => {
 		const transport = spawnClient()
@@ -562,257 +534,6 @@ describe('StdioClientTransport — drives a real child process over stdio', () =
 //   for the named condition inside a `performance.now()` budget rather than for a fixed delay.
 
 /** The bytes an evidence child writes to its own `stderr`. */
-const EVIDENCE_SENTINEL = 'evidence-sentinel'
-
-/** The first marker in the overflow child's stderr run — the half the byte bound drops. */
-const EVIDENCE_HEAD = 'evidence-head'
-
-/** The last marker in the overflow child's stderr run — the half the byte bound keeps. */
-const EVIDENCE_TAIL = 'evidence-tail'
-
-/** One character whose UTF-8 encoding occupies more than one byte. */
-const MULTIBYTE = 'é'
-
-/** How many bytes one {@link MULTIBYTE} character occupies, read on the host running the test. */
-const MULTIBYTE_BYTES = Buffer.byteLength(MULTIBYTE, 'utf8')
-
-/** One character whose UTF-8 width does NOT divide the byte bound evenly. */
-const UNEVEN = '€'
-
-/** How many bytes one {@link UNEVEN} character occupies, read on the host running the test. */
-const UNEVEN_BYTES = Buffer.byteLength(UNEVEN, 'utf8')
-
-/** The character a decoder substitutes for bytes it cannot read as a complete sequence. */
-const REPLACEMENT = '�'
-
-/** The bytes the handled child writes from inside its own `SIGTERM` handler. */
-const HANDLED_SENTINEL = 'handled-sentinel'
-
-/** The scratch file that same handler writes, so a reading can tell whether the handler ran. */
-const HANDLED_FILE = 'handled.txt'
-
-/** Whether this host ends a child by force, leaving the child no signal it can handle. */
-const FORCED = process.platform === 'win32'
-
-/** A command name no host resolves, so the spawn faults instead of producing a child. */
-const ABSENT_COMMAND = 'orkestrel-mcp-absent-command'
-
-/** The exit code the failing children report, so their end is a fault rather than a success. */
-const EVIDENCE_CODE = 3
-
-/** The bytes the detached descendant writes before the child's terminal moment. */
-const DESCENDANT_EARLY = 'descendant-early'
-
-/** The bytes the detached descendant writes after that moment, once the tail is frozen. */
-const DESCENDANT_LATE = 'descendant-late'
-
-/** The scratch file whose appearance releases the descendant's late write. */
-const TRIGGER_FILE = 'trigger.txt'
-
-/** The scratch file the descendant writes after its late stderr write has flushed. */
-const DONE_FILE = 'done.txt'
-
-/** The scratch file the first child under one command writes, so a later child spawns nothing. */
-const CLAIM_FILE = 'claim.txt'
-
-/** The executable name a BARE command resolves to, so a stripped `PATH` refuses the next spawn. */
-const EVIDENCE_EXECUTABLE = basename(process.execPath)
-
-/** The one `PATH` entry that resolves {@link EVIDENCE_EXECUTABLE}. */
-const EVIDENCE_DIRECTORY = dirname(process.execPath)
-
-/** How long a post-condition tail reading is repeated before it counts as stable, in milliseconds. */
-const STABILITY_WINDOW = 500
-
-// One parameterized child whose entire job is what it puts on its own `stderr`. `MCP_EVIDENCE_WAIT`
-// keeps it alive and defers the write until a line arrives, so a test can read a live tail before
-// and after the child writes; without it the child writes once and ends, optionally non-zero.
-const EVIDENCE_SCRIPT = `
-const payload = process.env.MCP_EVIDENCE_PAYLOAD
-const code = process.env.MCP_EVIDENCE_CODE
-const write = () => { if (payload !== undefined) process.stderr.write(payload) }
-if (process.env.MCP_EVIDENCE_WAIT === 'true') {
-	const readline = require('node:readline')
-	readline.createInterface({ input: process.stdin }).on('line', write)
-	const timer = setInterval(() => {}, 1000)
-	process.stdin.on('end', () => clearInterval(timer))
-} else {
-	write()
-	if (code !== undefined) process.exitCode = Number(code)
-}
-`
-
-// A child that installs a `SIGTERM` handler and writes its startup marker at once. The handler
-// records a scratch file as well as stderr bytes, so a reading that finds no handler bytes in the
-// tail can still say whether the handler ran and its write was lost or the host never delivered
-// the signal at all.
-const HANDLED_SCRIPT = `
-const { writeFileSync } = require('node:fs')
-process.on('SIGTERM', () => {
-	writeFileSync(process.env.MCP_EVIDENCE_HANDLED, 'handled')
-	process.stderr.write(${JSON.stringify(HANDLED_SENTINEL)}, () => { process.exit(0) })
-})
-process.stderr.write(process.env.MCP_EVIDENCE_PAYLOAD)
-setInterval(() => {}, 1000)
-`
-
-// The detached descendant that outlives the child it was spawned from, holding that child's
-// inherited `stderr`. It writes its early marker at once, then parks on the trigger file the test
-// creates after the teardown barrier, writes its late marker, and reports that the write flushed.
-// The deadline is a self-release, so an abandoned descendant ends rather than parking forever.
-const DESCENDANT_SCRIPT = `
-const { existsSync, writeFileSync } = require('node:fs')
-process.stderr.write(process.env.MCP_EVIDENCE_EARLY)
-const deadline = Date.now() + 30000
-const timer = setInterval(() => {
-	if (existsSync(process.env.MCP_EVIDENCE_TRIGGER)) {
-		clearInterval(timer)
-		process.stderr.write(process.env.MCP_EVIDENCE_LATE, () => {
-			writeFileSync(process.env.MCP_EVIDENCE_DONE, 'done')
-			process.exit(0)
-		})
-	} else if (Date.now() > deadline) {
-		clearInterval(timer)
-		process.exit(1)
-	}
-}, 20)
-`
-
-// The FIRST child under this command hands its `stderr` down to a detached descendant, reports that
-// descendant's pid, and ends. The descendant inherits no stdout, so the readline reader can close
-// on stdout end while the supervisor still drains stderr. Every later child reads the first child's
-// claim file and stays alive writing nothing — a replacement lifetime respawns the same command,
-// so without that branch the replacement would spawn a second descendant and write the same marker
-// into ITS own tail, and a reading meant to report the superseded child would report the live one.
-const DESCENDANT_STDERR_SCRIPT = `
-const { existsSync, writeFileSync } = require('node:fs')
-const claim = process.env.MCP_EVIDENCE_CLAIM
-if (existsSync(claim)) {
-	setInterval(() => {}, 1000)
-} else {
-	writeFileSync(claim, 'claimed')
-	const { spawn } = require('node:child_process')
-	const descendant = spawn(process.execPath, ['-e', ${JSON.stringify(DESCENDANT_SCRIPT)}], {
-		detached: true,
-		stdio: ['ignore', 'ignore', 'inherit'],
-	})
-	descendant.unref()
-	process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: 'descendant', result: { pid: descendant.pid } }) + '\\n')
-}
-`
-
-/** What one {@link EVIDENCE_SCRIPT} child does with its `stderr` and with its exit. */
-interface EvidenceChildOptions {
-	/** The exact bytes the child writes to its own `stderr`; it writes nothing when omitted. */
-	readonly payload?: string
-	/** The non-zero code the child ends with; it ends successfully when omitted. */
-	readonly code?: number
-	/** Whether the child stays alive and defers its write until a line arrives on its stdin. */
-	readonly wait?: boolean
-}
-
-function spawnEvidenceClient(options?: EvidenceChildOptions): StdioClientTransport {
-	const environment: Record<string, string> = {}
-	if (options?.payload !== undefined) environment['MCP_EVIDENCE_PAYLOAD'] = options.payload
-	if (options?.code !== undefined) environment['MCP_EVIDENCE_CODE'] = String(options.code)
-	if (options?.wait === true) environment['MCP_EVIDENCE_WAIT'] = 'true'
-	return new StdioClientTransport({
-		command: process.execPath,
-		args: ['-e', EVIDENCE_SCRIPT],
-		env: environment,
-	})
-}
-
-/**
- * The same evidence child, reached through a BARE command name instead of an absolute path.
- *
- * `@orkestrel/process` resolves a bare command through the merged environment's `PATH` at each
- * spawn, so removing {@link EVIDENCE_DIRECTORY} from `process.env.PATH` between one lifetime and
- * the next makes that next one a spawn the host refuses. That is the only lifetime that ends
- * without starting a process, and therefore the only one whose end reliably lands INSIDE another
- * lifetime's teardown.
- */
-function spawnResolvedEvidenceClient(): StdioClientTransport {
-	return new StdioClientTransport({
-		command: EVIDENCE_EXECUTABLE,
-		args: ['-e', EVIDENCE_SCRIPT],
-		env: { MCP_EVIDENCE_PAYLOAD: EVIDENCE_SENTINEL, MCP_EVIDENCE_WAIT: 'true' },
-	})
-}
-
-function spawnHandledEvidenceClient(scratch: ScratchInterface): StdioClientTransport {
-	return new StdioClientTransport({
-		command: process.execPath,
-		args: ['-e', HANDLED_SCRIPT],
-		env: {
-			MCP_EVIDENCE_PAYLOAD: EVIDENCE_SENTINEL,
-			MCP_EVIDENCE_HANDLED: join(scratch.path, HANDLED_FILE),
-		},
-	})
-}
-
-function spawnDescendantStderrClient(scratch: ScratchInterface): StdioClientTransport {
-	return new StdioClientTransport({
-		command: process.execPath,
-		args: ['-e', DESCENDANT_STDERR_SCRIPT],
-		env: {
-			MCP_EVIDENCE_EARLY: DESCENDANT_EARLY,
-			MCP_EVIDENCE_LATE: DESCENDANT_LATE,
-			MCP_EVIDENCE_TRIGGER: join(scratch.path, TRIGGER_FILE),
-			MCP_EVIDENCE_DONE: join(scratch.path, DONE_FILE),
-			MCP_EVIDENCE_CLAIM: join(scratch.path, CLAIM_FILE),
-		},
-	})
-}
-
-/** Park until the transport's `close` event has fired, so a tail read after it is complete. */
-function waitForClose(transport: StdioClientTransport, description: string): Promise<readonly []> {
-	return waitForEvent<readonly []>(
-		(listener) => {
-			transport.emitter.on('close', listener)
-		},
-		description,
-		{ budget: 10_000 },
-	)
-}
-
-/** Park until the transport's live tail carries `text`, so the write is read rather than raced. */
-function waitForEvidence(transport: StdioClientTransport, text: string): Promise<void> {
-	return waitForCondition(
-		`the child stderr bytes ${text} reach the transport evidence`,
-		() => transport.evidence?.includes(text) === true,
-		{ budget: 10_000 },
-	)
-}
-
-/** Read the pid the descendant-spawning child reports on its one stdout line. */
-function readDescendantPid(message: JSONRPCMessage): number {
-	if (!('result' in message) || !isRecord(message.result)) {
-		throw new Error('The descendant report carries no result')
-	}
-	const value = message.result['pid']
-	if (typeof value !== 'number') throw new Error('The descendant report carries no pid')
-	return value
-}
-
-/**
- * Read the tail repeatedly across a bounded window and answer every distinct reading.
- *
- * The window opens after the fact that would have moved the tail has already happened, so one
- * member is what a stable reading looks like and a second member names the drift.
- */
-async function collectEvidence(
-	transport: StdioClientTransport,
-): Promise<ReadonlyArray<string | undefined>> {
-	const readings = new Set<string | undefined>()
-	const opened = performance.now()
-	while (performance.now() - opened < STABILITY_WINDOW) {
-		readings.add(transport.evidence)
-		await waitForDelay(10)
-	}
-	return [...readings]
-}
-
 describe('StdioClientTransport — the retained stderr tail', () => {
 	it('reads undefined before start(), because no child has run', async () => {
 		const transport = spawnEvidenceClient({ wait: true })
@@ -832,7 +553,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 
 	it('reads the stderr a failing child wrote, after that child ends on its own', async () => {
 		const transport = spawnEvidenceClient({ payload: EVIDENCE_SENTINEL, code: EVIDENCE_CODE })
-		const closed = waitForClose(transport, 'the failing child close event')
+		const closed = waitForStdioClose(transport, 'the failing child close event')
 		await transport.start()
 		await closed
 
@@ -842,7 +563,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 
 	it('CONTROL — a failing child that wrote nothing reads an empty tail, not the sentinel', async () => {
 		const transport = spawnEvidenceClient({ code: EVIDENCE_CODE })
-		const closed = waitForClose(transport, 'the silent failing child close event')
+		const closed = waitForStdioClose(transport, 'the silent failing child close event')
 		await transport.start()
 		await closed
 
@@ -923,11 +644,11 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			code: EVIDENCE_CODE,
 			wait: true,
 		})
-		let seen: string | undefined
-		let fired = false
+		const seen = new MCPFixtureCell<string | undefined>(undefined)
+		const fired = new MCPFixtureCell(false)
 		transport.emitter.on('close', () => {
-			seen = transport.evidence
-			fired = true
+			seen.value = transport.evidence
+			fired.value = true
 		})
 		await transport.start()
 
@@ -939,8 +660,8 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		await waitForEvidence(transport, EVIDENCE_SENTINEL)
 		await transport.close()
 
-		expect(fired).toBe(true)
-		expect(seen).toBe(EVIDENCE_SENTINEL)
+		expect(fired.value).toBe(true)
+		expect(seen.value).toBe(EVIDENCE_SENTINEL)
 		expect(transport.evidence).toBe(EVIDENCE_SENTINEL)
 	})
 
@@ -980,22 +701,22 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 
 	it('holds every close listener to the captured tail when the close was explicit', async () => {
 		const transport = spawnEvidenceClient({ payload: EVIDENCE_SENTINEL, wait: true })
-		let early: string | undefined
-		let late: string | undefined
-		let read = false
-		let restarting: Promise<void> | undefined
+		const early = new MCPFixtureCell<string | undefined>(undefined)
+		const late = new MCPFixtureCell<string | undefined>(undefined)
+		const read = new MCPFixtureCell(false)
+		const restarting = new MCPFixtureCell<Promise<void> | undefined>(undefined)
 		transport.emitter.on('close', () => {
-			if (!read) early = transport.evidence
+			if (!read.value) early.value = transport.evidence
 		})
 		transport.emitter.on('close', () => {
 			// An explicit teardown still holds its barrier while these listeners run, so this
 			// `start()` parks behind it instead of opening the next lifetime inside the emit.
-			restarting ??= transport.start()
+			restarting.value ??= transport.start()
 		})
 		transport.emitter.on('close', () => {
-			if (read) return
-			late = transport.evidence
-			read = true
+			if (read.value) return
+			late.value = transport.evidence
+			read.value = true
 		})
 		try {
 			await transport.start()
@@ -1006,45 +727,47 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 
 			// The listener AFTER the one that restarted reads what the listener before it read: the
 			// replacement cannot open until every listener has returned.
-			expect(early).toBe(EVIDENCE_SENTINEL)
-			expect(late).toBe(EVIDENCE_SENTINEL)
+			expect(early.value).toBe(EVIDENCE_SENTINEL)
+			expect(late.value).toBe(EVIDENCE_SENTINEL)
 		} finally {
-			await requireValue(restarting)
+			await requireValue(restarting.value)
 			await transport.close()
 		}
 	}, 30_000)
 
 	it('CONTROL — a natural exit lets a listener clear that tail before the later listeners read', async () => {
 		const transport = spawnEvidenceClient({ payload: EVIDENCE_SENTINEL, code: EVIDENCE_CODE })
-		let early: string | undefined
-		let late: string | undefined
-		let read = false
-		let restarting: Promise<void> | undefined
+		const early = new MCPFixtureCell<string | undefined>(undefined)
+		const late = new MCPFixtureCell<string | undefined>(undefined)
+		const read = new MCPFixtureCell(false)
+		const restarting = new MCPFixtureCell<Promise<void> | undefined>(undefined)
 		transport.emitter.on('close', () => {
-			if (!read) early = transport.evidence
+			if (!read.value) early.value = transport.evidence
 		})
 		transport.emitter.on('close', () => {
 			// The exit bridge holds no barrier, so this `start()` runs to its spawn INSIDE the emit
 			// and the tail it clears is already gone when the listener after it reads.
-			restarting ??= transport.start()
+			restarting.value ??= transport.start()
 		})
 		transport.emitter.on('close', () => {
-			if (read) return
-			late = transport.evidence
-			read = true
+			if (read.value) return
+			late.value = transport.evidence
+			read.value = true
 		})
 		try {
 			await transport.start()
-			await waitForCondition('the failing child ends and its close listeners run', () => read, {
-				budget: 10_000,
-			})
+			await waitForCondition(
+				'the failing child ends and its close listeners run',
+				() => read.value,
+				{ budget: 10_000 },
+			)
 
 			// The tail the earlier listener read is the ended child's own, and the later listener reads
 			// the replacement's empty live tail instead.
-			expect(early).toBe(EVIDENCE_SENTINEL)
-			expect(late).toBe('')
+			expect(early.value).toBe(EVIDENCE_SENTINEL)
+			expect(late.value).toBe('')
 		} finally {
-			await requireValue(restarting)
+			await requireValue(restarting.value)
 			await transport.close()
 		}
 	}, 30_000)
@@ -1055,39 +778,41 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		const arrived = new Promise<JSONRPCMessage>((resolve) => {
 			transport.emitter.on('message', resolve)
 		})
-		let restarting: Promise<void> | undefined
-		let captured: string | undefined
-		let ended = false
+		const restarting = new MCPFixtureCell<Promise<void> | undefined>(undefined)
+		const captured = new MCPFixtureCell<string | undefined>(undefined)
+		const ended = new MCPFixtureCell(false)
 		transport.emitter.on('error', () => {
 			// The drain-bound notice is emitted from INSIDE the natural exit's own report, BEFORE
 			// that exit has fired `close`. A restart begun here must not open the next lifetime over
 			// the tail the `close` listeners are about to read.
-			restarting ??= transport.start()
+			restarting.value ??= transport.start()
 		})
 		transport.emitter.on('close', () => {
-			captured ??= transport.evidence
-			ended = true
+			captured.value ??= transport.evidence
+			ended.value = true
 		})
-		let pid: number | undefined
+		const pid = new MCPFixtureCell<number | undefined>(undefined)
 		try {
 			await transport.start()
-			pid = readDescendantPid(
+			pid.value = readDescendantPid(
 				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
 			)
 			// CONTROL — the ended child's own tail is present before its exit reports, so the reading
 			// below excludes a replacement rather than a value this lifetime never carried.
 			await waitForEvidence(transport, DESCENDANT_EARLY)
 
-			await waitForCondition('the ended child fires its close', () => ended, { budget: 10_000 })
+			await waitForCondition('the ended child fires its close', () => ended.value, {
+				budget: 10_000,
+			})
 
 			// The `close` for the ended lifetime reached its listener while that lifetime's child was
 			// still the held one. A replacement installed inside the report would have read its own
 			// empty live tail here instead.
-			expect(captured).toContain(DESCENDANT_EARLY)
+			expect(captured.value).toContain(DESCENDANT_EARLY)
 		} finally {
-			if (restarting !== undefined) await restarting
+			if (restarting.value !== undefined) await restarting.value
 			await transport.close()
-			if (pid !== undefined && isRunning(pid)) process.kill(pid)
+			if (pid.value !== undefined && isRunning(pid.value)) process.kill(pid.value)
 			await destroyScratch(scratch)
 		}
 	}, 30_000)
@@ -1098,41 +823,43 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		const arrived = new Promise<JSONRPCMessage>((resolve) => {
 			transport.emitter.on('message', resolve)
 		})
-		let early: string | undefined
-		let late: string | undefined
-		let read = false
-		let restarting: Promise<void> | undefined
+		const early = new MCPFixtureCell<string | undefined>(undefined)
+		const late = new MCPFixtureCell<string | undefined>(undefined)
+		const read = new MCPFixtureCell(false)
+		const restarting = new MCPFixtureCell<Promise<void> | undefined>(undefined)
 		transport.emitter.on('close', () => {
-			if (!read) early = transport.evidence
+			if (!read.value) early.value = transport.evidence
 		})
 		transport.emitter.on('close', () => {
 			// The barrier the report held is released before this emit, so this `start()` runs to its
 			// spawn INSIDE the emit rather than parking behind the ended lifetime.
-			restarting ??= transport.start()
+			restarting.value ??= transport.start()
 		})
 		transport.emitter.on('close', () => {
-			if (read) return
-			late = transport.evidence
-			read = true
+			if (read.value) return
+			late.value = transport.evidence
+			read.value = true
 		})
-		let pid: number | undefined
+		const pid = new MCPFixtureCell<number | undefined>(undefined)
 		try {
 			await transport.start()
-			pid = readDescendantPid(
+			pid.value = readDescendantPid(
 				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
 			)
 			await waitForEvidence(transport, DESCENDANT_EARLY)
 
-			await waitForCondition('the ended child fires its close', () => read, { budget: 10_000 })
+			await waitForCondition('the ended child fires its close', () => read.value, {
+				budget: 10_000,
+			})
 
 			// The same exit that defers an error listener's restart still lets a `close` listener's
 			// restart replace the tail every listener after it reads.
-			expect(early).toContain(DESCENDANT_EARLY)
-			expect(late).toBe('')
+			expect(early.value).toContain(DESCENDANT_EARLY)
+			expect(late.value).toBe('')
 		} finally {
-			if (restarting !== undefined) await restarting
+			if (restarting.value !== undefined) await restarting.value
 			await transport.close()
-			if (pid !== undefined && isRunning(pid)) process.kill(pid)
+			if (pid.value !== undefined && isRunning(pid.value)) process.kill(pid.value)
 			await destroyScratch(scratch)
 		}
 	}, 30_000)
@@ -1143,45 +870,47 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		const arrived = new Promise<JSONRPCMessage>((resolve) => {
 			transport.emitter.on('message', resolve)
 		})
-		let joining: Promise<void> | undefined
-		let restarting: Promise<void> | undefined
-		let late: string | undefined
-		let read = false
+		const joining = new MCPFixtureCell<Promise<void> | undefined>(undefined)
+		const restarting = new MCPFixtureCell<Promise<void> | undefined>(undefined)
+		const late = new MCPFixtureCell<string | undefined>(undefined)
+		const read = new MCPFixtureCell(false)
 		transport.emitter.on('close', () => {
 			// The ended lifetime reached its terminal moment before this emit, so this `close()` has
 			// nothing to tear down and must leave NO barrier behind. A resolved no-op barrier parks
 			// the `start()` below on the microtask queue, and the replacement then opens after this
 			// emit rather than inside it.
-			joining ??= transport.close()
+			joining.value ??= transport.close()
 		})
 		transport.emitter.on('close', () => {
-			restarting ??= transport.start()
+			restarting.value ??= transport.start()
 		})
 		transport.emitter.on('close', () => {
-			if (read) return
-			late = transport.evidence
-			read = true
+			if (read.value) return
+			late.value = transport.evidence
+			read.value = true
 		})
-		let pid: number | undefined
+		const pid = new MCPFixtureCell<number | undefined>(undefined)
 		try {
 			await transport.start()
-			pid = readDescendantPid(
+			pid.value = readDescendantPid(
 				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
 			)
 			// CONTROL — the ended child's own tail is present before its exit reports, so the reading
 			// below excludes a replacement rather than a value this lifetime never carried.
 			await waitForEvidence(transport, DESCENDANT_EARLY)
 
-			await waitForCondition('the ended child fires its close', () => read, { budget: 10_000 })
+			await waitForCondition('the ended child fires its close', () => read.value, {
+				budget: 10_000,
+			})
 
 			// The replacement opened INSIDE the emit despite the earlier `close()`, so the listener
 			// after it reads the replacement's own empty live tail rather than the ended child's.
-			expect(late).toBe('')
+			expect(late.value).toBe('')
 		} finally {
-			await requireValue(joining)
-			await requireValue(restarting)
+			await requireValue(joining.value)
+			await requireValue(restarting.value)
 			await transport.close()
-			if (pid !== undefined && isRunning(pid)) process.kill(pid)
+			if (pid.value !== undefined && isRunning(pid.value)) process.kill(pid.value)
 			await destroyScratch(scratch)
 		}
 	}, 30_000)
@@ -1192,41 +921,41 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		const arrived = new Promise<JSONRPCMessage>((resolve) => {
 			transport.emitter.on('message', resolve)
 		})
-		let restarting: Promise<void> | undefined
-		let joining: Promise<void> | undefined
-		let ends = 0
+		const restarting = new MCPFixtureCell<Promise<void> | undefined>(undefined)
+		const joining = new MCPFixtureCell<Promise<void> | undefined>(undefined)
+		const ends = new MCPFixtureCell(0)
 		transport.emitter.on('error', () => {
-			restarting ??= transport.start()
+			restarting.value ??= transport.start()
 		})
 		transport.emitter.on('close', () => {
-			ends += 1
+			ends.value += 1
 			// This `close()` lands in the gap between the report's barrier and the replacement the
 			// parked `start()` above has not installed yet. The lifetime is closed and no barrier is
 			// assigned, so it returns directly and leaves nothing behind — a barrier left here would
 			// become the answer a LATER `close()` resolves through, over a live replacement it then
 			// never tears down.
-			joining ??= transport.close()
+			joining.value ??= transport.close()
 		})
-		let pid: number | undefined
+		const pid = new MCPFixtureCell<number | undefined>(undefined)
 		try {
 			await transport.start()
-			pid = readDescendantPid(
+			pid.value = readDescendantPid(
 				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
 			)
 			await waitForEvidence(transport, DESCENDANT_EARLY)
 
-			await waitForCondition('the ended child fires its close', () => ends >= 1, {
+			await waitForCondition('the ended child fires its close', () => ends.value >= 1, {
 				budget: 10_000,
 			})
-			await requireValue(restarting)
-			await requireValue(joining)
+			await requireValue(restarting.value)
+			await requireValue(joining.value)
 
 			// The replacement is a live child, so this close runs a real teardown and reports it.
 			await transport.close()
-			expect(ends).toBe(2)
+			expect(ends.value).toBe(2)
 		} finally {
 			await transport.close()
-			if (pid !== undefined && isRunning(pid)) process.kill(pid)
+			if (pid.value !== undefined && isRunning(pid.value)) process.kill(pid.value)
 			await destroyScratch(scratch)
 		}
 	}, 30_000)
@@ -1236,9 +965,9 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		const inherited = requireValue(process.env['PATH'])
 		const transport = spawnResolvedEvidenceClient()
 		const errors: unknown[] = []
-		let ends = 0
+		const ends = new MCPFixtureCell(0)
 		transport.emitter.on('error', (error) => errors.push(error))
-		transport.emitter.on('close', () => (ends += 1))
+		transport.emitter.on('close', () => (ends.value += 1))
 		try {
 			process.env['PATH'] = `${EVIDENCE_DIRECTORY}${delimiter}${inherited}`
 			await transport.start()
@@ -1256,7 +985,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			const restarting = transport.start()
 			await Promise.all([closing, restarting])
 			process.env['PATH'] = inherited
-			await waitForCondition('the closing and replacement lifetimes end', () => ends >= 2, {
+			await waitForCondition('the closing and replacement lifetimes end', () => ends.value >= 2, {
 				budget: 10_000,
 			})
 
@@ -1276,9 +1005,9 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		const inherited = requireValue(process.env['PATH'])
 		const transport = spawnResolvedEvidenceClient()
 		const errors: unknown[] = []
-		let ends = 0
+		const ends = new MCPFixtureCell(0)
 		transport.emitter.on('error', (error) => errors.push(error))
-		transport.emitter.on('close', () => (ends += 1))
+		transport.emitter.on('close', () => (ends.value += 1))
 		try {
 			process.env['PATH'] = `${EVIDENCE_DIRECTORY}${delimiter}${inherited}`
 			await transport.start()
@@ -1292,7 +1021,9 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 
 			process.env['PATH'] = scratch.path
 			await transport.start()
-			await waitForCondition('the replacement lifetime ends', () => ends >= 2, { budget: 10_000 })
+			await waitForCondition('the replacement lifetime ends', () => ends.value >= 2, {
+				budget: 10_000,
+			})
 			process.env['PATH'] = inherited
 
 			expect(errors).toHaveLength(1)
@@ -1308,7 +1039,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		const transport = spawnEvidenceClient({
 			payload: EVIDENCE_HEAD + 'x'.repeat(PROCESS_EVIDENCE) + EVIDENCE_TAIL,
 		})
-		const closed = waitForClose(transport, 'the overflowing child close event')
+		const closed = waitForStdioClose(transport, 'the overflowing child close event')
 		await transport.start()
 		await closed
 
@@ -1324,7 +1055,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		expect(PROCESS_EVIDENCE % MULTIBYTE_BYTES).toBe(0)
 		const characters = PROCESS_EVIDENCE / MULTIBYTE_BYTES
 		const transport = spawnEvidenceClient({ payload: MULTIBYTE.repeat(PROCESS_EVIDENCE) })
-		const closed = waitForClose(transport, 'the multibyte child close event')
+		const closed = waitForStdioClose(transport, 'the multibyte child close event')
 		await transport.start()
 		await closed
 
@@ -1342,7 +1073,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		expect(PROCESS_EVIDENCE % UNEVEN_BYTES).not.toBe(0)
 		const characters = (PROCESS_EVIDENCE - (PROCESS_EVIDENCE % UNEVEN_BYTES)) / UNEVEN_BYTES
 		const transport = spawnEvidenceClient({ payload: UNEVEN.repeat(PROCESS_EVIDENCE) })
-		const closed = waitForClose(transport, 'the uneven multibyte child close event')
+		const closed = waitForStdioClose(transport, 'the uneven multibyte child close event')
 		await transport.start()
 		await closed
 
@@ -1380,7 +1111,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 
 	it('CONTROL — a resolvable command that writes stderr yields a non-empty tail', async () => {
 		const transport = spawnEvidenceClient({ payload: EVIDENCE_SENTINEL })
-		const closed = waitForClose(transport, 'the resolvable child close event')
+		const closed = waitForStdioClose(transport, 'the resolvable child close event')
 		await transport.start()
 		await closed
 
@@ -1392,15 +1123,15 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 	it("leaves the live lifetime's tail alone when a superseded child exits late", async () => {
 		const scratch = createScratch()
 		const transport = spawnDescendantStderrClient(scratch)
-		let closes = 0
-		transport.emitter.on('close', () => (closes += 1))
+		const closes = new MCPFixtureCell(0)
+		transport.emitter.on('close', () => (closes.value += 1))
 		const arrived = new Promise<JSONRPCMessage>((resolve) => {
 			transport.emitter.on('message', resolve)
 		})
-		let pid: number | undefined
+		const pid = new MCPFixtureCell<number | undefined>(undefined)
 		try {
 			await transport.start()
-			pid = readDescendantPid(
+			pid.value = readDescendantPid(
 				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
 			)
 			await waitForEvidence(transport, DESCENDANT_EARLY)
@@ -1424,17 +1155,17 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			)
 			await waitForCondition(
 				'the descendant holding the superseded child stderr has exited',
-				() => !isRunning(requireValue(pid)),
+				() => !isRunning(requireValue(pid.value)),
 				{ budget: 15_000 },
 			)
 
 			// Every reading taken after that exit landed is the live lifetime's empty tail, and the
 			// superseded child's own end fired no second close.
 			expect(await collectEvidence(transport)).toEqual([''])
-			expect(closes).toBe(1)
+			expect(closes.value).toBe(1)
 		} finally {
 			await transport.close()
-			if (pid !== undefined && isRunning(pid)) process.kill(pid)
+			if (pid.value !== undefined && isRunning(pid.value)) process.kill(pid.value)
 			await destroyScratch(scratch)
 		}
 	}, 30_000)
@@ -1445,10 +1176,10 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		const arrived = new Promise<JSONRPCMessage>((resolve) => {
 			transport.emitter.on('message', resolve)
 		})
-		let pid: number | undefined
+		const pid = new MCPFixtureCell<number | undefined>(undefined)
 		try {
 			await transport.start()
-			pid = readDescendantPid(
+			pid.value = readDescendantPid(
 				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
 			)
 			await waitForEvidence(transport, DESCENDANT_EARLY)
@@ -1463,7 +1194,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			)
 			await waitForCondition(
 				'the descendant holding the closed child stderr has exited',
-				() => !isRunning(requireValue(pid)),
+				() => !isRunning(requireValue(pid.value)),
 				{ budget: 15_000 },
 			)
 
@@ -1471,7 +1202,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			expect(await collectEvidence(transport)).toEqual([captured])
 		} finally {
 			await transport.close()
-			if (pid !== undefined && isRunning(pid)) process.kill(pid)
+			if (pid.value !== undefined && isRunning(pid.value)) process.kill(pid.value)
 			await destroyScratch(scratch)
 		}
 	}, 30_000)
@@ -1482,10 +1213,10 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		const arrived = new Promise<JSONRPCMessage>((resolve) => {
 			transport.emitter.on('message', resolve)
 		})
-		let pid: number | undefined
+		const pid = new MCPFixtureCell<number | undefined>(undefined)
 		try {
 			await transport.start()
-			pid = readDescendantPid(
+			pid.value = readDescendantPid(
 				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
 			)
 			// CONTROL — the descendant's write BEFORE the terminal moment reaches the tail, so the
@@ -1504,7 +1235,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			)
 			await waitForCondition(
 				'the descendant that wrote after the barrier has exited',
-				() => !isRunning(requireValue(pid)),
+				() => !isRunning(requireValue(pid.value)),
 				{ budget: 15_000 },
 			)
 
@@ -1512,7 +1243,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			expect(transport.evidence).not.toContain(DESCENDANT_LATE)
 		} finally {
 			await transport.close()
-			if (pid !== undefined && isRunning(pid)) process.kill(pid)
+			if (pid.value !== undefined && isRunning(pid.value)) process.kill(pid.value)
 			await destroyScratch(scratch)
 		}
 	}, 30_000)
@@ -1525,10 +1256,10 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 		const arrived = new Promise<JSONRPCMessage>((resolve) => {
 			transport.emitter.on('message', resolve)
 		})
-		let pid: number | undefined
+		const pid = new MCPFixtureCell<number | undefined>(undefined)
 		try {
 			await transport.start()
-			pid = readDescendantPid(
+			pid.value = readDescendantPid(
 				await waitForSettlement(arrived, 10_000, 'Timed out waiting for the descendant report'),
 			)
 			await waitForEvidence(transport, DESCENDANT_EARLY)
@@ -1546,7 +1277,7 @@ describe('StdioClientTransport — the retained stderr tail', () => {
 			expect(transport.evidence).toContain(DESCENDANT_EARLY)
 		} finally {
 			await transport.close()
-			if (pid !== undefined && isRunning(pid)) process.kill(pid)
+			if (pid.value !== undefined && isRunning(pid.value)) process.kill(pid.value)
 			await destroyScratch(scratch)
 		}
 	}, 30_000)

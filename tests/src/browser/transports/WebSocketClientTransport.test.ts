@@ -3,6 +3,7 @@ import { describe, expect, inject, it } from 'vitest'
 import { createMCPClient } from '@src/core'
 import { WebSocketClientTransport } from '@src/browser'
 import { waitForDelay } from '@orkestrel/test'
+import { MCPFixtureCell } from '../../../setup.js'
 import { createJSONRPCRequest, MODERN_METADATA, waitForSettlement } from '../../../setup.js'
 
 // src/browser/transports/WebSocketClientTransport.ts — what the browser face owes the socket
@@ -28,9 +29,9 @@ describe('WebSocketClientTransport — close releases the socket it bound', () =
 	it('ignores the old socket close after a new socket has replaced it', async () => {
 		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
 		const messages: JSONRPCMessage[] = []
-		let closed = 0
+		const closed = new MCPFixtureCell(0)
 		transport.emitter.on('message', (message) => messages.push(message))
-		transport.emitter.on('close', () => (closed += 1))
+		transport.emitter.on('close', () => (closed.value += 1))
 		await transport.start()
 
 		await transport.close()
@@ -38,7 +39,7 @@ describe('WebSocketClientTransport — close releases the socket it bound', () =
 		// The first socket's native `close` lands here, after the second is already live.
 		await waitForDelay(60)
 
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 		await transport.send({
 			jsonrpc: '2.0',
 			method: 'ping',
@@ -54,15 +55,15 @@ describe('WebSocketClientTransport — close releases the socket it bound', () =
 
 	it('emits close once however many times it is called', async () => {
 		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
-		let closed = 0
-		transport.emitter.on('close', () => (closed += 1))
+		const closed = new MCPFixtureCell(0)
+		transport.emitter.on('close', () => (closed.value += 1))
 		await transport.start()
 
 		await transport.close()
 		await transport.close()
 		await waitForDelay(60)
 
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 	})
 })
 
@@ -88,11 +89,11 @@ describe('WebSocketClientTransport — a send the channel cannot carry rejects',
 
 	it('rejects a send issued after the server closed the socket', async () => {
 		const transport = new WebSocketClientTransport({ url: `${serverURL}/close`, protocols: [] })
-		let closed = 0
-		transport.emitter.on('close', () => (closed += 1))
+		const closed = new MCPFixtureCell(0)
+		transport.emitter.on('close', () => (closed.value += 1))
 		await transport.start()
 		await waitForDelay(60)
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 
 		await expect(transport.send(createJSONRPCRequest({ method: 'ping', id: 1 }))).rejects.toThrow(
 			'WebSocket transport is not connected',

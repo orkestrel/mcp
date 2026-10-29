@@ -1,10 +1,9 @@
-import type { StreamInterface } from '@orkestrel/server'
 import { HTTPDisconnect } from '@src/server'
 import { describe, expect, it } from 'vitest'
 import { createStream } from '@orkestrel/server'
 import { waitForDelay } from '@orkestrel/test'
 import { waitForSettlement } from '../../setup.js'
-import { createStreamStub } from '../../setupServer.js'
+import { createStreamStub, createDeferredStream } from '../../setupServer.js'
 
 describe('HTTPDisconnect', () => {
 	it('propagates incoming request abort to the composed signal', async () => {
@@ -163,28 +162,7 @@ describe('HTTPDisconnect', () => {
 
 	it('does not abort graceful completion while its final read is still draining', async () => {
 		const completion = Promise.withResolvers<void>()
-		let ended = false
-		const stream: StreamInterface = {
-			response: new Response(
-				new ReadableStream<Uint8Array>({
-					async pull(controller) {
-						await completion.promise
-						controller.close()
-					},
-				}),
-			),
-			get closed() {
-				return ended
-			},
-			write() {
-				return true
-			},
-			comment() {},
-			async drain() {},
-			end() {
-				ended = true
-			},
-		}
+		const stream = createDeferredStream(completion)
 		const disconnect = new HTTPDisconnect(new AbortController().signal, { interval: 10 })
 		const response = disconnect.bridge(stream)
 		const body = response.body

@@ -1,6 +1,21 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { isMCPError, isMCPToolError, MCPError, MCPToolError } from '@src/core'
 
+describe('isMCPError', () => {
+	it('accepts class-instance context without narrowing its declared unknown type', () => {
+		const context = new Date(0)
+		const error = new MCPError('context', -32603, context)
+		expect(isMCPError(error)).toBe(true)
+		expect(error.context).toBe(context)
+	})
+
+	it('accepts callable context without narrowing its declared unknown type', () => {
+		const error = new MCPError('context', -32603, Math.max)
+		expect(isMCPError(error)).toBe(true)
+		expect(error.context).toBe(Math.max)
+	})
+})
+
 describe('MCPToolError', () => {
 	it('is an Error that carries its message, the TOOL code, and its name', () => {
 		const error = new MCPToolError('tool exploded')

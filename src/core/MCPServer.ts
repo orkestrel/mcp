@@ -1,6 +1,7 @@
+import { MCPSubscriptionSource } from './MCPSubscriptionSource.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { ToolCall } from '@orkestrel/tool'
-import type { JSONValue } from '@orkestrel/contract'
+import type { JSONValue, Result } from '@orkestrel/contract'
 import type {
 	JSONRPCErrorResponse,
 	JSONRPCId,
@@ -41,7 +42,6 @@ import type {
 	MCPStream,
 	MCPStreamControllerInterface,
 	MCPSubscriptionFilter,
-	MCPSubscriptionOptions,
 	MCPTaskContext,
 	MCPTaskManagerInterface,
 	MCPTaskResult,
@@ -88,7 +88,6 @@ import {
 	buildToolDescriptors,
 	computeMissingCapabilities,
 	digestJSON,
-	matchesSubscriptionNotification,
 	serializeJSON,
 	stampSubscriptionNotification,
 	supportsTask,
@@ -104,7 +103,6 @@ import {
 	isAbsoluteURI,
 	isBoundedJSON,
 	isBoundedString,
-	isJSONRPCNotification,
 	isMCPCallResult,
 	isMCPCompletion,
 	isMCPCompletionParams,
@@ -953,16 +951,15 @@ export class MCPServer implements MCPServerInterface {
 		}
 	}
 
-	async #execute(
+	async #attemptExecution(
 		request: JSONRPCRequest,
 		call: ToolCall,
 		options: MCPMethodOptions,
 		progress?: MCPProgressReporter,
-	): Promise<MCPCallResult | JSONRPCResponse> {
+	): Promise<Result<unknown>> {
 		const { signal, caller } = options
-		let result: unknown
 		try {
-			result =
+			const value =
 				this.#options.execution === undefined
 					? await this.#options.tools.execute(call, {
 							signal,
@@ -976,9 +973,21 @@ export class MCPServer implements MCPServerInterface {
 							...(caller === undefined ? {} : { caller }),
 							...(progress === undefined ? {} : { progress }),
 						})
+			return { success: true, value }
 		} catch (error) {
-			return this.#contain(error, request.id)
+			return { success: false, error }
 		}
+	}
+
+	async #execute(
+		request: JSONRPCRequest,
+		call: ToolCall,
+		options: MCPMethodOptions,
+		progress?: MCPProgressReporter,
+	): Promise<MCPCallResult | JSONRPCResponse> {
+		const outcome = await this.#attemptExecution(request, call, options, progress)
+		if (!outcome.success) return this.#contain(outcome.error, request.id)
+		const result = outcome.value
 		const captured = snapshotJSON(result, {
 			bytes: this.#limits.content,
 			keys: this.#limits.keys,
@@ -1426,48 +1435,23 @@ export class MCPServer implements MCPServerInterface {
 			const task = this.#options.task
 			const configured = this.#options.subscription
 			const tasks = task !== undefined && configured !== undefined
-			let notifications = buildSubscriptionFilter(
+			const filter = buildSubscriptionFilter(
 				requested,
 				{ ...configured?.notifications, toolsListChanged: true },
 				tasks,
 			)
-			const requestedTaskIds = notifications.taskIds
-			if (requestedTaskIds !== undefined) {
-				const resolved: string[] = []
-				if (task !== undefined) {
-					for (const taskId of requestedTaskIds) {
-						if ((await task.tasks.task(taskId, options)) !== undefined) resolved.push(taskId)
-					}
-				}
-				const { taskIds: _dropped, ...rest } = notifications
-				notifications = resolved.length > 0 ? { ...rest, taskIds: resolved } : rest
-			}
-			const state: {
-				frame: JSONRPCNotification | undefined
-				failure: { readonly error: unknown } | undefined
-				iterator: AsyncIterator<JSONRPCNotification> | undefined
-			} = {
-				frame: undefined,
-				failure: undefined,
-				iterator: undefined,
-			}
-			// Registry callbacks and demand-driven consumer pulls share one native queue.
-			// MCPStreamController owns cancellation and releases listeners even while idle.
-			// Only a stream omitting the tools family ends gracefully with its producer;
-			// a stream honouring that family stays open until failure or signal abort.
-			const source = new ReadableStream<JSONRPCNotification | undefined>({
-				start: this.#startSubscription.bind(this, notifications, options, configured, state),
-				pull: this.#pullSubscription.bind(this, notifications, options, state),
-			})
+			const notifications =
+				filter.taskIds === undefined ? filter : await this.#resolveFilter(filter, options)
+			const source = new MCPSubscriptionSource(this.#options, notifications, options, this.#limits)
 			yield buildSubscriptionAcknowledgement(notifications, id)
-			for await (const notification of source) {
+			for await (const notification of source.stream) {
 				if (notification === undefined) continue
 				// Only the registry frame clears the mark, so a consumer frame dequeued ahead of
 				// it cannot let a second registry frame in behind the one still unread.
-				if (notification === state.frame) state.frame = undefined
+				source.consume(notification)
 				yield stampSubscriptionNotification(notification, id)
 			}
-			if (state.failure !== undefined) throw state.failure.error
+			source.finish()
 			return buildSubscriptionResult(id, this.#options.identity)
 		} catch (error) {
 			// An abort is a cancellation, not a fault: it produces no terminal and reports
@@ -1480,135 +1464,19 @@ export class MCPServer implements MCPServerInterface {
 		}
 	}
 
-	async #startSubscription(
-		notifications: MCPSubscriptionFilter,
+	async #resolveFilter(
+		filter: MCPSubscriptionFilter,
 		options: MCPMethodOptions,
-		configured: MCPSubscriptionOptions | undefined,
-		state: {
-			frame: JSONRPCNotification | undefined
-			failure: { readonly error: unknown } | undefined
-			iterator: AsyncIterator<JSONRPCNotification> | undefined
-		},
-		controller: ReadableStreamDefaultController<JSONRPCNotification | undefined>,
-	): Promise<void> {
-		const emitter = this.#options.tools.emitter
-		const changed = this.#change.bind(this, controller, options.signal, state)
-		if (options.signal.aborted) {
-			controller.error(options.signal.reason)
-			return
-		}
-		// Skip listener registration on destroyed registries without relying on emitter tolerance.
-		if (notifications.toolsListChanged === true && !emitter.destroyed) {
-			emitter.on('add', changed)
-			emitter.on('remove', changed)
-			emitter.on('clear', changed)
-		}
-		options.signal.addEventListener(
-			'abort',
-			() => {
-				emitter.off('add', changed)
-				emitter.off('remove', changed)
-				emitter.off('clear', changed)
-				const iterator = state.iterator
-				state.iterator = undefined
-				if (iterator !== undefined) this.#releaseProducer(iterator, options.signal.reason)
-				controller.error(options.signal.reason)
-			},
-			{ once: true },
-		)
-		try {
-			if (configured === undefined) return
-			const source = await configured.producer(notifications, options)
-			const iterator = source[Symbol.asyncIterator]()
-			if (options.signal.aborted) this.#releaseProducer(iterator, options.signal.reason)
-			else state.iterator = iterator
-		} catch (error) {
-			this.#failSubscription(state, options.signal, controller, error)
-		}
-	}
-
-	#change(
-		controller: ReadableStreamDefaultController<JSONRPCNotification | undefined>,
-		signal: AbortSignal,
-		state: {
-			frame: JSONRPCNotification | undefined
-			failure: { readonly error: unknown } | undefined
-			iterator: AsyncIterator<JSONRPCNotification> | undefined
-		},
-	): void {
-		// #change is registered only when the honoured filter carries the tools family, and the
-		// graceful close runs only when that filter omits it, so this guard's failure check is the
-		// whole closed-stream test: a stream with these listeners closes on a failure or its signal
-		// and on nothing else.
-		if (signal.aborted || state.failure !== undefined || state.frame !== undefined) return
-		const notification: JSONRPCNotification = {
-			jsonrpc: '2.0',
-			method: 'notifications/tools/list_changed',
-		}
-		state.frame = notification
-		controller.enqueue(notification)
-	}
-
-	async #pullSubscription(
-		notifications: MCPSubscriptionFilter,
-		options: MCPMethodOptions,
-		state: {
-			frame: JSONRPCNotification | undefined
-			failure: { readonly error: unknown } | undefined
-			iterator: AsyncIterator<JSONRPCNotification> | undefined
-		},
-		controller: ReadableStreamDefaultController<JSONRPCNotification | undefined>,
-	): Promise<void> {
-		try {
-			if (options.signal.aborted) return
-			const next = await state.iterator?.next()
-			if (options.signal.aborted) return
-			if (next === undefined || next.done === true) {
-				state.iterator = undefined
-				if (notifications.toolsListChanged !== true) controller.close()
-				return
+	): Promise<MCPSubscriptionFilter> {
+		const resolved: string[] = []
+		const task = this.#options.task
+		if (task !== undefined && filter.taskIds !== undefined) {
+			for (const taskId of filter.taskIds) {
+				if ((await task.tasks.task(taskId, options)) !== undefined) resolved.push(taskId)
 			}
-			// Own before matching: a foreign getter cannot change the frame between reads.
-			const owned = parseJSONRPCMessage(next.value, {
-				bytes: this.#limits.message,
-				depth: this.#limits.depth,
-			})
-			// A discarded item still settles this pull. The outer reader skips it and
-			// requests the next item, preserving demand through unmatched producer frames.
-			controller.enqueue(
-				owned !== undefined &&
-					isJSONRPCNotification(owned) &&
-					owned.method !== 'notifications/tools/list_changed' &&
-					matchesSubscriptionNotification(owned, notifications)
-					? owned
-					: undefined,
-			)
-		} catch (error) {
-			this.#failSubscription(state, options.signal, controller, error)
 		}
-	}
-
-	#failSubscription(
-		state: {
-			frame: JSONRPCNotification | undefined
-			failure: { readonly error: unknown } | undefined
-			iterator: AsyncIterator<JSONRPCNotification> | undefined
-		},
-		signal: AbortSignal,
-		controller: ReadableStreamDefaultController<JSONRPCNotification | undefined>,
-		error: unknown,
-	): void {
-		if (signal.aborted) return
-		state.failure = { error }
-		controller.close()
-	}
-
-	// The reason is the release's argument because a `ReadableStream`-backed producer reads it
-	// as the cancel reason: without it the owner's pending writes reject with `undefined` and
-	// name nothing. A generator-backed producer ignores the argument, so it costs that case
-	// nothing.
-	#releaseProducer(iterator: AsyncIterator<JSONRPCNotification>, reason: unknown): void {
-		void iterator.return?.(reason)?.catch(() => undefined)
+		const { taskIds: _dropped, ...rest } = filter
+		return resolved.length > 0 ? { ...rest, taskIds: resolved } : rest
 	}
 
 	// THE SHARED INGRESS of every `tasks/*` method: the capability the extension requires
@@ -1799,11 +1667,13 @@ export class MCPServer implements MCPServerInterface {
 			)
 		}
 		const owned = snapshot[0]
-		let payload: Readonly<Record<string, JSONValue>>
 		if (!owned.success) {
-			payload = { content: [{ type: 'text', text: owned.error }], isError: true }
+			return this.#encodePayload(
+				{ content: [{ type: 'text', text: owned.error }], isError: true },
+				id,
+			)
 		} else if (owned.value === undefined) {
-			payload = { content: [{ type: 'text', text: '' }] }
+			return this.#encodePayload({ content: [{ type: 'text', text: '' }] }, id)
 		} else {
 			const text = snapshot[1]
 			// UNREACHABLE at runtime, and kept anyway: `snapshotToolResult` pairs a defined
@@ -1822,11 +1692,17 @@ export class MCPServer implements MCPServerInterface {
 					'Server could not serialize tool content',
 				)
 			}
-			payload = {
-				content: [{ type: 'text', text }],
-				structuredContent: owned.value,
-			}
+			return this.#encodePayload(
+				{ content: [{ type: 'text', text }], structuredContent: owned.value },
+				id,
+			)
 		}
+	}
+
+	#encodePayload(
+		payload: Readonly<Record<string, JSONValue>>,
+		id: JSONRPCId,
+	): MCPCallResult | JSONRPCResponse {
 		const captured = snapshotJSON(payload, {
 			bytes: this.#limits.content,
 			keys: this.#limits.keys,

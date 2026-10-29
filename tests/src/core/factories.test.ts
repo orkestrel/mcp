@@ -8,7 +8,7 @@ import {
 } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { createMemoryTransport } from '../../setup.js'
+import { completeFixtureHandshake, createMemoryTransport } from '../../setup.js'
 
 // A minimal in-memory MCPTransportInterface double (real, not a mock):
 // `send` records every outbound string, `close` counts calls; `listen`/`closed` are
@@ -25,7 +25,7 @@ describe('createMCPServer', () => {
 		const options = {
 			identity: { name: 'ready', version: '1.0.0' },
 			tools: createToolManager(),
-			handshake: async () => {},
+			handshake: completeFixtureHandshake,
 		}
 		expect(createMCPServer(options).handshake).toBe(options.handshake)
 		expect(

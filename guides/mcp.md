@@ -914,7 +914,7 @@ cares must call `validate` first and return an
 the missing argument, or seed `missing: 'empty'` and accept the gaps.
 
 **The control that proves these are ports rather than shaped holes** is that neither
-adapter is privileged. `tests/setupConformance.ts` backs the same ports with plain
+adapter is privileged. `tests/setupServer.ts` backs the same ports with plain
 in-memory objects — no workspace, no template engine, no `@orkestrel/*` registry at
 all — and the foreign conformance client cannot tell the difference, because there is
 nothing on the wire that could. The compiler now agrees with the wire: that fixture is
@@ -2672,7 +2672,7 @@ const routes = createMCPRoutes(createMCPLegacy(mcp)) // answers `initialize` too
 
 #### Carry asserted caller context from HTTP middleware
 
-`HTTPHandlerOptions<TState>` names the POST handler's `streaming`, `origin`,
+`HTTPHandlerOptions<TState>` names the POST handler's `stream`, `origin`,
 `keepalive`, and `caller` options; `HTTPTransportOptions<TState>` extends that
 shape with `path`. The caller extractor is the synchronous
 `MCPCallerHandler<TState>`:
@@ -2883,10 +2883,10 @@ An extended interface's name comes before `plus`, with the members it adds after
 | `MCPOriginOptions`            | interface | `{ enabled?, origins? }`                                                            | Configures the protocol-required HTTP `Origin` validation shared by the route and session enforcement sites.                                                                                                                                                                            |
 | `MCPKeepaliveOptions`         | interface | `{ interval? }`                                                                     | Configures the shared SSE keepalive for held-open HTTP responses.                                                                                                                                                                                                                       |
 | `MCPCallerHandler`            | type      | `(request: Request, context: RouteContext<string, TState> \| undefined) => unknown` | Extracts consumer-asserted caller context synchronously from an HTTP request after the transport has validated it for dispatch.                                                                                                                                                         |
-| `HTTPHandlerOptions`          | interface | `{ streaming?, origin?, keepalive?, caller? }`                                      | Options shared by the MCP Streamable-HTTP POST handler and route factory.                                                                                                                                                                                                               |
+| `HTTPHandlerOptions`          | interface | `{ stream?, origin?, keepalive?, caller? }`                                         | Options shared by the MCP Streamable-HTTP POST handler and route factory.                                                                                                                                                                                                               |
 | `HTTPTransportOptions`        | interface | `HTTPHandlerOptions<TState> plus { path? }`                                         | Options for `createMCPRoutes` — the mount path plus the shared POST-handler options. `createMCPRoutes` is stateless; sessions are a separate middleware (`createMCPSession`), composed with `server.use`.                                                                               |
 | `MCPSessionOptions`           | interface | `{ capacity?, ttl? } plus clock?`                                                   | Options for the `MCPSession` entity — its folded replay log's capacity and per-event lifetime.                                                                                                                                                                                          |
-| `MCPSessionMiddlewareOptions` | interface | `{ path?, ttl?, session?, origin?, keepalive? } plus clock?`                        | Options for `createMCPSession` — the path the session middleware owns, the session idle time-to-live, and the per-session resumable event-log bound.                                                                                                                                    |
+| `MCPSessionMiddlewareOptions` | interface | `{ path?, ttl?, session?, origin?, keepalive?, store? } plus clock?`                | Options for `createMCPSession` — the path the session middleware owns, the session idle time-to-live, and the per-session resumable event-log bound.                                                                                                                                    |
 | `MCPSessionInterface`         | interface | `{ id } plus attach, detach, push, replay`                                          | Represents one MCP transport session — the per-session entity a `createMCPSession` middleware owns (the `MCPSession` entity), carrying the resumable server→client push channel with its bounded replay log folded in.                                                                  |
 | `MCPSessionState`             | interface | `{ session?, initialization? }`                                                     | Declares the `context.state` slice a `createMCPSession` middleware sets on a validated / minted request — a consumer's `TState` extends this so the downstream route handler can read `context.state.session` to `push` a server-initiated message onto the session's resumable stream. |
 | `MCPSessionEvent`             | interface | `{ id, message, timestamp }`                                                        | Represents one entry of an `MCPSessionInterface`'s folded replay log — a single pushed `JSONRPCMessage` tagged with the monotone event `id` the session assigned and the `timestamp` it was appended at (for the lazy-TTL replay window).                                               |
@@ -3295,7 +3295,7 @@ annotations, retains the `AbortController` whose abort is WebMCP's own unregistr
 subscribes to the manager's own `emitter` so a later `add`, `remove`, or `clear` reaches the
 document registry without a second call; `adopt` reads `getTools` and wraps each
 `RegisteredTool` as a tool, excluding `annotations.debugging: true` unless you pass
-`adopt({ debugging: true })`. Each tool's `execute` runs `executeTool` with the caller's
+`adopt({ debug: true })`. Each tool's `execute` runs `executeTool` with the caller's
 `ToolContext.signal`; `destroy` aborts the registrations this handle made, releases that
 subscription, and leaves a name it never registered alone. WebMCP keys a registration by tool
 name per document, so a release takes whatever now stands under that name. See
@@ -3340,7 +3340,6 @@ const tools = await http.tools()
 | `createMessagePortTransport`     | function | Creates the browser-face `MessagePort` transport — a `MCPTransportInterface` over a native `MessagePort`, the symmetric carrier that works as either a server or a client transport depending on which binder (`bindServer` or `bindClient`) it is handed to.                                             |
 | `createScopeServer`              | function | Creates an `MCPServer` hosted inside a worker scope and wires that scope's message events to it — the browser face's bootstrap, and the twin of the Node face's `createStdioServer`.                                                                                                                      |
 | `createScopeTransport`           | function | Adapts a hostable `ScopeInterface` (`self` in a dedicated Web Worker, or any structurally matching double) into a `ScopeTransportInterface` — the implicit, portless message channel `createScopeServer` binds for the dedicated-worker shape.                                                            |
-| `createScopeMessageListener`     | function | Builds `createScopeServer`'s `message`-event listener — the unified dispatcher that routes every inbound event on a hostable scope, portless or port-bearing, to the right binding.                                                                                                                       |
 | `createPageServer`               | function | Creates an `MCPServer` hosted inside the calling page and hands back the client bound to it — the page twin of `createScopeServer`, and the in-page MCP pair as one call.                                                                                                                                 |
 | `createModelContext`             | function | Creates the bridge between a tool registry and a document's WebMCP registry, or reports that the document exposes none.                                                                                                                                                                                   |
 
@@ -3421,13 +3420,109 @@ An extended interface's name comes before `plus`, with the members it adds after
 | `ModelContextEventMap`            | type      | `{ change: readonly [], activate: readonly [name: string], abort: readonly [name: string] }`     | Reports changes and execution events from a WebMCP registry.                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `ModelContextOptions`             | interface | `{ document?, on?, error? }`                                                                     | Options for `createModelContext` — the document to bridge and the emitter's initial wiring.                                                                                                                                                                                                                                                                                                                                                                                             |
 | `ModelContextPublishOptions`      | interface | `{ origins? }`                                                                                   | Options for `ModelContextInterface.publish` — the origins each registration is exposed to.                                                                                                                                                                                                                                                                                                                                                                                              |
-| `ModelContextAdoptOptions`        | interface | `{ origins?, debugging? }`                                                                       | Options for `ModelContextInterface.adopt` — the origins and debugging tools to include.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `ModelContextAdoptOptions`        | interface | `{ origins?, debug? }`                                                                           | Options for `ModelContextInterface.adopt` — the origins and debugging tools to include.                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `ModelContextInterface`           | interface | `{ emitter } plus publish, adopt, destroy`                                                       | Represents the bridge between a `ToolManagerInterface` and a document's WebMCP registry — what `createModelContext` returns.                                                                                                                                                                                                                                                                                                                                                            |
 
 _This face declares no `HTTPClientTransportOptions`. It is host-independent and ships from
 `@orkestrel/mcp`; see [Core § Types](#types)._
 
+### Binding and traversal entities
+
+The core face exports the entities that own a duplex binding and a subscription source.
+`MCPServer` uses `MCPSubscriptionSource` for its producer queue and registry listeners.
+
+| API                     | Kind     | Summary                                                                                |
+| ----------------------- | -------- | -------------------------------------------------------------------------------------- |
+| `MCPServerBinding`      | class    | Owns the request lifetimes installed on a server's duplex carrier.                     |
+| `MCPSubscriptionSource` | class    | Owns one subscription producer, its registry listeners, and its unread registry frame. |
+| `walkHeaderAnnotations` | function | Yields annotation values while preserving the schema's depth-first traversal order.    |
+
+| Type                  | Kind      | Shape                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Summary                                                                           |
+| --------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `MCPBindingInterface` | interface | `{} plus stop`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Owns one installed transport binding until it is detached.                        |
+| `MCPJSONFrame`        | type      | `{ readonly operation: 'value'; readonly value: unknown; readonly depth: number } \| { readonly operation: 'string'; readonly value: string; readonly output?: string[] } \| { readonly operation: 'text'; readonly text: string } \| { readonly operation: 'close'; readonly value: object; readonly text: string } \| { readonly operation: 'record'; readonly value: object; readonly names: readonly string[]; readonly encoded: string[]; readonly index: number; readonly depth: number }` | Describes a pending operation in the bounded canonical JSON traversal.            |
+| `MCPJSONStep`         | interface | `{ bytes, keys, text? }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Records a traversal step's cumulative budget and its optional emitted JSON token. |
+| `MCPJSONProperty`     | interface | `{ text, value }`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Pairs a serialized property name with its once-read own data value.               |
+
+```ts
+import { MCPServerBinding, walkHeaderAnnotations } from '@orkestrel/mcp'
+
+const binding = new MCPServerBinding(server, transport)
+binding.stop()
+Array.from(walkHeaderAnnotations({ properties: { region: { 'x-mcp-header': 'Region' } } }))
+// ['Region']
+```
+
+The browser face exports the scope entities used by `createScopeServer` and
+`createScopeTransport`.
+
+| API              | Kind  | Summary                                                                   |
+| ---------------- | ----- | ------------------------------------------------------------------------- |
+| `ScopeServer`    | class | Owns a scope's implicit binding and every accepted client-port binding.   |
+| `ScopeTransport` | class | Adapts a scope's implicit channel to replaceable MCP transport callbacks. |
+
+The server face exports the session table and serialized carrier adapter.
+`createMCPSession` creates an isolated `MCPSessionStore` unless `options.store` supplies
+a table. A supplied table owns its session identities and idle-cutoff removal.
+
+| API                       | Kind     | Summary                                                                           |
+| ------------------------- | -------- | --------------------------------------------------------------------------------- |
+| `MCPSessionStore`         | class    | Owns an in-memory table of negotiated legacy MCP sessions.                        |
+| `DuplexServerTransport`   | class    | Bridges a message carrier to the server's serialized transport protocol.          |
+| `readRequestText`         | function | Reads a request body, returning absence when the body cannot be read.             |
+| `resolveHeaderParameters` | function | Resolves a named tool's header declarations through the bounded listing protocol. |
+
+| Type                       | Kind      | Shape                             | Summary                                                                           |
+| -------------------------- | --------- | --------------------------------- | --------------------------------------------------------------------------------- |
+| `MCPSessionStoreInterface` | interface | `{} plus get, set, delete, sweep` | Stores negotiated legacy sessions and removes entries at an explicit idle cutoff. |
+
+```ts
+import { readRequestText, resolveHeaderParameters } from '@orkestrel/mcp/server'
+
+const body = await readRequestText(
+	new Request('https://example.test/mcp', {
+		method: 'POST',
+		body: '{}',
+	}),
+)
+const parameters = await resolveHeaderParameters(server, invocation, 'search')
+```
+
+`isMCPError` and `isMCPToolError` require the class's own self-valued symbol brand and
+declared members on an `Error` subclass instance. They accept subclasses and errors from
+another installed copy, ignore `name`, and refuse unbranded look-alikes and transparent
+proxies. `MCPError.context` admits any value, including `undefined`.
+
 ## Methods
+
+#### `MCPBindingInterface`
+
+| Method | Returns | Summary                                             |
+| ------ | ------- | --------------------------------------------------- |
+| `stop` | `void`  | Detaches the binding without closing its transport. |
+
+```ts
+binding.stop()
+```
+
+#### `MCPSessionStoreInterface`
+
+| Method   | Returns                        | Summary                                                           |
+| -------- | ------------------------------ | ----------------------------------------------------------------- |
+| `get`    | `MCPSessionEntry \| undefined` | Reads the session associated with an opaque protocol identifier.  |
+| `set`    | `void`                         | Publishes an entry under the identifier its session owns.         |
+| `delete` | `boolean`                      | Removes a session and reports whether its identifier was present. |
+| `sweep`  | `void`                         | Removes every entry last touched at or before the idle cutoff.    |
+
+```ts
+import { MCPSessionStore } from '@orkestrel/mcp/server'
+
+const store = new MCPSessionStore()
+store.set(entry)
+store.get(entry.session.id)
+store.sweep(Date.now() - 60_000)
+store.delete(entry.session.id)
+```
 
 The public methods of the layer's behavioral interfaces — every call-signature
 member listed (their `readonly` data members stay Surface rows). Each
@@ -4095,9 +4190,9 @@ is the same shape, and its `deliver` is what the peer calls to hand a frame acro
 #### `ScopeServerInterface`
 
 The worker-scope handle `createScopeServer` returns, and the browser twin of
-`StdioServerInterface`. No class implements it: the factory owns the `MCPServer`, the
-implicit scope binding, and the per-port bindings behind it, and publishes the one door that
-ends them. It arms at construction rather than on a `start`, because an event delivered
+`StdioServerInterface`. `ScopeServer` owns the `MCPServer`, the implicit scope binding,
+and the per-port bindings, and exposes `stop` to end them. It arms at construction
+rather than on a `start`, because an event delivered
 between the call and an explicit arm would reach nothing.
 
 | Method | Returns | Summary                                                                                |
@@ -4232,7 +4327,7 @@ value that was thrown no longer exists to forward and a foreign caller receives 
 `Error` whose `message` is that text.
 
 The `adopt` method excludes a tool carrying `annotations.debugging: true` unless you pass
-`adopt({ debugging: true })`. A false or omitted hint leaves the tool included either way;
+`adopt({ debug: true })`. A false or omitted hint leaves the tool included either way;
 the `origins` option continues to filter which registrations the registry returns.
 
 **An adopted tool validates nothing.** It advertises the foreign `inputSchema` as its
@@ -4654,7 +4749,7 @@ import {
 
 const request = new Request('http://localhost/mcp', { headers: { accept: 'text/event-stream' } })
 acceptsEventStream(request) // true
-createMCPPostHandler(mcp, { streaming: true }) // the same stateless POST handler createMCPRoutes mounts
+createMCPPostHandler(mcp, { stream: true }) // the same stateless POST handler createMCPRoutes mounts
 readSessionHeader(request) // undefined — no mcp-session-id header
 readLastEventId(request) // undefined — no Last-Event-ID header
 rejectUnknownSession() // a 404 JSON-RPC error Response
@@ -5013,7 +5108,7 @@ the implemented rows live.
 | `toolchange` event                                                                               | `ModelContextEventMap.change`                                                                    | implement — the registry names no changed tool, so ours is a bare signal and a listener re-reads `adopt`                                                                                                                                | `G5c` § 2                    |
 | `toolactivated` event                                                                            | `ModelContextEventMap.activate`                                                                  | implement — republishes the tool name when execution begins                                                                                                                                                                             | 2026-09-29 draft, `index.bs` |
 | `toolcancel` event                                                                               | `ModelContextEventMap.abort`                                                                     | implement — republishes the tool name; `abort` is the fixed lifecycle vocabulary for cancellation                                                                                                                                       | 2026-09-29 draft, `index.bs` |
-| `ToolAnnotations.debugging`                                                                      | `adopt({ debugging })`                                                                           | implement — excluded by default; the `debugging` option includes the tool                                                                                                                                                               | 2026-09-29 draft, `index.bs` |
+| `ToolAnnotations.debugging`                                                                      | `adopt({ debug })`                                                                               | implement — excluded by default; the `debug` option includes the tool                                                                                                                                                                   | 2026-09-29 draft, `index.bs` |
 | Registry change events on our own tool registry                                                  | `ToolManagerEventMap` (`add`, `remove`, `clear`), followed by `publish`                          | implement — `@orkestrel/tool` publishes registry events, so `publish` subscribes to the manager's `emitter` and the document registry tracks the tool registry with no second call                                                      | `G5c` § 2                    |
 | `inputSchema` (JSON Schema)                                                                      | `ToolDefinition.parameters`, derived from `ToolOptions.contract`                                 | implement, exceeds in the publish direction — a published tool carries the contract that validates arguments before execution; an adopted tool carries the foreign `inputSchema` as `parameters` and validates nothing                  | `G5c` § 1; `G5` § 8          |
 | `ModelContextTool.title`                                                                         | `ToolDefinition.title`                                                                           | implement                                                                                                                                                                                                                               | `G5c` § 1                    |
@@ -5064,7 +5159,7 @@ this package publishes no OAuth client.
 The comparison starts no server and drives no client. It reads the stable Tasks
 extension's published schema from the vendored mirror
 `tests/mirrors/ext-tasks-2026-07-28-schema.json`, and the `TASK_SCHEMA_DIGEST` constant in
-`tests/setupConformance.ts` pins that file's raw bytes: a changed byte throws at module
+`tests/setupServer.ts` pins that file's raw bytes: a changed byte throws at module
 load, before a comparison row runs, so no row reads a mirror this package has not pinned.
 Each comparison row projects one schema coordinate — a task variant, a result composition,
 a notification shape, a subscription fragment — and compares it with the shape this
@@ -5072,7 +5167,7 @@ package ships, so a contract that drifts from the authority reddens the row nami
 coordinate.
 
 They share one project — `tests/conformance.test.ts` over the fixture in
-`tests/setupConformance.ts` — and `npm test` gates it. It spawns a foreign process and
+`tests/setupServer.ts` — and `npm test` gates it. It spawns a foreign process and
 drives it over a real socket, but the runner is a pinned development dependency resolved
 from `node_modules` and the socket is loopback, so the run is offline and hermetic. The
 runner's baseline is recorded scenario by scenario rather than as one total, so a scenario
@@ -5372,12 +5467,12 @@ chromestatus record, read 2026-09-15 and last updated 2026-08-12, reports that f
 `Proposed` with `"flag": false` and `"origintrial": false` — no browser ships it, behind a flag or in an origin trial. The real
 Chromium the browser suite drives therefore exposes no `document.modelContext`, which
 `tests/src/browser/factories.test.ts` records as its own reading of the page rather than
-assuming, and every bridge scenario runs against `tests/fixtures/modelContext.ts`: an in-memory
+assuming, and every bridge scenario runs against `tests/setupBrowser.ts`: an in-memory
 implementation of that WebIDL, member for member and nothing beyond it. **What that proves:**
 the translation each way — the projected annotations, the exposure and origin options, the
 signal carried into a published tool and out to an adopted one, the `toolchange` republication,
 `toolactivated` republished as `activate`, `toolcancel` republished as `abort`, the default
-exclusion of `annotations.debugging: true` tools unless `adopt({ debugging: true })` requests
+exclusion of `annotations.debugging: true` tools unless `adopt({ debug: true })` requests
 them, and the registration ownership and event listeners `destroy` releases. **What it does not prove:** that a user
 agent's own registry accepts these registrations, or that an agent driving one reaches this
 page's tools. **What it costs:** nothing a consumer can reach today, because
@@ -5635,8 +5730,8 @@ the exact statement:
     exports add no behavioral interface with methods (the factories,
     `acceptsEventStream` / `readSessionHeader` /
     `readLastEventId` / `rejectUnknownSession` / `readEventStream` /
-    `decodeEvent` / `upgradeRequestPath` / `extractLines` / `dispatchLines` /
-    `createScopeMessageListener` are functions; the options interfaces / event
+    `decodeEvent` / `upgradeRequestPath` / `extractLines` / `dispatchLines`
+    are functions; the options interfaces / event
     maps / `MCPSessionEvent` / `LineExtraction` are bags;
     `StdioClientTransportInterface` extends `MCPMessageTransportInterface` with
     the readonly `evidence` data member and declares no call signature of its
@@ -5687,7 +5782,7 @@ the exact statement:
     serialized origin requires an exact consumer-supplied `origin.origins` entry or
     receives **403**. The predicate reads only `Origin`, never the request URL, `Host`,
     or another request header. `origin.enabled: false` explicitly delegates validation
-    to an upstream layer. When `streaming` is enabled (default `true`) and the client
+    to an upstream layer. When `stream` is enabled (default `true`) and the client
     `Accept`s `text/event-stream` (`acceptsEventStream`), the 200 reply is one
     SSE `data:` event over `@orkestrel/server`'s `createStream` seam, then the
     stream ends, carrying `X-Accel-Buffering: no`; else a plain JSON body. A
@@ -6144,8 +6239,8 @@ the exact statement:
     when omitted), `bindServer`s it eagerly over a `createScopeTransport(scope)`
     (the implicit, portless channel — bound once, for the whole lifetime of
     the returned handle, so a dedicated worker's very first portless message
-    needs no first-use setup), and registers one `scope.addEventListener(
-    'message', …)` listener built by `createScopeMessageListener`. That one
+    needs no first-use setup), and registers one `message` listener the
+    `ScopeServer` instance owns. That one
     listener handles every shape uniformly, per event, with no upfront
     detection flag: `event.ports.length > 0` spawns a fresh
     `createMessagePortTransport` + `bindServer` for that port (tracked for

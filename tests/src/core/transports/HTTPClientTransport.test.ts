@@ -1,4 +1,15 @@
 import type { JSONRPCMessage } from '@src/core'
+import {
+	createEndlessFetch,
+	MCPFixtureCell,
+	MCP_HTTP_REQUEST,
+	MCP_HTTP_ANNOTATED_TOOLS,
+	MCP_HTTP_CALL_METADATA,
+	MCP_HTTP_GONE_LISTING,
+	MCP_HTTP_EMPTY_LISTING,
+	MCP_HTTP_FIRST_PAGE,
+	MCP_HTTP_SECOND_PAGE,
+} from '../../../setup.js'
 import { describe, expect, it } from 'vitest'
 import { isRecord } from '@orkestrel/contract'
 import { HTTPClientTransport } from '@src/core'
@@ -14,49 +25,6 @@ import { waitForDelay } from '@orkestrel/test'
 // `init.signal` the way the platform does — erroring the body and failing the pending read.
 // It reimplements nothing this package owns; the transport under test is the real one.
 
-interface EndlessFetchInterface {
-	/** The `fetch` to hand the transport through its public `fetch` option. */
-	readonly answer: typeof fetch
-	/** How many response bodies were cancelled through the signal the transport passed. */
-	readonly cancelled: number
-}
-
-function createEndlessFetch(): EndlessFetchInterface {
-	let cancelled = 0
-	const encoder = new TextEncoder()
-	const answer: typeof fetch = async (_input, init) => {
-		const signal = init?.signal ?? undefined
-		if (signal !== null && signal?.aborted === true) throw new Error('aborted before dispatch')
-		const body = new ReadableStream<Uint8Array>({
-			start(controller) {
-				// One SSE comment: enough for the response headers to flush and the reader to park,
-				// and not an event, so the transport never finishes decoding.
-				controller.enqueue(encoder.encode(': open\n\n'))
-				signal?.addEventListener(
-					'abort',
-					() => {
-						cancelled += 1
-						controller.error(new Error('response body cancelled'))
-					},
-					{ once: true },
-				)
-			},
-		})
-		return new Response(body, {
-			status: 200,
-			headers: { 'content-type': 'text/event-stream' },
-		})
-	}
-	return {
-		answer,
-		get cancelled() {
-			return cancelled
-		},
-	}
-}
-
-const REQUEST: JSONRPCMessage = { jsonrpc: '2.0', id: 1, method: 'tools/list' }
-
 describe('HTTPClientTransport — close releases the request it has in flight', () => {
 	it('close() cancels the response body a send is still reading', async () => {
 		const peer = createEndlessFetch()
@@ -64,7 +32,7 @@ describe('HTTPClientTransport — close releases the request it has in flight', 
 			url: 'http://127.0.0.1:1/mcp',
 			fetch: peer.answer,
 		})
-		const sending = transport.send(REQUEST)
+		const sending = transport.send(MCP_HTTP_REQUEST)
 		await waitForDelay(20)
 		// The control: the reply never ends, so the write is still outstanding.
 		expect(peer.cancelled).toBe(0)
@@ -85,7 +53,7 @@ describe('HTTPClientTransport — close releases the request it has in flight', 
 		})
 		const errors: unknown[] = []
 		transport.emitter.on('error', (error) => errors.push(error))
-		const sending = transport.send(REQUEST)
+		const sending = transport.send(MCP_HTTP_REQUEST)
 		await waitForDelay(20)
 
 		await transport.close()
@@ -166,16 +134,51 @@ describe('HTTPClientTransport — a non-success reply carrying no message reject
 })
 
 describe('HTTPClientTransport — close is idempotent', () => {
+	it('drops the legacy protocol on restart while retaining the captured session', async () => {
+		const headers: Headers[] = []
+		const transport = new HTTPClientTransport({
+			url: 'http://127.0.0.1:1/mcp',
+			fetch: (_input, init) => {
+				headers.push(new Headers(init?.headers))
+				return Promise.resolve(
+					Response.json(
+						{ jsonrpc: '2.0', id: 0, result: { protocolVersion: '2025-11-25' } },
+						{ headers: { 'mcp-session-id': 'retained-session' } },
+					),
+				)
+			},
+		})
+
+		await transport.send({ jsonrpc: '2.0', id: 0, method: 'initialize' })
+		await transport.send({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+		await transport.close()
+		await transport.start()
+		await transport.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' })
+
+		expect(headers.map((header) => header.get('mcp-protocol-version'))).toEqual([
+			null,
+			'2025-11-25',
+			null,
+		])
+		expect(headers.map((header) => header.get('mcp-session-id'))).toEqual([
+			null,
+			'retained-session',
+			'retained-session',
+		])
+		expect(transport.session).toBe('retained-session')
+		await transport.close()
+	})
+
 	it('emits close once however many times it is called', async () => {
 		const transport = new HTTPClientTransport({ url: 'http://127.0.0.1:1/mcp' })
-		let closed = 0
-		transport.emitter.on('close', () => (closed += 1))
+		const closed = new MCPFixtureCell(0)
+		transport.emitter.on('close', () => (closed.value += 1))
 
 		await transport.close()
 		await transport.close()
 		await transport.close()
 
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 	})
 })
 
@@ -183,123 +186,13 @@ describe('HTTPClientTransport — close is idempotent', () => {
 // in tests/src/server/transports/HTTPClientTransport.test.ts, and the sentinel wire form is
 // written out literally rather than re-derived, so a row cannot agree with a broken encoder.
 
-const ANNOTATED_TOOLS = {
-	jsonrpc: '2.0',
-	id: 1,
-	result: {
-		resultType: 'complete',
-		ttlMs: 0,
-		cacheScope: 'private',
-		nextCursor: 'page-2',
-		tools: [
-			{
-				name: 'valid_tool',
-				inputSchema: {
-					type: 'object',
-					properties: {
-						region: { type: 'string', 'x-mcp-header': 'Region' },
-						priority: { type: 'integer', 'x-mcp-header': 'Priority' },
-						verbose: { type: 'boolean', 'x-mcp-header': 'Verbose' },
-						query: { type: 'string' },
-					},
-				},
-			},
-			{
-				name: 'invalid_duplicate_diff_case',
-				inputSchema: {
-					type: 'object',
-					properties: {
-						field1: { type: 'string', 'x-mcp-header': 'MyField' },
-						field2: { type: 'string', 'x-mcp-header': 'myfield' },
-					},
-				},
-			},
-		],
-	},
-}
-
-const CALL_METADATA = {
-	'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-	'io.modelcontextprotocol/clientCapabilities': {},
-}
-
-// A listing that advertises one annotated tool, and the fresh listing that no longer carries
-// it. A `tools/list` sent with no `cursor` REPLACES what the caller was told, so the second
-// of these leaves the transport with nothing to project for `gone`. The Node face pins the
-// same interleaving, plus the continuation half.
-const GONE_LISTING = {
-	jsonrpc: '2.0',
-	id: 1,
-	result: {
-		resultType: 'complete',
-		ttlMs: 0,
-		cacheScope: 'private',
-		tools: [
-			{
-				name: 'gone',
-				inputSchema: {
-					type: 'object',
-					properties: { region: { type: 'string', 'x-mcp-header': 'Region' } },
-				},
-			},
-		],
-	},
-}
-
-const EMPTY_LISTING = {
-	jsonrpc: '2.0',
-	id: 2,
-	result: { resultType: 'complete', ttlMs: 0, cacheScope: 'private', tools: [] },
-}
-
-// Two pages of ONE listing, the second requested with the cursor the first handed back. A
-// continuation ACCUMULATES, so both tools stay projectable.
-const FIRST_PAGE = {
-	jsonrpc: '2.0',
-	id: 1,
-	result: {
-		resultType: 'complete',
-		ttlMs: 0,
-		cacheScope: 'private',
-		nextCursor: 'page-2',
-		tools: [
-			{
-				name: 'paged_one',
-				inputSchema: {
-					type: 'object',
-					properties: { region: { type: 'string', 'x-mcp-header': 'Region' } },
-				},
-			},
-		],
-	},
-}
-
-const SECOND_PAGE = {
-	jsonrpc: '2.0',
-	id: 2,
-	result: {
-		resultType: 'complete',
-		ttlMs: 0,
-		cacheScope: 'private',
-		tools: [
-			{
-				name: 'paged_two',
-				inputSchema: {
-					type: 'object',
-					properties: { priority: { type: 'integer', 'x-mcp-header': 'Priority' } },
-				},
-			},
-		],
-	},
-}
-
 describe('HTTPClientTransport — the x-mcp-header contract', () => {
 	it('excludes an invalidly annotated tool and reports the exclusion on error', async () => {
 		const messages: JSONRPCMessage[] = []
 		const faults: unknown[] = []
 		const transport = new HTTPClientTransport({
 			url: 'http://127.0.0.1:1/mcp',
-			fetch: () => Promise.resolve(Response.json(ANNOTATED_TOOLS)),
+			fetch: () => Promise.resolve(Response.json(MCP_HTTP_ANNOTATED_TOOLS)),
 		})
 		transport.emitter.on('message', (message) => messages.push(message))
 		transport.emitter.on('error', (error) => faults.push(error))
@@ -308,7 +201,7 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
 
 		const delivered = messages[0]
@@ -333,7 +226,7 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			url: 'http://127.0.0.1:1/mcp',
 			fetch: (_input, init) => {
 				headers.push(new Headers(init?.headers))
-				return Promise.resolve(Response.json(ANNOTATED_TOOLS))
+				return Promise.resolve(Response.json(MCP_HTTP_ANNOTATED_TOOLS))
 			},
 		})
 
@@ -341,7 +234,7 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
 		await transport.send({
 			jsonrpc: '2.0',
@@ -350,7 +243,7 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			params: {
 				name: 'valid_tool',
 				arguments: { region: ' padded ', priority: 42, verbose: null, query: 'SELECT 1' },
-				_meta: CALL_METADATA,
+				_meta: MCP_HTTP_CALL_METADATA,
 			},
 		})
 
@@ -376,7 +269,11 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/call',
-			params: { name: 'valid_tool', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+			params: {
+				name: 'valid_tool',
+				arguments: { region: 'us-west1' },
+				_meta: MCP_HTTP_CALL_METADATA,
+			},
 		})
 
 		const called = headers[0]
@@ -387,14 +284,12 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 
 	it('projects nothing for a tool a later cursorless listing no longer carries', async () => {
 		const headers: Headers[] = []
-		let issued = 0
 		const transport = new HTTPClientTransport({
 			url: 'http://127.0.0.1:1/mcp',
 			fetch: (_input, init) => {
 				headers.push(new Headers(init?.headers))
-				issued += 1
-				if (issued === 1) return Promise.resolve(Response.json(GONE_LISTING))
-				if (issued === 2) return Promise.resolve(Response.json(EMPTY_LISTING))
+				if (headers.length === 1) return Promise.resolve(Response.json(MCP_HTTP_GONE_LISTING))
+				if (headers.length === 2) return Promise.resolve(Response.json(MCP_HTTP_EMPTY_LISTING))
 				return Promise.resolve(new Response(null, { status: 202 }))
 			},
 		})
@@ -403,19 +298,23 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 2,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 3,
 			method: 'tools/call',
-			params: { name: 'gone', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+			params: {
+				name: 'gone',
+				arguments: { region: 'us-west1' },
+				_meta: MCP_HTTP_CALL_METADATA,
+			},
 		})
 
 		const called = headers[2]
@@ -430,19 +329,17 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 	// objects and reimplements nothing this package owns. The Node face pins the same rows.
 	it('caches nothing from a listing a fresh one superseded before its answer arrived', async () => {
 		const headers: Headers[] = []
-		let issued = 0
-		let release: ((response: Response) => void) | undefined
+		const release = new MCPFixtureCell<((response: Response) => void) | undefined>(undefined)
 		const transport = new HTTPClientTransport({
 			url: 'http://127.0.0.1:1/mcp',
 			fetch: (_input, init) => {
 				headers.push(new Headers(init?.headers))
-				issued += 1
-				if (issued === 1) {
+				if (headers.length === 1) {
 					return new Promise<Response>((resolve) => {
-						release = resolve
+						release.value = resolve
 					})
 				}
-				if (issued === 2) return Promise.resolve(Response.json(EMPTY_LISTING))
+				if (headers.length === 2) return Promise.resolve(Response.json(MCP_HTTP_EMPTY_LISTING))
 				return Promise.resolve(new Response(null, { status: 202 }))
 			},
 		})
@@ -453,22 +350,22 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { cursor: 'page-2', _meta: CALL_METADATA },
+			params: { cursor: 'page-2', _meta: MCP_HTTP_CALL_METADATA },
 		})
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 2,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
-		if (release === undefined) throw new Error('the transport issued no continuation')
-		release(Response.json(SECOND_PAGE))
+		if (release.value === undefined) throw new Error('the transport issued no continuation')
+		release.value(Response.json(MCP_HTTP_SECOND_PAGE))
 		await superseded
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 3,
 			method: 'tools/call',
-			params: { name: 'paged_two', arguments: { priority: 3 }, _meta: CALL_METADATA },
+			params: { name: 'paged_two', arguments: { priority: 3 }, _meta: MCP_HTTP_CALL_METADATA },
 		})
 
 		const called = headers[2]
@@ -484,19 +381,17 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 		const headers: Headers[] = []
 		const messages: JSONRPCMessage[] = []
 		const faults: unknown[] = []
-		let issued = 0
-		let release: ((response: Response) => void) | undefined
+		const release = new MCPFixtureCell<((response: Response) => void) | undefined>(undefined)
 		const transport = new HTTPClientTransport({
 			url: 'http://127.0.0.1:1/mcp',
 			fetch: (_input, init) => {
 				headers.push(new Headers(init?.headers))
-				issued += 1
-				if (issued === 1) {
+				if (headers.length === 1) {
 					return new Promise<Response>((resolve) => {
-						release = resolve
+						release.value = resolve
 					})
 				}
-				if (issued === 2) return Promise.resolve(Response.json(EMPTY_LISTING))
+				if (headers.length === 2) return Promise.resolve(Response.json(MCP_HTTP_EMPTY_LISTING))
 				return Promise.resolve(new Response(null, { status: 202 }))
 			},
 		})
@@ -507,22 +402,26 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { cursor: 'page-2', _meta: CALL_METADATA },
+			params: { cursor: 'page-2', _meta: MCP_HTTP_CALL_METADATA },
 		})
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 2,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
-		if (release === undefined) throw new Error('the transport issued no continuation')
-		release(Response.json(ANNOTATED_TOOLS))
+		if (release.value === undefined) throw new Error('the transport issued no continuation')
+		release.value(Response.json(MCP_HTTP_ANNOTATED_TOOLS))
 		await superseded
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 3,
 			method: 'tools/call',
-			params: { name: 'valid_tool', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+			params: {
+				name: 'valid_tool',
+				arguments: { region: 'us-west1' },
+				_meta: MCP_HTTP_CALL_METADATA,
+			},
 		})
 
 		const delivered = messages[1]
@@ -542,22 +441,20 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 
 	it('keeps both pages projectable when a fresh listing and its own continuation overlap', async () => {
 		const headers: Headers[] = []
-		let issued = 0
-		let listing: ((response: Response) => void) | undefined
-		let continuation: ((response: Response) => void) | undefined
+		const listing = new MCPFixtureCell<((response: Response) => void) | undefined>(undefined)
+		const continuation = new MCPFixtureCell<((response: Response) => void) | undefined>(undefined)
 		const transport = new HTTPClientTransport({
 			url: 'http://127.0.0.1:1/mcp',
 			fetch: (_input, init) => {
 				headers.push(new Headers(init?.headers))
-				issued += 1
-				if (issued === 1) {
+				if (headers.length === 1) {
 					return new Promise<Response>((resolve) => {
-						listing = resolve
+						listing.value = resolve
 					})
 				}
-				if (issued === 2) {
+				if (headers.length === 2) {
 					return new Promise<Response>((resolve) => {
-						continuation = resolve
+						continuation.value = resolve
 					})
 				}
 				return Promise.resolve(new Response(null, { status: 202 }))
@@ -569,32 +466,36 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
 		const paged = transport.send({
 			jsonrpc: '2.0',
 			id: 2,
 			method: 'tools/list',
-			params: { cursor: 'page-2', _meta: CALL_METADATA },
+			params: { cursor: 'page-2', _meta: MCP_HTTP_CALL_METADATA },
 		})
-		if (listing === undefined || continuation === undefined) {
+		if (listing.value === undefined || continuation.value === undefined) {
 			throw new Error('the transport issued no listing')
 		}
-		listing(Response.json(FIRST_PAGE))
+		listing.value(Response.json(MCP_HTTP_FIRST_PAGE))
 		await fresh
-		continuation(Response.json(SECOND_PAGE))
+		continuation.value(Response.json(MCP_HTTP_SECOND_PAGE))
 		await paged
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 3,
 			method: 'tools/call',
-			params: { name: 'paged_one', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+			params: {
+				name: 'paged_one',
+				arguments: { region: 'us-west1' },
+				_meta: MCP_HTTP_CALL_METADATA,
+			},
 		})
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 4,
 			method: 'tools/call',
-			params: { name: 'paged_two', arguments: { priority: 3 }, _meta: CALL_METADATA },
+			params: { name: 'paged_two', arguments: { priority: 3 }, _meta: MCP_HTTP_CALL_METADATA },
 		})
 
 		const first = headers[2]

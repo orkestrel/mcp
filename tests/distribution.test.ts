@@ -17,10 +17,11 @@ import type { ProcessInterface } from '@orkestrel/process'
 import type { SpawnSyncReturns } from 'node:child_process'
 import type { TestContext } from 'vitest'
 import { createProcess } from '@orkestrel/process/server'
-import { isArray, isObject, isString } from '@orkestrel/contract'
+import { attempt, isArray, isObject, isString } from '@orkestrel/contract'
 import { spawnSync } from 'node:child_process'
 import {
 	copyFileSync,
+	cpSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -39,8 +40,49 @@ import { chromium } from 'playwright'
 import { build } from 'vite'
 import { resolveBrowser, resolvePinnedBrowser } from '../configs/browsers.js'
 import { afterAll, describe, expect, it } from 'vitest'
+import { MCPFixtureCell } from './setup.js'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const ERROR_COPY_DRIVER = `
+import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+const require = createRequire(import.meta.url)
+const copies = []
+for (const directory of process.argv.slice(2)) {
+	copies.push(await import(pathToFileURL(join(directory, 'dist/src/core/index.js')).href))
+	copies.push(require(join(directory, 'dist/src/core/index.cjs')))
+}
+for (const name of ['MCPError', 'MCPToolError']) {
+	assert.equal(new Set(copies.map((copy) => copy[name])).size, copies.length)
+	for (const source of copies) {
+		const Constructor = source[name]
+		const code = name === 'MCPError' ? -32601 : 'TOOL'
+		const error = new Constructor('fixture failure', code)
+		class Specialized extends Constructor {
+			name = 'Specialized'
+		}
+		const subclass = new Specialized('subclass failure', code)
+		const brand = Symbol.for('@orkestrel/mcp.' + name)
+		const descriptor = Object.getOwnPropertyDescriptor(error, brand)
+		assert.equal(descriptor?.value, error)
+		assert.equal(descriptor?.enumerable, false)
+		assert.equal(descriptor?.writable, false)
+		const lookalike = Object.assign(new Error('fixture failure'), { code })
+		const object = { [brand]: undefined }
+		object[brand] = object
+		for (const target of copies) {
+			const guard = target['is' + name]
+			assert.equal(guard(error), true)
+			assert.equal(guard(subclass), true)
+			assert.equal(guard(lookalike), false)
+			assert.equal(guard(new Proxy(error, {})), false)
+			assert.equal(guard(object), false)
+		}
+	}
+}
+`
 // npm's JavaScript entry, run by this Node with no shell between: a Windows shell reads `^` in a
 // range argument as its escape character and drops it, so a caret spec reached npm as an exact
 // version and no longer matched the consumer's override for the same package.
@@ -50,7 +92,10 @@ const NPM_CLI = resolveNpmCli()
 // compiler majors this toolchain supports, and its in-process API is not. It is
 // resolved from the workspace under proof, so a consumer of the packed artifact is
 // checked by the same compiler that workspace's own `check` script runs.
-const TSC = createRequire(join(ROOT, 'package.json')).resolve('typescript/bin/tsc')
+const TSC = join(
+	dirname(createRequire(join(ROOT, 'package.json')).resolve('typescript/package.json')),
+	'bin/tsc',
+)
 // `prepublishOnly` runs this proof as `npm run test:distribution -- --mode release`.
 // Release is the publish gate, so evidence it cannot obtain fails there and skips
 // everywhere else: a gate that passes on missing evidence proves nothing.
@@ -279,10 +324,8 @@ function isNames(value: unknown): value is readonly string[] {
 function isPackageTarget(target: string): boolean {
 	if (!target.startsWith('./')) return false
 	for (const segment of target.slice(2).split(/[\\/]/u)) {
-		let decoded = segment
-		try {
-			decoded = decodeURIComponent(segment)
-		} catch {}
+		const outcome = attempt(() => decodeURIComponent(segment))
+		const decoded = outcome.success ? outcome.value : segment
 		const normalized = decoded.toLowerCase()
 		if (normalized === '.' || normalized === '..' || normalized === 'node_modules') return false
 	}
@@ -389,11 +432,16 @@ function matchesFile(path: string): boolean {
 // the containing condition or fallback list unresolved, so the walk continues.
 function targetToDeclaration(target: string, installed: string): string | undefined {
 	if (!isPackageTarget(target)) return undefined
-	let declaration = target
-	if (target.endsWith('.cjs')) declaration = `${target.slice(0, -4)}.d.cts`
-	else if (target.endsWith('.mjs')) declaration = `${target.slice(0, -4)}.d.mts`
-	else if (target.endsWith('.js')) declaration = `${target.slice(0, -3)}.d.ts`
-	else if (!isDeclaration(target)) return undefined
+	const declaration = target.endsWith('.cjs')
+		? `${target.slice(0, -4)}.d.cts`
+		: target.endsWith('.mjs')
+			? `${target.slice(0, -4)}.d.mts`
+			: target.endsWith('.js')
+				? `${target.slice(0, -3)}.d.ts`
+				: isDeclaration(target)
+					? target
+					: undefined
+	if (declaration === undefined) return undefined
 	return matchesFile(join(installed, declaration)) ? declaration : undefined
 }
 
@@ -425,22 +473,18 @@ function resolveDeclaration(
 // physical nested manifest starts a scope even when it omits `type` or cannot be
 // parsed. A directory at that spelling is not a manifest, so the walk continues.
 function readPackageType(installed: string, target: string): unknown {
-	let directory = dirname(join(installed, target))
-	while (true) {
-		const path = join(directory, 'package.json')
-		if (matchesFile(path)) {
-			try {
-				const manifest = readJson(path)
-				return isRecord(manifest) ? manifest.type : undefined
-			} catch {
-				return undefined
-			}
-		}
-		if (directory === installed) return undefined
-		const parent = dirname(directory)
-		if (parent === directory) return undefined
-		directory = parent
+	return readPackageScope(installed, dirname(join(installed, target)))
+}
+
+function readPackageScope(installed: string, directory: string): unknown {
+	const path = join(directory, 'package.json')
+	if (matchesFile(path)) {
+		const outcome = attempt(() => readJson(path))
+		return outcome.success && isRecord(outcome.value) ? outcome.value.type : undefined
 	}
+	if (directory === installed) return undefined
+	const parent = dirname(directory)
+	return parent === directory ? undefined : readPackageScope(installed, parent)
 }
 
 function resolvesBrowser(entry: unknown): boolean {
@@ -994,6 +1038,17 @@ function requireStage(context: TestContext): Stage {
 }
 
 describe('installed package consumer', () => {
+	it('recognizes branded errors across distinct installed module copies', (context) => {
+		const stage = requireStage(context)
+		const copy = join(stage.consumer, 'error-copy')
+		cpSync(stage.installed, copy, { recursive: true })
+		const driver = join(stage.consumer, 'error-copies.mjs')
+		writeFile(driver, ERROR_COPY_DRIVER)
+		const result = runNode([driver, stage.installed, copy], stage.consumer)
+		expect(readOutput(result)).toBe('')
+		expect(result.status).toBe(0)
+	})
+
 	it('packs one archive and installs it in isolation [requires the registry]', (context) => {
 		const stage = requireStage(context)
 		expect(stage.archives).toHaveLength(1)
@@ -1409,13 +1464,15 @@ async function startReceipts(stage: Stage): Promise<Receipts | string> {
 		return `The composed artifacts ${COMPOSITION.join(' ')} did not install: ${readOutput(install)}`
 	}
 	const options = resolveBrowser(resolvePinnedBrowser(), process.platform, process.env)
-	let browser: Browser
-	try {
-		browser = await launchBrowser(options)
-	} catch (error) {
-		return `No browser launched. ${describeBrowser(options)} was rejected: ${String(error)}`
-	}
-	let child: ProcessInterface | undefined
+	const launched = await launchBrowser(options).then(
+		(browser) => ({ browser }),
+		(error: unknown) => ({
+			failure: `No browser launched. ${describeBrowser(options)} was rejected: ${String(error)}`,
+		}),
+	)
+	if ('failure' in launched) return launched.failure
+	const browser = launched.browser
+	const child = new MCPFixtureCell<ProcessInterface | undefined>(undefined)
 	try {
 		const closure = readClosure(consumer, COMPOSED)
 		const modules = walkModules(consumer, [
@@ -1430,7 +1487,7 @@ async function startReceipts(stage: Stage): Promise<Receipts | string> {
 		const page = writeReceiptPage(consumer, closure, modules)
 		copyFileSync(SERVER_FIXTURE, join(consumer, FIXTURE))
 		copyFileSync(SCRIPT_FIXTURE, join(consumer, SCRIPT_MODULE))
-		child = createProcess({
+		child.value = createProcess({
 			command: {
 				file: process.execPath,
 				arguments: [FIXTURE, page, join(consumer, 'node_modules'), CREDENTIAL],
@@ -1439,26 +1496,26 @@ async function startReceipts(stage: Stage): Promise<Receipts | string> {
 		})
 		return {
 			consumer,
-			origin: await readOrigin(child),
+			origin: await readOrigin(child.value),
 			browser,
-			child,
+			child: child.value,
 			closure,
 			modules,
 		}
 	} catch (error) {
-		if (child !== undefined) await child.destroy()
+		if (child.value !== undefined) await child.value.destroy()
 		await browser.close()
 		throw error
 	}
 }
 
-let RECEIPTS: Promise<Receipts | string> | undefined
+const RECEIPTS = new MCPFixtureCell<Promise<Receipts | string> | undefined>(undefined)
 
 // The composition stage, or a skip naming what the run could not reach. A release run has no
 // skip available to it: evidence a gate cannot obtain is the gate failing.
 async function requireReceipts(context: TestContext): Promise<Receipts> {
-	RECEIPTS ??= startReceipts(requireStage(context))
-	const opened = await RECEIPTS
+	RECEIPTS.value ??= startReceipts(requireStage(context))
+	const opened = await RECEIPTS.value
 	if (typeof opened === 'string') {
 		if (RELEASE) throw new Error(`The release gate requires the composed page. ${opened}`)
 		return context.skip(opened)
@@ -1469,7 +1526,7 @@ async function requireReceipts(context: TestContext): Promise<Receipts> {
 // Closes the composition stage. The scratch tree's own removal calls it, so the child and the
 // browser are gone before the tree they run out of is removed.
 async function closeReceipts(): Promise<void> {
-	const opened = await RECEIPTS
+	const opened = await RECEIPTS.value
 	if (opened === undefined || typeof opened === 'string') return
 	await opened.child.destroy()
 	await opened.browser.close()

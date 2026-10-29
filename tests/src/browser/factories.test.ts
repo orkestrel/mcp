@@ -7,7 +7,6 @@ import type {
 	ModelContextPublishOptions,
 	PageServerInterface,
 	PageServerOptions,
-	ScopeInterface,
 	WebMCPAnnotations,
 	WebMCPDescriptor,
 	WebMCPDocument,
@@ -21,15 +20,13 @@ import type {
 	WebMCPToolEvent,
 	WebMCPToolsOptions,
 } from '@src/browser'
-import type { ToolManagerInterface } from '@orkestrel/tool'
+import type { ModelContext } from '@src/browser'
 import { describe, expect, expectTypeOf, inject, it, vi } from 'vitest'
 import {
 	bindClient,
 	bindServer,
 	createDuplexClientTransport,
 	createMCPClient,
-	createMCPServer,
-	DEFAULT_MCP_CACHE_TTL,
 	inferRequestVersion,
 	isMCPError,
 	MCP_META_SERVER,
@@ -42,7 +39,6 @@ import {
 	MCP_WEBSOCKET_SUBPROTOCOL,
 	parseRequestContext,
 } from '@src/core'
-import type { ModelContext } from '@src/browser'
 import {
 	DEFAULT_MCP_SERVER_NAME,
 	DEFAULT_MCP_SERVER_VERSION,
@@ -50,16 +46,15 @@ import {
 	createMessagePortTransport,
 	createModelContext,
 	createPageServer,
-	createScopeMessageListener,
 	createScopeServer,
-	createScopeTransport,
 	createWebSocketClientTransport,
 } from '@src/browser'
 import { isRecord } from '@orkestrel/contract'
-import { createTool, createToolManager } from '@orkestrel/tool'
+import { createToolManager } from '@orkestrel/tool'
 import { requireValue, waitForCondition, waitForDelay, waitForEvent } from '@orkestrel/test'
 import {
 	createCalculatorServer,
+	MCPFixtureCell,
 	createJSONRPCRequest,
 	createHeaderProjectionRequest,
 	HEADER_PROJECTION_CONTEXTS,
@@ -71,12 +66,15 @@ import {
 } from '../../setup.js'
 import {
 	createParkedTool,
+	createScopeDouble,
+	createCalculatorTools,
+	buildScopeDiscoveryReply,
 	createScopeCarrier,
 	drainRecorded,
 	recordPort,
 	recordRequests,
+	installModelContext,
 } from '../../setupBrowser.js'
-import { installModelContext } from '../../fixtures/modelContext.js'
 
 // src/browser/factories.ts + src/browser/transports — the browser-face CLIENT
 // transports (`createWebSocketClientTransport` over the native `WebSocket` global,
@@ -148,14 +146,14 @@ describe('createWebSocketClientTransport — the browser client against the Node
 			url: `${serverURL}/close`,
 			protocols: [],
 		})
-		let closeCount = 0
+		const closeCount = new MCPFixtureCell(0)
 		transport.emitter.on('close', () => {
-			closeCount += 1
+			closeCount.value += 1
 		})
 		await transport.start()
 		await waitForDelay(50)
 
-		expect(closeCount).toBe(1)
+		expect(closeCount.value).toBe(1)
 	})
 
 	it('a malformed inbound frame surfaces on error and does not throw', async () => {
@@ -644,75 +642,6 @@ describe('duplex — driven per carrier, and observed at the peer', () => {
 // request/response strings prove the wiring without needing a full `MCPClient` for every
 // scenario.
 
-interface ScopeDoubleInterface {
-	readonly scope: ScopeInterface
-	readonly sent: readonly unknown[]
-	readonly listenerCount: number
-	dispatch(init: { data?: unknown; ports?: readonly MessagePort[] }): void
-}
-
-function createScopeDouble(): ScopeDoubleInterface {
-	const sent: unknown[] = []
-	const listeners = new Set<(event: MessageEvent) => void>()
-	const scope: ScopeInterface = {
-		postMessage(message: unknown): void {
-			sent.push(message)
-		},
-		addEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
-			listeners.add(listener)
-		},
-		removeEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
-			listeners.delete(listener)
-		},
-	}
-	return {
-		scope,
-		get sent() {
-			return sent
-		},
-		get listenerCount() {
-			return listeners.size
-		},
-		dispatch(init) {
-			const ports = init.ports === undefined ? [] : [...init.ports]
-			const event = new MessageEvent('message', { data: init.data, ports })
-			for (const listener of listeners) listener(event)
-		},
-	}
-}
-
-function createCalculatorTools(): ToolManagerInterface {
-	const tools = createToolManager()
-	tools.add(createTool({ name: 'add', execute: (a) => Number(a['x']) + Number(a['y']) }))
-	return tools
-}
-
-// The scope double hosts a bare modern server. Use `modernRequest` because a version-less
-// `createJSONRPCRequest` is correctly rejected by that server with JSON-RPC -32602, and drive
-// `server/discover` because it is the modern era's own required RPC — 2026-07-28 removes
-// `ping`, so a bare server answers that one -32601 and it cannot carry a transport canary.
-// That bare server still advertises `tools: { listChanged: true }`, because it owns the tools
-// family and produces it from its own registry whatever the host configured.
-function expectModernReply(message: unknown, id: number): void {
-	expect(JSON.parse(String(message))).toEqual({
-		jsonrpc: '2.0',
-		id,
-		result: {
-			resultType: 'complete',
-			supportedVersions: [MCP_MODERN_VERSION],
-			capabilities: { tools: { listChanged: true } },
-			ttlMs: DEFAULT_MCP_CACHE_TTL,
-			cacheScope: 'private',
-			_meta: {
-				[MCP_META_SERVER]: {
-					name: DEFAULT_MCP_SERVER_NAME,
-					version: DEFAULT_MCP_SERVER_VERSION,
-				},
-			},
-		},
-	})
-}
-
 describe('createScopeServer — the default scope is the current one', () => {
 	it('wires the real global scope when no scope argument is supplied', async () => {
 		// Inside a worker this default IS that worker's `self`. The page's own `globalThis`
@@ -730,7 +659,7 @@ describe('createScopeServer — the default scope is the current one', () => {
 			port2.postMessage(JSON.stringify(modernRequest('server/discover')))
 			await vi.waitFor(() => expect(replies).toHaveLength(1))
 
-			expectModernReply(replies[0], 1)
+			expect(JSON.parse(String(replies[0]))).toEqual(buildScopeDiscoveryReply(1))
 		} finally {
 			worker.stop()
 		}
@@ -780,7 +709,7 @@ describe('createScopeServer — dedicated-worker-shaped scope (implicit, portles
 		port2.postMessage(JSON.stringify(modernRequest('server/discover')))
 
 		await vi.waitFor(() => expect(replies).toHaveLength(1))
-		expectModernReply(replies[0], 1)
+		expect(JSON.parse(String(replies[0]))).toEqual(buildScopeDiscoveryReply(1))
 		expect(double.sent).toEqual([])
 
 		worker.stop()
@@ -932,7 +861,7 @@ describe('createScopeServer — accept option', () => {
 		allowed.port2.postMessage(JSON.stringify(modernRequest('server/discover')))
 		await vi.waitFor(() => expect(allowedReplies).toHaveLength(1))
 
-		expectModernReply(allowedReplies[0], 1)
+		expect(JSON.parse(String(allowedReplies[0]))).toEqual(buildScopeDiscoveryReply(1))
 		denied.port2.postMessage(JSON.stringify(modernRequest('server/discover', 2)))
 		await waitForDelay(30)
 		expect(deniedReplies).toEqual([])
@@ -978,7 +907,7 @@ describe('createScopeServer — double-port-delivery dedup', () => {
 		await vi.waitFor(() => expect(replies).toHaveLength(1))
 
 		expect(replies).toHaveLength(1)
-		expectModernReply(replies[0], 1)
+		expect(JSON.parse(String(replies[0]))).toEqual(buildScopeDiscoveryReply(1))
 		worker.stop()
 	})
 })
@@ -1037,55 +966,9 @@ describe('createScopeServer — hostile inbound', () => {
 		double.dispatch({ data: JSON.stringify(modernRequest('server/discover')) })
 
 		await vi.waitFor(() => expect(double.sent).toHaveLength(1))
-		expectModernReply(double.sent[0], 1)
+		expect(JSON.parse(String(double.sent[0]))).toEqual(buildScopeDiscoveryReply(1))
 
 		worker.stop()
-	})
-})
-
-// ── createScopeMessageListener — the dedup state and the teardown state are ONE ────
-//
-// The dedup was right and its bookkeeping was not. The listener kept accepted ports in a `seen`
-// set private to its own closure, while the teardown callbacks went into the caller's
-// `teardowns`. `createScopeServer`'s `stop` could reach only the second one, so a Service Worker —
-// the shape the doc names, whose closure lives as long as the worker — retained every
-// `MessagePort` it had ever accepted, including ports already closed and unbound, for the
-// worker's life. Separate collections over one lifetime is what let one of them be forgotten.
-//
-// There is now one collection: the teardown map is KEYED by the port it tears down, so
-// membership answers "already bound?" and clearing the map drops both facts at once. The
-// rows below drive the exported listener with a caller-owned map, which is the only seam from
-// which either fact is observable at all.
-
-describe('createScopeMessageListener — one collection carries both the teardown and the dedup', () => {
-	it('keys each accepted port binding by the port, so no dedup state sits outside the caller-owned map', () => {
-		const double = createScopeDouble()
-		const server = createMCPServer({
-			tools: createCalculatorTools(),
-			identity: { name: DEFAULT_MCP_SERVER_NAME, version: DEFAULT_MCP_SERVER_VERSION },
-		})
-		const scopeTransport = createScopeTransport(double.scope)
-		const teardowns = new Map<MessagePort, () => void>()
-		const onMessage = createScopeMessageListener(server, scopeTransport, teardowns, {
-			tools: createCalculatorTools(),
-		})
-		const { port1 } = new MessageChannel()
-
-		onMessage(new MessageEvent('message', { ports: [port1] }))
-		expect([...teardowns.keys()]).toEqual([port1])
-
-		// The dedup reads that same map, so a repeat delivery adds nothing.
-		onMessage(new MessageEvent('message', { ports: [port1] }))
-		expect(teardowns.size).toBe(1)
-
-		// Clearing the map the way `stop` does drops the dedup state with it: the SAME port
-		// is accepted again afterwards. A private `seen` set would have refused this forever.
-		for (const teardown of teardowns.values()) teardown()
-		teardowns.clear()
-		onMessage(new MessageEvent('message', { ports: [port1] }))
-		expect([...teardowns.keys()]).toEqual([port1])
-
-		for (const teardown of teardowns.values()) teardown()
 	})
 })
 
@@ -1243,17 +1126,17 @@ describe('createPageServer — the MCP pair hosted in the page that calls it', (
 		// A short deadline, so a request that reached the wire reports the deadline rather than
 		// the refusal — which is exactly the reading this test must not accept.
 		const page = createPageServer({ tools: createCalculatorTools(), client: { timeout: 1_000 } })
-		let called: Promise<unknown> | undefined
-		let detailed: Promise<unknown> | undefined
-		let opened: Promise<unknown> | undefined
+		const called = new MCPFixtureCell<Promise<unknown> | undefined>(undefined)
+		const detailed = new MCPFixtureCell<Promise<unknown> | undefined>(undefined)
+		const opened = new MCPFixtureCell<Promise<unknown> | undefined>(undefined)
 		// `connect` is emitted while the attempt that produced it is still the published one, so
 		// a stop issued from the listener leaves that attempt standing. Every request issued
 		// after it belongs to a session the stop has already ended.
 		page.client.emitter.once('connect', () => {
 			page.stop()
-			called = page.client.call('add', { x: 1, y: 2 })
-			detailed = page.client.tasks.task('missing')
-			opened = page.client.listen(undefined, { signal: new AbortController().signal }).next()
+			called.value = page.client.call('add', { x: 1, y: 2 })
+			detailed.value = page.client.tasks.task('missing')
+			opened.value = page.client.listen(undefined, { signal: new AbortController().signal }).next()
 		})
 
 		await page.client.connect()
@@ -1262,16 +1145,19 @@ describe('createPageServer — the MCP pair hosted in the page that calls it', (
 		// passed the refusal reaches a channel nothing is listening on, so it reports the
 		// 1000 ms deadline, and a subscription that passed it parks on a response that never
 		// comes at all. Reading the parked one last would hide the two that answered.
-		const call = await requireValue(called, 'the connect listener must have issued the call')
+		const call = await requireValue(called.value, 'the connect listener must have issued the call')
 			.then(() => undefined)
 			.catch((reason: unknown) => reason)
 		expect(isMCPError(call) && call.code).toBe(-32600)
-		const task = await requireValue(detailed, 'the connect listener must have issued the task')
+		const task = await requireValue(
+			detailed.value,
+			'the connect listener must have issued the task',
+		)
 			.then(() => undefined)
 			.catch((reason: unknown) => reason)
 		expect(isMCPError(task) && task.code).toBe(-32600)
 		const subscription = await requireValue(
-			opened,
+			opened.value,
 			'the connect listener must have opened the subscription',
 		)
 			.then(() => undefined)
@@ -1397,7 +1283,7 @@ describe('the browser barrel — what a consumer of @orkestrel/mcp/browser recei
 		}>()
 		expectTypeOf<ModelContextAdoptOptions>().toEqualTypeOf<{
 			readonly origins?: readonly string[]
-			readonly debugging?: boolean
+			readonly debug?: boolean
 		}>()
 	})
 

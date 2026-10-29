@@ -1,129 +1,77 @@
-// The consumer-side guides-parity drop-in: runs `@orkestrel/guide`'s checks against
-// this repo's own `guides/README.md` manifest. The constants that follow are this
-// package's own, as is the executed section that closes the file.
-
-import type {
-	JSONRPCId,
-	JSONRPCMessage,
-	JSONRPCNotification,
-	MCPCallOutcome,
-	MCPDispatcherInterface,
-	MCPSubscriptionResult,
-} from '@src/core'
-import type * as CoreRuntime from '@src/core'
-import type * as ServerRuntime from '@src/server'
-import type * as ContractRuntime from '@orkestrel/contract'
-import type * as GuideRuntime from '@orkestrel/guide'
-import type * as TestRuntime from '@orkestrel/test'
-import type * as TestServerRuntime from '@orkestrel/test/server'
-import type * as ToolRuntime from '@orkestrel/tool'
-import type * as VitestRuntime from 'vitest'
-import type * as SetupRuntime from './setup.js'
-import type * as SetupServerRuntime from './setupServer.js'
-import type { ChildProcess } from 'node:child_process'
-import type { GuideCommandContext } from '@orkestrel/guide/server'
 import type { ScratchInterface } from '@orkestrel/test/server'
+import { closeSync, openSync } from 'node:fs'
+import { join } from 'node:path'
 import { GuideCommand } from '@orkestrel/guide/server'
 import { readInventory } from '@orkestrel/test/server'
 import { createVitest } from 'vitest/node'
-import { spawn } from 'node:child_process'
-import { closeSync, fstatSync, openSync } from 'node:fs'
-import { join } from 'node:path'
-import { PassThrough } from 'node:stream'
 
-/** Every fence language this package's guides are allowed to use. */
-const FENCE_LANGUAGES = Object.freeze(['text', 'ts'])
-/** The fence language whose blocks count as worked examples. */
-const EXAMPLE_LANGUAGE = 'ts'
-/** The package identity that binds its manifest, module map, and README pitch. */
-const PACKAGE_NAME = '@orkestrel/mcp'
-/** The one guide this package sources, whose tagline the README pitch equals. */
-const GUIDE_SPEC = 'guides/mcp.md'
-/** Each import specifier this package's own guides may resolve against. */
-const MODULES = Object.freeze({
-	'@orkestrel/mcp': 'src/core',
-	'@orkestrel/mcp/browser': 'src/browser',
-	'@orkestrel/mcp/server': 'src/server',
-})
-/**
- * Declarations deliberately kept out of the barrel, as `computeSymbolKey` strings.
- *
- * A class that one-class-per-file evicted from its single consumer cannot become a
- * local, so it stays exported without being public. Naming it here is what makes that
- * intentional rather than forgotten — and the assertion that follows it fails when a name
- * here stops being stranded, so the list cannot rot.
- */
-const INTERNAL: readonly string[] = Object.freeze([])
+await new GuideCommand({
+	root: new URL('../', import.meta.url),
+	patterns: ['src/**/*.ts', 'tests/**/*.ts', 'guides/*.md', '*.md', 'package.json'],
+	modules: {
+		'@orkestrel/mcp': 'src/core',
+		'@orkestrel/mcp/browser': 'src/browser',
+		'@orkestrel/mcp/server': 'src/server',
+	},
+	languages: ['text', 'ts'],
+	language: 'ts',
+	reader: readInventory,
+	runner: createVitest,
+}).execute(async (context) => {
+	const { EXAMPLE_LANGUAGE } = await import('./setupServer.js')
+	const { createMCPLegacy, createMCPServer, isMCPError, MCP_META_SUBSCRIPTION } =
+		await import('@src/core')
 
-/** Source modules that own removable legacy server ingress. */
-const LEGACY_OWNERS = Object.freeze([
-	'src/core/MCPLegacy.ts',
-	'src/core/factories.ts',
-	'src/core/index.ts',
-	'src/core/types.ts',
-	'src/server/MCPSession.ts',
-	'src/server/index.ts',
-	'src/server/middlewares.ts',
-	'src/server/types.ts',
-])
+	const { isRecord } = await import('@orkestrel/contract')
+	const { createTool, createToolManager } = await import('@orkestrel/tool')
+	const { afterAll, beforeAll, describe, expect, it } = await import('vitest')
+	const {
+		computeSymbolKey,
+		createGuide,
+		createSource,
+		createSourceManager,
+		extractFenceImports,
+		findMissing,
+		findMissingSymbols,
+		findUnexampled,
+		isExternalLink,
+		resolveLink,
+	} = await import('@orkestrel/guide')
+	const { requireValue } = await import('@orkestrel/test')
+	const { createScratch } = await import('@orkestrel/test/server')
+	const { createToolRefresh, refreshTools } = await import('./setup.js')
+	const { findMissingNamedImports } = await import('./setupServer.js')
 
-/**
- * Declarations, named imports from any specifier, and barrel exports that make a module own
- * removable legacy ingress.
- */
-const LEGACY_OWNER_PATTERN =
-	/\b(?:export\s+class\s+(?:MCPLegacy|MCPSession)\b|export\s+function\s+(?:createMCPLegacy|createMCPSession)\b|export\s+interface\s+(?:MCPLegacyOptions|MCPSession(?:MiddlewareOptions|Options|Interface|State|Entry|Event))\b|import(?:\s+type)?\s*\{[^}]*\b(?:MCPLegacy|MCPSession)\b[^}]*\}\s*from\s*['"][^'"]+['"]|export\s+\*\s+from\s*['"]\.\/(?:MCPLegacy|MCPSession)\.js['"])/u
+	const { MCPFixtureCell } = await import('./setup.js')
+	const {
+		PACKAGE_NAME,
+		GUIDE_SPEC,
+		MODULES,
+		INTERNAL,
+		LEGACY_OWNERS,
+		findLegacyOwners,
+		STDERR_SENTINEL,
+		STDERR_FILE,
+		INHERITED,
+		readDescriptorIdentity,
+		reportThroughTransport,
+		readEvidenceThroughTransport,
+		readSilentEvidenceThroughTransport,
+		reportThroughReplacingSpawn,
+		reportThroughInheritingSpawn,
+		LEGACY_INITIALIZE,
+		driveStdioServer,
+		createGuideServer,
+		readGuideClientVersion,
+		readGuideSubscription,
+		readGuideProgressClaim,
+		readGuideCapacityRefusal,
+		BURST_METHODS,
+		readBurstSubscription,
+		readGuideBoundCall,
+	} = await import('./setupServer.js')
+	const { files, report: parity, rows } = context
 
-let bindClient: typeof CoreRuntime.bindClient
-let bindServer: typeof CoreRuntime.bindServer
-let createDuplexClientTransport: typeof CoreRuntime.createDuplexClientTransport
-let createMCPClient: typeof CoreRuntime.createMCPClient
-let createMCPLegacy: typeof CoreRuntime.createMCPLegacy
-let createMCPLegacyClientTransport: typeof CoreRuntime.createMCPLegacyClientTransport
-let createMCPServer: typeof CoreRuntime.createMCPServer
-let isMCPError: typeof CoreRuntime.isMCPError
-let isMCPSubscriptionResult: typeof CoreRuntime.isMCPSubscriptionResult
-let MCP_META_SUBSCRIPTION: typeof CoreRuntime.MCP_META_SUBSCRIPTION
-let createStdioClientTransport: typeof ServerRuntime.createStdioClientTransport
-let createStdioServer: typeof ServerRuntime.createStdioServer
-let isRecord: typeof ContractRuntime.isRecord
-let createTool: typeof ToolRuntime.createTool
-let createToolManager: typeof ToolRuntime.createToolManager
-let afterAll: typeof VitestRuntime.afterAll
-let beforeAll: typeof VitestRuntime.beforeAll
-let describe: typeof VitestRuntime.describe
-let expect: typeof VitestRuntime.expect
-let it: typeof VitestRuntime.it
-let computeSymbolKey: typeof GuideRuntime.computeSymbolKey
-let createGuide: typeof GuideRuntime.createGuide
-let createSource: typeof GuideRuntime.createSource
-let createSourceManager: typeof GuideRuntime.createSourceManager
-let extractFenceImports: typeof GuideRuntime.extractFenceImports
-let findMissing: typeof GuideRuntime.findMissing
-let findMissingSymbols: typeof GuideRuntime.findMissingSymbols
-let findUnexampled: typeof GuideRuntime.findUnexampled
-let isExternalLink: typeof GuideRuntime.isExternalLink
-let resolveLink: typeof GuideRuntime.resolveLink
-let requireValue: typeof TestRuntime.requireValue
-let waitForCondition: typeof TestRuntime.waitForCondition
-let createScratch: typeof TestServerRuntime.createScratch
-let createLoopbackTransport: typeof SetupRuntime.createLoopbackTransport
-let createMemoryTransport: typeof SetupRuntime.createMemoryTransport
-let createSubscriptionServer: typeof SetupRuntime.createSubscriptionServer
-let createToolRefresh: typeof SetupRuntime.createToolRefresh
-let refreshTools: typeof SetupRuntime.refreshTools
-let waitForSettlement: typeof SetupRuntime.waitForSettlement
-let findMissingNamedImports: typeof SetupServerRuntime.findMissingNamedImports
-
-/** Return the source modules carrying a removable legacy-ingress declaration or dependency. */
-function findLegacyOwners(population: Readonly<Record<string, string>>): readonly string[] {
-	return Object.entries(population)
-		.filter(([path, source]) => path.startsWith('src/') && LEGACY_OWNER_PATTERN.test(source))
-		.map(([path]) => path)
-		.sort()
-}
-
-function registerParity({ files, report, rows }: GuideCommandContext): void {
 	const sourceManager = createSourceManager({ files, modules: MODULES })
 	const own = requireValue(
 		rows.find((row) => row.entry.spec === GUIDE_SPEC),
@@ -146,7 +94,7 @@ function registerParity({ files, report, rows }: GuideCommandContext): void {
 	})
 
 	it('manifest lists at least one guide', () => {
-		expect(report.input).toEqual([])
+		expect(parity.input).toEqual([])
 		expect(rows.length).toBeGreaterThan(0)
 		expect(own.entry.spec).toBe(GUIDE_SPEC)
 	})
@@ -158,7 +106,7 @@ function registerParity({ files, report, rows }: GuideCommandContext): void {
 	// The failure names both title sets, because a pin reporting only its own emptiness
 	// leaves the reader to work out which side dropped the title.
 	it('pairs at least one example title across the guide and the source', () => {
-		expect(report.examples.titles.filter((finding) => finding.spec === GUIDE_SPEC)).toEqual([])
+		expect(parity.examples.titles.filter((finding) => finding.spec === GUIDE_SPEC)).toEqual([])
 	})
 
 	// The README's pitch and the guide's tagline are one text, each read as the blockquote
@@ -172,7 +120,7 @@ function registerParity({ files, report, rows }: GuideCommandContext): void {
 		)
 		if (!isRecord(parsed)) throw new Error('Invalid package manifest: package.json')
 		expect(parsed.name).toBe(PACKAGE_NAME)
-		expect(report.pitch).toEqual([])
+		expect(parity.pitch).toEqual([])
 	})
 
 	describe('legacy server-ingress ownership', () => {
@@ -587,8 +535,8 @@ function registerParity({ files, report, rows }: GuideCommandContext): void {
 	// control: `stranded server face` forces it to report a non-empty answer, and reading browser and
 	// server as one scope makes that same answer disappear — the masking a widened scope causes. The
 	// LIVE rows cannot show that, because a union of internally-complete barrels is itself internally
-	// complete: their `stranded`/`phantom` expectations stay `[]` under every union of the real faces,
-	// so a widened `module` passes them unremarked. What binds each live face's scope is that face's
+	// complete apart from the explicitly interned declarations, so a widened `module` still
+	// passes them unremarked. What binds each live face's scope is that face's
 	// own neighbour-refusal row above, not these rows; what these rows catch is a real declaration
 	// going stranded or phantom inside one barrel. The population sizes stay asserted because a
 	// mistyped module path yields two empty populations, and two empty populations differ by nothing.
@@ -597,7 +545,10 @@ function registerParity({ files, report, rows }: GuideCommandContext): void {
 			name: `${face.specifier} barrel`,
 			files,
 			module: face.module,
-			stranded: [],
+			stranded: requireValue(SOURCES.get(face.specifier), face.specifier)
+				.exports()
+				.map(computeSymbolKey)
+				.filter((key) => INTERNAL.includes(key)),
 			phantom: [],
 		})),
 		{
@@ -662,7 +613,7 @@ function registerParity({ files, report, rows }: GuideCommandContext): void {
 	for (const { entry, guide, source } of rows) {
 		describe(`${entry.concept}`, () => {
 			it('uses only listed fence languages', () => {
-				expect(report.fences.filter((finding) => finding.spec === entry.spec)).toEqual([])
+				expect(parity.fences.filter((finding) => finding.spec === entry.spec)).toEqual([])
 			})
 
 			it('extracts non-empty aggregate barrel and documented surfaces', () => {
@@ -727,11 +678,11 @@ function registerParity({ files, report, rows }: GuideCommandContext): void {
 			// worklist `npm run test:guides` prints, so a failure here is read the way that command's
 			// output is.
 			it('keeps every compared summary and example equal to its source', () => {
-				expect(report.drift.filter((finding) => finding.spec === entry.spec)).toEqual([])
+				expect(parity.drift.filter((finding) => finding.spec === entry.spec)).toEqual([])
 			})
 
 			it('documents an example for every Surface function', () => {
-				expect(report.examples.functions.filter((finding) => finding.spec === entry.spec)).toEqual(
+				expect(parity.examples.functions.filter((finding) => finding.spec === entry.spec)).toEqual(
 					[],
 				)
 			})
@@ -781,250 +732,25 @@ function registerParity({ files, report, rows }: GuideCommandContext): void {
 			})
 		})
 	}
-}
 
-// ── The stdio client transport's spawn contract, executed ────────────────────
-//
-// A parity assertion proves a documented name resolves. It can never reach a sentence about
-// behaviour, which is how `guides/mcp.md` § stdio transport carried false ones through a
-// green gate: that `createStdioClientTransport` spawns through `node:child_process.spawn` with
-// a provided `env` REPLACING `process.env`, and that the child's `stderr` INHERITS the parent's.
-// Both are now stated the other way round in the guide, so both are executed here.
-//
-// One child reports what it actually received. Each transport reading is contrasted with the same
-// reading taken from a raw `node:child_process.spawn` configured the way the old sentences
-// described this transport — `env` replacing and `stderr` inheriting. Those controls sit outside
-// this package entirely, which is what makes these assertions evidence rather than a restatement
-// of the source.
-//
-// The host facts below decide what each control can compare:
-//
-// - Windows injects a host set — `PATH`, `SYSTEMROOT`, `TEMP`, `USERPROFILE`, and more — into any
-//   explicit environment, so a child of a REPLACING spawn there reads its parent's own `PATH`
-//   unchanged. `PATH` separates a merge from a replacement on a POSIX host alone.
-//   `guides/process.md` § The child environment owns that law. What separates them on every host
-//   is a key this test names itself, outside the injected set.
-// - `fstat` gives a Windows anonymous pipe no file id and reports a per-process handle value as
-//   `ino` instead, so two processes holding the SAME pipe read different identities and one
-//   process reads a different identity for every child it hands that pipe down to. A `dev:ino`
-//   comparison across a process boundary carries meaning only for a descriptor that has a file
-//   id. The inherit control therefore hands its child a scratch FILE, not this process's own
-//   `stderr`, which under this runner is exactly such a pipe.
-
-/** The bytes the reporting child writes to its own `stderr` before it answers. */
-const STDERR_SENTINEL = 'stderr-sentinel'
-
-/** The scratch file the inherit control hands down as its relay's `stderr`. */
-const STDERR_FILE = 'stderr.log'
-
-/**
- * One request, one JSON-RPC reply carrying what the spawned child's environment and `stderr` are.
- *
- * The kind reading masks the mode bits itself: `Stats.isFIFO()` answers `false` for a Windows
- * anonymous pipe whose mode carries `S_IFIFO`, so the derived answer is the one that travels.
- */
-const REPORT_SCRIPT = `
-const readline = require('node:readline')
-const { constants, fstatSync } = require('node:fs')
-const rl = readline.createInterface({ input: process.stdin })
-rl.on('line', (line) => {
-	const message = JSON.parse(line)
-	if (message.method !== 'report') return
-	process.stderr.write(${JSON.stringify(STDERR_SENTINEL)})
-	const stderr = fstatSync(2)
-	process.stdout.write(JSON.stringify({
-		jsonrpc: '2.0',
-		id: message.id,
-		result: {
-			path: process.env.PATH,
-			supplied: process.env.MCP_GUIDE_SUPPLIED,
-			inherited: process.env.MCP_GUIDE_INHERITED,
-			absent: process.env.MCP_GUIDE_ABSENT,
-			stderr: String(stderr.dev) + ':' + String(stderr.ino),
-			// A stdio pipe is a FIFO on some hosts and a socketpair on others: this host reports
-			// S_IFSOCK for the very descriptor Node created as 'pipe'. Read the property the
-			// assertion needs — a channel the supervisor made — rather than one host's spelling of
-			// it. The inherit control hands down a regular file, which is neither, so the reading
-			// still separates the two.
-			pipe:
-				(stderr.mode & constants.S_IFMT) === constants.S_IFIFO
-				|| (stderr.mode & constants.S_IFMT) === constants.S_IFSOCK,
-		},
-	}) + '\\n')
-})
-`
-
-/**
- * A raw spawn whose `stdio` slot 2 is `'inherit'`, run one level down from this test.
- *
- * The relay is what makes `'inherit'` measurable. This process cannot name its own `stderr` across
- * a process boundary on every host, so it hands the relay a scratch file instead and reads that
- * file's identity back out of the grandchild `'inherit'` passes it down to.
- */
-const RELAY_SCRIPT = `
-const { spawn } = require('node:child_process')
-const child = spawn(process.execPath, ['-e', ${JSON.stringify(REPORT_SCRIPT)}], {
-	stdio: ['pipe', 'pipe', 'inherit'],
-})
-process.stdin.pipe(child.stdin)
-child.stdout.pipe(process.stdout)
-`
-
-/** The `env` this guide's claim is about: one key the parent does not carry. */
-const SUPPLIED_ENVIRONMENT = Object.freeze({ MCP_GUIDE_SUPPLIED: 'supplied' })
-
-/** The key this process carries and never supplies, so only a merge can put it in a child. */
-const INHERITED = Object.freeze({ key: 'MCP_GUIDE_INHERITED', value: 'inherited' })
-
-function readReport(value: unknown): Readonly<Record<string, unknown>> {
-	if (!isRecord(value)) throw new Error('The child returned no JSON-RPC envelope')
-	const result = value['result']
-	if (!isRecord(result)) throw new Error('The child returned no result record')
-	return result
-}
-
-/** The identity `fstat` reports for one descriptor, in the shape the reporting child reports it. */
-function readIdentity(descriptor: number): string {
-	const stat = fstatSync(descriptor)
-	return `${String(stat.dev)}:${String(stat.ino)}`
-}
-
-async function reportThroughTransport(): Promise<Readonly<Record<string, unknown>>> {
-	const transport = createStdioClientTransport({
-		command: process.execPath,
-		args: ['-e', REPORT_SCRIPT],
-		env: SUPPLIED_ENVIRONMENT,
-	})
-	const arrived = new Promise<JSONRPCMessage>((resolve) => {
-		transport.emitter.on('message', resolve)
-	})
-	try {
-		await transport.start()
-		await transport.send({ jsonrpc: '2.0', id: 1, method: 'report' })
-		const message = await waitForSettlement(
-			arrived,
-			10_000,
-			'Timed out waiting for the spawned child report',
-		)
-		return readReport(message)
-	} finally {
-		await transport.close()
-	}
-}
-
-/**
- * Drive the reporting child and answer the tail its transport retained, read after `close()`.
- *
- * The child writes {@link STDERR_SENTINEL} to its own `stderr` before it answers, so the reading is
- * taken after the sentinel has arrived rather than at whatever moment the reply happened to land.
- */
-async function readEvidenceThroughTransport(): Promise<string | undefined> {
-	const transport = createStdioClientTransport({
-		command: process.execPath,
-		args: ['-e', REPORT_SCRIPT],
-		env: SUPPLIED_ENVIRONMENT,
-	})
-	const arrived = new Promise<JSONRPCMessage>((resolve) => {
-		transport.emitter.on('message', resolve)
-	})
-	try {
-		await transport.start()
-		await transport.send({ jsonrpc: '2.0', id: 1, method: 'report' })
-		await waitForSettlement(arrived, 10_000, 'Timed out waiting for the spawned child report')
-		await waitForCondition(
-			'the reporting child stderr sentinel reaches the transport evidence',
-			() => transport.evidence?.includes(STDERR_SENTINEL) === true,
-			{ budget: 10_000 },
-		)
-	} finally {
-		await transport.close()
-	}
-	return transport.evidence
-}
-
-/** Answer the tail retained for the same child left unasked, so it writes no `stderr` at all. */
-async function readSilentEvidenceThroughTransport(): Promise<string | undefined> {
-	const transport = createStdioClientTransport({
-		command: process.execPath,
-		args: ['-e', REPORT_SCRIPT],
-		env: SUPPLIED_ENVIRONMENT,
-	})
-	try {
-		await transport.start()
-	} finally {
-		await transport.close()
-	}
-	return transport.evidence
-}
-
-/** Drive one raw-spawn control through its stdout pipe and read back the one report line. */
-async function readSpawnReport(child: ChildProcess): Promise<Readonly<Record<string, unknown>>> {
-	const stdout = child.stdout
-	const stdin = child.stdin
-	if (stdout === null || stdin === null) throw new Error('The control child has no stdio pipes')
-	try {
-		let buffer = ''
-		const line = new Promise<string>((resolve) => {
-			stdout.setEncoding('utf8')
-			stdout.on('data', (chunk: string) => {
-				buffer += chunk
-				const newline = buffer.indexOf('\n')
-				if (newline !== -1) resolve(buffer.slice(0, newline))
-			})
-		})
-		stdin.write('{"jsonrpc":"2.0","id":1,"method":"report"}\n')
-		const text = await waitForSettlement(
-			line,
-			10_000,
-			'Timed out waiting for the control child report',
-		)
-		return readReport(JSON.parse(text))
-	} finally {
-		child.kill()
-	}
-}
-
-/**
- * The environment control: a raw spawn whose `env` REPLACES `process.env`.
- *
- * Its `stderr` is dropped because the reporting child writes a sentinel there and this control
- * makes no claim about that descriptor. The inherit control owns that claim.
- */
-async function reportThroughReplacingSpawn(): Promise<Readonly<Record<string, unknown>>> {
-	return await readSpawnReport(
-		spawn(process.execPath, ['-e', REPORT_SCRIPT], {
-			env: { ...SUPPLIED_ENVIRONMENT },
-			stdio: ['pipe', 'pipe', 'ignore'],
-		}),
-	)
-}
-
-/** The `stderr` control: a raw spawn that INHERITS the descriptor this test handed its relay. */
-async function reportThroughInheritingSpawn(
-	descriptor: number,
-): Promise<Readonly<Record<string, unknown>>> {
-	return await readSpawnReport(
-		spawn(process.execPath, ['-e', RELAY_SCRIPT], { stdio: ['pipe', 'pipe', descriptor] }),
-	)
-}
-
-function registerStdioSpawn(): void {
 	describe('guides/mcp.md § stdio transport — what the spawned child actually receives', () => {
-		let owned: { readonly scratch: ScratchInterface; readonly descriptor: number } | undefined
+		const owned = new MCPFixtureCell<
+			{ readonly scratch: ScratchInterface; readonly descriptor: number } | undefined
+		>(undefined)
 
 		beforeAll(() => {
 			process.env[INHERITED.key] = INHERITED.value
 			const scratch = createScratch()
 			scratch.write(STDERR_FILE, '')
-			owned = { scratch, descriptor: openSync(join(scratch.path, STDERR_FILE), 'a') }
+			owned.value = { scratch, descriptor: openSync(join(scratch.path, STDERR_FILE), 'a') }
 		})
 
 		afterAll(() => {
-			if (owned !== undefined) {
-				closeSync(owned.descriptor)
-				owned.scratch.destroy()
+			if (owned.value !== undefined) {
+				closeSync(owned.value.descriptor)
+				owned.value.scratch.destroy()
 			}
-			owned = undefined
+			owned.value = undefined
 			delete process.env[INHERITED.key]
 		})
 
@@ -1070,12 +796,12 @@ function registerStdioSpawn(): void {
 		})
 
 		it("CONTROL — a raw spawn with stdio 'inherit' hands the child the exact descriptor its parent holds", async () => {
-			const held = requireValue(owned)
+			const held = requireValue(owned.value)
 
 			const report = await reportThroughInheritingSpawn(held.descriptor)
 
 			// The grandchild reports the scratch file this test handed the relay, identity and kind.
-			expect(report['stderr']).toBe(readIdentity(held.descriptor))
+			expect(report['stderr']).toBe(readDescriptorIdentity(held.descriptor))
 			expect(report['pipe']).toBe(false)
 			// And the bytes it wrote to that descriptor landed in the file this process owns.
 			expect(held.scratch.read(STDERR_FILE)).toBe(STDERR_SENTINEL)
@@ -1092,107 +818,7 @@ function registerStdioSpawn(): void {
 			expect(await readSilentEvidenceThroughTransport()).toBe('')
 		})
 	})
-}
 
-// ── The flagship stdio composition, executed ─────────────────────────────────
-//
-// `guides/mcp.md` § stdio transport wires `createStdioServer(createMCPLegacy(mcp)).start()` and
-// its trailing comment claims two things: that the composition answers `initialize`, and that
-// passing `mcp` alone subtracts exactly that. Parity proves both names resolve and neither
-// sentence. So the fence's composition is transcribed here and driven over the injectable stream
-// pair the same factory documents — the same dispatcher value, reached through the same call.
-//
-// The bare dispatcher is the control, and it is the comment's own subtraction: it sits outside
-// the decorated population, and it answers the refusal the modern seam owes an unregistered
-// method instead of a handshake.
-
-/** The dated handshake a legacy MCP client opens with, framed as the transport frames it. */
-const LEGACY_INITIALIZE =
-	'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"guide","version":"1.0.0"}}}'
-
-/** A legacy-only stdio peer that answers the adapter handshake and refuses other requests. */
-const LEGACY_PEER_SCRIPT = `
-const readline = require('node:readline')
-const rl = readline.createInterface({ input: process.stdin })
-rl.on('line', (line) => {
-	const message = JSON.parse(line)
-	if (message.id === undefined) return
-	const response = message.method === 'initialize'
-		? {
-				jsonrpc: '2.0',
-				id: message.id,
-				result: {
-					protocolVersion: '2025-11-25',
-					capabilities: { tools: {} },
-					serverInfo: { name: 'legacy-peer', version: '1.0.0' },
-				},
-			}
-		: {
-				jsonrpc: '2.0',
-				id: message.id,
-				error: { code: -32601, message: 'Method not found: ' + message.method },
-			}
-	process.stdout.write(JSON.stringify(response) + '\\n')
-})
-`
-
-/** Read one newline-framed reply off a stdio server's injected output stream. */
-async function readStdioReply(output: PassThrough): Promise<unknown> {
-	let buffer = ''
-	const line = new Promise<string>((resolve) => {
-		output.setEncoding('utf8')
-		output.on('data', (chunk: string) => {
-			buffer += chunk
-			const newline = buffer.indexOf('\n')
-			if (newline !== -1) resolve(buffer.slice(0, newline))
-		})
-	})
-	const text = await waitForSettlement(line, 10_000, 'Timed out waiting for the stdio server reply')
-	return JSON.parse(text)
-}
-
-/** Drive one framed request through a `createStdioServer` pump over injected streams. */
-async function driveStdioServer(mcp: MCPDispatcherInterface, request: string): Promise<unknown> {
-	const input = new PassThrough()
-	const output = new PassThrough()
-	const stdio = createStdioServer(mcp, { input, output })
-	stdio.start()
-	try {
-		const reply = readStdioReply(output)
-		input.write(`${request}\n`)
-		return await reply
-	} finally {
-		stdio.stop()
-	}
-}
-
-/** The fence's own server: the docs identity over an empty tool registry. */
-function createGuideServer(): ReturnType<typeof createMCPServer> {
-	return createMCPServer({
-		identity: { name: 'docs', version: '1.0.0' },
-		tools: createToolManager(),
-	})
-}
-
-/** Drives the fence's consumer-side adapter over a spawned legacy stdio peer. */
-async function readGuideClientVersion(): Promise<string | undefined> {
-	const carrier = createStdioClientTransport({
-		command: process.execPath,
-		args: ['-e', LEGACY_PEER_SCRIPT],
-	})
-	const client = createMCPClient({
-		transport: createMCPLegacyClientTransport(carrier, { timeout: 10_000 }),
-		timeout: 10_000,
-	})
-	try {
-		await client.connect()
-		return client.version
-	} finally {
-		await client.disconnect()
-	}
-}
-
-function registerStdioComposition(): void {
 	describe('guides/mcp.md § stdio transport — what the consumer-visible client exposes', () => {
 		it('keeps the client modern through the legacy stdio adapter', async () => {
 			await expect(readGuideClientVersion()).resolves.toBe('2026-07-28')
@@ -1224,253 +850,7 @@ function registerStdioComposition(): void {
 			})
 		})
 	})
-}
 
-// ── The client subscription fence, executed ──────────────────────────────────
-//
-// `guides/mcp.md` § Consume a subscription from a client claims an ORDER and a SHAPE: the
-// acknowledgement is the first YIELD, every stamped frame follows it in wire order, and the
-// graceful terminal is the generator's RETURN value rather than a yield. Parity proves that
-// `listen` exists and proves no sentence about what it delivers. So the fence's reads are
-// transcribed here and driven against a real in-process `MCPServer` over the duplex loopback —
-// the carrier the same section names as the one that delivers incrementally.
-//
-// Membership rule of the instrument: a notification carrying this subscription's reserved id
-// enters the stream, and one carrying no id does not. Both are injected through the SAME
-// transport door while the subscription is live, so the negative reading reports on the
-// stamping rather than on a delivery path that was dead. A route that claimed every inbound
-// notification would satisfy every ordering assertion here and fail the membership row.
-
-/** The honoured families the fence's filter names, as its own fence spells them. */
-const GUIDE_SUBSCRIPTION_FILTER = Object.freeze({
-	promptsListChanged: true,
-	resourceSubscriptions: Object.freeze(['resource://guide']),
-})
-
-/** The unstamped server notification that must stay outside the subscription stream. */
-const GUIDE_UNSTAMPED_NOTIFICATION: JSONRPCNotification = {
-	jsonrpc: '2.0',
-	method: 'notifications/message',
-	params: { level: 'info', data: 'outside every subscription' },
-}
-
-/** What one run of the fence's reads observed, in the order the fence reads them. */
-interface GuideSubscriptionReading {
-	readonly opened: IteratorResult<JSONRPCNotification, MCPSubscriptionResult>
-	/** The method the fence reads behind its `opened.done === false` guard. */
-	readonly acknowledged: string | undefined
-	readonly frames: readonly string[]
-	readonly closure: MCPSubscriptionResult | undefined
-	readonly proven: boolean
-	readonly unstamped: readonly string[]
-}
-
-/** Report the id the client minted for its `subscriptions/listen` request. */
-function findListenId(messages: readonly JSONRPCMessage[]): JSONRPCId | undefined {
-	for (const message of messages) {
-		if (!('method' in message) || message.method !== 'subscriptions/listen') continue
-		if ('id' in message) return message.id
-	}
-	return undefined
-}
-
-/** Drive the fence's `listen` reads against a real subscription server over the loopback. */
-async function readGuideSubscription(): Promise<GuideSubscriptionReading> {
-	const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
-	const transport = createLoopbackTransport(
-		createSubscriptionServer(() => source.readable, GUIDE_SUBSCRIPTION_FILTER),
-	)
-	const client = createMCPClient({ transport })
-	const unstamped: string[] = []
-	client.emitter.on('notification', (message) => {
-		if ('method' in message) unstamped.push(message.method)
-	})
-	await client.connect()
-
-	const subscription = new AbortController()
-	const stream = client.listen(GUIDE_SUBSCRIPTION_FILTER, {
-		signal: subscription.signal,
-		capacity: 16,
-	})
-	const opened = await stream.next()
-	// The fence's own narrowing, transcribed: the member read sits behind `opened.done === false`,
-	// so a run where the first read is not a yield reports no method rather than reading one.
-	let acknowledged: string | undefined
-	if (opened.done === false) acknowledged = opened.value.method
-
-	// Both injections ride the same transport door, while the subscription is live: the stamped
-	// one must enter the stream and the unstamped one must not.
-	transport.receive({
-		jsonrpc: '2.0',
-		method: 'notifications/prompts/list_changed',
-		params: { _meta: { [MCP_META_SUBSCRIPTION]: findListenId(transport.messages) } },
-	})
-	transport.receive(GUIDE_UNSTAMPED_NOTIFICATION)
-	const frames: string[] = []
-	const injected = await stream.next()
-	if (injected.done === false) frames.push(injected.value.method)
-
-	// The fence's own shape: one read per frame, so the consumer is parked when each arrives.
-	const writer = source.writable.getWriter()
-	await writer.write({ jsonrpc: '2.0', method: 'notifications/prompts/list_changed' })
-	const prompts = await stream.next()
-	if (prompts.done === false) frames.push(prompts.value.method)
-	await writer.write({
-		jsonrpc: '2.0',
-		method: 'notifications/resources/updated',
-		params: { uri: 'resource://guide' },
-	})
-	const resources = await stream.next()
-	if (resources.done === false) frames.push(resources.value.method)
-	await writer.close()
-
-	let closure: MCPSubscriptionResult | undefined
-	const terminal = await stream.next()
-	if (terminal.done === true) closure = terminal.value
-	subscription.abort()
-	await client.disconnect()
-	return {
-		opened,
-		acknowledged,
-		frames,
-		closure,
-		proven: isMCPSubscriptionResult(closure),
-		unstamped,
-	}
-}
-
-/** What the method row's progress-before-discard sentence observed. */
-interface GuideProgressReading {
-	readonly progress: readonly unknown[]
-	readonly notifications: readonly string[]
-}
-
-/** Drive active progress and unclaimed stale stamps through the same client transport door. */
-async function readGuideProgressClaim(): Promise<GuideProgressReading> {
-	const release = Promise.withResolvers<void>()
-	const tools = createToolManager()
-	tools.add(
-		createTool({
-			name: 'slow',
-			execute: async () => {
-				await release.promise
-				return 'done'
-			},
-		}),
-	)
-	const transport = createLoopbackTransport(
-		createMCPServer({ identity: { name: 'progress-server', version: '1.0.0' }, tools }),
-	)
-	const client = createMCPClient({ transport })
-	const progress: unknown[] = []
-	const notifications: string[] = []
-	client.emitter.on('notification', (message) => {
-		if ('method' in message) notifications.push(message.method)
-	})
-	await client.connect()
-
-	const call = client.call('slow', {}, { progress: (report) => progress.push(report) })
-	const id = transport.messages.find((message) => message.method === 'tools/call')?.id
-	if (id === undefined) throw new Error('Expected the guide call to carry an id')
-	transport.receive({
-		jsonrpc: '2.0',
-		method: 'notifications/progress',
-		params: {
-			progressToken: id,
-			progress: 1,
-			_meta: { [MCP_META_SUBSCRIPTION]: 9_999 },
-		},
-	})
-	transport.receive({
-		jsonrpc: '2.0',
-		method: 'notifications/custom',
-		params: { _meta: { [MCP_META_SUBSCRIPTION]: 9_999 } },
-	})
-	transport.receive({
-		jsonrpc: '2.0',
-		method: 'notifications/progress',
-		params: {
-			progressToken: 8_888,
-			progress: 2,
-			_meta: { [MCP_META_SUBSCRIPTION]: 9_999 },
-		},
-	})
-	await Promise.resolve()
-	release.resolve()
-	await call
-	await client.disconnect()
-	return { progress, notifications }
-}
-
-/** What one run of the section's bad-`capacity` clause observed. */
-interface GuideCapacityReading {
-	/** The reason the first read rejected with, or `undefined` when that read resolved. */
-	readonly refusal: unknown
-	/** Every method the transport carried up to and including that read. */
-	readonly methods: readonly string[]
-}
-
-/** Drive the capacity clause: a `capacity` below one fails the first read, before any write. */
-async function readGuideCapacityRefusal(): Promise<GuideCapacityReading> {
-	const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
-	const transport = createLoopbackTransport(
-		createSubscriptionServer(() => source.readable, GUIDE_SUBSCRIPTION_FILTER),
-	)
-	const client = createMCPClient({ transport })
-	await client.connect()
-
-	const stream = client.listen(GUIDE_SUBSCRIPTION_FILTER, {
-		signal: new AbortController().signal,
-		capacity: 0,
-	})
-	// The read is settled rather than awaited: the clause's subject is WHICH way it settles.
-	const [read] = await Promise.allSettled([stream.next()])
-	const methods = transport.messages.map((message) => message.method)
-	await client.disconnect()
-	return { refusal: read.status === 'rejected' ? read.reason : undefined, methods }
-}
-
-/** The families the burst reading asks for and the server honours, so every write matches. */
-const BURST_SUBSCRIPTION_FILTER = Object.freeze({
-	promptsListChanged: true,
-	resourcesListChanged: true,
-})
-
-/** The frames the burst reading writes before it reads anything, in wire order. */
-const BURST_METHODS = Object.freeze([
-	'notifications/prompts/list_changed',
-	'notifications/prompts/list_changed',
-	'notifications/resources/list_changed',
-])
-
-/** Write every frame before the first read — the burst the bounded queue exists to retain. */
-async function readBurstSubscription(): Promise<readonly string[]> {
-	const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
-	const transport = createLoopbackTransport(
-		createSubscriptionServer(() => source.readable, BURST_SUBSCRIPTION_FILTER),
-	)
-	const client = createMCPClient({ transport })
-	await client.connect()
-	const subscription = new AbortController()
-	const stream = client.listen(BURST_SUBSCRIPTION_FILTER, { signal: subscription.signal })
-	await stream.next()
-
-	const writer = source.writable.getWriter()
-	for (const method of BURST_METHODS) await writer.write({ jsonrpc: '2.0', method })
-	await writer.close()
-
-	const frames: string[] = []
-	for (;;) {
-		const frame = await stream.next()
-		if (frame.done === true) break
-		frames.push(frame.value.method)
-	}
-	subscription.abort()
-	await client.disconnect()
-	return frames
-}
-
-function registerSubscription(): void {
 	describe('guides/mcp.md § Consume a subscription from a client — what the stream delivers', () => {
 		it('yields the acknowledgement first, then the stamped frames, and returns the terminal', async () => {
 			const reading = await readGuideSubscription()
@@ -1525,41 +905,13 @@ function registerSubscription(): void {
 			expect(reading.methods).toEqual(['server/discover'])
 		})
 	})
-}
 
-/** Drive the fence verbatim: bind both halves, connect, and read what `call` resolves to. */
-async function readGuideBoundCall(): Promise<MCPCallOutcome> {
-	const serverSide = createMemoryTransport()
-	const clientSide = createMemoryTransport()
-	serverSide.connect(clientSide)
-	clientSide.connect(serverSide)
-
-	const tools = createToolManager()
-	tools.add(createTool({ name: 'add', execute: (a) => Number(a['x']) + Number(a['y']) }))
-	const server = createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
-	bindServer(server, serverSide)
-
-	const client = createMCPClient({ transport: createDuplexClientTransport(clientSide) })
-	const unbind = bindClient(client, clientSide)
-	await client.connect()
-	const outcome = await client.call('add', { x: 2, y: 5 })
-	unbind()
-	return outcome
-}
-
-// The fence names the value its binding holds, and `call` resolves an MCPCallOutcome rather than
-// the bare result — so the comment is executed here instead of read, and it reddens the moment
-// the documented shape and the resolved shape disagree.
-function registerDuplex(): void {
 	describe('guides/mcp.md § Bind a server or a client to any duplex transport', () => {
 		it('resolves the outcome the fence documents over the bound loopback pair', async () => {
 			expect(await readGuideBoundCall()).toEqual({ resultType: 'complete', value: 7 })
 		})
 	})
-}
 
-/** Drives the refresh fence against a real subscription and serialized duplex pair. */
-function registerToolRefresh(): void {
 	describe('guides/mcp.md — Refresh the tools an agent holds', () => {
 		it('adds remote tools beside the local tool from an initial snapshot', async () => {
 			const fixture = createToolRefresh()
@@ -1601,15 +953,23 @@ function registerToolRefresh(): void {
 					{ signal: subscription.signal },
 				)
 				await notifications.next()
-				let outcome = await refreshTools(fixture.client, fixture.tools, [])
+				const outcome = new MCPFixtureCell(await refreshTools(fixture.client, fixture.tools, []))
 				fixture.remote.add(createTool({ name: 'added', execute: () => 'added' }))
 				for await (const notification of notifications) {
 					if (notification.method === 'notifications/tools/list_changed') {
-						outcome = await refreshTools(fixture.client, fixture.tools, outcome.installed)
+						outcome.value = await refreshTools(
+							fixture.client,
+							fixture.tools,
+							outcome.value.installed,
+						)
 						break
 					}
 				}
-				expect(outcome).toEqual({ installed: ['remote', 'added'], collisions: [], failures: [] })
+				expect(outcome.value).toEqual({
+					installed: ['remote', 'added'],
+					collisions: [],
+					failures: [],
+				})
 				expect(
 					await fixture.tools.execute({ id: 'added', name: 'added', arguments: {} }),
 				).toMatchObject({ success: true, value: 'added' })
@@ -1630,7 +990,7 @@ function registerToolRefresh(): void {
 					{ signal: subscription.signal },
 				)
 				await notifications.next()
-				let outcome = await refreshTools(fixture.client, fixture.tools, [])
+				const outcome = new MCPFixtureCell(await refreshTools(fixture.client, fixture.tools, []))
 				const previous = fixture.tools.tool('remote')
 				const refreshed: string[] = []
 				fixture.remote.add(
@@ -1638,7 +998,7 @@ function registerToolRefresh(): void {
 				)
 				for await (const notification of notifications) {
 					if (notification.method !== 'notifications/tools/list_changed') continue
-					outcome = await refreshTools(fixture.client, fixture.tools, outcome.installed)
+					outcome.value = await refreshTools(fixture.client, fixture.tools, outcome.value.installed)
 					if (fixture.remote.tool('remote') === undefined) {
 						refreshed.push('removed')
 						break
@@ -1652,7 +1012,7 @@ function registerToolRefresh(): void {
 					fixture.remote.remove('remote')
 				}
 				expect(refreshed).toEqual(['replaced', 'removed'])
-				expect(outcome).toEqual({ installed: [], collisions: [], failures: [] })
+				expect(outcome.value).toEqual({ installed: [], collisions: [], failures: [] })
 				expect(fixture.tools.tool('remote')).toBeUndefined()
 				expect(fixture.tools.tool('local')).toBe(fixture.local)
 			} finally {
@@ -1702,61 +1062,4 @@ function registerToolRefresh(): void {
 			}
 		})
 	})
-}
-
-await new GuideCommand({
-	root: new URL('../', import.meta.url),
-	patterns: ['src/**/*.ts', 'tests/**/*.ts', 'guides/*.md', '*.md', 'package.json'],
-	modules: MODULES,
-	languages: FENCE_LANGUAGES,
-	language: EXAMPLE_LANGUAGE,
-	reader: readInventory,
-	runner: createVitest,
-}).execute(async (context) => {
-	;({
-		bindClient,
-		bindServer,
-		createDuplexClientTransport,
-		createMCPClient,
-		createMCPLegacy,
-		createMCPLegacyClientTransport,
-		createMCPServer,
-		isMCPError,
-		isMCPSubscriptionResult,
-		MCP_META_SUBSCRIPTION,
-	} = await import('@src/core'))
-	;({ createStdioClientTransport, createStdioServer } = await import('@src/server'))
-	;({ isRecord } = await import('@orkestrel/contract'))
-	;({ createTool, createToolManager } = await import('@orkestrel/tool'))
-	;({ afterAll, beforeAll, describe, expect, it } = await import('vitest'))
-	;({
-		computeSymbolKey,
-		createGuide,
-		createSource,
-		createSourceManager,
-		extractFenceImports,
-		findMissing,
-		findMissingSymbols,
-		findUnexampled,
-		isExternalLink,
-		resolveLink,
-	} = await import('@orkestrel/guide'))
-	;({ requireValue, waitForCondition } = await import('@orkestrel/test'))
-	;({ createScratch } = await import('@orkestrel/test/server'))
-	;({
-		createLoopbackTransport,
-		createMemoryTransport,
-		createSubscriptionServer,
-		createToolRefresh,
-		refreshTools,
-		waitForSettlement,
-	} = await import('./setup.js'))
-	;({ findMissingNamedImports } = await import('./setupServer.js'))
-
-	registerParity(context)
-	registerStdioSpawn()
-	registerStdioComposition()
-	registerSubscription()
-	registerDuplex()
-	registerToolRefresh()
 })

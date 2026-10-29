@@ -49,7 +49,9 @@ export class MCPStreamController implements MCPStreamControllerInterface {
 	readonly #signal: AbortSignal
 	readonly #closure: AbortController
 	readonly #listener: () => void
-	#waiter: PromiseWithResolvers<IteratorResult<JSONRPCNotification, JSONRPCResponse>> | undefined
+	readonly #waiters = new Set<
+		PromiseWithResolvers<IteratorResult<JSONRPCNotification, JSONRPCResponse>>
+	>()
 	#terminal: JSONRPCResponse | undefined
 	#error: unknown
 	#closed = false
@@ -84,22 +86,19 @@ export class MCPStreamController implements MCPStreamControllerInterface {
 	 */
 	async next(): Promise<IteratorResult<JSONRPCNotification, JSONRPCResponse>> {
 		if (this.#closed) return this.#exhausted()
-		if (this.#waiter !== undefined) throw new Error('A stream read is already pending')
+		if (this.#waiters.size !== 0) throw new Error('A stream read is already pending')
 		const waiter = Promise.withResolvers<IteratorResult<JSONRPCNotification, JSONRPCResponse>>()
-		this.#waiter = waiter
+		this.#waiters.add(waiter)
 		const pending = this.#source.next()
 		// The consumer may leave before the producer answers, and the promise it abandons is
 		// this controller's to contain rather than the runtime's to report.
 		void pending.catch(() => undefined)
-		let result: IteratorResult<JSONRPCNotification, JSONRPCResponse>
-		try {
-			result = await Promise.race([pending, waiter.promise])
-		} catch (error) {
+		const result = await Promise.race([pending, waiter.promise]).catch((error: unknown) => {
 			if (!this.#closed) this.#fail(error)
 			throw error
-		}
+		})
 		if (this.#closed) return this.#exhausted()
-		this.#waiter = undefined
+		this.#waiters.delete(waiter)
 		if (result.done !== true) return result
 		this.#complete(result.value)
 		return { done: true, value: result.value }
@@ -183,8 +182,8 @@ export class MCPStreamController implements MCPStreamControllerInterface {
 		this.#closed = true
 		this.#terminal = terminal
 		this.#release()
-		this.#waiter?.resolve({ done: true, value: terminal })
-		this.#waiter = undefined
+		for (const waiter of this.#waiters) waiter.resolve({ done: true, value: terminal })
+		this.#waiters.clear()
 		void this.#source.return(terminal).catch(() => undefined)
 	}
 
@@ -195,8 +194,8 @@ export class MCPStreamController implements MCPStreamControllerInterface {
 		this.#closed = true
 		this.#error = error
 		this.#release()
-		this.#waiter?.reject(error)
-		this.#waiter = undefined
+		for (const waiter of this.#waiters) waiter.reject(error)
+		this.#waiters.clear()
 		void this.#source.throw(error).catch(() => undefined)
 	}
 

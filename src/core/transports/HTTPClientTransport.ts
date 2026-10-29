@@ -22,6 +22,7 @@ import {
 	readEventStream,
 } from '../helpers.js'
 import { inferRequestVersion } from '../inferers.js'
+import { HTTPLifetime } from '../HTTPLifetime.js'
 import { parseJSONRPCMessage } from '../parsers.js'
 import { isJSONRPCResponse, isMCPVersion, isModernRequest } from '../validators.js'
 
@@ -92,10 +93,6 @@ export class HTTPClientTransport implements MCPMessageTransportInterface {
 	readonly #headers: Readonly<Record<string, string>>
 	readonly #fetch: typeof fetch
 	readonly #timeout: number | undefined
-	// The requests on the wire, one controller each. `close` is the only thing that can
-	// reach them: a `send` parked on a reply that never ends holds both the request and its
-	// response reader, and no other seam this transport exposes leads back to either.
-	readonly #pending = new Set<AbortController>()
 	// Each listed tool's `x-mcp-header` projections, read from the `tools/list` results this
 	// transport delivered. The annotations describe a call's own arguments, so the table a
 	// `tools/call` projects from is the one the caller was told about and nothing else.
@@ -106,9 +103,8 @@ export class HTTPClientTransport implements MCPMessageTransportInterface {
 	// superseded listing apart from one the current lineage is still owed.
 	readonly #stamps = new WeakMap<JSONRPCMessage, number>()
 	#session: string | undefined = undefined
-	#protocol: string | undefined = undefined
+	#lifetime: HTTPLifetime | undefined = new HTTPLifetime()
 	#generation = 0
-	#closed = false
 
 	constructor(options: HTTPClientTransportOptions) {
 		this.#emitter = new Emitter<MCPMessageTransportEventMap>()
@@ -136,18 +132,19 @@ export class HTTPClientTransport implements MCPMessageTransportInterface {
 		// A request/response transport opens no long-lived connection — `send` issues each
 		// `fetch` on demand. There is nothing to arm; opening the next connected lifetime is all
 		// this does, so a transport an earlier `close` ended sends again from here.
-		this.#closed = false
+		this.#lifetime ??= new HTTPLifetime()
 	}
 
 	async send(message: JSONRPCMessage): Promise<void> {
 		this.#stamp(message)
-		const request = new AbortController()
-		this.#pending.add(request)
-		try {
-			await this.#exchange(message, request.signal)
-		} finally {
-			this.#pending.delete(request)
-		}
+		const signal = this.#lifetime?.signal
+		await this.#exchange(
+			message,
+			AbortSignal.any([
+				...(signal === undefined ? [] : [signal]),
+				...(this.#timeout === undefined ? [] : [AbortSignal.timeout(this.#timeout)]),
+			]),
+		)
 	}
 
 	// Abort every request still on the wire, then clear the captured protocol before emitting
@@ -155,11 +152,10 @@ export class HTTPClientTransport implements MCPMessageTransportInterface {
 	// captured `session` is untouched). Idempotent: a second `close` on a transport this one
 	// already ended releases nothing and emits nothing.
 	async close(): Promise<void> {
-		if (this.#closed) return
-		this.#closed = true
-		for (const request of this.#pending) request.abort()
-		this.#pending.clear()
-		this.#protocol = undefined
+		const lifetime = this.#lifetime
+		if (lifetime === undefined) return
+		this.#lifetime = undefined
+		lifetime.abort()
 		this.#emitter.emit('close')
 	}
 
@@ -175,9 +171,16 @@ export class HTTPClientTransport implements MCPMessageTransportInterface {
 	// One request/response exchange under `signal`: `close` aborts it, and a `timeout` option
 	// composes with it so whichever fires first ends the same fetch and the same body read.
 	async #exchange(message: JSONRPCMessage, signal: AbortSignal): Promise<void> {
-		let response: Response
+		const response = await this.#request(message, signal)
+		if (response === undefined) return
+		const session = response.headers.get(MCP_SESSION_HEADER)
+		if (session !== null) this.#session = session
+		await this.#deliver(response, message)
+	}
+
+	async #request(message: JSONRPCMessage, signal: AbortSignal): Promise<Response | undefined> {
 		try {
-			response = await this.#fetch(this.#url, {
+			return await this.#fetch(this.#url, {
 				method: 'POST',
 				headers: {
 					'content-type': 'application/json',
@@ -190,10 +193,7 @@ export class HTTPClientTransport implements MCPMessageTransportInterface {
 					...this.#headers,
 				},
 				body: JSON.stringify(message),
-				signal:
-					this.#timeout === undefined
-						? signal
-						: AbortSignal.any([signal, AbortSignal.timeout(this.#timeout)]),
+				signal,
 			})
 		} catch (error) {
 			// A network-level failure (connection refused, DNS) — surface it for observation;
@@ -201,11 +201,6 @@ export class HTTPClientTransport implements MCPMessageTransportInterface {
 			this.#emitter.emit('error', error)
 			return
 		}
-		// Capture a server-assigned session id (a stateless server sends none) so it is echoed
-		// on subsequent requests; a missing header leaves `session` unchanged.
-		const session = response.headers.get(MCP_SESSION_HEADER)
-		if (session !== null) this.#session = session
-		await this.#deliver(response, message)
 	}
 
 	// Modern requests announce their own protocol version, so the header is projected from the
@@ -233,7 +228,8 @@ export class HTTPClientTransport implements MCPMessageTransportInterface {
 					: {}),
 			}
 		}
-		return this.#protocol === undefined ? {} : { [MCP_PROTOCOL_VERSION_HEADER]: this.#protocol }
+		const protocol = this.#lifetime?.protocol
+		return protocol === undefined ? {} : { [MCP_PROTOCOL_VERSION_HEADER]: protocol }
 	}
 
 	// Decode a reply and emit each carried message. A 202 (notification accepted) has no
@@ -244,26 +240,26 @@ export class HTTPClientTransport implements MCPMessageTransportInterface {
 	async #deliver(response: Response, sent: JSONRPCMessage): Promise<void> {
 		if (response.status === 202) return
 		const type = response.headers.get('content-type') ?? ''
-		let messages: readonly JSONRPCMessage[] = []
-		let failure: { readonly error: unknown } | undefined
-		try {
-			if (type.includes('text/event-stream')) {
-				messages = await readEventStream(response)
-			} else if (type.includes('application/json')) {
-				const message = parseJSONRPCMessage(await response.json())
-				if (message !== undefined) messages = [message]
-			}
-		} catch (error) {
-			failure = { error }
-		}
+		const decoded = await this.#decode(response, type).then(
+			(messages) => ({ messages }),
+			(error: unknown) => ({ error }),
+		)
+		const messages = 'messages' in decoded ? decoded.messages : []
 		for (const message of messages) this.#capture(message, sent)
 		if (!response.ok && messages.length === 0) throw buildResponseError(response, type)
-		if (failure !== undefined) this.#emitter.emit('error', failure.error)
+		if ('error' in decoded) this.#emitter.emit('error', decoded.error)
+	}
+
+	async #decode(response: Response, type: string): Promise<readonly JSONRPCMessage[]> {
+		if (type.includes('text/event-stream')) return await readEventStream(response)
+		if (!type.includes('application/json')) return []
+		const message = parseJSONRPCMessage(await response.json())
+		return message === undefined ? [] : [message]
 	}
 
 	// Capture the negotiated SUPPORTED protocol from the initialize result before emitting
 	// the message, so the next request carries its required protocol-version header; any
-	// other value (missing or unsupported) is ignored and leaves `#protocol` unchanged. A
+	// other value (missing or unsupported) leaves the lifetime's protocol unchanged. A
 	// `tools/list` answer additionally passes through `#select`, which is where SEP-2243's
 	// client-side exclusion happens — before the caller ever sees the result.
 	#capture(message: JSONRPCMessage, sent: JSONRPCMessage): void {
@@ -272,7 +268,7 @@ export class HTTPClientTransport implements MCPMessageTransportInterface {
 			isRecord(message.result) &&
 			isMCPVersion(message.result['protocolVersion'])
 		) {
-			this.#protocol = message.result['protocolVersion']
+			this.#lifetime?.accept(message.result['protocolVersion'])
 		}
 		this.#emitter.emit('message', this.#select(message, sent))
 	}

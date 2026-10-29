@@ -25,6 +25,7 @@ import type {
 } from './types.js'
 import { Emitter } from '@orkestrel/emitter'
 import { Tool } from '@orkestrel/tool'
+import { MCPConnection } from './MCPConnection.js'
 import { MCPTaskClient } from './MCPTaskClient.js'
 import {
 	attempt,
@@ -190,39 +191,8 @@ export class MCPClient implements MCPClientInterface {
 		}
 	>()
 	#nextId = 0
-	#connected = false
-	// WHICH attempt owns the connection this client opened on the transport, if any: the generation
-	// whose `start()` opened it. One fact, so a claim asks `is this connection MINE` and never `is
-	// SOMETHING open` — the question a superseded attempt resuming over a connection a LATER attempt
-	// opened would otherwise answer yes to. Both close sites read and clear it in ONE synchronous
-	// stretch before awaiting `close()`, and a close still running is joined rather than repeated, so
-	// `close()` (not contractually idempotent) runs once per connection; and whichever of them meets
-	// a close that FAILED — or one that merely outran its deadline, which says the shutdown did not
-	// answer and never that it did not happen — keeps the claim, because a connection that did not
-	// close, or never confirmed that it had, is still owed one. Which is also why `connect` refuses
-	// to open while a claim is standing.
-	#owner: number | undefined = undefined
-	// The `transport.close()` this client stopped waiting for, while it is still running. A deadline
-	// ends the WAIT, never the close, so the promise is retained rather than a verdict about it: the
-	// next caller that owes this connection a close JOINS this one under a fresh deadline instead of
-	// issuing a second shutdown over it, and the transport's own eventual answer — the only
-	// authority on whether the connection ended — settles the claim it left standing.
-	#closing: Promise<void> | undefined = undefined
-	// The in-flight connect attempt: the negotiation a second caller JOINS, and the generation
-	// it was published under, so a caller can tell an attempt it may join from one a teardown
-	// already superseded and must merely outwait. Genuinely private glue, like `#pending`'s
-	// settler shape.
-	#connecting: { readonly negotiation: Promise<void>; readonly generation: number } | undefined =
-		undefined
-	// The in-flight disconnect, published BEFORE its work starts.
-	#disconnecting: Promise<void> | undefined = undefined
-	#generation = 0
-	// Settled by every teardown, and replaced in the same stretch. A raw wire write — a
-	// notification, which carries no id and therefore no `#pending` entry — is the one await
-	// the teardown's drain cannot reach and no deadline is watching, so an attempt races its
-	// own raw write against this and stops waiting on a transport that may never answer.
-	#supersession = Promise.withResolvers<void>()
-	#version: MCPModernVersion | undefined = undefined
+	#connection: MCPConnection | undefined
+	readonly #teardowns = new Set<Promise<void>>()
 	#offer: MCPModernVersion
 
 	constructor(options: MCPClientOptions) {
@@ -263,11 +233,11 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	get connected(): boolean {
-		return this.#connected
+		return this.#connection?.connected ?? false
 	}
 
 	get version(): MCPModernVersion | undefined {
-		return this.#version
+		return this.#connection?.version
 	}
 
 	get transport(): MCPMessageTransportInterface {
@@ -279,61 +249,33 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	async connect(): Promise<void> {
-		// Wait out everything that must finish before a NEW attempt may open the next connection: a
-		// teardown in flight, an attempt a teardown already superseded, and a close this client
-		// still OWES. A CURRENT attempt is joined — one handshake, one outcome, shared. A SUPERSEDED
-		// one is outwaited instead: its caller asked for the connection that teardown ended, this
-		// caller is asking for a fresh one, and running beside it would open a second connection
-		// with one owner. Re-read after every wait, because what was in flight when this caller
-		// arrived is not what is in flight when it resumes, and two callers resuming together must
-		// not both open.
 		for (;;) {
-			const closing = this.#disconnecting
+			const [closing] = this.#teardowns
 			if (closing !== undefined) {
 				await closing.catch(() => undefined)
 				continue
 			}
-			if (this.#connected) return
-			const inflight = this.#connecting
-			if (inflight === undefined) {
-				// The claim a `close()` that faulted — or that outran its deadline — left standing:
-				// that connection did not close, or never confirmed that it had, so it is still owned,
-				// and this is the second door onto the rule `disconnect` already enforces — the door
-				// that never asked. Opening here would `start()` a connection beside it and leave the
-				// first with no claim and no public path. The debt is settled through the same slot
-				// `disconnect` publishes, so a caller arriving mid-retry joins one teardown instead
-				// of racing it; the retry joins a close still running rather than issuing another;
-				// and a close that fails AGAIN rejects THIS caller with that fault, leaving the debt
-				// owned for whoever asks next. Read only once no attempt is in flight: a LIVE attempt
-				// legitimately holds the claim while it negotiates, and closing there would tear down
-				// the very connection this caller is waiting on.
-				if (this.#owner === undefined) break
+			const current = this.#connection
+			if (current === undefined) break
+			if (current.connected) return
+			if (!current.settled) {
+				if (!current.superseded) return current.negotiation
+				await current.negotiation.catch(() => undefined)
+				continue
+			}
+			if (current.owed) {
 				await this.#teardown()
 				continue
 			}
-			if (inflight.generation === this.#generation) return inflight.negotiation
-			await inflight.negotiation.catch(() => undefined)
+			break
 		}
-		this.#generation += 1
-		const generation = this.#generation
-		// Published before `#negotiate` — and so before the injected `transport.start()` —
-		// runs: a transport that re-enters `connect()` joins this attempt instead of opening
-		// another. Building the record around `this.#negotiate(...)` directly does NOT close that
-		// door, because an async function runs synchronously to its first await, so `start()`
-		// would already have been called before the assignment.
-		const negotiation = Promise.resolve().then(() => this.#negotiate(generation))
-		const published = { negotiation, generation }
-		this.#connecting = published
-		try {
-			await negotiation
-		} finally {
-			// Only this attempt's own gate: a settling attempt must never unpublish a live one.
-			if (this.#connecting === published) this.#connecting = undefined
-		}
+		const connection = new MCPConnection(this.#transport, (current) => this.#negotiate(current))
+		this.#connection = connection
+		await connection.negotiation
 	}
 
 	async discover(): Promise<MCPDiscoverResult> {
-		const negotiated = this.#version
+		const negotiated = this.#connection?.version
 		const version = isMCPModernVersion(negotiated) ? negotiated : this.#offer
 		const received = await this.#request('server/discover', undefined, this.#timeout, version)
 		const owned = attempt(() => cloneJSONRecord(received))
@@ -389,12 +331,15 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	async disconnect(): Promise<void> {
-		const closing = this.#disconnecting
+		const [closing] = this.#teardowns
 		if (closing !== undefined) return closing
-		// These are worth tearing down: an announced connection, an attempt still in
-		// flight, and a connection whose `close()` faulted or never answered — that one is still
-		// owned, and both this path and the next `connect()` can reach it.
-		if (!this.#connected && this.#connecting === undefined && this.#owner === undefined) return
+		const connection = this.#connection
+		if (
+			connection === undefined ||
+			(!connection.connected && connection.settled && !connection.owed)
+		) {
+			return
+		}
 		await this.#teardown()
 	}
 
@@ -472,7 +417,7 @@ export class MCPClient implements MCPClientInterface {
 		if (opening !== undefined) throw opening
 		this.#nextId += 1
 		const id = this.#nextId
-		const modern = this.#version
+		const modern = this.#connection?.version
 		const request: JSONRPCRequest = {
 			jsonrpc: '2.0',
 			id,
@@ -547,22 +492,22 @@ export class MCPClient implements MCPClientInterface {
 	//
 	// `server/discover` is deliberately outside it. It is the round trip a connection is BUILT
 	// from, so refusing it would refuse `connect` itself; an attempt in flight publishes
-	// `#connecting` before `#negotiate` runs, which is what lets the handshake's own requests
+	// `#connection` before `#negotiate` runs, which is what lets the handshake's own requests
 	// through, and a bare `discover()` on a client that has never connected is a probe this
 	// package publishes on purpose.
 	//
 	// An attempt exempts its own requests only while it is the CURRENT one. `connect` is
 	// emitted from inside the attempt, so the attempt is still published when a listener runs,
-	// and a transport that listener loses — a closed port, a stopped page server — invalidates
-	// it at once by bumping the generation while leaving the gate standing. An exemption
+	// and a transport that listener loses — a closed port, a stopped page server —
+	// supersedes it at once while the negotiation remains pending. An exemption
 	// reading only whether SOME attempt is in flight would admit every request issued after
 	// that loss, and each would reach a carrier that drops the frame and answer nothing until
-	// its deadline. Comparing the attempt's generation with the live one is the same reading
+	// its deadline. Reading the connection's superseded latch is the same decision
 	// `#negotiate` and `connect` already take to tell a joinable attempt from a superseded one.
 	//
 	// A `disconnect` issued from that same listener is the OTHER sequence, and this gate is not
 	// what answers it. `#teardown` defers its close through the microtask queue, so the
-	// transport is still open and the generation still current when the listener's next request
+	// transport is still open and the connection has not been superseded when the listener's next request
 	// is issued: that request is admitted, entered as pending, and rejected by the teardown's
 	// own drain. It settles well inside its deadline rather than refusing, and it never parks.
 	//
@@ -572,9 +517,10 @@ export class MCPClient implements MCPClientInterface {
 	// reading, two deliveries, and no second copy of the rule to drift.
 	#refuse(method: string): MCPError | undefined {
 		if (method === 'server/discover') return undefined
-		if (this.#connected) return undefined
-		const inflight = this.#connecting
-		if (inflight !== undefined && inflight.generation === this.#generation) return undefined
+		const current = this.#connection
+		if (current?.connected || (current !== undefined && !current.settled && !current.superseded)) {
+			return undefined
+		}
 		return new MCPError(
 			`MCP client is not connected, so '${method}' was not issued`,
 			JSONRPC_INVALID_REQUEST,
@@ -607,7 +553,7 @@ export class MCPClient implements MCPClientInterface {
 		const timeout = deadline
 		const caller = options?.signal
 		const report = options?.progress
-		const modern = version ?? this.#version
+		const modern = version ?? this.#connection?.version
 		const metadata = {
 			...(modern === undefined
 				? {}
@@ -637,18 +583,13 @@ export class MCPClient implements MCPClientInterface {
 				reject(new Error(`MCP request '${method}' was aborted`, { cause: reason }))
 				return
 			}
-			let expiry: AbortSignal | undefined
-			let expire: (() => void) | undefined
-			if (timeout !== undefined) {
-				expiry = AbortSignal.timeout(timeout)
-				expire = this.#timeoutRequest.bind(this, id, method, timeout)
-				expiry.addEventListener('abort', expire, { once: true })
-			}
-			let abort: (() => void) | undefined
-			if (caller !== undefined) {
-				abort = this.#abortRequest.bind(this, id, method, caller)
-				caller.addEventListener('abort', abort, { once: true })
-			}
+			const expiry = timeout === undefined ? undefined : AbortSignal.timeout(timeout)
+			const expire =
+				timeout === undefined ? undefined : this.#timeoutRequest.bind(this, id, method, timeout)
+			if (expire !== undefined) expiry?.addEventListener('abort', expire, { once: true })
+			const abort =
+				caller === undefined ? undefined : this.#abortRequest.bind(this, id, method, caller)
+			if (abort !== undefined) caller?.addEventListener('abort', abort, { once: true })
 			this.#pending.set(id, {
 				resolve,
 				reject,
@@ -870,61 +811,56 @@ export class MCPClient implements MCPClientInterface {
 		return outcome.value
 	}
 
-	// One connect attempt, stamped with the generation `connect` published it under. Every
+	// One connection owns the attempt that `connect` published. Every
 	// re-ask below asks the same question a suspended negotiation must ask before it writes
 	// anything: is this still the current attempt, or did a `disconnect` supersede it?
-	async #negotiate(generation: number): Promise<void> {
-		await this.#transport.start()
-		// Claimed when the open COMPLETES — an abandoned `start()` that succeeds later still opened
-		// something and must still be closable — and never over a claim already standing. A standing
-		// claim names a connection an earlier attempt opened and no `close()` has confirmed, so
-		// overwriting it would leave that connection with no claim and no public path while this
-		// attempt reported itself connected over the same transport. `connect` refuses to open while
-		// a close is owed, so this is the second lock on that door rather than the door itself.
-		if (this.#owner !== undefined) {
-			throw new Error('MCP client owes a connection it has not closed')
-		}
-		this.#owner = generation
+	async #discover(connection: MCPConnection): Promise<MCPDiscoverResult> {
 		try {
-			if (generation !== this.#generation) throw new Error('MCP client disconnected')
-			let discovery: MCPDiscoverResult
 			try {
-				try {
-					discovery = await this.discover()
-				} catch (error) {
-					// Re-ask BEFORE the offer moves: this branch writes a SECOND discovery and
-					// creates a second pending entry, and `#closeConnection` drains `#pending`
-					// exactly once — a retry issued after that drain has nothing left to settle it,
-					// so a superseded attempt would never settle at all.
-					if (generation !== this.#generation) {
-						throw new Error('MCP client disconnected', { cause: error })
-					}
-					if (!isMCPError(error) || error.code !== MCP_UNSUPPORTED_VERSION) throw error
-					if (this.#pin !== undefined) throw error
-					const supported = isRecord(error.context) ? error.context['supported'] : undefined
-					const retry = isArray(supported)
-						? inferVersion(supported.filter((version): version is string => isString(version)))
-						: undefined
-					if (retry === undefined) throw error
-					this.#offer = retry
-					discovery = await this.discover()
-				}
+				return await this.discover()
 			} catch (error) {
-				if (generation !== this.#generation) throw error
-				if (!isMCPError(error) || error.code !== JSONRPC_METHOD_NOT_FOUND) throw error
-				throw new MCPError(
-					'MCP server does not support modern negotiation; wrap the transport with createMCPLegacyClientTransport to connect to a legacy peer',
-					error.code,
-					error.context,
-				)
+				// Re-ask BEFORE the offer moves: this branch writes a SECOND discovery and
+				// creates a second pending entry, and `#closeConnection` drains `#pending`
+				// exactly once — a retry issued after that drain has nothing left to settle it,
+				// so a superseded attempt would never settle at all.
+				if (connection.superseded) {
+					throw new Error('MCP client disconnected', { cause: error })
+				}
+				if (!isMCPError(error) || error.code !== MCP_UNSUPPORTED_VERSION) throw error
+				if (this.#pin !== undefined) throw error
+				const supported = isRecord(error.context) ? error.context['supported'] : undefined
+				const retry = isArray(supported)
+					? inferVersion(supported.filter((version): version is string => isString(version)))
+					: undefined
+				if (retry === undefined) throw error
+				this.#offer = retry
+				return await this.discover()
 			}
+		} catch (error) {
+			if (connection.superseded) throw error
+			if (!isMCPError(error) || error.code !== JSONRPC_METHOD_NOT_FOUND) throw error
+			throw new MCPError(
+				'MCP server does not support modern negotiation; wrap the transport with createMCPLegacyClientTransport to connect to a legacy peer',
+				error.code,
+				error.context,
+			)
+		}
+	}
 
-			let version: MCPModernVersion | undefined
-			if (this.#pin === undefined) {
-				version = inferVersion(discovery.supportedVersions)
-			} else if (isMCPModernVersion(this.#pin) && discovery.supportedVersions.includes(this.#pin)) {
-				version = this.#pin
-			} else {
+	async #negotiate(connection: MCPConnection): Promise<void> {
+		await this.#transport.start()
+		connection.claim()
+		try {
+			if (connection.superseded) throw new Error('MCP client disconnected')
+			const discovery = await this.#discover(connection)
+
+			const version =
+				this.#pin === undefined
+					? inferVersion(discovery.supportedVersions)
+					: isMCPModernVersion(this.#pin) && discovery.supportedVersions.includes(this.#pin)
+						? this.#pin
+						: undefined
+			if (this.#pin !== undefined && version === undefined) {
 				throw new MCPError(
 					'MCP server does not support the pinned protocol version',
 					MCP_UNSUPPORTED_VERSION,
@@ -943,26 +879,14 @@ export class MCPClient implements MCPClientInterface {
 					},
 				)
 			}
-			if (generation !== this.#generation) throw new Error('MCP client disconnected')
-			this.#version = version
-			this.#connected = true
+			if (connection.superseded) throw new Error('MCP client disconnected')
+			connection.accept(version)
 			this.#emitter.emit('connect')
 		} catch (error) {
-			// A superseded attempt must STILL close a connection IT opened, because `#closeConnection`
-			// skipped that close — nothing was open yet when it ran. But it closes only its OWN:
-			// the claim is this attempt's generation, so an attempt resuming over a connection a later
-			// attempt opened matches nothing and closes nothing. Claiming is synchronous, so the
-			// winner is decided before either side suspends.
-			if (this.#owner === generation) {
-				this.#owner = undefined
+			if (connection.owed) {
 				try {
-					await this.#closeTransport()
+					await this.#closeTransport(connection)
 				} catch (fault) {
-					// The connection did not close — or never confirmed that it had — so its ownership
-					// is not discarded: `disconnect` and the next `connect` are the paths left that can
-					// close it. Distinct failures owed to distinct audiences: this observer learns the transport
-					// fault, and the caller below still learns why the connection did not happen.
-					this.#owner = generation
 					this.#emitter.emit('error', fault)
 				}
 			}
@@ -970,91 +894,42 @@ export class MCPClient implements MCPClientInterface {
 		}
 	}
 
-	// Publish the teardown BEFORE its work starts, and unpublish it only once that work has settled.
-	// While it is published every `disconnect` joins it and every `connect` waits for it, which is
-	// what keeps one close and one open from running together. Shared by `disconnect` and by the
-	// `connect` that finds a close still owed, so both travel one slot and one queue.
+	// Publish before work starts, so reentrant callers join the same teardown.
 	async #teardown(): Promise<void> {
+		const [running] = this.#teardowns
+		if (running !== undefined) return await running
 		const teardown = Promise.resolve().then(() => this.#closeConnection())
-		this.#disconnecting = teardown
+		this.#teardowns.add(teardown)
 		try {
 			await teardown
 		} finally {
-			this.#disconnecting = undefined
+			this.#teardowns.delete(teardown)
 		}
 	}
 
-	// Invalidate any in-flight connect FIRST, so it cannot install `connected` over a connection
-	// this is closing. This does NOT await the attempt: an attempt suspended inside the injected
-	// `start()` would hold the teardown open for as long as that transport takes to open. What
-	// unwinds the attempt instead is rejecting every pending request AND settling the supersession
-	// signal — together they reach every await an attempt can be parked in once the transport has
-	// opened — and `#owner` decides which side closes. The attempt's gate stays published: it is
-	// the attempt itself that clears it, once it has settled, so a new `connect()` outwaits it
-	// rather than running beside it.
+	// Supersede before draining requests. An unfinished start closes what it opens later.
 	async #closeConnection(): Promise<void> {
-		this.#generation += 1
-		// Replace, then settle: the settled signal releases every attempt parked in a raw write
-		// right now, and the fresh one belongs to whatever attempt comes next — an attempt racing
-		// an already settled signal would abandon its own writes before making them.
-		const supersession = this.#supersession
-		this.#supersession = Promise.withResolvers<void>()
-		supersession.resolve()
-		const announced = this.#connected
-		this.#connected = false
-		this.#version = undefined
+		const connection = this.#connection
+		if (connection === undefined) return
+		const announced = connection.connected
+		connection.supersede()
 		for (const id of this.#pending.keys()) {
 			this.#settle(id, new Error('MCP client disconnected'), true)
 		}
-		// One rule covers both faults this teardown can meet: `disconnect` announces the loss of
-		// a connection this client ANNOUNCED, so an attempt that never emitted `connect` emits no
-		// `disconnect` either — and where it IS owed, a failing `close()` still reaches the
-		// caller without swallowing the announcement.
-		const owner = this.#owner
-		this.#owner = undefined
 		try {
-			if (owner !== undefined) await this.#closeTransport()
-		} catch (fault) {
-			// The connection did not close — or never confirmed that it had — so it is still owned,
-			// and a caller can still reach it: a client that discarded its claim here would leave a
-			// real connection open for the process's life with no public path left to close it. Where
-			// the fault was the deadline the close is still running, so the next caller joins it and
-			// the transport's own answer, not this one, decides whether the debt survives.
-			this.#owner = owner
-			throw fault
+			if (connection.owed) await this.#closeTransport(connection)
 		} finally {
 			if (announced) this.#emitter.emit('disconnect')
 		}
 	}
 
-	// The transport's own `close()` — the one await nothing else in this client can reach. The drain
-	// settles a pending request, a request deadline settles one the peer ignores, and the
-	// supersession signal settles a raw write; a shutdown the transport accepts and never answers is
-	// deaf to each of them, and while a teardown is published it would hold `disconnect` AND every
-	// later `connect` for the process's life. So the WAIT carries the same deadline every other
-	// transport wait carries — the wait, never the close, which keeps running and may still end the
-	// connection. That difference is the whole design here: a fault means the shutdown did NOT
-	// happen, a deadline means this client stopped waiting to hear whether it did, and treating the
-	// second as the first is what would send a second `close()` over a connection the first is still
-	// closing.
-	async #closeTransport(): Promise<void> {
-		// Join the close already running; issue one only when none is.
-		let closing = this.#closing
-		if (closing === undefined) {
-			closing = this.#transport.close()
-			this.#closing = closing
-			void closing.then(
-				() => this.#discharge(true),
-				() => this.#discharge(false),
-			)
-		}
+	// Bound the wait, leaving the connection's close running and joinable after a timeout.
+	async #closeTransport(connection: MCPConnection): Promise<void> {
+		const closing = connection.close()
 		const timeout = this.#timeout
 		const deadline = AbortSignal.timeout(timeout)
 		await Promise.race([
 			closing,
-			// `_` is the unused `resolve`: this side of the race only ever rejects. `race` keeps a
-			// handler on both sides, so a deadline that fires after the close returned rejects
-			// nothing unhandled.
 			new Promise<never>((_, reject) => {
 				deadline.addEventListener(
 					'abort',
@@ -1063,18 +938,6 @@ export class MCPClient implements MCPClientInterface {
 				)
 			}),
 		])
-	}
-
-	// The retained close finally answered, possibly long after its caller stopped waiting for it,
-	// and only it can say what happened: a close that RESOLVED ended the connection, so the claim it
-	// left standing is discharged here and the next `connect` may open; one that REJECTED ended
-	// nothing, so the claim stays owed and the next caller issues a fresh `close()` rather than
-	// joining a dead one. Nothing can have re-claimed the connection meanwhile — opening requires no
-	// standing claim, and while this close runs the claim is either held or held open by a published
-	// teardown — so the discharge can only ever clear the claim this close belonged to.
-	#discharge(closed: boolean): void {
-		this.#closing = undefined
-		if (closed) this.#owner = undefined
 	}
 
 	#timeoutRequest(id: JSONRPCId, method: string, timeout: number): void {
@@ -1121,14 +984,9 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	#loseTransport(): void {
-		const announced = this.#connected
-		this.#generation += 1
-		this.#connected = false
-		this.#version = undefined
-		this.#owner = undefined
-		const supersession = this.#supersession
-		this.#supersession = Promise.withResolvers<void>()
-		supersession.resolve()
+		const connection = this.#connection
+		const announced = connection?.connected
+		connection?.release()
 		for (const id of this.#pending.keys()) {
 			this.#settle(id, new Error('MCP transport closed'), true)
 		}

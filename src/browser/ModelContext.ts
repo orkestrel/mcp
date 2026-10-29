@@ -186,7 +186,7 @@ export class ModelContext implements ModelContextInterface {
 			options?.origins === undefined ? {} : { fromOrigins: options.origins },
 		)
 		return registered
-			.filter((tool) => options?.debugging === true || tool.annotations?.debugging !== true)
+			.filter((tool) => options?.debug === true || tool.annotations?.debugging !== true)
 			.map((tool) => createTool({ ...webMCPToTool(tool), execute: this.#execute.bind(this, tool) }))
 	}
 

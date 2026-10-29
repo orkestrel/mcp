@@ -61,16 +61,9 @@ const ABSENT = 'missing'
 // than random, `fetched` counts every call the page makes through the global transport after
 // `arm` wraps it, and `executed` counts the calls the hosted server's own handler ran. Each
 // scenario runs in a page of its own, so each starts from this module's initial state.
-let painted = 0
-let fetched = 0
-let executed = 0
-let armed = false
-let closure = {}
 // The page's real transport, held aside by `arm` so the counter can delegate to it.
-let carry
 // The credential the relay receipt presents, held where the provider's own headers callback
 // reads it.
-let credential = ''
 
 // The parked tool's moments, published as promises so a caller waits for them instead of
 // polling: `ANNOUNCE` settles after the handler is running, `OBSERVE` after its execution
@@ -80,47 +73,10 @@ const OBSERVE = Promise.withResolvers()
 
 // Counts one call and hands it to the page's real transport. The wrapper replaces nothing: the
 // real transport still carries every request, and the count is beside it.
-function countedFetch(...request) {
-	fetched += 1
-	return carry(...request)
-}
-
-function arm() {
-	if (armed) return
-	armed = true
-	carry = globalThis.fetch.bind(globalThis)
-	globalThis.fetch = countedFetch
-}
-
-function fetches() {
-	return fetched
-}
 
 // Reads what the page's own closure imports published, one export at a time.
-function readClosure() {
-	const read = {}
-	for (const [specifier, namespace] of Object.entries(closure)) {
-		const names = Object.keys(namespace).sort()
-		const first = names[0]
-		read[specifier] = {
-			names: names.length,
-			first: first ?? '',
-			kind: typeof namespace[first],
-		}
-	}
-	return JSON.stringify(read)
-}
 
 // Writes one note into the document and answers with the receipt it wrote.
-function paint(args) {
-	painted += 1
-	const receipt = `receipt-${painted}`
-	const item = document.createElement('li')
-	item.dataset.note = String(args.note ?? '')
-	item.textContent = receipt
-	document.getElementById(LIST).append(item)
-	return receipt
-}
 
 // Reads back what the page tool wrote, so a receipt states the document's own text.
 function readPainted() {
@@ -137,10 +93,6 @@ function addNumbers(args) {
 
 // The same sum, counted, so a receipt can state that the hosted server's own handler ran rather
 // than something upstream answering for it.
-function countAdd(args) {
-	executed += 1
-	return addNumbers(args)
-}
 
 // Parks until its own execution context aborts, announcing each moment on the promise a caller
 // is already waiting on.
@@ -159,9 +111,6 @@ function hold(args, context) {
 }
 
 // The headers the relay provider presents on every turn.
-function relayHeaders() {
-	return { authorization: credential }
-}
 
 // What one tool advertises to whoever holds it: the identity, the display metadata, the schema,
 // and the domain annotations. A field a projection dropped is absent here rather than defaulted.
@@ -220,30 +169,8 @@ function readCode(error) {
 // them — a script answering in the page, or the relay endpoint answering over the origin — and
 // everything else is held here, so each receipt is comparable with the other: what differs
 // between their readings is the provider and nothing else.
-async function runPaint(provider) {
-	const tools = createToolManager()
-	tools.add(createTool({ ...PAINT, execute: paint }))
-	const ledger = new Ledger()
-	const agent = createAgent(provider, { tools, limit: 4, on: ledger.hooks })
-	agent.context.messages.add({
-		role: 'user',
-		content: `record the note ${NOTE}`,
-	})
-	const result = await agent.generate()
-	return JSON.stringify({
-		painted: readPainted(),
-		calls: ledger.calls,
-		turns: ledger.turns,
-		content: result.content,
-		partial: result.partial,
-		...readMessages(agent),
-	})
-}
 
 // An agent with a page-defined tool, running entirely in the page.
-function runPage() {
-	return runPaint(new ScriptedProvider('scripted', PAINT_SCRIPT))
-}
 
 // The in-page MCP pair: connect, list, call, and the terminal's own refusal. The listing
 // is where the tool's display metadata and annotations come back off the wire.
@@ -264,12 +191,7 @@ async function runPair() {
 	const listed = await pair.client.tools()
 	const outcome = await pair.client.call(ADD.name, { a: 2, b: 3 })
 	pair.stop()
-	let code = 0
-	try {
-		await pair.client.call(ADD.name, { a: 2, b: 3 })
-	} catch (error) {
-		code = readCode(error)
-	}
+	const code = await readPairRefusal(pair.client)
 	return JSON.stringify({
 		connected: { connect, stop: pair.client.connected },
 		version,
@@ -283,39 +205,6 @@ async function runPair() {
 // server, a name the server does not hold comes back as a failure, and the run continues. The
 // registry's own entry is read back, so the metadata is followed from the wire into the
 // registry the agent dispatches from.
-async function runBridge() {
-	const hosted = createToolManager()
-	hosted.add(createTool({ ...ADD, execute: countAdd }))
-	const pair = createPageServer({ tools: hosted })
-	await pair.client.connect()
-	const advertised = await pair.client.tools()
-	const registry = createToolManager()
-	registry.add(advertised)
-	const ledger = new Ledger()
-	const script = [
-		buildTurn('', { index: 1, name: ADD.name, arguments: { a: 2, b: 3 } }),
-		buildTurn('', { index: 2, name: ABSENT, arguments: {} }),
-		buildTurn('the sum is 5'),
-	]
-	const agent = createAgent(new ScriptedProvider('scripted', script), {
-		tools: registry,
-		limit: 5,
-		on: ledger.hooks,
-	})
-	agent.context.messages.add({ role: 'user', content: 'add 2 and 3' })
-	const result = await agent.generate()
-	pair.stop()
-	return JSON.stringify({
-		advertised: advertised.map(readTool),
-		registered: readTool(registry.tool(ADD.name)),
-		executed,
-		calls: ledger.calls,
-		turns: ledger.turns,
-		content: result.content,
-		partial: result.partial,
-		...readMessages(agent),
-	})
-}
 
 // The caller's abort, carried from the agent's run through the client's request and into
 // the hosted handler's own execution context.
@@ -352,16 +241,6 @@ async function runCancel() {
 
 // On the page side, the agent's provider is the relay endpoint on this page's own origin, and
 // the tool it dispatches still executes in the page.
-function runRelay(url, value) {
-	credential = value
-	return runPaint(
-		createRelayProvider({
-			url,
-			parser: createNDJSONParser,
-			headers: relayHeaders,
-		}),
-	)
-}
 
 // The instrument's own control: one deliberate request the request log and the counter must
 // each report.
@@ -379,17 +258,161 @@ async function runControl(url) {
  * @param namespaces - Each `@orkestrel` root entry the installed agent's own module names,
  *   imported by the generated page module and keyed by its specifier
  */
+
+class ReceiptPage {
+	#painted = 0
+	#fetched = 0
+	#executed = 0
+	#armed = false
+	#closure = {}
+	#carry
+	#credential = ''
+
+	countedFetch(...request) {
+		this.#fetched += 1
+		return this.#carry(...request)
+	}
+
+	arm() {
+		if (this.#armed) return
+		this.#armed = true
+		this.#carry = globalThis.fetch.bind(globalThis)
+		globalThis.fetch = this.countedFetch.bind(this)
+	}
+
+	fetches() {
+		return this.#fetched
+	}
+
+	readClosure() {
+		const read = {}
+		for (const [specifier, namespace] of Object.entries(this.#closure)) {
+			const names = Object.keys(namespace).sort()
+			const first = names[0]
+			read[specifier] = {
+				names: names.length,
+				first: first ?? '',
+				kind: typeof namespace[first],
+			}
+		}
+		return JSON.stringify(read)
+	}
+
+	paint(args) {
+		this.#painted += 1
+		const receipt = `receipt-${this.#painted}`
+		const item = document.createElement('li')
+		item.dataset.note = String(args.note ?? '')
+		item.textContent = receipt
+		document.getElementById(LIST).append(item)
+		return receipt
+	}
+
+	countAdd(args) {
+		this.#executed += 1
+		return addNumbers(args)
+	}
+
+	relayHeaders() {
+		return { authorization: this.#credential }
+	}
+
+	async runPaint(provider) {
+		const tools = createToolManager()
+		tools.add(createTool({ ...PAINT, execute: this.paint.bind(this) }))
+		const ledger = new Ledger()
+		const agent = createAgent(provider, { tools, limit: 4, on: ledger.hooks })
+		agent.context.messages.add({
+			role: 'user',
+			content: `record the note ${NOTE}`,
+		})
+		const result = await agent.generate()
+		return JSON.stringify({
+			painted: readPainted(),
+			calls: ledger.calls,
+			turns: ledger.turns,
+			content: result.content,
+			partial: result.partial,
+			...readMessages(agent),
+		})
+	}
+
+	runPage() {
+		return this.runPaint(new ScriptedProvider('scripted', PAINT_SCRIPT))
+	}
+
+	async runBridge() {
+		const hosted = createToolManager()
+		hosted.add(createTool({ ...ADD, execute: this.countAdd.bind(this) }))
+		const pair = createPageServer({ tools: hosted })
+		await pair.client.connect()
+		const advertised = await pair.client.tools()
+		const registry = createToolManager()
+		registry.add(advertised)
+		const ledger = new Ledger()
+		const script = [
+			buildTurn('', { index: 1, name: ADD.name, arguments: { a: 2, b: 3 } }),
+			buildTurn('', { index: 2, name: ABSENT, arguments: {} }),
+			buildTurn('the sum is 5'),
+		]
+		const agent = createAgent(new ScriptedProvider('scripted', script), {
+			tools: registry,
+			limit: 5,
+			on: ledger.hooks,
+		})
+		agent.context.messages.add({ role: 'user', content: 'add 2 and 3' })
+		const result = await agent.generate()
+		pair.stop()
+		return JSON.stringify({
+			advertised: advertised.map(readTool),
+			registered: readTool(registry.tool(ADD.name)),
+			executed: this.#executed,
+			calls: ledger.calls,
+			turns: ledger.turns,
+			content: result.content,
+			partial: result.partial,
+			...readMessages(agent),
+		})
+	}
+
+	runRelay(url, value) {
+		this.#credential = value
+		return this.runPaint(
+			createRelayProvider({
+				url,
+				parser: createNDJSONParser,
+				headers: this.relayHeaders.bind(this),
+			}),
+		)
+	}
+
+	publish(namespaces) {
+		this.#closure = namespaces
+		globalThis.receipts = {
+			arm: this.arm.bind(this),
+			fetches: this.fetches.bind(this),
+			closure: this.readClosure.bind(this),
+			page: this.runPage.bind(this),
+			pair: runPair,
+			bridge: this.runBridge.bind(this),
+			cancel: runCancel,
+			relay: this.runRelay.bind(this),
+			control: runControl,
+		}
+	}
+}
+
+const PAGE = new ReceiptPage()
+
 export function publish(namespaces) {
-	closure = namespaces
-	globalThis.receipts = {
-		arm,
-		fetches,
-		closure: readClosure,
-		page: runPage,
-		pair: runPair,
-		bridge: runBridge,
-		cancel: runCancel,
-		relay: runRelay,
-		control: runControl,
+	PAGE.publish(namespaces)
+}
+
+async function readPairRefusal(client) {
+	try {
+		await client.call(ADD.name, { a: 2, b: 3 })
+		return 0
+	} catch (error) {
+		return readCode(error)
 	}
 }

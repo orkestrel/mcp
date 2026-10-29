@@ -238,8 +238,10 @@ export function inferParameterRefusal(
 	values: unknown,
 ): string | undefined {
 	for (const parameter of parameters) {
-		let carried: unknown = values
-		for (const key of parameter.path) carried = isRecord(carried) ? carried[key] : undefined
+		const carried = Iterator.from(parameter.path).reduce<unknown>(
+			(value, key) => (isRecord(value) ? value[key] : undefined),
+			values,
+		)
 		const field = `${MCP_PARAM_PREFIX}${parameter.name}`
 		const path = parameter.path.join('.')
 		const header = request.headers.get(field)

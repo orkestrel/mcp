@@ -1,22 +1,11 @@
-import type {
-	MCPMessageTransportEventMap,
-	MCPMessageTransportInterface,
-	JSONRPCId,
-	JSONRPCInvocation,
-	JSONRPCMessage,
-	JSONRPCNotification,
-	JSONRPCResponse,
-	MCPDispatcherInterface,
-} from '@src/core'
-import type { ToolManagerInterface } from '@orkestrel/tool'
-import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { MCPMessageTransportEventMap, JSONRPCMessage, JSONRPCNotification } from '@src/core'
+import { startErrorPeer } from '../../setupServer.js'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
 	bindClient,
 	bindServer,
 	createDuplexClientTransport,
 	createMCPClient,
-	createMCPLegacy,
 	createMCPServer,
 	isMCPError,
 	isMCPToolError,
@@ -28,17 +17,32 @@ import {
 	MCP_META_VERSION,
 	MCP_HANDSHAKE_VERSION,
 	MCP_UNSUPPORTED_VERSION,
-	parseJSONRPCMessage,
 	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from '@src/core'
 import { createHTTPClientTransport } from '@src/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { createEmitter } from '@orkestrel/emitter'
-import { createServer } from 'node:http'
-import { createSignal, requireValue, waitForDelay } from '@orkestrel/test'
+import { createSignal, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { isRecord } from '@orkestrel/contract'
 import {
 	createAbortTools,
+	recordAbortTimeout,
+	NATIVE_ABORT_TIMEOUT,
+	RECORDED_ABORT_DEADLINES,
+	createDispatchPeer,
+	createFixturePeer,
+	buildClientHandshakeResponse,
+	buildPeerDiscovery,
+	buildPeerCallResponse,
+	createCallPeer,
+	readPeerRequestId,
+	createWritePeer,
+	buildPeerProgress,
+	buildPeerError,
+	createPeerTools,
+	createPeerServer,
+	MCPFixtureCell,
+	createForgedResponsePeer,
+	createAccessorSignal,
 	createMemoryTransport,
 	createInputServer,
 	createLoopbackTransport,
@@ -46,574 +50,76 @@ import {
 	TestTaskManager,
 } from '../../setup.js'
 
-const NATIVE_ABORT_TIMEOUT = AbortSignal.timeout
-const RECORDED_ABORT_DEADLINES: number[] = []
-
-function recordAbortTimeout(deadline: number): AbortSignal {
-	RECORDED_ABORT_DEADLINES.push(deadline)
-	return NATIVE_ABORT_TIMEOUT(deadline)
-}
-
-// MCPClient ↔ a REAL MCPServer over an in-process LOOPBACK transport (a
-// real server + real ToolManager, no mocks of the unit under test). The loopback's
-// `send` dispatches each message through the server's `dispatch` and emits the response
-// back on its `message` event, so the full `initialize` / `tools/list` / `tools/call`
-// path runs in-process and deterministically. The OVER-FETCH JSON/SSE wire path is
-// pinned in tests/src/server/integration.test.ts. Here: the handshake, tool discovery + local-tool
-// wrapping (the wrapped `execute` calls back over the loopback), the content round-trip
-// + a remote-error → local throw, id correlation, the per-request timeout, and
-// disconnect rejecting pending requests.
-
-// An in-process loopback ClientTransport over a real MCPServer: each sent message is
-// dispatched through the server and its response (if any) emitted on `message` — a real
-// transport, not a mock. `gate` optionally WITHHOLDS the response for a chosen method
-// (so a request stays pending), to drive the timeout / disconnect paths. `sent` records
-// every method sent, for the correlation / handshake assertions.
-interface LoopbackInterface extends MCPMessageTransportInterface {
-	readonly sent: readonly string[]
-	readonly requests: readonly JSONRPCInvocation[]
-	readonly started: number
-	readonly closed: number
-	// The ORDERED transport lifecycle, recording each `start` / `close` at the moment the step
-	// hands control back — including a `close` that then FAULTS, because the client did perform
-	// it. Counts alone cannot see an interleaving: `{started: 2, closed: 1}` is the same tally
-	// whether the second start ran before or after the close finished.
-	readonly lifecycle: readonly string[]
-}
-
-// A fixture peer additionally exposes `release()`, which drains every suspended lifecycle step
-// the peer is parking — a `close.hold`-suspended `close()`, a `send.park`-suspended
-// `send()`, a `start.hold`-suspended `start()`, or any of them — and `live`: how many connections
-// it has OPEN. `live` is the instrument the attempt counters cannot be. `closed` counts
-// close ATTEMPTS, so `{ started: 2, closed: 2 }` reads identically whether both connections closed
-// or one close FAILED and left its connection open with no path back to it; `lifecycle` records the
-// same attempts in order and cannot separate them either. `live` rises when a `start()` completes
-// and falls only when a `close()` SUCCEEDS, so it is the one reading that answers "is anything
-// still open".
-//
-// Recorded gap: `release()` drains ONE shared list, so "release the held close while the held start
-// stays held" is inexpressible. No scenario here needs it — every test holding two steps at once
-// releases them in the order the client reaches them — but a test that must free one kind of
-// suspension while another stays parked needs the list split by step first.
-interface FixturePeerInterface extends LoopbackInterface {
-	readonly live: number
-	release(): void
-}
-
-function createLoopback(
-	server: MCPDispatcherInterface,
-	gate?: (method: string) => boolean,
-): LoopbackInterface {
-	const emitter = createEmitter<MCPMessageTransportEventMap>()
-	const requests: JSONRPCInvocation[] = []
-	const lifecycle: string[] = []
-	let started = 0
-	let closed = 0
-	return {
-		emitter,
-		session: undefined,
-		duplex: true,
-		get sent() {
-			return requests.map((request) => request.method)
-		},
-		get requests() {
-			return requests
-		},
-		get started() {
-			return started
-		},
-		get closed() {
-			return closed
-		},
-		get lifecycle() {
-			return lifecycle
-		},
-		async start() {
-			started += 1
-			lifecycle.push('start')
-		},
-		async send(message: JSONRPCMessage) {
-			if (!('method' in message)) return
-			requests.push(message)
-			const answer = await server.dispatch(message)
-			// This scripted peer drives only unary methods, so a held-open stream never
-			// arrives here; narrow it off rather than pretending it is a message.
-			if (answer === undefined || Symbol.asyncIterator in answer) return
-			// `gate(method)` true → withhold the response (the request stays pending), to
-			// drive the timeout / disconnect tests; otherwise emit it for id correlation.
-			if (gate === undefined || !gate(message.method)) emitter.emit('message', answer)
-		},
-		async close() {
-			closed += 1
-			lifecycle.push('close')
-		},
-	}
-}
-
-// The peer's seams, grouped under the transport method each one shapes. Every leaf answers for ONE
-// call, keyed by that call's 1-based count, because a boolean seam cannot express "the first close
-// fails, the second succeeds" — which is exactly what the client documents about a faulted close,
-// and what no instrument in this file could previously produce.
-interface FixturePeerOptions {
-	// The scripted answer to one request: a correlated response, a transport failure, or nothing.
-	readonly reply: (request: JSONRPCInvocation, count: number) => JSONRPCResponse | Error | undefined
-	// The OPENING step's seams. `hold` suspends the chosen `start()` through the shared
-	// held-resolver list — a transport whose socket or session is still coming up — until
-	// `release()` drains it; `enter` runs at `start()`'s first statement, before any await, so an
-	// injected transport can re-enter the client at the one position that observes what the client
-	// published before it handed control away. `fault` makes the chosen `start()` FAIL after it has
-	// already opened its connection — the acquire-then-reject class, which the client cannot see and
-	// therefore cannot clean up.
-	readonly start?: {
-		readonly hold?: (count: number) => boolean
-		readonly enter?: () => void
-		readonly fault?: (count: number) => boolean
-	}
-	// `park` suspends the write of the chosen method through that same list, for a slow write of a
-	// handshake step, so a test can observe what the client does WHILE the write is still in flight.
-	// Keyed by the same 1-based request count `reply` receives, so "the FIRST notification, not the
-	// one a reconnect sends" is a predicate rather than a counter smuggled into the test.
-	readonly send?: { readonly park?: (method: string, count: number) => boolean }
-	// `hold` suspends the chosen `close()` — a real transport whose shutdown takes time, a socket
-	// draining, an HTTP session ending — so a test can observe what the client does WHILE a close is
-	// still in flight; a held close the test never releases is a shutdown that never returns at all.
-	// `fault` makes the chosen `close()` FAIL: a socket that refuses to drain, a peer that rejects
-	// the shutdown.
-	readonly close?: {
-		readonly hold?: (count: number) => boolean
-		readonly fault?: (count: number) => boolean
-	}
-	// What the carrier declares about client-initiated notifications. Defaults to a duplex
-	// channel; `false` is the CONTROL for every claim about a cancellation frame, because it
-	// is the carrier class the frame structurally cannot reach — a request/response transport
-	// with no client→server notification channel at all, not a duplex one behaving badly.
-	readonly duplex?: boolean
-}
-
-// A minimal protocol-faithful peer for negotiation paths a conforming local MCPServer cannot
-// produce. The script returns a correlated response, no response, or a transport failure; the peer
-// records every real JSON-RPC request, preserves the lifecycle counts, and counts its own live
-// connections. No fake clock, no mock: each suspension is a real unresolved promise the test itself
-// settles, and each fault is a real rejection out of the real interface.
-function createFixturePeer(options: FixturePeerOptions): FixturePeerInterface {
-	const emitter = createEmitter<MCPMessageTransportEventMap>()
-	const requests: JSONRPCInvocation[] = []
-	const lifecycle: string[] = []
-	const held: Array<() => void> = []
-	let started = 0
-	let closed = 0
-	let live = 0
-	return {
-		emitter,
-		session: undefined,
-		duplex: options.duplex ?? true,
-		get sent() {
-			return requests.map((request) => request.method)
-		},
-		get requests() {
-			return requests
-		},
-		get started() {
-			return started
-		},
-		get closed() {
-			return closed
-		},
-		get lifecycle() {
-			return lifecycle
-		},
-		get live() {
-			return live
-		},
-		async start() {
-			options.start?.enter?.()
-			// Indexed off the count this call WILL take: `started` moves once the open completes, so
-			// a test can still read `started === 0` while the opening step is suspended.
-			if (options.start?.hold?.(started + 1) === true) {
-				await new Promise<void>((resolve) => {
-					held.push(resolve)
-				})
-			}
-			started += 1
-			live += 1
-			lifecycle.push('start')
-			// Opened, then refused: the connection exists and the caller is told the open failed, so
-			// nothing on the client side ever has a claim on it. Recorded AFTER `live` rises, because
-			// that strand is the whole point of the seam.
-			if (options.start?.fault?.(started) === true) throw new Error('transport start failed')
-		},
-		async send(message) {
-			if (!('method' in message)) return
-			requests.push(message)
-			const count = requests.length
-			// A parked write has left the client but not yet reached the peer, so the peer
-			// answers only once `release()` lets the write land.
-			if (options.send?.park?.(message.method, count) === true) {
-				await new Promise<void>((resolve) => {
-					held.push(resolve)
-				})
-			}
-			const response = options.reply(message, count)
-			if (response instanceof Error) throw response
-			if (response !== undefined) emitter.emit('message', response)
-		},
-		async close() {
-			// Counted on ENTRY, so a suspended close still has a stable index and the seams can name
-			// it; `lifecycle` still records the attempt only once the step hands control back.
-			closed += 1
-			const count = closed
-			if (options.close?.hold?.(count) === true) {
-				await new Promise<void>((resolve) => {
-					held.push(resolve)
-				})
-			}
-			// Recorded BEFORE the fault: a close that failed is still a close this client
-			// performed, and the count of attempts is what a retry has to move. What it did NOT do
-			// is close anything — so only a close that reaches the end lowers `live`.
-			lifecycle.push('close')
-			if (options.close?.fault?.(count) === true) throw new Error('transport close failed')
-			// `live` refuses to go negative and says so instead. A close reaching here ends a
-			// connection, so finding none open means this peer was asked to shut down something that
-			// was not there — a second close over one connection, or a close landing after a later
-			// attempt already closed it. A counter that silently reaches -1 cannot report the defect
-			// it exists to detect, and a raced-away rejection nobody is waiting for is invisible, so
-			// the lifecycle carries the marker too.
-			if (live === 0) {
-				lifecycle.push('overclose')
-				throw new Error('transport closed a connection that was not open')
-			}
-			live -= 1
-		},
-		release() {
-			for (const resolve of held.splice(0)) resolve()
-		},
-	}
-}
-
-function initializeResponse(id: string | number, protocol: unknown): JSONRPCResponse {
-	return {
-		jsonrpc: '2.0',
-		id,
-		result: {
-			protocolVersion: protocol,
-			capabilities: {},
-			serverInfo: { name: 'fixture', version: '1.0.0' },
-		},
-	}
-}
-
-function discoverResponse(
-	id: string | number,
-	versions: readonly unknown[] = ['2026-07-28', '2025-11-25'],
-	fields: Readonly<Record<string, unknown>> = {},
-): JSONRPCResponse {
-	return {
-		jsonrpc: '2.0',
-		id,
-		result: {
-			supportedVersions: versions,
-			capabilities: { tools: {} },
-			resultType: 'complete',
-			ttlMs: 60_000,
-			cacheScope: 'private',
-			...fields,
-		},
-	}
-}
-
-// One scripted `tools/call` answer, carrying whatever result the test needs — the arms a
-// conforming local MCPServer never produces (a deferred task, an input request, a
-// `resultType` no revision defines) all arrive this way.
-function callResponse(
-	id: string | number,
-	result: Readonly<Record<string, unknown>>,
-): JSONRPCResponse {
-	return { jsonrpc: '2.0', id, result }
-}
-
-// A modern peer that always completes discovery and hands every other request to `answer`.
-// `duplex` is the carrier's own declaration, so a test can put the SAME scenario on a
-// carrier that cannot take a client notification at all.
-function callPeer(
-	answer: (request: JSONRPCInvocation, count: number) => JSONRPCResponse | Error | undefined,
-	duplex = true,
-): FixturePeerInterface {
-	return createFixturePeer({
-		duplex,
-		reply: (request, count) => {
-			if (request.id === undefined) return undefined
-			if (request.method === 'server/discover') return discoverResponse(request.id)
-			return answer(request, count)
-		},
-	})
-}
-
-// The id the peer saw on its `count`-th request (1-based) — the correlation a test needs to
-// address a specific in-flight request, rather than assuming the client's counter.
-function requestId(peer: LoopbackInterface, count: number): string | number {
-	const id = peer.requests[count - 1]?.id
-	if (id === undefined) throw new Error(`Expected request ${count} to carry an id`)
-	return id
-}
-
-// A carrier whose `tools/call` write FAILS, in one of the shapes a failing write can
-// take — and they are one keyword apart. `throws` picks it: `true` is a non-`async` `send`
-// that throws SYNCHRONOUSLY, which `MCPMessageTransportInterface` forbids; `false` is the same
-// non-`async` `send` returning a REJECTED promise, which is what the contract requires. The
-// carrier is `duplex` either way, so a cancellation frame CAN reach it and its absence means
-// the client did not write one rather than that nothing could have carried it.
-//
-// Deliberately NOT built on `createFixturePeer`: every peer in this file declares `async send`,
-// and an `async` function converts a synchronous throw into a rejection — which is the whole
-// difference under test. This is the one carrier that has to be written the other way.
-function createWritePeer(throws: boolean): LoopbackInterface {
-	const emitter = createEmitter<MCPMessageTransportEventMap>()
-	const requests: JSONRPCInvocation[] = []
-	const lifecycle: string[] = []
-	let started = 0
-	let closed = 0
-	return {
-		emitter,
-		session: undefined,
-		duplex: true,
-		get sent() {
-			return requests.map((request) => request.method)
-		},
-		get requests() {
-			return requests
-		},
-		get started() {
-			return started
-		},
-		get closed() {
-			return closed
-		},
-		get lifecycle() {
-			return lifecycle
-		},
-		async start() {
-			started += 1
-			lifecycle.push('start')
-		},
-		send(message: JSONRPCMessage): Promise<void> {
-			if (!('method' in message)) return Promise.resolve()
-			requests.push(message)
-			if (message.method === 'server/discover' && message.id !== undefined) {
-				emitter.emit('message', discoverResponse(message.id))
-				return Promise.resolve()
-			}
-			if (message.method !== 'tools/call') return Promise.resolve()
-			const failure = new Error('write failed')
-			if (throws) throw failure
-			return Promise.reject(failure)
-		},
-		async close() {
-			closed += 1
-			lifecycle.push('close')
-		},
-	}
-}
-
-// One inbound progress frame naming a request by its progress token.
-function progressNotification(token: string | number, progress: number): JSONRPCMessage {
-	return {
-		jsonrpc: '2.0',
-		method: 'notifications/progress',
-		params: { progressToken: token, progress },
-	}
-}
-
-function errorResponse(id: string | number, code: number, data?: unknown): JSONRPCResponse {
-	return {
-		jsonrpc: '2.0',
-		id,
-		error: {
-			code,
-			message: code === MCP_UNSUPPORTED_VERSION ? 'Unsupported protocol version' : 'Legacy peer',
-			...(data === undefined ? {} : { data }),
-		},
-	}
-}
-
-interface ErrorPeerInterface {
-	readonly base: string
-	readonly requests: readonly JSONRPCInvocation[]
-	held(path: string): Promise<void>
-	release(path: string): void
-	stop(): Promise<void>
-}
-
-interface HeldResponse {
-	readonly id: JSONRPCId
-	readonly response: ServerResponse
-}
-
-async function readHTTPInvocation(request: IncomingMessage): Promise<JSONRPCInvocation> {
-	let body = ''
-	for await (const chunk of request) body += String(chunk)
-	const parsed: unknown = JSON.parse(body)
-	const message = parseJSONRPCMessage(parsed)
-	if (message === undefined || !('method' in message)) {
-		throw new Error('Expected an HTTP JSON-RPC invocation')
-	}
-	return message
-}
-
-function sendHTTPResponse(
-	response: ServerResponse,
-	status: number,
-	message?: JSONRPCMessage,
-): void {
-	response.writeHead(status, message === undefined ? {} : { 'content-type': 'application/json' })
-	response.end(message === undefined ? undefined : JSON.stringify(message))
-}
-
-async function startErrorPeer(): Promise<ErrorPeerInterface> {
-	const requests: JSONRPCInvocation[] = []
-	const responses = new Map<string, HeldResponse>()
-	const idless = Promise.withResolvers<void>()
-	const correlated = Promise.withResolvers<void>()
-	const silent = Promise.withResolvers<void>()
-	const server = createServer(async (request, response) => {
-		const message = await readHTTPInvocation(request)
-		requests.push(message)
-		if (message.method === 'notifications/initialized') {
-			sendHTTPResponse(response, 202)
-			return
-		}
-		if (message.id === undefined) {
-			sendHTTPResponse(response, 400)
-			return
-		}
-		if (request.url === '/modern') {
-			sendHTTPResponse(response, 200, discoverResponse(message.id))
-			return
-		}
-		if (request.url === '/silent') {
-			if (message.method === 'server/discover') {
-				responses.set('/silent', { id: message.id, response })
-				silent.resolve()
-				return
-			}
-			sendHTTPResponse(response, 200, initializeResponse(message.id, MCP_HANDSHAKE_VERSION))
-			return
-		}
-		if (request.url === '/connect') {
-			if (message.method === 'server/discover') {
-				sendHTTPResponse(response, 400, {
-					jsonrpc: '2.0',
-					error: { code: -32000, message: 'Bad Request: Server not initialized' },
-				})
-				return
-			}
-			sendHTTPResponse(response, 200, initializeResponse(message.id, MCP_HANDSHAKE_VERSION))
-			return
-		}
-		const path = request.url ?? ''
-		if (!responses.has(path)) {
-			responses.set(path, { id: message.id, response })
-			if (path === '/idless') idless.resolve()
-			if (path === '/correlated') correlated.resolve()
-			return
-		}
-		if (path === '/idless') {
-			sendHTTPResponse(response, 400, {
-				jsonrpc: '2.0',
-				error: { code: -32000, message: 'Bad Request: Server not initialized' },
-			})
-			return
-		}
-		sendHTTPResponse(response, 400, {
-			jsonrpc: '2.0',
-			id: message.id,
-			error: { code: -32041, message: 'Correlated failure' },
-		})
-	})
-	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-	const address = server.address()
-	if (address === null || typeof address === 'string') {
-		server.close()
-		throw new Error('Expected an ephemeral HTTP port')
-	}
-	return {
-		base: `http://127.0.0.1:${address.port}`,
-		get requests() {
-			return requests
-		},
-		held(path) {
-			if (path === '/idless') return idless.promise
-			if (path === '/correlated') return correlated.promise
-			if (path === '/silent') return silent.promise
-			return Promise.reject(new Error(`Unknown held path '${path}'`))
-		},
-		release(path) {
-			const held = responses.get(path)
-			if (held === undefined) return
-			responses.delete(path)
-			sendHTTPResponse(held.response, 200, discoverResponse(held.id))
-		},
-		stop() {
-			for (const held of responses.values()) held.response.destroy()
-			responses.clear()
-			return new Promise<void>((resolve, reject) => {
-				server.close((error) => {
-					if (error === undefined) resolve()
-					else reject(error)
-				})
-				server.closeAllConnections()
-			})
-		},
-	}
-}
-
-// A real ToolManager carrying a deterministic `echo` (returns a structured value),
-// a `greet` (a plain string), and a `boom` (throws — the manager isolates it into a
-// result error, which the server maps to an `isError` tool result).
-function toolRegistry(): ToolManagerInterface {
-	const tools = createToolManager()
-	tools.add(
-		createTool({
-			name: 'echo',
-			description: 'Echo the arguments back',
-			parameters: { type: 'object', properties: { value: { type: 'string' } } },
-			execute: (args) => ({ echoed: args['value'] }),
-		}),
-	)
-	tools.add(createTool({ name: 'greet', execute: () => 'hello' }))
-	tools.add(
-		createTool({
-			name: 'boom',
-			execute: () => {
-				throw new Error('tool exploded')
-			},
-		}),
-	)
-	return tools
-}
-
-function serverWithTools(): MCPDispatcherInterface {
-	return createMCPLegacy(
-		createMCPServer({
-			identity: { name: 'loopback', version: '1.2.3' },
-			tools: toolRegistry(),
-		}),
-	)
-}
-
 describe('MCPClient — connect (modern negotiation)', () => {
+	it('retries a failed negotiation with no accepted version and a second transport start', async () => {
+		const peer = createFixturePeer({
+			reply: (request, count) => {
+				if (request.method !== 'server/discover' || request.id === undefined) return undefined
+				return count === 1
+					? buildPeerDiscovery(request.id, ['1999-01-01'])
+					: buildPeerDiscovery(request.id)
+			},
+		})
+		const client = createMCPClient({ transport: peer })
+
+		await expect(client.connect()).rejects.toMatchObject({ code: MCP_UNSUPPORTED_VERSION })
+		expect(client.version).toBeUndefined()
+		expect(client.connected).toBe(false)
+		expect(peer.started).toBe(1)
+
+		await client.connect()
+
+		expect(peer.started).toBe(2)
+		expect(client.connected).toBe(true)
+		expect(client.version).toBe('2026-07-28')
+		await client.disconnect()
+	})
+
+	it('owes no close after the transport closes during an in-flight negotiation', async () => {
+		const peer = createFixturePeer({
+			reply: (request) => {
+				if (request.id === undefined) return undefined
+				return buildPeerDiscovery(request.id)
+			},
+			send: { park: () => true },
+		})
+		const client = createMCPClient({ transport: peer })
+		const opening = client.connect()
+		const rejected = opening.catch((error: unknown) => error)
+		try {
+			await waitForCondition('discovery starts', () => peer.sent.includes('server/discover'))
+			await peer.close()
+			peer.emitter.emit('close')
+			await expect(rejected).resolves.toMatchObject({
+				message: 'MCP client disconnected',
+				cause: { message: 'MCP transport closed' },
+			})
+			await client.disconnect()
+
+			expect(client.version).toBeUndefined()
+			expect(client.connected).toBe(false)
+			expect(peer.closed).toBe(1)
+			expect(peer.live).toBe(0)
+			expect(peer.lifecycle).toEqual(['start', 'close'])
+		} finally {
+			peer.release()
+			await client.disconnect()
+		}
+	})
+
 	it('rejects an invalid runtime pin synchronously during construction', () => {
 		const peer = createFixturePeer({ reply: () => undefined })
 		const options: unknown = { transport: peer, version: '2020-01-01' }
-		let failure: unknown
+		const failure = new MCPFixtureCell<unknown>(undefined)
 
 		try {
 			Reflect.apply(createMCPClient, undefined, [options])
 		} catch (error) {
-			failure = error
+			failure.value = error
 		}
 
-		expect(isMCPError(failure)).toBe(true)
-		expect(failure).toMatchObject({
+		expect(isMCPError(failure.value)).toBe(true)
+		expect(failure.value).toMatchObject({
 			code: MCP_UNSUPPORTED_VERSION,
 			context: { supported: SUPPORTED_MODERN_PROTOCOL_VERSIONS, requested: '2020-01-01' },
 		})
@@ -622,7 +128,7 @@ describe('MCPClient — connect (modern negotiation)', () => {
 	})
 
 	it('opens the transport, discovers modern support, and reports the newest common version', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({
 			transport: loopback,
 			identity: { name: 'tester', version: '9.9.9' },
@@ -638,23 +144,23 @@ describe('MCPClient — connect (modern negotiation)', () => {
 	})
 
 	it('fires the connect event and is idempotent', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback })
-		let connects = 0
+		const connects = new MCPFixtureCell(0)
 		client.emitter.on('connect', () => {
-			connects += 1
+			connects.value += 1
 		})
 
 		await client.connect()
 		await client.connect() // second connect is a no-op
 
-		expect(connects).toBe(1)
+		expect(connects.value).toBe(1)
 		expect(loopback.started).toBe(1)
 		expect(client.connected).toBe(true)
 	})
 
 	it('exposes the injected transport', () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback })
 		expect(client.transport).toBe(loopback)
 	})
@@ -662,7 +168,7 @@ describe('MCPClient — connect (modern negotiation)', () => {
 
 describe('MCPClient — modern discovery', () => {
 	it('exposes discover() and stamps its request with version, capabilities, and client identity', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({
 			transport: loopback,
 			identity: { name: 'inspector', version: '2.0.0' },
@@ -686,7 +192,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return errorResponse(request.id, MCP_UNSUPPORTED_VERSION, {
+				return buildPeerError(request.id, MCP_UNSUPPORTED_VERSION, {
 					supported: ['2025-11-25', '2025-06-18'],
 				})
 			},
@@ -704,7 +210,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return errorResponse(request.id, MCP_UNSUPPORTED_VERSION, {
+				return buildPeerError(request.id, MCP_UNSUPPORTED_VERSION, {
 					supported: ['2025-11-25', '2025-06-18'],
 				})
 			},
@@ -722,7 +228,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id, [MCP_HANDSHAKE_VERSION])
+				return buildPeerDiscovery(request.id, [MCP_HANDSHAKE_VERSION])
 			},
 		})
 		const client = createMCPClient({ transport: peer, version: '2026-07-28' })
@@ -742,7 +248,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return errorResponse(request.id, MCP_UNSUPPORTED_VERSION, {
+				return buildPeerError(request.id, MCP_UNSUPPORTED_VERSION, {
 					supported: ['2025-11-25'],
 				})
 			},
@@ -767,20 +273,20 @@ describe('MCPClient — modern discovery', () => {
 			},
 		})
 		const client = createMCPClient({ transport: peer })
-		let caught: unknown
+		const caught = new MCPFixtureCell<unknown>(undefined)
 
 		try {
 			await client.connect()
 		} catch (error) {
-			caught = error
+			caught.value = error
 		}
 
-		expect(isMCPError(caught)).toBe(true)
-		if (!isMCPError(caught)) throw new Error('Expected an MCPError')
-		expect(caught.name).toBe('MCPError')
-		expect(caught.code).toBe(-32000)
-		expect(caught.message).toBe('Bad Request: Server not initialized')
-		expect(caught.context).toBeUndefined()
+		expect(isMCPError(caught.value)).toBe(true)
+		if (!isMCPError(caught.value)) throw new Error('Expected an MCPError')
+		expect(caught.value.name).toBe('MCPError')
+		expect(caught.value.code).toBe(-32000)
+		expect(caught.value.message).toBe('Bad Request: Server not initialized')
+		expect(caught.value.context).toBeUndefined()
 		expect(client.version).toBeUndefined()
 		expect(peer.sent).toEqual(['server/discover'])
 	})
@@ -789,7 +295,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return errorResponse(request.id, JSONRPC_METHOD_NOT_FOUND)
+				return buildPeerError(request.id, JSONRPC_METHOD_NOT_FOUND)
 			},
 		})
 		const client = createMCPClient({ transport: peer })
@@ -831,10 +337,10 @@ describe('MCPClient — modern discovery', () => {
 			reply: (request) => {
 				if (request.id === undefined) return undefined
 				if (request.method === 'server/discover') {
-					return initializeResponse(request.id, MCP_HANDSHAKE_VERSION)
+					return buildClientHandshakeResponse(request.id, MCP_HANDSHAKE_VERSION)
 				}
 				if (request.method === 'initialize') {
-					return initializeResponse(request.id, MCP_HANDSHAKE_VERSION)
+					return buildClientHandshakeResponse(request.id, MCP_HANDSHAKE_VERSION)
 				}
 				return undefined
 			},
@@ -864,7 +370,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id, ['2026-07-28'], fields)
+				return buildPeerDiscovery(request.id, ['2026-07-28'], fields)
 			},
 		})
 		const client = createMCPClient({ transport: peer })
@@ -873,27 +379,7 @@ describe('MCPClient — modern discovery', () => {
 	})
 
 	it('owns an inbound response before routing and rejects a forged post-validation arm', async () => {
-		const emitter = createEmitter<MCPMessageTransportEventMap>()
-		const transport: MCPMessageTransportInterface = {
-			emitter,
-			session: undefined,
-			duplex: true,
-			async start() {},
-			async send(message) {
-				if (!('method' in message) || message.id === undefined) return
-				const target = discoverResponse(message.id)
-				const response = new Proxy(target, {
-					get(source, property) {
-						if (property === 'error') {
-							return { code: -32_000, message: 'forged after validation' }
-						}
-						return Reflect.get(source, property)
-					},
-				})
-				emitter.emit('message', response)
-			},
-			async close() {},
-		}
+		const transport = createForgedResponsePeer()
 		const client = createMCPClient({ transport })
 
 		await expect(client.discover()).resolves.toMatchObject({
@@ -910,7 +396,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id, versions, { ttlMs: ttl })
+				return buildPeerDiscovery(request.id, versions, { ttlMs: ttl })
 			},
 		})
 		const client = createMCPClient({ transport: peer })
@@ -922,7 +408,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id, ['2099-01-01', '2026-07-28'])
+				return buildPeerDiscovery(request.id, ['2099-01-01', '2026-07-28'])
 			},
 		})
 		const client = createMCPClient({ transport: peer })
@@ -940,7 +426,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id, ['2026-07-28'], { _meta: metadata, ttlMs: 0 })
+				return buildPeerDiscovery(request.id, ['2026-07-28'], { _meta: metadata, ttlMs: 0 })
 			},
 		})
 		const client = createMCPClient({ transport: peer })
@@ -954,7 +440,7 @@ describe('MCPClient — modern discovery', () => {
 	})
 
 	it('owns an inbound discovery response once before later validation', async () => {
-		let snapshots = 0
+		const snapshots = new MCPFixtureCell(0)
 		const result = new Proxy(
 			{
 				supportedVersions: ['2026-07-28'],
@@ -965,8 +451,8 @@ describe('MCPClient — modern discovery', () => {
 			},
 			{
 				ownKeys(target) {
-					snapshots += 1
-					if (snapshots > 1) throw new Error('hostile snapshot')
+					snapshots.value += 1
+					if (snapshots.value > 1) throw new Error('hostile snapshot')
 					return Reflect.ownKeys(target)
 				},
 			},
@@ -982,7 +468,7 @@ describe('MCPClient — modern discovery', () => {
 		await expect(client.discover()).resolves.toMatchObject({
 			supportedVersions: ['2026-07-28'],
 		})
-		expect(snapshots).toBe(1)
+		expect(snapshots.value).toBe(1)
 	})
 
 	it('accepts and returns an exact open custom server capability', async () => {
@@ -995,7 +481,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id, ['2026-07-28'], { capabilities })
+				return buildPeerDiscovery(request.id, ['2026-07-28'], { capabilities })
 			},
 		})
 		const client = createMCPClient({ transport: peer })
@@ -1028,7 +514,7 @@ describe('MCPClient — modern discovery', () => {
 					}
 				}
 				if (request.method === 'initialize') {
-					return initializeResponse(request.id, MCP_HANDSHAKE_VERSION)
+					return buildClientHandshakeResponse(request.id, MCP_HANDSHAKE_VERSION)
 				}
 				return undefined
 			},
@@ -1048,7 +534,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method === 'initialize' && request.id !== undefined) {
-					return initializeResponse(request.id, MCP_HANDSHAKE_VERSION)
+					return buildClientHandshakeResponse(request.id, MCP_HANDSHAKE_VERSION)
 				}
 				return undefined
 			},
@@ -1113,7 +599,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id, ['2026-07-28'])
+				return buildPeerDiscovery(request.id, ['2026-07-28'])
 			},
 		})
 		const client = createMCPClient({ transport: peer, timeout: 15_000 })
@@ -1135,7 +621,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return errorResponse(request.id, JSONRPC_METHOD_NOT_FOUND)
+				return buildPeerError(request.id, JSONRPC_METHOD_NOT_FOUND)
 			},
 		})
 		const client = createMCPClient({ transport: peer, version: '2026-07-28' })
@@ -1149,7 +635,7 @@ describe('MCPClient — modern discovery', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.id === undefined) return undefined
-				if (request.method === 'server/discover') return discoverResponse(request.id)
+				if (request.method === 'server/discover') return buildPeerDiscovery(request.id)
 				if (request.method === 'tools/list') return new Error('Settled modern transport failed')
 				return undefined
 			},
@@ -1164,7 +650,7 @@ describe('MCPClient — modern discovery', () => {
 	})
 
 	it('stamps every modern request and sends no client notification', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback })
 
 		await client.connect()
@@ -1185,7 +671,7 @@ describe('MCPClient — modern discovery', () => {
 
 describe('MCPClient — tools() (discovery + local-tool wrapping)', () => {
 	it('lists the remote tools as local Tools, mapping inputSchema → parameters', async () => {
-		const client = createMCPClient({ transport: createLoopback(serverWithTools()) })
+		const client = createMCPClient({ transport: createDispatchPeer(createPeerServer()) })
 		await client.connect()
 
 		const tools = await client.tools()
@@ -1201,7 +687,7 @@ describe('MCPClient — tools() (discovery + local-tool wrapping)', () => {
 	})
 
 	it("the wrapped tool's execute calls back over the transport and returns the remote value", async () => {
-		const client = createMCPClient({ transport: createLoopback(serverWithTools()) })
+		const client = createMCPClient({ transport: createDispatchPeer(createPeerServer()) })
 		await client.connect()
 		const tools = await client.tools()
 		const echo = tools.find((tool) => tool.name === 'echo')
@@ -1213,7 +699,7 @@ describe('MCPClient — tools() (discovery + local-tool wrapping)', () => {
 	})
 
 	it('a wrapped remote-erroring tool, added to a ToolManager, is isolated into a failure result', async () => {
-		const client = createMCPClient({ transport: createLoopback(serverWithTools()) })
+		const client = createMCPClient({ transport: createDispatchPeer(createPeerServer()) })
 		await client.connect()
 		const remote = createToolManager()
 		remote.add(await client.tools())
@@ -1234,9 +720,9 @@ describe('MCPClient — tools() (discovery + local-tool wrapping)', () => {
 
 describe('MCPClient — call() (the content round-trip)', () => {
 	it('places input continuation state and responses as top-level tools/call params', async () => {
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, {
+				? buildPeerCallResponse(request.id, {
 						resultType: 'complete',
 						content: [{ type: 'text', text: 'done' }],
 					})
@@ -1294,9 +780,9 @@ describe('MCPClient — call() (the content round-trip)', () => {
 	// rides exactly when a caller supplies one: an absent state must leave the key off the
 	// wire rather than send `undefined`, an empty string, or a carrier this client invented.
 	it('omits requestState from a retry the peer sealed no state for', async () => {
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, {
+				? buildPeerCallResponse(request.id, {
 						resultType: 'complete',
 						content: [{ type: 'text', text: 'done' }],
 					})
@@ -1317,7 +803,7 @@ describe('MCPClient — call() (the content round-trip)', () => {
 
 	it('continues an input-required call with protected state and responses', async () => {
 		const client = createMCPClient({
-			transport: createLoopback(createInputServer(toolRegistry())),
+			transport: createDispatchPeer(createInputServer(createPeerTools())),
 			capabilities: { elicitation: {} },
 		})
 		await client.connect()
@@ -1347,7 +833,7 @@ describe('MCPClient — call() (the content round-trip)', () => {
 
 	it('keeps changed retry arguments under the server digest refusal', async () => {
 		const client = createMCPClient({
-			transport: createLoopback(createInputServer(toolRegistry())),
+			transport: createDispatchPeer(createInputServer(createPeerTools())),
 			capabilities: { elicitation: {} },
 		})
 		await client.connect()
@@ -1390,7 +876,7 @@ describe('MCPClient — call() (the content round-trip)', () => {
 	})
 
 	it('returns a structured value on the complete arm', async () => {
-		const client = createMCPClient({ transport: createLoopback(serverWithTools()) })
+		const client = createMCPClient({ transport: createDispatchPeer(createPeerServer()) })
 		await client.connect()
 
 		expect(await client.call('echo', { value: 'x' })).toEqual({
@@ -1400,7 +886,7 @@ describe('MCPClient — call() (the content round-trip)', () => {
 	})
 
 	it('returns a plain string value', async () => {
-		const client = createMCPClient({ transport: createLoopback(serverWithTools()) })
+		const client = createMCPClient({ transport: createDispatchPeer(createPeerServer()) })
 		await client.connect()
 
 		// `greet` returns the string 'hello'; the server carries it verbatim as
@@ -1409,7 +895,7 @@ describe('MCPClient — call() (the content round-trip)', () => {
 	})
 
 	it('throws when the remote tool fails (isError), carrying the error text', async () => {
-		const client = createMCPClient({ transport: createLoopback(serverWithTools()) })
+		const client = createMCPClient({ transport: createDispatchPeer(createPeerServer()) })
 		await client.connect()
 
 		await expect(client.call('boom', {})).rejects.toThrow('tool exploded')
@@ -1420,7 +906,7 @@ describe('MCPClient — call() (the content round-trip)', () => {
 	})
 
 	it('rejects a tools/call for an unknown remote tool (the manager not-found error)', async () => {
-		const client = createMCPClient({ transport: createLoopback(serverWithTools()) })
+		const client = createMCPClient({ transport: createDispatchPeer(createPeerServer()) })
 		await client.connect()
 
 		// The remote ToolManager resolves an unknown name to an `isError` not-found result,
@@ -1436,7 +922,7 @@ describe('MCPClient — result-type safety', () => {
 			const peer = createFixturePeer({
 				reply: (request) => {
 					if (request.id === undefined) return undefined
-					if (request.method === 'server/discover') return discoverResponse(request.id)
+					if (request.method === 'server/discover') return buildPeerDiscovery(request.id)
 					if (request.method === 'tools/list') {
 						return { jsonrpc: '2.0', id: request.id, result: { tools: [], resultType } }
 					}
@@ -1446,24 +932,24 @@ describe('MCPClient — result-type safety', () => {
 			const client = createMCPClient({ transport: peer })
 			await client.connect()
 
-			let caught: unknown
+			const caught = new MCPFixtureCell<unknown>(undefined)
 			try {
 				await client.tools()
 			} catch (error) {
-				caught = error
+				caught.value = error
 			}
 
-			expect(isMCPError(caught)).toBe(true)
-			if (!isMCPError(caught)) throw new Error('Expected an MCPError')
-			expect(caught.code).toBe(JSONRPC_INVALID_PARAMS)
-			expect(caught.message).toBe(`MCP result type '${resultType}' is not supported`)
+			expect(isMCPError(caught.value)).toBe(true)
+			if (!isMCPError(caught.value)) throw new Error('Expected an MCPError')
+			expect(caught.value.code).toBe(JSONRPC_INVALID_PARAMS)
+			expect(caught.value.message).toBe(`MCP result type '${resultType}' is not supported`)
 		},
 	)
 })
 
 describe('MCPClient — id correlation', () => {
 	it('routes each response to its own pending request across concurrent calls', async () => {
-		const client = createMCPClient({ transport: createLoopback(serverWithTools()) })
+		const client = createMCPClient({ transport: createDispatchPeer(createPeerServer()) })
 		await client.connect()
 
 		// Three concurrent calls; each must resolve to ITS OWN result, proving the id-keyed
@@ -1480,7 +966,7 @@ describe('MCPClient — id correlation', () => {
 	})
 
 	it('surfaces a server-initiated notification on the notification event', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback })
 		await client.connect()
 		const seen: JSONRPCMessage[] = []
@@ -1495,7 +981,7 @@ describe('MCPClient — id correlation', () => {
 	})
 
 	it('preserves a remote JSON-RPC error code and data as an MCPError', async () => {
-		const loopback = createLoopback(serverWithTools(), (method) => method === 'tools/list')
+		const loopback = createDispatchPeer(createPeerServer(), (method) => method === 'tools/list')
 		const client = createMCPClient({ transport: loopback })
 		await client.connect()
 		const pending = client.tools()
@@ -1509,17 +995,17 @@ describe('MCPClient — id correlation', () => {
 			},
 		})
 
-		let caught: unknown
+		const caught = new MCPFixtureCell<unknown>(undefined)
 		try {
 			await pending
 		} catch (error) {
-			caught = error
+			caught.value = error
 		}
-		expect(isMCPError(caught)).toBe(true)
-		if (!isMCPError(caught)) throw new Error('Expected an MCPError')
-		expect(caught.message).toBe('Remote failure')
-		expect(caught.code).toBe(-32042)
-		expect(caught.context).toEqual({ retry: false })
+		expect(isMCPError(caught.value)).toBe(true)
+		if (!isMCPError(caught.value)) throw new Error('Expected an MCPError')
+		expect(caught.value.message).toBe('Remote failure')
+		expect(caught.value.code).toBe(-32042)
+		expect(caught.value.context).toEqual({ retry: false })
 	})
 
 	it('settles id-less errors over real HTTP without weakening correlated isolation', async () => {
@@ -1571,16 +1057,16 @@ describe('MCPClient — id correlation', () => {
 			})
 			const retained = correlatedClient.discover()
 			await peer.held('/correlated')
-			let correlatedFailure: unknown
+			const correlatedFailure = new MCPFixtureCell<unknown>(undefined)
 			try {
 				await correlatedClient.discover()
 			} catch (error) {
-				correlatedFailure = error
+				correlatedFailure.value = error
 			}
-			expect(isMCPError(correlatedFailure)).toBe(true)
-			if (!isMCPError(correlatedFailure)) throw new Error('Expected an MCPError')
-			expect(correlatedFailure.code).toBe(-32041)
-			expect(correlatedFailure.message).toBe('Correlated failure')
+			expect(isMCPError(correlatedFailure.value)).toBe(true)
+			if (!isMCPError(correlatedFailure.value)) throw new Error('Expected an MCPError')
+			expect(correlatedFailure.value.code).toBe(-32041)
+			expect(correlatedFailure.value.message).toBe('Correlated failure')
 			peer.release('/correlated')
 			await expect(retained).resolves.toMatchObject({ resultType: 'complete' })
 		} finally {
@@ -1597,7 +1083,7 @@ describe('MCPClient — per-request timeout', () => {
 	it('rejects a request the server never answers, after the deadline', async () => {
 		// Gate `tools/list` so its response is withheld — the request stays pending until the
 		// tiny per-request deadline fires (short timers).
-		const loopback = createLoopback(serverWithTools(), (method) => method === 'tools/list')
+		const loopback = createDispatchPeer(createPeerServer(), (method) => method === 'tools/list')
 		const client = createMCPClient({ transport: loopback, timeout: 30 })
 		await client.connect() // `initialize` is NOT gated, so connect succeeds
 
@@ -1625,7 +1111,7 @@ describe('MCPClient — per-request timeout', () => {
 describe('MCPClient — disconnect', () => {
 	it('rejects every pending request and closes the transport', async () => {
 		// Gate `tools/call` so the call stays pending; disconnect must reject it.
-		const loopback = createLoopback(serverWithTools(), (method) => method === 'tools/call')
+		const loopback = createDispatchPeer(createPeerServer(), (method) => method === 'tools/call')
 		const client = createMCPClient({ transport: loopback, timeout: 5_000 })
 		await client.connect()
 
@@ -1639,7 +1125,7 @@ describe('MCPClient — disconnect', () => {
 	})
 
 	it('rejects a request on a client that is not connected', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback, timeout: 5_000 })
 		await client.connect()
 		await client.disconnect()
@@ -1658,7 +1144,7 @@ describe('MCPClient — disconnect', () => {
 	})
 
 	it('rejects a request on a client that has never connected', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback, timeout: 5_000 })
 
 		const called: unknown = await client.call('greet', {}).catch((reason: unknown) => reason)
@@ -1668,7 +1154,7 @@ describe('MCPClient — disconnect', () => {
 	})
 
 	it('rejects a task request on a client that is not connected', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback, timeout: 5_000 })
 		await client.connect()
 		await client.disconnect()
@@ -1689,7 +1175,7 @@ describe('MCPClient — disconnect', () => {
 	})
 
 	it('rejects a subscription opened on a client that is not connected', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback, timeout: 5_000 })
 		await client.connect()
 		await client.disconnect()
@@ -1707,22 +1193,22 @@ describe('MCPClient — disconnect', () => {
 	})
 
 	it('rejects requests issued after transport loss inside a connect listener', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback, timeout: 1_000 })
-		let called: Promise<unknown> | undefined
-		let detailed: Promise<unknown> | undefined
-		let opened: Promise<unknown> | undefined
-		let written = 0
+		const called = new MCPFixtureCell<Promise<unknown> | undefined>(undefined)
+		const detailed = new MCPFixtureCell<Promise<unknown> | undefined>(undefined)
+		const opened = new MCPFixtureCell<Promise<unknown> | undefined>(undefined)
+		const written = new MCPFixtureCell(0)
 		// `connect` is emitted while the attempt that produced it is still the published one, so
 		// the connection this listener loses leaves that attempt standing. The refusal exempts
 		// the negotiation's own requests, and this is the vector that tells an exemption scoped
 		// to the CURRENT attempt from one that admits any retained attempt at all.
 		client.emitter.once('connect', () => {
 			loopback.emitter.emit('close')
-			written = loopback.sent.length
-			called = client.call('greet', {})
-			detailed = client.tasks.task('missing')
-			opened = client.listen(undefined, { signal: new AbortController().signal }).next()
+			written.value = loopback.sent.length
+			called.value = client.call('greet', {})
+			detailed.value = client.tasks.task('missing')
+			opened.value = client.listen(undefined, { signal: new AbortController().signal }).next()
 		})
 
 		await client.connect()
@@ -1730,16 +1216,19 @@ describe('MCPClient — disconnect', () => {
 		// Each reading is asserted as it arrives: a request that passed the refusal reports its
 		// 1000 ms deadline, and a subscription that passed it parks on a response no transport
 		// is left to carry, so reading the parked one last would hide the two that answered.
-		const call = await requireValue(called, 'the connect listener must have issued the call')
+		const call = await requireValue(called.value, 'the connect listener must have issued the call')
 			.then(() => undefined)
 			.catch((reason: unknown) => reason)
 		expect(isMCPError(call) && call.code).toBe(-32600)
-		const task = await requireValue(detailed, 'the connect listener must have issued the task')
+		const task = await requireValue(
+			detailed.value,
+			'the connect listener must have issued the task',
+		)
 			.then(() => undefined)
 			.catch((reason: unknown) => reason)
 		expect(isMCPError(task) && task.code).toBe(-32600)
 		const subscription = await requireValue(
-			opened,
+			opened.value,
 			'the connect listener must have opened the subscription',
 		)
 			.then(() => undefined)
@@ -1747,17 +1236,17 @@ describe('MCPClient — disconnect', () => {
 		expect(isMCPError(subscription) && subscription.code).toBe(-32600)
 		// Nothing reached the wire after the loss: a refusal that still wrote the frame would
 		// leave the peer holding a request this client has already given up on.
-		expect(loopback.sent.length).toBe(written)
+		expect(loopback.sent.length).toBe(written.value)
 	})
 
 	it('settles requests issued after disconnect inside a connect listener', async () => {
 		const deadline = 1_000
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback, timeout: deadline })
-		let closing: Promise<void> | undefined
-		let called: Promise<unknown> | undefined
-		let detailed: Promise<unknown> | undefined
-		let opened: Promise<unknown> | undefined
+		const closing = new MCPFixtureCell<Promise<void> | undefined>(undefined)
+		const called = new MCPFixtureCell<Promise<unknown> | undefined>(undefined)
+		const detailed = new MCPFixtureCell<Promise<unknown> | undefined>(undefined)
+		const opened = new MCPFixtureCell<Promise<unknown> | undefined>(undefined)
 		// An immediate `-32600` is NOT this contract. `disconnect` defers its teardown through
 		// the microtask queue, so at this instant the transport is open and the attempt that
 		// emitted `connect` is still the published one — these requests are issued onto a live
@@ -1765,10 +1254,10 @@ describe('MCPClient — disconnect', () => {
 		// request it finds pending. A transport LOSS is the other reading: it invalidates the
 		// attempt synchronously, and the test above is where every later request refuses.
 		client.emitter.once('connect', () => {
-			closing = client.disconnect()
-			called = client.call('greet', {})
-			detailed = client.tasks.task('missing')
-			opened = client.listen(undefined, { signal: new AbortController().signal }).next()
+			closing.value = client.disconnect()
+			called.value = client.call('greet', {})
+			detailed.value = client.tasks.task('missing')
+			opened.value = client.listen(undefined, { signal: new AbortController().signal }).next()
 		})
 
 		await client.connect()
@@ -1778,18 +1267,21 @@ describe('MCPClient — disconnect', () => {
 		// subscription the drain missed would park on a response nothing is left to carry.
 		const started = performance.now()
 		await expect(
-			requireValue(closing, 'the connect listener must have disconnected'),
+			requireValue(closing.value, 'the connect listener must have disconnected'),
 		).resolves.toBeUndefined()
-		const call = await requireValue(called, 'the connect listener must have issued the call')
+		const call = await requireValue(called.value, 'the connect listener must have issued the call')
 			.then(() => undefined)
 			.catch((reason: unknown) => reason)
 		expect(call instanceof Error && call.message).toBe('MCP client disconnected')
-		const task = await requireValue(detailed, 'the connect listener must have issued the task')
+		const task = await requireValue(
+			detailed.value,
+			'the connect listener must have issued the task',
+		)
 			.then(() => undefined)
 			.catch((reason: unknown) => reason)
 		expect(task instanceof Error && task.message).toBe('MCP client disconnected')
 		const subscription = await requireValue(
-			opened,
+			opened.value,
 			'the connect listener must have opened the subscription',
 		)
 			.then(() => undefined)
@@ -1799,7 +1291,7 @@ describe('MCPClient — disconnect', () => {
 	})
 
 	it('answers the discovery probe on a client that has never connected', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback })
 
 		// The control the refusal must not reach. `discover` is the round trip a connection is
@@ -1808,18 +1300,18 @@ describe('MCPClient — disconnect', () => {
 	})
 
 	it('fires the disconnect event and is idempotent', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback })
-		let disconnects = 0
+		const disconnects = new MCPFixtureCell(0)
 		client.emitter.on('disconnect', () => {
-			disconnects += 1
+			disconnects.value += 1
 		})
 		await client.connect()
 
 		await client.disconnect()
 		await client.disconnect() // second disconnect is a no-op
 
-		expect(disconnects).toBe(1)
+		expect(disconnects.value).toBe(1)
 		expect(loopback.closed).toBe(1)
 	})
 })
@@ -1839,18 +1331,18 @@ describe('MCPClient — disconnect', () => {
 // population it would have to bound. It stays as a behavioral test.
 describe('MCPClient — connect/disconnect ordering', () => {
 	it('joins a concurrent connect into one handshake and one connect event', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback })
-		let connects = 0
+		const connects = new MCPFixtureCell(0)
 		client.emitter.on('connect', () => {
-			connects += 1
+			connects.value += 1
 		})
 
 		await Promise.all([client.connect(), client.connect()])
 
 		expect(loopback.started).toBe(1)
 		expect(loopback.sent).toEqual(['server/discover'])
-		expect(connects).toBe(1)
+		expect(connects.value).toBe(1)
 		expect(client.connected).toBe(true)
 		expect(client.version).toBe('2026-07-28')
 	})
@@ -1878,7 +1370,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id, ['1999-01-01'])
+				return buildPeerDiscovery(request.id, ['1999-01-01'])
 			},
 		})
 		const client = createMCPClient({ transport: peer })
@@ -1895,7 +1387,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id)
+				return buildPeerDiscovery(request.id)
 			},
 			close: { hold: () => true },
 		})
@@ -1922,7 +1414,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id)
+				return buildPeerDiscovery(request.id)
 			},
 		})
 		const client = createMCPClient({ transport: peer })
@@ -1942,7 +1434,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id, ['1999-01-01'])
+				return buildPeerDiscovery(request.id, ['1999-01-01'])
 			},
 			close: { hold: () => true },
 		})
@@ -1971,7 +1463,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
 				if (count > 1) return undefined
 				void client.disconnect()
-				return errorResponse(request.id, MCP_UNSUPPORTED_VERSION, { supported: ['2025-11-25'] })
+				return buildPeerError(request.id, MCP_UNSUPPORTED_VERSION, { supported: ['2025-11-25'] })
 			},
 		})
 		const client = createMCPClient({ transport: peer })
@@ -1997,7 +1489,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id, ['1999-01-01'])
+				return buildPeerDiscovery(request.id, ['1999-01-01'])
 			},
 			close: { hold: () => true },
 		})
@@ -2026,7 +1518,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
 				void client.disconnect()
-				return discoverResponse(request.id)
+				return buildPeerDiscovery(request.id)
 			},
 		})
 		const client = createMCPClient({ transport: peer })
@@ -2051,7 +1543,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id)
+				return buildPeerDiscovery(request.id)
 			},
 			start: { hold: () => true },
 		})
@@ -2074,16 +1566,16 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		// in place before the injected `start()` runs. A transport re-entering at `start()`'s
 		// FIRST statement is the only observer that can tell a published gate from one assigned
 		// after the call: it must join the attempt already in flight, not open a second one.
-		let depth = 0
+		const depth = new MCPFixtureCell(0)
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
-				return discoverResponse(request.id)
+				return buildPeerDiscovery(request.id)
 			},
 			start: {
 				enter: () => {
-					if (depth >= 3) return
-					depth += 1
+					if (depth.value >= 3) return
+					depth.value += 1
 					void client.connect()
 				},
 			},
@@ -2120,27 +1612,27 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) =>
 				request.method === 'server/discover' && request.id !== undefined
-					? discoverResponse(request.id)
+					? buildPeerDiscovery(request.id)
 					: undefined,
 			close: { hold: () => true },
 		})
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 
-		let joined = false
+		const joined = new MCPFixtureCell(false)
 		const first = client.disconnect()
 		const second = client.disconnect().then(() => {
-			joined = true
+			joined.value = true
 		})
 		await waitForDelay(20)
 
-		expect(joined).toBe(false)
+		expect(joined.value).toBe(false)
 		expect(peer.lifecycle).toEqual(['start'])
 
 		peer.release()
 		await Promise.all([first, second])
 
-		expect(joined).toBe(true)
+		expect(joined.value).toBe(true)
 		expect(peer.lifecycle).toEqual(['start', 'close'])
 		expect(peer.closed).toBe(1)
 	}, 2_000)
@@ -2154,7 +1646,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) =>
 				request.method === 'server/discover' && request.id !== undefined
-					? discoverResponse(request.id)
+					? buildPeerDiscovery(request.id)
 					: undefined,
 		})
 		const client = createMCPClient({ transport: peer })
@@ -2179,7 +1671,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) =>
 				request.method === 'server/discover' && request.id !== undefined
-					? discoverResponse(request.id, ['1999-01-01'])
+					? buildPeerDiscovery(request.id, ['1999-01-01'])
 					: undefined,
 			close: { fault: () => true },
 		})
@@ -2207,7 +1699,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) =>
 				request.method === 'server/discover' && request.id !== undefined
-					? discoverResponse(request.id)
+					? buildPeerDiscovery(request.id)
 					: undefined,
 			start: { hold: () => true },
 		})
@@ -2247,7 +1739,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) =>
 				request.method === 'server/discover' && request.id !== undefined
-					? discoverResponse(request.id)
+					? buildPeerDiscovery(request.id)
 					: undefined,
 			start: { hold: () => true },
 		})
@@ -2291,7 +1783,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) => {
 				if (request.id === undefined) return undefined
-				if (request.method === 'server/discover') return discoverResponse(request.id)
+				if (request.method === 'server/discover') return buildPeerDiscovery(request.id)
 				if (request.method === 'tools/list') {
 					return {
 						jsonrpc: '2.0',
@@ -2331,7 +1823,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) =>
 				request.method === 'server/discover' && request.id !== undefined
-					? discoverResponse(request.id)
+					? buildPeerDiscovery(request.id)
 					: undefined,
 			close: { fault: () => true },
 		})
@@ -2365,7 +1857,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) =>
 				request.method === 'server/discover' && request.id !== undefined
-					? discoverResponse(request.id)
+					? buildPeerDiscovery(request.id)
 					: undefined,
 			close: { fault: (count) => count === 1 },
 		})
@@ -2399,8 +1891,8 @@ describe('MCPClient — connect/disconnect ordering', () => {
 			reply: (request, count) => {
 				if (request.method !== 'server/discover' || request.id === undefined) return undefined
 				return count === 1
-					? discoverResponse(request.id, ['1999-01-01'])
-					: discoverResponse(request.id)
+					? buildPeerDiscovery(request.id, ['1999-01-01'])
+					: buildPeerDiscovery(request.id)
 			},
 			close: { fault: (count) => count === 1 },
 		})
@@ -2433,7 +1925,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) =>
 				request.method === 'server/discover' && request.id !== undefined
-					? discoverResponse(request.id)
+					? buildPeerDiscovery(request.id)
 					: undefined,
 			close: { fault: (count) => count === 1 },
 		})
@@ -2462,7 +1954,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) =>
 				request.method === 'server/discover' && request.id !== undefined
-					? discoverResponse(request.id)
+					? buildPeerDiscovery(request.id)
 					: undefined,
 			close: { hold: () => true },
 		})
@@ -2491,7 +1983,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) =>
 				request.method === 'server/discover' && request.id !== undefined
-					? discoverResponse(request.id, ['1999-01-01'])
+					? buildPeerDiscovery(request.id, ['1999-01-01'])
 					: undefined,
 			close: { hold: () => true },
 		})
@@ -2524,7 +2016,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) =>
 				request.method === 'server/discover' && request.id !== undefined
-					? discoverResponse(request.id)
+					? buildPeerDiscovery(request.id)
 					: undefined,
 			close: { hold: (count) => count === 1 },
 		})
@@ -2558,7 +2050,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) =>
 				request.method === 'server/discover' && request.id !== undefined
-					? discoverResponse(request.id)
+					? buildPeerDiscovery(request.id)
 					: undefined,
 			close: { hold: (count) => count === 1, fault: (count) => count > 1 },
 		})
@@ -2590,7 +2082,7 @@ describe('MCPClient — connect/disconnect ordering', () => {
 		const peer = createFixturePeer({
 			reply: (request) =>
 				request.method === 'server/discover' && request.id !== undefined
-					? discoverResponse(request.id)
+					? buildPeerDiscovery(request.id)
 					: undefined,
 			close: { hold: (count) => count === 1, fault: (count) => count === 1 },
 		})
@@ -2689,13 +2181,13 @@ describe('MCPMessageTransportInterface — a failing send rejects, never throws'
 		const named = peer.requests
 			.filter((request) => request.method === 'notifications/cancelled')
 			.map((request) => request.params?.['requestId'])
-		expect(named).toEqual([requestId(peer, 2)])
+		expect(named).toEqual([readPeerRequestId(peer, 2)])
 	})
 })
 
 describe('MCPClient — observer safety', () => {
 	it('a throwing connect listener cannot corrupt connect, and routes to the error handler', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const errors: Array<readonly [unknown, string]> = []
 		// The emitter's `error` handler receives (error, event) — never a domain event.
 		const client = createMCPClient({
@@ -2763,7 +2255,7 @@ describe('MCPClient — discovery requires resultType', () => {
 						},
 					}
 				}
-				return initializeResponse(request.id, MCP_HANDSHAKE_VERSION)
+				return buildClientHandshakeResponse(request.id, MCP_HANDSHAKE_VERSION)
 			},
 		})
 		const client = createMCPClient({ transport: peer })
@@ -2778,7 +2270,7 @@ describe('MCPClient — discovery requires resultType', () => {
 	it('CONTROL — a different method omitting resultType is not refused', async () => {
 		// `tools/list` answering without the discriminator is a legacy-shaped result the
 		// response path still admits; the discovery rule must not fire for it.
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/list' && request.id !== undefined
 				? { jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'echo' }] } }
 				: undefined,
@@ -2803,9 +2295,9 @@ describe('MCPClient — call() result polymorphism', () => {
 			ttlMs: null,
 			pollIntervalMs: 500,
 		}
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, task)
+				? buildPeerCallResponse(request.id, task)
 				: undefined,
 		)
 		const client = createMCPClient({ transport: peer })
@@ -2820,9 +2312,9 @@ describe('MCPClient — call() result polymorphism', () => {
 	})
 
 	it('answers the input_required arm when the call needs another round trip', async () => {
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, {
+				? buildPeerCallResponse(request.id, {
 						resultType: 'input_required',
 						requestState: 'opaque-state',
 					})
@@ -2840,9 +2332,9 @@ describe('MCPClient — call() result polymorphism', () => {
 	it('CONTROL — an unknown resultType is refused even on tools/call', async () => {
 		// The class the arm narrowing structurally cannot handle. Carrying it would
 		// hand a caller an arm whose meaning this client invented.
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, { resultType: 'future', content: [] })
+				? buildPeerCallResponse(request.id, { resultType: 'future', content: [] })
 				: undefined,
 		)
 		const client = createMCPClient({ transport: peer })
@@ -2855,9 +2347,13 @@ describe('MCPClient — call() result polymorphism', () => {
 	})
 
 	it('refuses a task arm whose payload is malformed', async () => {
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, { resultType: 'task', taskId: 'task-1', status: 'flying' })
+				? buildPeerCallResponse(request.id, {
+						resultType: 'task',
+						taskId: 'task-1',
+						status: 'flying',
+					})
 				: undefined,
 		)
 		const client = createMCPClient({ transport: peer })
@@ -2870,9 +2366,9 @@ describe('MCPClient — call() result polymorphism', () => {
 	})
 
 	it('refuses an input arm carrying neither requests nor state', async () => {
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, { resultType: 'input_required' })
+				? buildPeerCallResponse(request.id, { resultType: 'input_required' })
 				: undefined,
 		)
 		const client = createMCPClient({ transport: peer })
@@ -2885,12 +2381,12 @@ describe('MCPClient — call() result polymorphism', () => {
 	})
 
 	it('a wrapped tool throws rather than handing an agent a deferred answer', async () => {
-		const peer = callPeer((request) => {
+		const peer = createCallPeer((request) => {
 			if (request.id === undefined) return undefined
 			if (request.method === 'tools/list') {
 				return { jsonrpc: '2.0', id: request.id, result: { tools: [{ name: 'slow' }] } }
 			}
-			return callResponse(request.id, {
+			return buildPeerCallResponse(request.id, {
 				resultType: 'task',
 				taskId: 'task-1',
 				status: 'working',
@@ -2922,9 +2418,9 @@ describe('MCPClient — call() prefers structuredContent', () => {
 		// The real MCP idiom: `content` is a rendering for a model to read and
 		// `structuredContent` is the value. Re-deriving one from the other is a guess that
 		// is right only while the server serialized exactly the value and nothing else.
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, {
+				? buildPeerCallResponse(request.id, {
 						resultType: 'complete',
 						content: [{ type: 'text', text: 'Found 3 results' }],
 						structuredContent: { count: 3 },
@@ -2943,9 +2439,9 @@ describe('MCPClient — call() prefers structuredContent', () => {
 	it('prefers an explicit null structured value over the text blocks', async () => {
 		// `null` is a value the tool returned, not an absence — the distinction a presence
 		// check keeps and an `undefined` check would lose.
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, {
+				? buildPeerCallResponse(request.id, {
 						resultType: 'complete',
 						content: [{ type: 'text', text: '"ignored"' }],
 						structuredContent: null,
@@ -2959,9 +2455,9 @@ describe('MCPClient — call() prefers structuredContent', () => {
 	})
 
 	it('falls back to the parsed text when the peer sent no structured value', async () => {
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, {
+				? buildPeerCallResponse(request.id, {
 						resultType: 'complete',
 						content: [{ type: 'text', text: '{"echoed":"x"}' }],
 					})
@@ -2977,9 +2473,9 @@ describe('MCPClient — call() prefers structuredContent', () => {
 	})
 
 	it('falls back to the raw text when it is not JSON', async () => {
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, {
+				? buildPeerCallResponse(request.id, {
 						resultType: 'complete',
 						content: [{ type: 'text', text: 'plain words' }],
 					})
@@ -2995,9 +2491,9 @@ describe('MCPClient — call() prefers structuredContent', () => {
 	})
 
 	it('carries a value-less success as an undefined value', async () => {
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, { resultType: 'complete', content: [] })
+				? buildPeerCallResponse(request.id, { resultType: 'complete', content: [] })
 				: undefined,
 		)
 		const client = createMCPClient({ transport: peer })
@@ -3007,9 +2503,9 @@ describe('MCPClient — call() prefers structuredContent', () => {
 	})
 
 	it('still throws a remote isError before reading any structured value', async () => {
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, {
+				? buildPeerCallResponse(request.id, {
 						resultType: 'complete',
 						content: [{ type: 'text', text: 'tool exploded' }],
 						structuredContent: { swallowed: true },
@@ -3028,7 +2524,7 @@ describe('MCPClient — call() prefers structuredContent', () => {
 
 describe('MCPClient — wrapped tool context', () => {
 	it('omits wrapped annotations when the wire descriptor has empty annotations', async () => {
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/list' && request.id !== undefined
 				? {
 						jsonrpc: '2.0',
@@ -3051,7 +2547,7 @@ describe('MCPClient — wrapped tool context', () => {
 	})
 
 	it('maps readOnlyHint while ignoring an unconsumed malformed openWorldHint', async () => {
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/list' && request.id !== undefined
 				? {
 						jsonrpc: '2.0',
@@ -3153,13 +2649,13 @@ describe('MCPClient — wrapped tool context', () => {
 
 describe('MCPClient — per-request cancellation', () => {
 	it('rejects the caller and tells a duplex peer which request was cancelled', async () => {
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 		const controller = new AbortController()
 
 		const pending = client.call('slow', {}, { signal: controller.signal })
-		const id = requestId(peer, 2)
+		const id = readPeerRequestId(peer, 2)
 		controller.abort()
 
 		await expect(pending).rejects.toThrow("MCP request 'tools/call' was aborted")
@@ -3170,7 +2666,7 @@ describe('MCPClient — per-request cancellation', () => {
 	})
 
 	it('carries a string abort reason on the wire and omits a non-string one', async () => {
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 		const spoken = new AbortController()
@@ -3178,7 +2674,7 @@ describe('MCPClient — per-request cancellation', () => {
 
 		const first = client.call('slow', {}, { signal: spoken.signal })
 		const second = client.call('slow', {}, { signal: silent.signal })
-		const ids = [requestId(peer, 2), requestId(peer, 3)]
+		const ids = [readPeerRequestId(peer, 2), readPeerRequestId(peer, 3)]
 		spoken.abort('operator stopped')
 		silent.abort(new Error('not a wire string'))
 
@@ -3193,7 +2689,7 @@ describe('MCPClient — per-request cancellation', () => {
 		// Drawn from outside the frame's population: a carrier with no client-to-server
 		// notification channel at all. The dated revision defines none over Streamable HTTP,
 		// where closing the response stream is itself the cancellation signal.
-		const peer = callPeer(() => undefined, false)
+		const peer = createCallPeer(() => undefined, false)
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 		const controller = new AbortController()
@@ -3206,7 +2702,7 @@ describe('MCPClient — per-request cancellation', () => {
 	})
 
 	it('refuses an already-aborted caller before anything is written', async () => {
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 		const controller = new AbortController()
@@ -3221,9 +2717,9 @@ describe('MCPClient — per-request cancellation', () => {
 	})
 
 	it('sends nothing when the request is already over — a task is not the request', async () => {
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, {
+				? buildPeerCallResponse(request.id, {
 						resultType: 'task',
 						taskId: 'task-1',
 						status: 'working',
@@ -3250,7 +2746,7 @@ describe('MCPClient — per-request cancellation', () => {
 	it('discards a response that arrives after the abort, silently', async () => {
 		// Cancellation is ADVISORY: every receiver obligation is `SHOULD`/`MAY` and the spec says
 		// to IGNORE a late answer. It is not a fault, and it is not a notification either.
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 		const notifications: JSONRPCMessage[] = []
@@ -3260,11 +2756,11 @@ describe('MCPClient — per-request cancellation', () => {
 		const controller = new AbortController()
 
 		const pending = client.call('slow', {}, { signal: controller.signal })
-		const id = requestId(peer, 2)
+		const id = readPeerRequestId(peer, 2)
 		controller.abort()
 		await expect(pending).rejects.toThrow(/was aborted/)
 
-		peer.emitter.emit('message', callResponse(id, { resultType: 'complete', content: [] }))
+		peer.emitter.emit('message', buildPeerCallResponse(id, { resultType: 'complete', content: [] }))
 		await waitForDelay()
 
 		expect(notifications).toEqual([])
@@ -3272,12 +2768,12 @@ describe('MCPClient — per-request cancellation', () => {
 	})
 
 	it('cancels one request and leaves the connection and its siblings alone', async () => {
-		const peer = callPeer((request, count) => {
+		const peer = createCallPeer((request, count) => {
 			if (request.method !== 'tools/call' || request.id === undefined) return undefined
 			// The FIRST call is left hanging for the abort; the next answers normally.
 			return count === 2
 				? undefined
-				: callResponse(request.id, { resultType: 'complete', structuredContent: 'second' })
+				: buildPeerCallResponse(request.id, { resultType: 'complete', structuredContent: 'second' })
 		})
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
@@ -3292,14 +2788,14 @@ describe('MCPClient — per-request cancellation', () => {
 	})
 
 	it('cancels every request one controller is driving', async () => {
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 		const controller = new AbortController()
 
 		const first = client.call('a', {}, { signal: controller.signal })
 		const second = client.call('b', {}, { signal: controller.signal })
-		const ids = [requestId(peer, 2), requestId(peer, 3)]
+		const ids = [readPeerRequestId(peer, 2), readPeerRequestId(peer, 3)]
 		controller.abort()
 
 		await expect(first).rejects.toThrow(/was aborted/)
@@ -3313,7 +2809,7 @@ describe('MCPClient — per-request cancellation', () => {
 
 describe('MCPClient — request-scoped progress', () => {
 	it('stamps the progress token only where a caller is listening, and routes the frames', async () => {
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 		const seen: unknown[] = []
@@ -3321,7 +2817,7 @@ describe('MCPClient — request-scoped progress', () => {
 		client.emitter.on('notification', (message) => notifications.push(message))
 
 		const pending = client.call('slow', {}, { progress: (progress) => seen.push(progress) })
-		const id = requestId(peer, 2)
+		const id = readPeerRequestId(peer, 2)
 		expect(peer.requests[1]?.params?.['_meta']).toEqual({
 			[MCP_META_VERSION]: '2026-07-28',
 			[MCP_META_CAPABILITIES]: {},
@@ -3329,11 +2825,11 @@ describe('MCPClient — request-scoped progress', () => {
 			progressToken: id,
 		})
 
-		peer.emitter.emit('message', progressNotification(id, 1))
-		peer.emitter.emit('message', progressNotification(id, 2))
+		peer.emitter.emit('message', buildPeerProgress(id, 1))
+		peer.emitter.emit('message', buildPeerProgress(id, 2))
 		peer.emitter.emit(
 			'message',
-			callResponse(id, { resultType: 'complete', structuredContent: 'done' }),
+			buildPeerCallResponse(id, { resultType: 'complete', structuredContent: 'done' }),
 		)
 
 		await expect(pending).resolves.toEqual({ resultType: 'complete', value: 'done' })
@@ -3346,7 +2842,7 @@ describe('MCPClient — request-scoped progress', () => {
 	})
 
 	it('claims stale-stamped progress for the active call before subscription routing', async () => {
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer, timeout: 5_000 })
 		await client.connect()
 		const seen: unknown[] = []
@@ -3354,7 +2850,7 @@ describe('MCPClient — request-scoped progress', () => {
 		client.emitter.on('notification', (message) => notifications.push(message))
 
 		const pending = client.call('slow', {}, { progress: (progress) => seen.push(progress) })
-		const id = requestId(peer, 2)
+		const id = readPeerRequestId(peer, 2)
 		peer.emitter.emit('message', {
 			jsonrpc: '2.0',
 			method: 'notifications/progress',
@@ -3382,9 +2878,9 @@ describe('MCPClient — request-scoped progress', () => {
 		// One assertion over BOTH shapes, so the claim cannot be satisfied by a client that
 		// stamps nothing at all: the watched request must carry the token AND the unwatched
 		// one must not.
-		const peer = callPeer((request) =>
+		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? callResponse(request.id, { resultType: 'complete', structuredContent: 1 })
+				? buildPeerCallResponse(request.id, { resultType: 'complete', structuredContent: 1 })
 				: undefined,
 		)
 		const client = createMCPClient({ transport: peer })
@@ -3400,13 +2896,13 @@ describe('MCPClient — request-scoped progress', () => {
 
 		expect(peer.requests[1]?.params?.['_meta']).toEqual({
 			...stamp,
-			progressToken: requestId(peer, 2),
+			progressToken: readPeerRequestId(peer, 2),
 		})
 		expect(peer.requests[2]?.params?.['_meta']).toEqual(stamp)
 	})
 
 	it('claims a frame naming an in-flight request and leaves one naming nothing', async () => {
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer, timeout: 5_000 })
 		await client.connect()
 		const seen: unknown[] = []
@@ -3414,12 +2910,12 @@ describe('MCPClient — request-scoped progress', () => {
 		client.emitter.on('notification', (message) => notifications.push(message))
 
 		const pending = client.call('slow', {}, { progress: (progress) => seen.push(progress) })
-		const id = requestId(peer, 2)
+		const id = readPeerRequestId(peer, 2)
 		// The instrument first: a frame naming THIS request is claimed.
-		peer.emitter.emit('message', progressNotification(id, 1))
+		peer.emitter.emit('message', buildPeerProgress(id, 1))
 		// The control: a token this client never minted names no request, so it stays an
 		// ordinary server notification.
-		peer.emitter.emit('message', progressNotification(9_999, 2))
+		peer.emitter.emit('message', buildPeerProgress(9_999, 2))
 		await waitForDelay()
 
 		expect(seen).toEqual([{ progressToken: id, progress: 1 }])
@@ -3429,7 +2925,7 @@ describe('MCPClient — request-scoped progress', () => {
 	})
 
 	it('claims a well-formed frame and leaves a malformed one', async () => {
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer, timeout: 5_000 })
 		await client.connect()
 		const seen: unknown[] = []
@@ -3437,8 +2933,8 @@ describe('MCPClient — request-scoped progress', () => {
 		client.emitter.on('notification', (message) => notifications.push(message))
 
 		const pending = client.call('slow', {}, { progress: (progress) => seen.push(progress) })
-		const id = requestId(peer, 2)
-		peer.emitter.emit('message', progressNotification(id, 1))
+		const id = readPeerRequestId(peer, 2)
+		peer.emitter.emit('message', buildPeerProgress(id, 1))
 		// The same token, the same in-flight request — only the payload is not a progress
 		// payload, so the handler must not be handed it.
 		peer.emitter.emit('message', {
@@ -3455,7 +2951,7 @@ describe('MCPClient — request-scoped progress', () => {
 	})
 
 	it('contains a throwing progress handler on the client error channel', async () => {
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 		const errors: unknown[] = []
@@ -3470,11 +2966,11 @@ describe('MCPClient — request-scoped progress', () => {
 				},
 			},
 		)
-		const id = requestId(peer, 2)
-		peer.emitter.emit('message', progressNotification(id, 1))
+		const id = readPeerRequestId(peer, 2)
+		peer.emitter.emit('message', buildPeerProgress(id, 1))
 		peer.emitter.emit(
 			'message',
-			callResponse(id, { resultType: 'complete', structuredContent: 'done' }),
+			buildPeerCallResponse(id, { resultType: 'complete', structuredContent: 'done' }),
 		)
 
 		await expect(pending).resolves.toEqual({ resultType: 'complete', value: 'done' })
@@ -3504,7 +3000,7 @@ describe('MCPClient — every registration is released on every exit', () => {
 			send: { park: (method, count) => method === 'tools/call' && count === 2 },
 			reply: (request, count) => {
 				if (request.id === undefined) return undefined
-				if (request.method === 'server/discover') return discoverResponse(request.id)
+				if (request.method === 'server/discover') return buildPeerDiscovery(request.id)
 				if (request.method !== 'tools/call') return undefined
 				return count === 2 ? new Error('write failed') : undefined
 			},
@@ -3520,10 +3016,10 @@ describe('MCPClient — every registration is released on every exit', () => {
 			{},
 			{ signal: subject.signal, progress: (progress) => seen.push(progress) },
 		)
-		const id = requestId(peer, 2)
+		const id = readPeerRequestId(peer, 2)
 		const live = client.call('other', {}, { signal: sibling.signal })
 		// LIVE: every registration is real while the write is still in flight.
-		peer.emitter.emit('message', progressNotification(id, 1))
+		peer.emitter.emit('message', buildPeerProgress(id, 1))
 		await waitForDelay()
 		expect(seen).toEqual([{ progressToken: id, progress: 1 }])
 		expect(subject.count).toBe(1)
@@ -3535,7 +3031,7 @@ describe('MCPClient — every registration is released on every exit', () => {
 		// caller's own signal is as clean as the client found it. Read BEFORE anything aborts,
 		// because a `once` listener that fires removes itself and would hide the difference.
 		expect(subject.count).toBe(0)
-		peer.emitter.emit('message', progressNotification(id, 2))
+		peer.emitter.emit('message', buildPeerProgress(id, 2))
 		await waitForDelay()
 		subject.controller.abort()
 		await waitForDelay()
@@ -3547,11 +3043,11 @@ describe('MCPClient — every registration is released on every exit', () => {
 		const named = peer.requests
 			.filter((request) => request.method === 'notifications/cancelled')
 			.map((request) => request.params?.['requestId'])
-		expect(named).toEqual([requestId(peer, 3)])
+		expect(named).toEqual([readPeerRequestId(peer, 3)])
 	})
 
 	it('releases both on the other exit nobody enumerates: disconnect mid-flight', async () => {
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer, timeout: 5_000 })
 		await client.connect()
 		const seen: unknown[] = []
@@ -3563,11 +3059,11 @@ describe('MCPClient — every registration is released on every exit', () => {
 			{},
 			{ signal: subject.signal, progress: (progress) => seen.push(progress) },
 		)
-		const id = requestId(peer, 2)
+		const id = readPeerRequestId(peer, 2)
 		const probed = client.call('other', {}, { signal: probe.signal })
 		// LIVE, every instrument: the frame reaches the handler, an abort reaches the wire, and
 		// the caller's signal carries the listener this request registered on it.
-		peer.emitter.emit('message', progressNotification(id, 1))
+		peer.emitter.emit('message', buildPeerProgress(id, 1))
 		await waitForDelay()
 		probe.abort()
 		await expect(probed).rejects.toThrow(/was aborted/)
@@ -3579,7 +3075,7 @@ describe('MCPClient — every registration is released on every exit', () => {
 
 		// RELEASED by the drain, which knows nothing about any of the registrations.
 		expect(subject.count).toBe(0)
-		peer.emitter.emit('message', progressNotification(id, 2))
+		peer.emitter.emit('message', buildPeerProgress(id, 2))
 		await waitForDelay()
 		subject.controller.abort()
 		await waitForDelay()
@@ -3588,11 +3084,11 @@ describe('MCPClient — every registration is released on every exit', () => {
 		const named = peer.requests
 			.filter((request) => request.method === 'notifications/cancelled')
 			.map((request) => request.params?.['requestId'])
-		expect(named).toEqual([requestId(peer, 3)])
+		expect(named).toEqual([readPeerRequestId(peer, 3)])
 	})
 
 	it('releases both when the request simply answers', async () => {
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer, timeout: 5_000 })
 		await client.connect()
 		const seen: unknown[] = []
@@ -3604,21 +3100,21 @@ describe('MCPClient — every registration is released on every exit', () => {
 			{},
 			{ signal: subject.signal, progress: (progress) => seen.push(progress) },
 		)
-		const id = requestId(peer, 2)
+		const id = readPeerRequestId(peer, 2)
 		const live = client.call('other', {}, { signal: sibling.signal })
-		peer.emitter.emit('message', progressNotification(id, 1))
+		peer.emitter.emit('message', buildPeerProgress(id, 1))
 		await waitForDelay()
 		expect(seen).toEqual([{ progressToken: id, progress: 1 }])
 		expect(subject.count).toBe(1)
 
 		peer.emitter.emit(
 			'message',
-			callResponse(id, { resultType: 'complete', structuredContent: 'done' }),
+			buildPeerCallResponse(id, { resultType: 'complete', structuredContent: 'done' }),
 		)
 		await expect(pending).resolves.toEqual({ resultType: 'complete', value: 'done' })
 
 		expect(subject.count).toBe(0)
-		peer.emitter.emit('message', progressNotification(id, 2))
+		peer.emitter.emit('message', buildPeerProgress(id, 2))
 		await waitForDelay()
 		subject.controller.abort()
 		await waitForDelay()
@@ -3629,11 +3125,11 @@ describe('MCPClient — every registration is released on every exit', () => {
 		const named = peer.requests
 			.filter((request) => request.method === 'notifications/cancelled')
 			.map((request) => request.params?.['requestId'])
-		expect(named).toEqual([requestId(peer, 3)])
+		expect(named).toEqual([readPeerRequestId(peer, 3)])
 	})
 
 	it('releases both on the request deadline', async () => {
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer, timeout: 50 })
 		await client.connect()
 		const seen: unknown[] = []
@@ -3645,9 +3141,9 @@ describe('MCPClient — every registration is released on every exit', () => {
 			{},
 			{ signal: subject.signal, progress: (progress) => seen.push(progress) },
 		)
-		const id = requestId(peer, 2)
+		const id = readPeerRequestId(peer, 2)
 		const probed = client.call('other', {}, { signal: probe.signal })
-		peer.emitter.emit('message', progressNotification(id, 1))
+		peer.emitter.emit('message', buildPeerProgress(id, 1))
 		await waitForDelay()
 		probe.abort()
 		await expect(probed).rejects.toThrow(/was aborted/)
@@ -3657,7 +3153,7 @@ describe('MCPClient — every registration is released on every exit', () => {
 		await expect(pending).rejects.toThrow(/timed out/)
 
 		expect(subject.count).toBe(0)
-		peer.emitter.emit('message', progressNotification(id, 2))
+		peer.emitter.emit('message', buildPeerProgress(id, 2))
 		await waitForDelay()
 		subject.controller.abort()
 		await waitForDelay()
@@ -3666,13 +3162,13 @@ describe('MCPClient — every registration is released on every exit', () => {
 		const named = peer.requests
 			.filter((request) => request.method === 'notifications/cancelled')
 			.map((request) => request.params?.['requestId'])
-		expect(named).toEqual([requestId(peer, 3)])
+		expect(named).toEqual([readPeerRequestId(peer, 3)])
 	})
 })
 
 describe('MCPClient — an uncorrelated response is discarded', () => {
 	it('never publishes a response nobody is waiting for as a notification', async () => {
-		const loopback = createLoopback(serverWithTools())
+		const loopback = createDispatchPeer(createPeerServer())
 		const client = createMCPClient({ transport: loopback })
 		await client.connect()
 		const seen: JSONRPCMessage[] = []
@@ -3958,7 +3454,7 @@ describe('MCPClient — subscriptions/listen', () => {
 	})
 
 	it('discards stale-stamped frames that no active call or subscription claims', async () => {
-		const peer = callPeer(() => undefined)
+		const peer = createCallPeer(() => undefined)
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 		const seen: JSONRPCMessage[] = []
@@ -4035,22 +3531,15 @@ describe('MCPClient — subscriptions/listen', () => {
 		const captured = new AbortController()
 		const replacement = new AbortController()
 		const reason = new Error('captured signal stopped')
-		let reads = 0
-		const options = {
-			get signal(): AbortSignal {
-				reads += 1
-				if (reads === 1) return captured.signal
-				captured.abort(reason)
-				return replacement.signal
-			},
-		}
+		const reads = new MCPFixtureCell(0)
+		const options = createAccessorSignal(captured, replacement, reason, reads)
 		const stream = client.listen({ toolsListChanged: true }, options)
 
 		void options.signal
 		const [read] = await Promise.allSettled([stream.next()])
 
 		expect(read).toEqual({ status: 'rejected', reason })
-		expect(reads).toBe(2)
+		expect(reads.value).toBe(2)
 		expect(transport.messages.map((message) => message.method)).toEqual(['server/discover'])
 	})
 

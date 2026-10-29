@@ -2,8 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { isWebMCPDocument, isWebMCPRegistry, isWebMCPToolEvent } from '@src/browser'
 import { isRecord } from '@orkestrel/contract'
 import { createHostileValues } from '@orkestrel/test'
-import { buildRegistry, REGISTRY_MEMBERS } from '../../setupBrowser.js'
-import { installModelContext, ToolActivatedEvent } from '../../fixtures/modelContext.js'
+import { MCPFixtureCell } from '../../setup.js'
+import {
+	buildRegistry,
+	REGISTRY_MEMBERS,
+	installModelContext,
+	ToolActivatedEvent,
+} from '../../setupBrowser.js'
 
 // src/browser/validators.ts — the WebMCP feature detection, run against a REAL `Document`.
 // The population that matters is platform class instances, not plain objects: a `Document`
@@ -66,11 +71,11 @@ describe('isWebMCPRegistry — narrowing a prototype-carried registry, not a pla
 
 	it('refuses every adversarial value without throwing', () => {
 		for (const [index, value] of createHostileValues().entries()) {
-			let accepted: boolean | undefined
+			const accepted = new MCPFixtureCell<boolean | undefined>(undefined)
 			expect(() => {
-				accepted = isWebMCPRegistry(value)
+				accepted.value = isWebMCPRegistry(value)
 			}, `hostile value ${index}`).not.toThrow()
-			expect(accepted, `hostile value ${index}`).toBe(false)
+			expect(accepted.value, `hostile value ${index}`).toBe(false)
 		}
 	})
 })
@@ -102,11 +107,11 @@ describe('isWebMCPDocument — the feature detection a page runs before building
 
 	it('refuses every adversarial value without throwing', () => {
 		for (const [index, value] of createHostileValues().entries()) {
-			let accepted: boolean | undefined
+			const accepted = new MCPFixtureCell<boolean | undefined>(undefined)
 			expect(() => {
-				accepted = isWebMCPDocument(value)
+				accepted.value = isWebMCPDocument(value)
 			}, `hostile value ${index}`).not.toThrow()
-			expect(accepted, `hostile value ${index}`).toBe(false)
+			expect(accepted.value, `hostile value ${index}`).toBe(false)
 		}
 	})
 })

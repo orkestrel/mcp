@@ -1,3 +1,10 @@
+import { startStack, SUM_SCHEMA, FAULT_MESSAGE } from './setupServer.js'
+import { afterEach, describe, expect, it } from 'vitest'
+import { MCP_FALLBACK_VERSION, MCP_MODERN_VERSION } from '@src/core'
+import { createTeardown } from '@orkestrel/test'
+import { createTool, createToolManager } from '@orkestrel/tool'
+import { createJSONRPCRequest, postJSON } from './setup.js'
+
 // The package's own features, composed and driven together.
 //
 // An integration test is an end-to-end test: it puts the features of this package together
@@ -13,90 +20,13 @@
 // The composition costs real sockets and real handshakes, so it is its own `integration`
 // project with its own timeout, kept out of `npm test` and required by `prepublishOnly`.
 
-import type { MCPClientInterface, MCPLegacyVersion } from '@src/core'
-import type { MCPSessionState } from '@src/server'
-import type { ToolManagerInterface } from '@orkestrel/tool'
-import type { StartedServerInterface } from './setupServer.js'
-import { afterEach, describe, expect, it } from 'vitest'
-import {
-	bindClient,
-	bindServer,
-	createDuplexClientTransport,
-	createMCPClient,
-	createMCPLegacy,
-	createMCPLegacyClientTransport,
-	createMCPServer,
-	MCP_FALLBACK_VERSION,
-	MCP_MODERN_VERSION,
-} from '@src/core'
-import { createMessagePortTransport } from '@src/browser'
-import {
-	createHTTPClientTransport,
-	createMCPRoutes,
-	createMCPSession,
-	createWebSocketClientTransport,
-	createWebSocketServer,
-} from '@src/server'
-import { createDispatcher } from '@orkestrel/router'
-import { createServer } from '@orkestrel/server'
-import { createTeardown } from '@orkestrel/test'
-import { createTool, createToolManager } from '@orkestrel/tool'
-import { createJSONRPCRequest, postJSON } from './setup.js'
-import { startServer } from './setupServer.js'
-
 /** The JSON Schema `sum` advertises, renamed to `inputSchema` on the wire and back again. */
-const SUM_SCHEMA: Readonly<Record<string, unknown>> = Object.freeze({
-	type: 'object',
-	properties: Object.freeze({
-		left: Object.freeze({ type: 'number' }),
-		right: Object.freeze({ type: 'number' }),
-	}),
-})
 
 /** What the failing tool throws, verbatim, so every face can be checked for the same text. */
-const FAULT_MESSAGE = 'the tool refused the call'
 
 /** The composed deployment one case drives. */
-interface TestStackInterface {
-	/** The live registry every face serves — a tool added here reaches all of them. */
-	readonly tools: ToolManagerInterface
-	/** The listener's bound base URL, carrying both Node-face transports. */
-	readonly base: string
-	/**
-	 * Open a core client over the server face's Streamable-HTTP carrier.
-	 *
-	 * @param version - The revision to pin, for a client that must handshake; omit for modern
-	 * @returns An unconnected client, tracked for teardown
-	 */
-	http(version?: MCPLegacyVersion): MCPClientInterface
-	/**
-	 * Open a core client over the server face's WebSocket carrier.
-	 *
-	 * @returns An unconnected client, tracked for teardown
-	 */
-	socket(): MCPClientInterface
-	/**
-	 * Open a core client over the browser face's `MessagePort` carrier, bound to the SAME server.
-	 *
-	 * @returns An unconnected client whose carrier is one half of a real `MessageChannel`
-	 */
-	channel(): MCPClientInterface
-	/** Disconnect every client this stack opened, then close its carriers and its listener. */
-	stop(): Promise<void>
-}
 
 /** How one {@link startStack} deployment is mounted. */
-interface TestStackOptions {
-	/**
-	 * Mount the legacy decorator and the stateful session middleware.
-	 *
-	 * @remarks
-	 * The decorator serves BOTH eras, and the session layer acts on legacy traffic only, so a
-	 * stack built this way is the deployment a consumer ships when it must answer dated
-	 * `initialize` clients as well as modern ones.
-	 */
-	readonly legacy?: boolean
-}
 
 /**
  * Add two numeric arguments, refusing anything else.
@@ -105,14 +35,6 @@ interface TestStackOptions {
  * @returns The sum
  * @throws When either argument is missing or not a number
  */
-function sumArguments(args: Readonly<Record<string, unknown>>): number {
-	const left = args['left']
-	const right = args['right']
-	if (typeof left !== 'number' || typeof right !== 'number') {
-		throw new Error('sum takes two numbers')
-	}
-	return left + right
-}
 
 /**
  * Fail the call the way a misbehaving tool does.
@@ -120,9 +42,6 @@ function sumArguments(args: Readonly<Record<string, unknown>>): number {
  * @returns Never
  * @throws Always, carrying {@link FAULT_MESSAGE}
  */
-function raiseFault(): never {
-	throw new Error(FAULT_MESSAGE)
-}
 
 /**
  * Build the live tool registry every composed face serves.
@@ -134,19 +53,6 @@ function raiseFault(): never {
  *
  * @returns A registry holding `sum` and `explode`, in that order
  */
-function createRegistry(): ToolManagerInterface {
-	const tools = createToolManager()
-	tools.add(
-		createTool({
-			name: 'sum',
-			description: 'Add two numbers',
-			parameters: SUM_SCHEMA,
-			execute: sumArguments,
-		}),
-	)
-	tools.add(createTool({ name: 'explode', execute: raiseFault }))
-	return tools
-}
 
 /**
  * Mount one core MCP server on every face this package ships.
@@ -163,68 +69,6 @@ function createRegistry(): ToolManagerInterface {
  *   {@link TestStackOptions}
  * @returns The running deployment plus its teardown
  */
-async function startStack(options?: TestStackOptions): Promise<TestStackInterface> {
-	const tools = createRegistry()
-	const mcp = createMCPServer({ identity: { name: 'integration', version: '1.0.0' }, tools })
-	// The one dispatch face every carrier below is mounted on, so a case cannot reach one era
-	// on one carrier and another era on the next.
-	const face = options?.legacy === true ? createMCPLegacy(mcp) : mcp
-	const dispatcher = createDispatcher<MCPSessionState>()
-	dispatcher.add(createMCPRoutes<MCPSessionState>(face))
-	const server = createServer<MCPSessionState>({
-		dispatcher,
-		state: () => ({}),
-		host: '127.0.0.1',
-	})
-	if (options?.legacy === true) server.use(createMCPSession<MCPSessionState>())
-	server.upgrade(createWebSocketServer(face, { emitter: server.emitter }))
-	const handle: StartedServerInterface<MCPSessionState> = await startServer(server)
-	const channels: MessageChannel[] = []
-	const clients: MCPClientInterface[] = []
-	const base = handle.base
-	return {
-		tools,
-		base,
-		http(version) {
-			const transport = createHTTPClientTransport({ url: `${base}/mcp` })
-			const client = createMCPClient({
-				transport:
-					version === undefined
-						? transport
-						: createMCPLegacyClientTransport(transport, { version }),
-			})
-			clients.push(client)
-			return client
-		},
-		socket() {
-			const client = createMCPClient({
-				transport: createWebSocketClientTransport({ url: `${base}/mcp` }),
-			})
-			clients.push(client)
-			return client
-		},
-		channel() {
-			const channel = new MessageChannel()
-			channels.push(channel)
-			// Both halves bind synchronously after construction — a `MessagePort` transport
-			// starts its port at construction, so an await in the gap would drop queued frames.
-			bindServer(face, createMessagePortTransport({ port: channel.port1 }))
-			const carrier = createMessagePortTransport({ port: channel.port2 })
-			const client = createMCPClient({ transport: createDuplexClientTransport(carrier) })
-			bindClient(client, carrier)
-			clients.push(client)
-			return client
-		},
-		async stop() {
-			for (const client of clients) await client.disconnect()
-			for (const channel of channels) {
-				channel.port1.close()
-				channel.port2.close()
-			}
-			await handle.stop()
-		},
-	}
-}
 
 const teardown = createTeardown()
 afterEach(() => teardown.destroy())

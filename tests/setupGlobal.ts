@@ -1,5 +1,5 @@
 import type { TestProject } from 'vitest/node'
-import type { BrowserFixtureInterface } from './fixtures/browserServer.js'
+import type { BrowserFixtureInterface } from './setupServer.js'
 import { fileURLToPath } from 'node:url'
 import { isRecord } from '@orkestrel/contract'
 import { createServer as createViteServer } from 'vite'
@@ -37,6 +37,7 @@ export async function setup(project: TestProject): Promise<() => Promise<void>> 
 		resolve: {
 			alias: {
 				'@src/core': fileURLToPath(new URL('../src/core/index.ts', import.meta.url)),
+				'@src/browser': fileURLToPath(new URL('../src/browser/index.ts', import.meta.url)),
 				'@src/server': fileURLToPath(new URL('../src/server/index.ts', import.meta.url)),
 			},
 		},

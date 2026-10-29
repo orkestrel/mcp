@@ -1,4 +1,4 @@
-import { isInstance } from '@orkestrel/contract'
+import { holds, INTRINSICS, isNumber } from '@orkestrel/contract'
 
 /**
  * Preserves a Model Context Protocol error's machine-readable numeric code and
@@ -40,6 +40,7 @@ export class MCPError extends Error {
 	 */
 	constructor(message: string, code: number, context?: unknown) {
 		super(message)
+		INTRINSICS.define(this, Symbol.for('@orkestrel/mcp.MCPError'), { value: this })
 		this.code = code
 		this.context = context
 	}
@@ -47,6 +48,10 @@ export class MCPError extends Error {
 
 /**
  * Determines whether an unknown value is an {@link MCPError}.
+ *
+ * @remarks
+ * Accepts branded instances and subclasses from another installed copy. The guard reads the
+ * numeric code and context, ignores `name`, and refuses transparent proxies and unbranded errors.
  *
  * @param value - The unknown value to inspect
  * @returns True if the value is an `MCPError`; false otherwise
@@ -58,7 +63,18 @@ export class MCPError extends Error {
  * ```
  */
 export function isMCPError(value: unknown): value is MCPError {
-	return isInstance(value, MCPError)
+	return holds(() => {
+		if (
+			!(value instanceof INTRINSICS.error) ||
+			INTRINSICS.prototype(value) === INTRINSICS.error.prototype ||
+			INTRINSICS.describe(value, Symbol.for('@orkestrel/mcp.MCPError'))?.value !== value ||
+			!isNumber(INTRINSICS.reflect.read(value, 'code')) ||
+			!INTRINSICS.reflect.present(value, 'context')
+		)
+			return false
+		INTRINSICS.reflect.read(value, 'context')
+		return true
+	})
 }
 
 /**
@@ -82,10 +98,19 @@ export function isMCPError(value: unknown): value is MCPError {
 export class MCPToolError extends Error {
 	override readonly name = 'MCPToolError'
 	readonly code = 'TOOL' as const
+
+	constructor(message?: string, options?: ErrorOptions) {
+		super(message, options)
+		INTRINSICS.define(this, Symbol.for('@orkestrel/mcp.MCPToolError'), { value: this })
+	}
 }
 
 /**
  * Determines whether an unknown value is an {@link MCPToolError}.
+ *
+ * @remarks
+ * Accepts branded instances and subclasses from another installed copy. The guard requires
+ * `code: 'TOOL'`, ignores `name`, and refuses transparent proxies and unbranded errors.
  *
  * @param value - The unknown value to inspect
  * @returns True if the value is an `MCPToolError`; false otherwise
@@ -98,5 +123,11 @@ export class MCPToolError extends Error {
  * ```
  */
 export function isMCPToolError(value: unknown): value is MCPToolError {
-	return isInstance(value, MCPToolError)
+	return holds(
+		() =>
+			value instanceof INTRINSICS.error &&
+			INTRINSICS.prototype(value) !== INTRINSICS.error.prototype &&
+			INTRINSICS.describe(value, Symbol.for('@orkestrel/mcp.MCPToolError'))?.value === value &&
+			INTRINSICS.reflect.read(value, 'code') === 'TOOL',
+	)
 }

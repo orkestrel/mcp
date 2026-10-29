@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { MessagePortTransport } from '@src/browser'
 import { waitForDelay } from '@orkestrel/test'
+import { MCPFixtureCell } from '../../../setup.js'
 
 // src/browser/transports/MessagePortTransport.ts — the class driven DIRECTLY over one REAL
 // native `new MessageChannel()` (no mocks). A `MessagePort` is a genuinely SYMMETRIC
@@ -61,15 +62,15 @@ describe('MessagePortTransport — the port contract over a real MessageChannel'
 	it('close() fires the registered closed handler exactly once, even called twice', () => {
 		const { port1 } = new MessageChannel()
 		const transport = new MessagePortTransport({ port: port1 })
-		let closedCalls = 0
+		const closedCalls = new MCPFixtureCell(0)
 		transport.closed(() => {
-			closedCalls += 1
+			closedCalls.value += 1
 		})
 
 		transport.close()
 		transport.close()
 
-		expect(closedCalls).toBe(1)
+		expect(closedCalls.value).toBe(1)
 	})
 
 	it('listen/closed are single-handler-replace — a second registration replaces, never adds', async () => {
@@ -89,10 +90,10 @@ describe('MessagePortTransport — the port contract over a real MessageChannel'
 		const { port1, port2 } = new MessageChannel()
 		const transport = new MessagePortTransport({ port: port1 })
 		const received: string[] = []
-		let closedCalls = 0
+		const closedCalls = new MCPFixtureCell(0)
 		transport.listen((message) => received.push(message))
 		transport.closed(() => {
-			closedCalls += 1
+			closedCalls.value += 1
 		})
 
 		// Dispatch a genuine `messageerror` event directly on port1 — the real native event
@@ -104,6 +105,6 @@ describe('MessagePortTransport — the port contract over a real MessageChannel'
 		port2.postMessage('still works')
 		await vi.waitFor(() => expect(received).toEqual(['still works']))
 
-		expect(closedCalls).toBe(0)
+		expect(closedCalls.value).toBe(0)
 	})
 })

@@ -1,6 +1,5 @@
-import type { JSONRPCMessage } from '@src/core'
 import type { MiddlewareHandler } from '@orkestrel/server'
-import type { MCPSessionEntry, MCPSessionMiddlewareOptions, MCPSessionState } from './types.js'
+import type { MCPSessionMiddlewareOptions, MCPSessionState } from './types.js'
 import {
 	MCP_HEADER_MISMATCH,
 	MCP_PROTOCOL_VERSION_HEADER,
@@ -18,10 +17,12 @@ import {
 	allowsOrigin,
 	readLastEventId,
 	readSessionHeader,
+	readRequestText,
 	rejectUnknownSession,
 } from './helpers.js'
 import { inferLegacyVersion, inferSessionHeaderIssue } from './inferers.js'
 import { MCPSession } from './MCPSession.js'
+import { MCPSessionStore } from './stores/MCPSessionStore.js'
 import { HTTPDisconnect } from './HTTPDisconnect.js'
 
 /**
@@ -32,9 +33,9 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  * session store, mint-on-`initialize`, and resumable stream are all native to this package.
  *
  * @remarks
- * Owns a closure `Map<string, MCPSessionEntry>` keyed by session id, and a single request
- * `path` (default {@link DEFAULT_MCP_PATH}); a request to any other path passes straight
- * through (`next()`).
+ * Stores sessions through `options.store`, defaulting to an isolated {@link MCPSessionStore},
+ * and owns a request `path` (default {@link DEFAULT_MCP_PATH}). A request to any other path
+ * passes straight through (`next()`).
  *
  * A modern-shaped POST also passes straight through with `next()`, ignoring any session id.
  * The remaining behavior is the legacy session layer:
@@ -105,38 +106,25 @@ export function createMCPSession<TState extends MCPSessionState>(
 	const ttl = options?.ttl
 	const clock = options?.clock ?? Date.now
 	const origin = options?.origin
-	const store = new Map<string, MCPSessionEntry>()
+	const store = options?.store ?? new MCPSessionStore()
 
 	return async (request, context, next) => {
 		if (context.url.pathname !== path) return next()
 		if (!allowsOrigin(request, origin)) return new Response(null, { status: 403 })
-		let parsed: JSONRPCMessage | undefined
-		let text: string | undefined
-		if (context.method === 'POST') {
-			// Reading the body is the only step here that can throw. The JSON boundary itself is
-			// `parseJSON`, which answers `undefined` rather than throwing, so it sits outside.
-			try {
-				text = await request.text()
-			} catch {
-				text = undefined
-			}
-			parsed = text === undefined ? undefined : parseJSONRPCMessage(parseJSON(text))
-			if (text !== undefined && parsed !== undefined && isModernRequest(parsed)) {
-				return next(
-					new Request(context.url, {
-						method: 'POST',
-						headers: request.headers,
-						body: text,
-						signal: request.signal,
-					}),
-				)
-			}
+		const text = context.method === 'POST' ? await readRequestText(request) : undefined
+		const parsed = text === undefined ? undefined : parseJSONRPCMessage(parseJSON(text))
+		if (text !== undefined && parsed !== undefined && isModernRequest(parsed)) {
+			return next(
+				new Request(context.url, {
+					method: 'POST',
+					headers: request.headers,
+					body: text,
+					signal: request.signal,
+				}),
+			)
 		}
 		if (ttl !== undefined) {
-			const cutoff = clock() - ttl
-			for (const [id, entry] of store) {
-				if (entry.touched <= cutoff) store.delete(id)
-			}
+			store.sweep(clock() - ttl)
 		}
 
 		if (context.method === 'DELETE') {
@@ -145,19 +133,17 @@ export function createMCPSession<TState extends MCPSessionState>(
 			return new Response(null, { status: 204 })
 		}
 
-		let entry: MCPSessionEntry | undefined
 		const id = readSessionHeader(request)
-		if (id !== undefined) {
-			const current = store.get(id)
-			if (current !== undefined) {
-				entry = { session: current.session, touched: clock(), version: current.version }
-				store.set(id, entry)
-			}
-		}
+		const current = id === undefined ? undefined : store.get(id)
+		const touched =
+			current === undefined
+				? undefined
+				: { session: current.session, touched: clock(), version: current.version }
+		if (touched !== undefined) store.set(touched)
 
 		if (context.method === 'GET') {
-			if (entry === undefined) return rejectUnknownSession()
-			const session = entry.session
+			if (touched === undefined) return rejectUnknownSession()
+			const session = touched.session
 			const stream = createStream()
 			const disconnect = new HTTPDisconnect(request.signal, options?.keepalive)
 			stream.response.headers.set(SSE_BUFFERING_HEADER, SSE_BUFFERING_DISABLED)
@@ -182,19 +168,20 @@ export function createMCPSession<TState extends MCPSessionState>(
 		if (context.method !== 'POST' || text === undefined) return next()
 
 		// POST — only `initialize` mints a fresh session when no valid id is present.
-		let created: MCPSessionEntry | undefined
+		const created =
+			touched === undefined && parsed !== undefined && isInitializeRequest(parsed)
+				? {
+						session: new MCPSession(crypto.randomUUID(), {
+							...sessionOptions,
+							clock: sessionOptions.clock ?? clock,
+						}),
+						touched: clock(),
+						version: inferLegacyVersion(parsed),
+					}
+				: undefined
+		const entry = touched ?? created
 		if (entry === undefined) {
-			if (parsed !== undefined && isInitializeRequest(parsed)) {
-				// The minted session inherits this middleware's own clock unless the caller named a
-				// different one under `session`, so a deterministic clock reaches the log's lazy
-				// sweep instead of leaving it on wall-clock time.
-				const session = new MCPSession(crypto.randomUUID(), {
-					...sessionOptions,
-					clock: sessionOptions.clock ?? clock,
-				})
-				created = { session, touched: clock(), version: inferLegacyVersion(parsed) }
-				entry = created
-			} else if (id === undefined && isPingRequest(parsed)) {
+			if (id === undefined && isPingRequest(parsed)) {
 				return next(
 					new Request(context.url, {
 						method: 'POST',
@@ -203,9 +190,8 @@ export function createMCPSession<TState extends MCPSessionState>(
 						signal: request.signal,
 					}),
 				)
-			} else {
-				return rejectUnknownSession()
 			}
+			return rejectUnknownSession()
 		}
 		if (!Reflect.set(context.state, 'session', entry.session)) {
 			throw new Error('MCP session state is not writable')
@@ -235,13 +221,13 @@ export function createMCPSession<TState extends MCPSessionState>(
 			// mint stamp was taken before a whole `initialize` round trip that the middleware has no
 			// bound on: a handshake slower than `ttl` used to insert a session that was already
 			// expired, and the first request for the id this response advertises swept it away.
-			store.set(created.session.id, { ...created, touched: clock() })
-		} else if (store.get(entry.session.id) === entry) {
+			store.set({ ...created, touched: clock() })
+		} else if (store.get(entry.session.id)?.session === entry.session) {
 			// The same correction on the resolved-existing path — plus a RE-ASK. `store.get` is
 			// consulted again because a `DELETE` (or the sweep of a sibling request) may have removed
 			// this entry while this request was suspended, and a blind write-back would resurrect a
 			// session whose owner already ended it.
-			store.set(entry.session.id, { ...entry, touched: clock() })
+			store.set({ ...entry, touched: clock() })
 		}
 		response.headers.set(MCP_SESSION_HEADER, entry.session.id)
 		return response

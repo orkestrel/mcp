@@ -3,7 +3,6 @@ import type {
 	JSONRPCInvocation,
 	JSONRPCResponse,
 	MCPMethodOptions,
-	MCPStream,
 	MCPStreamControllerInterface,
 } from '@src/core'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -24,6 +23,10 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import { waitForAbort } from '@orkestrel/test'
 import {
 	createCalculatorServer,
+	createLegacyTools,
+	createUnreachableStream,
+	MCP_LEGACY_CASES,
+	MCPFixtureCell,
 	createJSONRPCNotification,
 	createJSONRPCRequest,
 	MemoryResourceManager,
@@ -81,27 +84,7 @@ describe('handshake method options', () => {
 
 // Captured before the W07-A production edit; divergences remain explicit named rows.
 
-const tools = createToolManager()
-tools.add(createTool({ name: 'good', execute: () => 5 }))
-tools.add(createTool({ name: 'missing', execute: () => undefined }))
-tools.add(createTool({ name: 'nan', execute: () => Number.NaN }))
-tools.add(
-	createTool({
-		name: 'failure',
-		execute: () => {
-			throw new Error('frozen failure')
-		},
-	}),
-)
-tools.add(createTool({ name: 'oversized', execute: () => 'x'.repeat(256) }))
-
-const descriptors = [
-	{ name: 'good', inputSchema: { type: 'object' } },
-	{ name: 'missing', inputSchema: { type: 'object' } },
-	{ name: 'nan', inputSchema: { type: 'object' } },
-	{ name: 'failure', inputSchema: { type: 'object' } },
-	{ name: 'oversized', inputSchema: { type: 'object' } },
-]
+const tools = createLegacyTools()
 
 const dispatcher = createMCPLegacy(
 	createMCPServer({
@@ -111,234 +94,8 @@ const dispatcher = createMCPLegacy(
 	}),
 )
 
-const malformedId: JSONRPCId = JSON.parse('null')
-
-const cases: ReadonlyArray<readonly [string, JSONRPCInvocation, JSONRPCResponse | undefined]> = [
-	[
-		'initialize-default',
-		{ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
-		{
-			jsonrpc: '2.0',
-			id: 1,
-			result: {
-				protocolVersion: '2025-11-25',
-				capabilities: { tools: {} },
-				serverInfo: { name: 'freeze', version: '1.0.0' },
-			},
-		},
-	],
-	[
-		'initialize-legacy-anchor',
-		{ jsonrpc: '2.0', id: 2, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
-		{
-			jsonrpc: '2.0',
-			id: 2,
-			result: {
-				protocolVersion: '2025-06-18',
-				capabilities: { tools: {} },
-				serverInfo: { name: 'freeze', version: '1.0.0' },
-			},
-		},
-	],
-	[
-		'initialize-newest-legacy',
-		{ jsonrpc: '2.0', id: 3, method: 'initialize', params: { protocolVersion: '2025-11-25' } },
-		{
-			jsonrpc: '2.0',
-			id: 3,
-			result: {
-				protocolVersion: '2025-11-25',
-				capabilities: { tools: {} },
-				serverInfo: { name: 'freeze', version: '1.0.0' },
-			},
-		},
-	],
-	[
-		'initialize-modern-requested',
-		{ jsonrpc: '2.0', id: 4, method: 'initialize', params: { protocolVersion: '2026-07-28' } },
-		{
-			jsonrpc: '2.0',
-			id: 4,
-			result: {
-				protocolVersion: '2025-11-25',
-				capabilities: { tools: {} },
-				serverInfo: { name: 'freeze', version: '1.0.0' },
-			},
-		},
-	],
-	[
-		'initialize-missing-params',
-		{ jsonrpc: '2.0', id: 5, method: 'initialize' },
-		{
-			jsonrpc: '2.0',
-			id: 5,
-			result: {
-				protocolVersion: '2025-11-25',
-				capabilities: { tools: {} },
-				serverInfo: { name: 'freeze', version: '1.0.0' },
-			},
-		},
-	],
-	['ping-empty', { jsonrpc: '2.0', id: 6, method: 'ping' }, { jsonrpc: '2.0', id: 6, result: {} }],
-	[
-		'ping-params',
-		{ jsonrpc: '2.0', id: 7, method: 'ping', params: { extra: true } },
-		{ jsonrpc: '2.0', id: 7, result: {} },
-	],
-	[
-		'ping-string-id',
-		{ jsonrpc: '2.0', id: 'ping', method: 'ping' },
-		{ jsonrpc: '2.0', id: 'ping', result: {} },
-	],
-	[
-		'tools-list-empty',
-		{ jsonrpc: '2.0', id: 9, method: 'tools/list' },
-		{ jsonrpc: '2.0', id: 9, result: { tools: descriptors } },
-	],
-	[
-		'tools-list-params',
-		{ jsonrpc: '2.0', id: 10, method: 'tools/list', params: { cursor: 'ignored' } },
-		{ jsonrpc: '2.0', id: 10, result: { tools: descriptors } },
-	],
-	[
-		'tools-call-good',
-		{ jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'good', arguments: {} } },
-		{
-			jsonrpc: '2.0',
-			id: 11,
-			result: { content: [{ type: 'text', text: '5' }], structuredContent: 5 },
-		},
-	],
-	[
-		'tools-call-no-arguments',
-		{ jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'good' } },
-		{
-			jsonrpc: '2.0',
-			id: 12,
-			result: { content: [{ type: 'text', text: '5' }], structuredContent: 5 },
-		},
-	],
-	[
-		'tools-call-missing-value',
-		{ jsonrpc: '2.0', id: 13, method: 'tools/call', params: { name: 'missing', arguments: {} } },
-		{ jsonrpc: '2.0', id: 13, result: { content: [{ type: 'text', text: '' }] } },
-	],
-	[
-		'tools-call-nan',
-		{ jsonrpc: '2.0', id: 14, method: 'tools/call', params: { name: 'nan', arguments: {} } },
-		{
-			jsonrpc: '2.0',
-			id: 14,
-			error: { code: -32603, message: 'Server execution returned an invalid tool result' },
-		},
-	],
-	[
-		'tools-call-failure',
-		{ jsonrpc: '2.0', id: 15, method: 'tools/call', params: { name: 'failure', arguments: {} } },
-		{
-			jsonrpc: '2.0',
-			id: 15,
-			result: { content: [{ type: 'text', text: 'frozen failure' }], isError: true },
-		},
-	],
-	[
-		'tools-call-unknown-tool',
-		{ jsonrpc: '2.0', id: 16, method: 'tools/call', params: { name: 'absent', arguments: {} } },
-		{
-			jsonrpc: '2.0',
-			id: 16,
-			result: { content: [{ type: 'text', text: 'tool not found: absent' }], isError: true },
-		},
-	],
-	[
-		'tools-call-missing-name',
-		{ jsonrpc: '2.0', id: 17, method: 'tools/call', params: { arguments: {} } },
-		{
-			jsonrpc: '2.0',
-			id: 17,
-			error: { code: -32602, message: 'Invalid params: a string `name` is required' },
-		},
-	],
-	[
-		'tools-call-nonstring-name',
-		{ jsonrpc: '2.0', id: 18, method: 'tools/call', params: { name: 4, arguments: {} } },
-		{
-			jsonrpc: '2.0',
-			id: 18,
-			error: { code: -32602, message: 'Invalid params: a string `name` is required' },
-		},
-	],
-	[
-		'tools-call-null-arguments',
-		{ jsonrpc: '2.0', id: 19, method: 'tools/call', params: { name: 'good', arguments: null } },
-		{
-			jsonrpc: '2.0',
-			id: 19,
-			error: {
-				code: -32602,
-				message: 'Invalid params: `arguments` must be an object when present',
-			},
-		},
-	],
-	[
-		'tools-call-oversized-value',
-		{ jsonrpc: '2.0', id: 20, method: 'tools/call', params: { name: 'oversized', arguments: {} } },
-		{
-			jsonrpc: '2.0',
-			id: 20,
-			error: { code: -32603, message: 'Server execution returned an invalid tool result' },
-		},
-	],
-	[
-		'unknown-method',
-		{ jsonrpc: '2.0', id: 21, method: 'unknown/method' },
-		{
-			jsonrpc: '2.0',
-			id: 21,
-			error: { code: -32601, message: 'Method not found: unknown/method' },
-		},
-	],
-	// A method the MODERN era defines is refused by the legacy door for the same reason an
-	// invented one is: the decorator forwards only what legacy names, so `server/discover`
-	// reaches the same arm rather than a modern handler behind it.
-	[
-		'modern-method-not-found',
-		{ jsonrpc: '2.0', id: 22, method: 'server/discover' },
-		{
-			jsonrpc: '2.0',
-			id: 22,
-			error: { code: -32601, message: 'Method not found: server/discover' },
-		},
-	],
-	[
-		'malformed-null-id',
-		{ jsonrpc: '2.0', id: malformedId, method: 'ping' },
-		{ jsonrpc: '2.0', error: { code: -32600, message: 'Invalid Request' } },
-	],
-	[
-		'malformed-fractional-id',
-		{ jsonrpc: '2.0', id: 2.5, method: 'ping' },
-		{ jsonrpc: '2.0', error: { code: -32600, message: 'Invalid Request' } },
-	],
-	[
-		'oversized-message',
-		{ jsonrpc: '2.0', id: 24, method: 'ping', params: { text: 'x'.repeat(2048) } },
-		{ jsonrpc: '2.0', error: { code: -32600, message: 'Invalid Request' } },
-	],
-	['initialized-notification', { jsonrpc: '2.0', method: 'notifications/initialized' }, undefined],
-]
-
-async function* createUnreachableStream(id: JSONRPCId): MCPStream {
-	yield {
-		jsonrpc: '2.0',
-		method: 'notifications/progress',
-		params: { progressToken: 'another-request', progress: 1 },
-	}
-	return buildJSONRPCResult(id, { resultType: 'complete' })
-}
-
 describe('legacy dispatch behavior freeze', () => {
-	it.each(cases)('%s', async (_name, request, output) => {
+	it.each(MCP_LEGACY_CASES)('%s', async (_name, request, output) => {
 		expect(await dispatcher.dispatch(request)).toEqual(output)
 	})
 })
@@ -396,13 +153,13 @@ describe('MCP legacy resource exclusions', () => {
 
 describe('MCPLegacy collapse boundaries', () => {
 	it('projects a tokened legacy tools/call stream with its progress and complete result', async () => {
-		let executions = 0
+		const executions = new MCPFixtureCell(0)
 		const legacy = createMCPLegacy(
 			createMCPServer({
 				identity: { name: 'progress', version: '1.0.0' },
 				tools,
 				execution: async (context) => {
-					executions += 1
+					executions.value += 1
 					if (context.progress === undefined) throw new Error('expected a progress reporter')
 					await context.progress.report({ progress: 1, total: 1, message: 'complete' })
 					return context.tools.execute(context.call)
@@ -433,17 +190,17 @@ describe('MCPLegacy collapse boundaries', () => {
 				result: { content: [{ type: 'text', text: '5' }], structuredContent: 5 },
 			},
 		})
-		expect(executions).toBe(1)
+		expect(executions.value).toBe(1)
 	})
 
 	it('mirrors an empty-token call with no reports through the text face', async () => {
-		let signal: AbortSignal | undefined
+		const signal = new MCPFixtureCell<AbortSignal | undefined>(undefined)
 		const legacy = createMCPLegacy(
 			createMCPServer({
 				identity: { name: 'progress', version: '1.0.0' },
 				tools,
 				execution: (context) => {
-					signal = context.signal
+					signal.value = context.signal
 					return context.tools.execute(context.call)
 				},
 			}),
@@ -465,7 +222,7 @@ describe('MCPLegacy collapse boundaries', () => {
 			value:
 				'{"jsonrpc":"2.0","id":"empty-token","result":{"content":[{"type":"text","text":"5"}],"structuredContent":5}}',
 		})
-		expect(signal?.aborted).toBe(true)
+		expect(signal.value?.aborted).toBe(true)
 	})
 
 	it('projects a native tool error result at the tokened terminal', async () => {
@@ -541,13 +298,13 @@ describe('MCPLegacy collapse boundaries', () => {
 
 	it('does not execute when the caller aborts before the first read', async () => {
 		const controller = new AbortController()
-		let executions = 0
+		const executions = new MCPFixtureCell(0)
 		const legacy = createMCPLegacy(
 			createMCPServer({
 				identity: { name: 'progress', version: '1.0.0' },
 				tools,
 				execution: (context) => {
-					executions += 1
+					executions.value += 1
 					return context.tools.execute(context.call)
 				},
 			}),
@@ -567,7 +324,7 @@ describe('MCPLegacy collapse boundaries', () => {
 		controller.abort(failure)
 
 		await expect(answer.next()).rejects.toBe(failure)
-		expect(executions).toBe(0)
+		expect(executions.value).toBe(0)
 	})
 
 	it('aborts an executor immediately during an outstanding read', async () => {
@@ -670,13 +427,13 @@ describe('MCPLegacy collapse boundaries', () => {
 	)
 
 	it('rejects a mismatched progress frame without yielding it', async () => {
-		let signal: AbortSignal | undefined
+		const signal = new MCPFixtureCell<AbortSignal | undefined>(undefined)
 		const server = createMCPServer({
 			identity: { name: 'stream', version: '1.0.0' },
 			tools,
 		})
 		server.methods.add('tools/call', async (request, options) => {
-			signal = options.signal
+			signal.value = options.signal
 			return createUnreachableStream(request.id)
 		})
 		const answer = await createMCPLegacy(server).dispatch({
@@ -698,7 +455,7 @@ describe('MCPLegacy collapse boundaries', () => {
 				},
 			},
 		})
-		expect(signal?.aborted).toBe(true)
+		expect(signal.value?.aborted).toBe(true)
 	})
 
 	it('rejects and disposes override streams without a legitimate tools/call token', async () => {

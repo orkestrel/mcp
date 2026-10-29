@@ -74,6 +74,7 @@ import {
 	arrayOf,
 	attempt,
 	cloneJSONRecord,
+	holds,
 	isArray,
 	isBoolean,
 	isFiniteNumber,
@@ -241,15 +242,7 @@ export function isAbsoluteURI(value: unknown): value is string {
 	if (separator <= 0 || !/^[A-Za-z][A-Za-z0-9+.-]*$/.test(value.slice(0, separator))) {
 		return false
 	}
-	for (let index = 0; index < value.length; index += 1) {
-		const code = value.charCodeAt(index)
-		if (code <= 0x20 || code >= 0x7f) return false
-		if (value[index] === '%') {
-			const escape = value.slice(index + 1, index + 3)
-			if (escape.length !== 2 || !/^[0-9A-Fa-f]{2}$/.test(escape)) return false
-			index += 2
-		}
-	}
+	if (/%(?![0-9A-Fa-f]{2})/.test(value)) return false
 	if (!/^[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]*$/.test(value)) return false
 
 	const fragmentIndex = value.indexOf('#', separator + 1)
@@ -293,26 +286,20 @@ export function isAbsoluteURI(value: unknown): value is string {
 		const elision = literal.indexOf('::')
 		if (elision !== literal.lastIndexOf('::')) return false
 		const compressed = elision >= 0
-		let groups: string[]
-		if (compressed) {
-			const left = literal.slice(0, elision)
-			const right = literal.slice(elision + 2)
-			if (
-				(left.length > 0 && (left.startsWith(':') || left.endsWith(':'))) ||
-				(right.length > 0 && (right.startsWith(':') || right.endsWith(':')))
-			)
-				return false
-			groups = [
-				...(left.length === 0 ? [] : left.split(':')),
-				...(right.length === 0 ? [] : right.split(':')),
-			]
-		} else {
-			if (literal.startsWith(':') || literal.endsWith(':')) return false
-			groups = literal.split(':')
-		}
-		let units = 0
-		for (let index = 0; index < groups.length; index += 1) {
-			const group = groups[index]
+		const left = compressed ? literal.slice(0, elision) : literal
+		const right = compressed ? literal.slice(elision + 2) : ''
+		if (
+			(left.length > 0 && (left.startsWith(':') || left.endsWith(':'))) ||
+			(right.length > 0 && (right.startsWith(':') || right.endsWith(':')))
+		)
+			return false
+		const groups = compressed
+			? [
+					...(left.length === 0 ? [] : left.split(':')),
+					...(right.length === 0 ? [] : right.split(':')),
+				]
+			: literal.split(':')
+		for (const [index, group] of groups.entries()) {
 			if (group === undefined || group.length === 0) return false
 			if (group.includes('.')) {
 				if (index !== groups.length - 1) return false
@@ -321,12 +308,11 @@ export function isAbsoluteURI(value: unknown): value is string {
 				for (const octet of octets) {
 					if (!/^(?:0|[1-9][0-9]{0,2})$/.test(octet) || Number(octet) > 255) return false
 				}
-				units += 2
 			} else {
 				if (!/^[0-9A-Fa-f]{1,4}$/.test(group)) return false
-				units += 1
 			}
 		}
+		const units = groups.reduce((count, group) => count + (group.includes('.') ? 2 : 1), 0)
 		return compressed ? units < 8 : units === 8
 	}
 
@@ -1335,21 +1321,16 @@ export function isBoundedString(value: unknown, bytes: number): value is string 
 	if (!isString(value) || !isInteger(bytes) || bytes < 0) {
 		return false
 	}
-	let measured = 0
-	for (let index = 0; index < value.length; index += 1) {
-		const code = value.charCodeAt(index)
-		if (code <= 0x7f) measured += 1
-		else if (code <= 0x7ff) measured += 2
-		else if (code >= 0xd800 && code <= 0xdbff) {
-			const next = value.charCodeAt(index + 1)
-			if (next >= 0xdc00 && next <= 0xdfff) {
-				measured += 4
-				index += 1
-			} else measured += 3
-		} else measured += 3
-		if (measured > bytes) return false
-	}
-	return true
+	return holds(() => {
+		Iterator.from(value).reduce((measured, character) => {
+			const code = character.charCodeAt(0)
+			const width = character.length === 2 ? 4 : code <= 0x7f ? 1 : code <= 0x7ff ? 2 : 3
+			const total = measured + width
+			if (total > bytes) throw new RangeError('The string exceeds its byte bound')
+			return total
+		}, 0)
+		return true
+	})
 }
 
 /**

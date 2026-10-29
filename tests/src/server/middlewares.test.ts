@@ -1,9 +1,5 @@
-import type { JSONRPCMessage } from '@src/core'
-import type { SSEEvent } from '@orkestrel/sse'
-import type { MiddlewareHandler } from '@orkestrel/server'
-import type { MCPOriginOptions, MCPSessionOptions, MCPSessionState } from '@src/server'
-import type { ManualClockInterface } from '../../setup.js'
-import type { StartedServerInterface } from '../../setupServer.js'
+import type { MCPSessionState } from '@src/server'
+import type { AppState } from '../../setupServer.js'
 import { request } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -31,9 +27,17 @@ import {
 	createJSONRPCRequest,
 	createManualClock,
 	postJSON,
-	readSSEStream,
+	MCPFixtureCell,
 } from '../../setup.js'
-import { createClockMiddleware, createDelayMiddleware, startServer } from '../../setupServer.js'
+import {
+	authenticateCaller,
+	startSession,
+	postSession,
+	openSessionStream,
+	takeEvents,
+	triggerPush,
+	startServer,
+} from '../../setupServer.js'
 
 // ── createMCPSession — the plug-and-play stateful session middleware ─────────
 //
@@ -56,10 +60,6 @@ import { createClockMiddleware, createDelayMiddleware, startServer } from '../..
 
 // The consumer TState this suite threads through the spine — extends MCPSessionState so
 // createMCPSession can set `context.state.session`.
-interface AppState extends MCPSessionState {
-	readonly caller?: unknown
-}
-
 const teardown = createTeardown()
 afterEach(() => teardown.destroy())
 
@@ -69,14 +69,14 @@ describe('handshake HTTP session acceptance', () => {
 		async (composition) => {
 			const readiness = Promise.withResolvers<void>()
 			const entered = Promise.withResolvers<void>()
-			let calls = 0
+			const calls = new MCPFixtureCell(0)
 			const observations: MCPSessionState[] = []
 			const protocols: Array<string | null> = []
 			const mcp = createMCPServer({
 				identity: { name: 'ready', version: '1.0.0' },
 				tools: createToolManager(),
 				handshake: () => {
-					calls += 1
+					calls.value += 1
 					entered.resolve()
 					return readiness.promise
 				},
@@ -104,7 +104,7 @@ describe('handshake HTTP session acceptance', () => {
 			expect(observations).toHaveLength(2)
 			expect(observations[1]).not.toHaveProperty('session')
 			expect(protocols[1]).toBeNull()
-			expect(calls).toBe(1)
+			expect(calls.value).toBe(1)
 			readiness.resolve()
 			const initialized = await initializing
 			expect(initialized.status).toBe(200)
@@ -118,13 +118,13 @@ describe('handshake HTTP session acceptance', () => {
 	it.each(['application/json', 'application/json, text/event-stream'])(
 		'handshake refusal stores no session and success mints one for %s',
 		async (accept) => {
-			let refused = true
-			let candidate: string | undefined
+			const refused = new MCPFixtureCell(true)
+			const candidate = new MCPFixtureCell<string | undefined>(undefined)
 			const mcp = createMCPServer({
 				identity: { name: 'ready', version: '1.0.0' },
 				tools: createToolManager(),
 				async handshake() {
-					if (refused) throw new MCPError('not ready', -32042, { code: 'NOT_READY' })
+					if (refused.value) throw new MCPError('not ready', -32042, { code: 'NOT_READY' })
 				},
 			})
 			const dispatcher = createDispatcher<MCPSessionState>()
@@ -132,7 +132,7 @@ describe('handshake HTTP session acceptance', () => {
 			const server = createServer<MCPSessionState>({ dispatcher, state: () => ({}) })
 			server.use(createMCPSession())
 			server.use((_request, context, next) => {
-				candidate = context.state.session?.id
+				candidate.value = context.state.session?.id
 				return next()
 			})
 			const handle = await startServer(server)
@@ -143,39 +143,39 @@ describe('handshake HTTP session acceptance', () => {
 				'"error":{"code":-32042,"message":"not ready","data":{"code":"NOT_READY"}}',
 			)
 			expect(failure.headers.get(MCP_SESSION_HEADER)).toBeNull()
-			expect(candidate).toEqual(expect.any(String))
+			expect(candidate.value).toEqual(expect.any(String))
 			const absent = await fetch(`${handle.base}/mcp`, {
 				method: 'DELETE',
-				headers: { [MCP_SESSION_HEADER]: candidate ?? '' },
+				headers: { [MCP_SESSION_HEADER]: candidate.value ?? '' },
 			})
 			expect(absent.status).toBe(404)
-			refused = false
+			refused.value = false
 			const success = await postJSON(handle.base, createJSONRPCRequest(), { headers: { accept } })
 			expect(success.status).toBe(200)
 			expect(success.headers.get('content-type')).toContain(
 				accept.includes('text/event-stream') ? 'text/event-stream' : 'application/json',
 			)
 			expect(await success.text()).toContain('"result":{"protocolVersion"')
-			expect(success.headers.get(MCP_SESSION_HEADER)).toBe(candidate)
-			const live = candidate
-			refused = true
+			expect(success.headers.get(MCP_SESSION_HEADER)).toBe(candidate.value)
+			const live = candidate.value
+			refused.value = true
 			const repeated = await postJSON(handle.base, createJSONRPCRequest(), {
 				headers: { accept, [MCP_SESSION_HEADER]: live ?? '' },
 			})
 			expect(repeated.status).toBe(200)
 			expect(await repeated.text()).toContain('"error":{"code":-32042')
 			expect(repeated.headers.get(MCP_SESSION_HEADER)).toBe(live)
-			expect(candidate).toBe(live)
+			expect(candidate.value).toBe(live)
 			const stored = await fetch(`${handle.base}/mcp`, {
 				method: 'DELETE',
-				headers: { [MCP_SESSION_HEADER]: candidate ?? '' },
+				headers: { [MCP_SESSION_HEADER]: candidate.value ?? '' },
 			})
 			expect(stored.status).toBe(204)
 		},
 	)
 
 	it('handshake omitted still mints a session for an SSE initialize result', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const response = await postJSON(handle.base, createJSONRPCRequest(), {
 			headers: { accept: 'application/json, text/event-stream' },
 		})
@@ -195,83 +195,9 @@ describe('handshake HTTP session acceptance', () => {
 // session off `context.state` (set by `createMCPSession` for a validated request) and push the
 // supplied message to its resumable GET stream — then short-circuit 202. The real shape of a
 // request handler pushing a server-initiated message (no test-only seam).
-function pushTrigger(payload: JSONRPCMessage): MiddlewareHandler<AppState> {
-	return (input, context, next) => {
-		if (context.method === 'POST' && input.headers.get('x-push-now') === '1') {
-			const session = context.state.session
-			if (session !== undefined) {
-				session.push(payload)
-				return new Response(null, { status: 202 })
-			}
-		}
-		return next()
-	}
-}
-
-function authenticateCaller(caller: unknown): MiddlewareHandler<AppState> {
-	return (_input, context, next) => {
-		if (!Reflect.set(context.state, 'caller', caller)) {
-			throw new Error('MCP caller state is not writable')
-		}
-		return next()
-	}
-}
-
-// Stand up a STATEFUL MCP server: `createMCPSession` in front of a session-agnostic
-// `createMCPRoutes`, plus (optionally) the in-request push-trigger app middleware. `ttl`, `clock`,
-// and the `session` group flow to the middleware (`clock` is the deterministic manual clock the
-// TTL specs advance explicitly).
-async function startSession(options?: {
-	readonly ttl?: number
-	readonly session?: MCPSessionOptions
-	readonly push?: JSONRPCMessage
-	readonly clock?: () => number
-	readonly origin?: MCPOriginOptions
-	readonly elapse?: { readonly clock: ManualClockInterface; readonly ms: number }
-	readonly hold?: number
-}): Promise<StartedServerInterface<AppState>> {
-	const origin = options?.origin
-	const dispatcher = createDispatcher<AppState>()
-	dispatcher.add(
-		createMCPRoutes<AppState>(createMCPLegacy(createCalculatorServer()), {
-			...(origin !== undefined ? { origin } : {}),
-		}),
-	)
-	const server = createServer<AppState>({ dispatcher, state: () => ({}) })
-	server.use(
-		createMCPSession<AppState>({
-			...(options?.ttl !== undefined ? { ttl: options.ttl } : {}),
-			...(options?.session !== undefined ? { session: options.session } : {}),
-			...(options?.clock !== undefined ? { clock: options.clock } : {}),
-			...(origin !== undefined ? { origin } : {}),
-		}),
-	)
-	// BEHIND the session middleware, so the clock moves while `createMCPSession` is suspended
-	// at `await next(forwarded)` — the only place a "last access" claim can be falsified.
-	const elapse = options?.elapse
-	if (elapse !== undefined) server.use(createClockMiddleware<AppState>(elapse.clock, elapse.ms))
-	if (options?.hold !== undefined) server.use(createDelayMiddleware<AppState>(options.hold))
-	if (options?.push !== undefined) server.use(pushTrigger(options.push))
-	const handle = await startServer(server)
-	teardown.add(() => handle.stop())
-	return handle
-}
-
-// POST a non-initialize request carrying a session id header — the stateful validation path.
-function postSession(
-	base: string,
-	id: string | undefined,
-	body: unknown,
-	headers?: Record<string, string>,
-): Promise<Response> {
-	const merged: Record<string, string> = { ...headers }
-	if (id !== undefined) merged[MCP_SESSION_HEADER] = id
-	return postJSON(base, body, { headers: merged })
-}
-
 describe('createMCPSession — mint / validate / DELETE', () => {
 	it('initialize mints a session id, returned in the mcp-session-id response header', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ params: { protocolVersion: '2025-06-18' } }),
@@ -286,7 +212,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('a tools/list echoing the minted id succeeds', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const init = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ params: { protocolVersion: '2025-11-25' } }),
@@ -305,7 +231,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('a post-initialize request with the pinned protocol-version header succeeds', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
 		const response = await postSession(
@@ -323,7 +249,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	// each is pinned to its own literal in its own unit row. This row drives them together at
 	// the older legacy revision, so a divergence between them fails here whichever side moved.
 	it('pins a session to the requested older legacy revision and accepts that header', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const init = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ params: { protocolVersion: MCP_FALLBACK_VERSION } }),
@@ -342,7 +268,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('a live session rejects a different supported protocol-version header', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const init = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ params: { protocolVersion: '2025-11-25' } }),
@@ -368,7 +294,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('a post-initialize request with an unsupported protocol-version header is rejected', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
 		const response = await postSession(
@@ -391,7 +317,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('does not retain or return a session for a rejected initialize request', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const response = await postJSON(handle.base, createJSONRPCRequest(), {
 			headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2099-01-01' },
 		})
@@ -402,7 +328,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('a non-initialize POST with NO session id → 404 + a JSON-RPC error body', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const response = await postSession(
 			handle.base,
 			undefined,
@@ -416,7 +342,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('a non-initialize POST with an UNKNOWN session id → 404 + a JSON-RPC error body', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const response = await postSession(
 			handle.base,
 			'00000000-0000-4000-8000-000000000000', // well-formed but never minted
@@ -429,14 +355,14 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	it('an initialize POST does NOT require a session header (it mints, never validates)', async () => {
 		// Even with the session middleware on, the FIRST request (initialize) carries no id and must
 		// succeed — otherwise a client could never bootstrap. It mints, returning the new id.
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const response = await postSession(handle.base, undefined, createJSONRPCRequest())
 		expect(response.status).toBe(200)
 		expect(response.headers.get(MCP_SESSION_HEADER)).not.toBeNull()
 	})
 
 	it('passes a modern POST straight through and ignores an unknown session id', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const response = await postSession(
 			handle.base,
 			'unknown-modern-session',
@@ -503,7 +429,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('a malformed body on a VALID session still gets the route -32700 (not pre-empted)', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		// Mint a session first; a malformed body carrying that VALID id resolves the session (the
 		// generic valid-session branch wins BEFORE the mint predicate awaits the body), so the
 		// session layer passes it through and `createMCPRoutes` returns the canonical parse error —
@@ -527,7 +453,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('DELETE {path} with the id → 204, and the session is then gone (a later echo → 404)', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
 		expect(id).not.toBeNull()
@@ -549,7 +475,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('DELETE with an unknown / missing id → 404 (no session to end)', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const missing = await fetch(`${handle.base}/mcp`, { method: 'DELETE' })
 		expect(missing.status).toBe(404)
 		const unknown = await fetch(`${handle.base}/mcp`, {
@@ -560,7 +486,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('denies session verbs with an unlisted origin and accepts an allowlisted origin', async () => {
-		const deniedHandle = await startSession()
+		const deniedHandle = await startSession(teardown)
 		const deniedInit = await postJSON(deniedHandle.base, createJSONRPCRequest())
 		const deniedId = deniedInit.headers.get(MCP_SESSION_HEADER)
 		const denied = await fetch(`${deniedHandle.base}/mcp`, {
@@ -571,7 +497,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 			},
 		})
 
-		const allowedHandle = await startSession({
+		const allowedHandle = await startSession(teardown, {
 			origin: { origins: ['https://client.example'] },
 		})
 		const allowedInit = await postJSON(allowedHandle.base, createJSONRPCRequest())
@@ -589,7 +515,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('delegates a present unlisted origin to an upstream validator when disabled', async () => {
-		const handle = await startSession({ origin: { enabled: false } })
+		const handle = await startSession(teardown, { origin: { enabled: false } })
 		const response = await postJSON(handle.base, createJSONRPCRequest(), {
 			headers: { origin: 'https://unlisted.example' },
 		})
@@ -599,7 +525,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('accepts a loopback Origin by default and mints a session', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const response = await postJSON(handle.base, createJSONRPCRequest(), {
 			headers: { origin: handle.base },
 		})
@@ -609,7 +535,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 	})
 
 	it('rejects a DNS-rebinding shape before minting a session', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const body = JSON.stringify(createJSONRPCRequest())
 		const outcome = await new Promise<{
 			readonly status: number | undefined
@@ -644,7 +570,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		// The session middleware owns `/mcp`; a POST to a different path is not session-gated. With no
 		// route registered there, the spine 404s it — proving the middleware did not short-circuit /
 		// 404 it as an unknown session.
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const response = await fetch(`${handle.base}/other`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
@@ -668,43 +594,10 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 
 // Open the resumable GET-SSE stream for `id` and return the live `Response` + abort `controller`.
 // Sends the session header + optional resume cursor.
-async function openSessionStream(
-	base: string,
-	id: string,
-	lastEventId?: string,
-): Promise<{ readonly response: Response; readonly controller: AbortController }> {
-	const controller = new AbortController()
-	const headers: Record<string, string> = { accept: 'text/event-stream', [MCP_SESSION_HEADER]: id }
-	if (lastEventId !== undefined) headers['last-event-id'] = lastEventId
-	const response = await fetch(`${base}/mcp`, { headers, signal: controller.signal })
-	return { response, controller }
-}
-
-// Read EXACTLY `n` decoded SSE events off the long-lived stream, then stop — a bounded reader so a
-// never-ending GET stream can't hang the test.
-async function takeEvents(response: Response, n: number): Promise<readonly SSEEvent[]> {
-	const events: SSEEvent[] = []
-	if (n === 0) return events
-	for await (const event of readSSEStream(response)) {
-		events.push(event)
-		if (events.length >= n) break
-	}
-	return events
-}
-
-// Fire the in-request push: a POST carrying the session id + `x-push-now: 1`, which the trigger
-// middleware turns into a `session.push` (→ 202). The session header makes the middleware resolve +
-// attach the session to `context.state`, so the handler can push to its GET stream.
-function triggerPush(base: string, id: string): Promise<Response> {
-	return postSession(base, id, createJSONRPCRequest({ method: 'ping', id: 'trigger' }), {
-		'x-push-now': '1',
-	})
-}
-
 describe('createMCPSession — resumable GET-SSE push channel', () => {
 	it('an in-request push ARRIVES on the open stream, decoded + carrying an id', async () => {
 		const pushed = createJSONRPCRequest({ method: 'notifications/message', id: 'srv-1' })
-		const handle = await startSession({ push: pushed })
+		const handle = await startSession(teardown, { push: pushed })
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
 		expect(id).not.toBeNull()
@@ -730,7 +623,7 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 
 	it('a reconnect with Last-Event-ID REPLAYS the missed events in order', async () => {
 		const pushed = createJSONRPCRequest({ method: 'notifications/message', id: 'srv' })
-		const handle = await startSession({ push: pushed })
+		const handle = await startSession(teardown, { push: pushed })
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
 		expect(id).not.toBeNull()
@@ -759,7 +652,7 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 
 	it('forwards the session capacity to each session it mints', async () => {
 		const pushed = createJSONRPCRequest({ method: 'notifications/message', id: 'srv' })
-		const handle = await startSession({ push: pushed, session: { capacity: 2 } })
+		const handle = await startSession(teardown, { push: pushed, session: { capacity: 2 } })
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
 		expect(id).not.toBeNull()
@@ -788,7 +681,11 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 	it('forwards its own clock to the session it mints, so the replay log sweeps on that clock', async () => {
 		const pushed = createJSONRPCRequest({ method: 'notifications/message', id: 'srv' })
 		const clock = createManualClock()
-		const handle = await startSession({ push: pushed, clock: clock.now, session: { ttl: 1 } })
+		const handle = await startSession(teardown, {
+			push: pushed,
+			clock: clock.now,
+			session: { ttl: 1 },
+		})
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
 		expect(id).not.toBeNull()
@@ -810,7 +707,7 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 	})
 
 	it('GET with a MISSING session id → 404 + a JSON-RPC error body', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const response = await fetch(`${handle.base}/mcp`, { headers: { accept: 'text/event-stream' } })
 		expect(response.status).toBe(404)
 		expect(await response.json()).toEqual({
@@ -820,7 +717,7 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 	})
 
 	it('GET with an UNKNOWN session id → 404', async () => {
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const response = await fetch(`${handle.base}/mcp`, {
 			headers: { accept: 'text/event-stream', [MCP_SESSION_HEADER]: 'never-minted' },
 		})
@@ -836,7 +733,7 @@ describe('createMCPSession — lazy session TTL eviction', () => {
 		// (dropped lazily on the next access — no background timer). Manual time — no real wait, no
 		// wall-clock race under suite load.
 		const clock = createManualClock()
-		const handle = await startSession({ ttl: 50, clock: clock.now })
+		const handle = await startSession(teardown, { ttl: 50, clock: clock.now })
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
 		expect(id).not.toBeNull()
@@ -854,7 +751,7 @@ describe('createMCPSession — lazy session TTL eviction', () => {
 		// restarts), echo again at t=100 (only 50ms since the touch) → still live. Touch-on-access
 		// keeps an active session young — explicit instants, zero real waits.
 		const clock = createManualClock()
-		const handle = await startSession({ ttl: 80, clock: clock.now })
+		const handle = await startSession(teardown, { ttl: 80, clock: clock.now })
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
 		expect(id).not.toBeNull()
@@ -892,7 +789,11 @@ describe('createMCPSession — `touched` is the instant of the last access', () 
 	// request for the id the server advertised is swept before it is resolved → 404.
 	it('a session whose initialize round trip outlasts the ttl is live for the id it advertised', async () => {
 		const clock = createManualClock()
-		const handle = await startSession({ ttl: 50, clock: clock.now, elapse: { clock, ms: 60 } })
+		const handle = await startSession(teardown, {
+			ttl: 50,
+			clock: clock.now,
+			elapse: { clock, ms: 60 },
+		})
 
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
@@ -912,7 +813,11 @@ describe('createMCPSession — `touched` is the instant of the last access', () 
 	// leaves the session one sweep away from death.
 	it('a continuously-used session survives requests that each outlast the ttl', async () => {
 		const clock = createManualClock()
-		const handle = await startSession({ ttl: 50, clock: clock.now, elapse: { clock, ms: 60 } })
+		const handle = await startSession(teardown, {
+			ttl: 50,
+			clock: clock.now,
+			elapse: { clock, ms: 60 },
+		})
 
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
@@ -942,7 +847,11 @@ describe('createMCPSession — `touched` is the instant of the last access', () 
 	// `id` — passes both rows and fails here.
 	it('a 202 notification re-stamps `touched` even though it answers no request', async () => {
 		const clock = createManualClock()
-		const handle = await startSession({ ttl: 50, clock: clock.now, elapse: { clock, ms: 60 } })
+		const handle = await startSession(teardown, {
+			ttl: 50,
+			clock: clock.now,
+			elapse: { clock, ms: 60 },
+		})
 
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
@@ -968,7 +877,7 @@ describe('createMCPSession — `touched` is the instant of the last access', () 
 	// entry and carry it past its own cutoff — a session that never dies while anyone knocks.
 	it('sweeps expired sessions before resolving the id, so a stale echo cannot revive one', async () => {
 		const clock = createManualClock()
-		const handle = await startSession({ ttl: 50, clock: clock.now })
+		const handle = await startSession(teardown, { ttl: 50, clock: clock.now })
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
 		expect(id).not.toBeNull()
@@ -995,7 +904,7 @@ describe('createMCPSession — `touched` is the instant of the last access', () 
 	// has ended the session, and a blind re-stamp would put it back. The same defect class as
 	// the WebSocket transport's, at a second door.
 	it('a DELETE that lands during a suspended POST is not undone by the write-back', async () => {
-		const handle = await startSession({ hold: 60 })
+		const handle = await startSession(teardown, { hold: 60 })
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
 		expect(id).not.toBeNull()
@@ -1027,7 +936,7 @@ describe('createMCPSession — `touched` is the instant of the last access', () 
 	// satisfy the assertion above.
 	it('leaves a session inside its window untouched by the sweep', async () => {
 		const clock = createManualClock()
-		const handle = await startSession({ ttl: 50, clock: clock.now })
+		const handle = await startSession(teardown, { ttl: 50, clock: clock.now })
 		const init = await postJSON(handle.base, createJSONRPCRequest())
 		const id = init.headers.get(MCP_SESSION_HEADER)
 
@@ -1047,7 +956,7 @@ describe('MCPClient over a server with createMCPSession — the client echoes th
 		// captures the `mcp-session-id` from the initialize response and ECHOES it on every later
 		// request — so the client clears the 404 session gate without any caller wiring. If the echo
 		// were missing, `tools()` (the first post-initialize request) would 404.
-		const handle = await startSession()
+		const handle = await startSession(teardown)
 		const client = createMCPClient({
 			transport: createMCPLegacyClientTransport(
 				createHTTPClientTransport({ url: `${handle.base}/mcp` }),

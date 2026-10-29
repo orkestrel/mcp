@@ -11,7 +11,6 @@ import type {
 	JSONRPCResultResponse,
 	MCPCallOutcome,
 	MCPClientCapabilities,
-	MCPClientInterface,
 	MCPMessageTransportEventMap,
 	MCPDiscoverResult,
 	MCPDispatchOptions,
@@ -20,13 +19,14 @@ import type {
 	MCPIdentity,
 	MCPInputRequestMap,
 	MCPJSONLimitOptions,
+	MCPJSONFrame,
+	MCPJSONStep,
+	MCPJSONProperty,
 	MCPLegacyResult,
-	MCPMetaObject,
 	MCPMethodOptions,
 	MCPProgress,
 	MCPResult,
 	MCPResultMetaObject,
-	MCPDispatcherInterface,
 	MCPServerOptions,
 	MCPSubscriptionFilter,
 	MCPTextStreamControllerInterface,
@@ -153,28 +153,31 @@ export function computeMissingCapabilities(
 ): MCPClientCapabilities | undefined {
 	const owned = attempt(() => cloneJSONRecord(capabilities))
 	const declared: Readonly<Record<string, unknown>> = owned.success ? owned.value : {}
-	const missing: Record<string, MCPMetaObject> = {}
-	let formUndeclared = false
-	let urlUndeclared = false
-	for (const request of Object.values(requests)) {
+	const deficits = Object.values(requests).map((request) => {
 		if (request.method === 'sampling/createMessage') {
-			if (!isRecord(declared['sampling'])) missing['sampling'] = {}
-			continue
+			return isRecord(declared['sampling']) ? undefined : 'sampling'
 		}
 		if (request.method === 'roots/list') {
-			if (!isRecord(declared['roots'])) missing['roots'] = {}
-			continue
+			return isRecord(declared['roots']) ? undefined : 'roots'
 		}
 		const elicitation = declared['elicitation']
 		if (request.params.mode === 'url') {
-			if (!isRecord(elicitation) || !isRecord(elicitation['url'])) urlUndeclared = true
-			continue
+			return isRecord(elicitation) && isRecord(elicitation['url']) ? undefined : 'url'
 		}
-		if (!supportsFormElicitation(declared)) formUndeclared = true
+		return supportsFormElicitation(declared) ? undefined : 'form'
+	})
+	const form = deficits.includes('form')
+	const url = deficits.includes('url')
+	const missing = {
+		...Object.fromEntries(
+			Array.from(new Set(deficits.filter((name) => name === 'sampling' || name === 'roots'))).map(
+				(name) => [name, {}],
+			),
+		),
+		...(form || url
+			? { elicitation: form ? (url ? { form: {}, url: {} } : {}) : { url: {} } }
+			: {}),
 	}
-	if (formUndeclared && !urlUndeclared) missing['elicitation'] = {}
-	if (urlUndeclared && !formUndeclared) missing['elicitation'] = { url: {} }
-	if (formUndeclared && urlUndeclared) missing['elicitation'] = { form: {}, url: {} }
 	return Object.keys(missing).length === 0 ? undefined : Object.freeze(missing)
 }
 
@@ -233,68 +236,59 @@ export function serializeJSON(value: unknown, limits: MCPJSONLimitOptions): stri
 		if (!isInteger(depth) || depth < 0) return undefined
 		if (breadth !== undefined && (!isInteger(breadth) || breadth < 0)) return undefined
 
-		let bytes = 0
-		let keys = 0
-		const chunks: string[] = []
+		const steps: MCPJSONStep[] = []
 		const ancestors = new WeakSet<object>()
-		const pending: Array<
-			| { readonly operation: 'value'; readonly value: unknown; readonly depth: number }
-			| { readonly operation: 'string'; readonly value: string; readonly output: string[] }
-			| { readonly operation: 'text'; readonly text: string }
-			| { readonly operation: 'close'; readonly value: object; readonly text: string }
-			| {
-					readonly operation: 'record'
-					readonly value: object
-					readonly names: readonly string[]
-					readonly encoded: string[]
-					readonly index: number
-					readonly depth: number
-			  }
-		> = [{ operation: 'value', value, depth: 0 }]
+		const pending: MCPJSONFrame[] = [{ operation: 'value', value, depth: 0 }]
 
 		while (pending.length > 0) {
 			const frame = pending.pop()
 			if (frame === undefined) return undefined
+			const previous = steps.at(-1)
+			const bytes = previous?.bytes ?? 0
+			const keys = previous?.keys ?? 0
 			if (frame.operation === 'text') {
-				chunks.push(frame.text)
+				steps.push({ bytes, keys, text: frame.text })
 				continue
 			}
 			if (frame.operation === 'close') {
 				ancestors.delete(frame.value)
-				chunks.push(frame.text)
+				steps.push({ bytes, keys, text: frame.text })
 				continue
 			}
 			if (frame.operation === 'string') {
-				let encodedBytes = 2
-				for (let index = 0; index < frame.value.length; index += 1) {
-					const code = frame.value.charCodeAt(index)
-					if (code === 0x22 || code === 0x5c) encodedBytes += 2
-					else if (
-						code === 0x08 ||
-						code === 0x09 ||
-						code === 0x0a ||
-						code === 0x0c ||
-						code === 0x0d
-					)
-						encodedBytes += 2
-					else if (code < 0x20) encodedBytes += 6
-					else if (code < 0x80) encodedBytes += 1
-					else if (code < 0x800) encodedBytes += 2
-					else if (code >= 0xd800 && code <= 0xdbff) {
-						const next = index + 1 < frame.value.length ? frame.value.charCodeAt(index + 1) : 0
-						if (next >= 0xdc00 && next <= 0xdfff) {
-							encodedBytes += 4
-							index += 1
-						} else encodedBytes += 6
-					} else if (code >= 0xdc00 && code <= 0xdfff) encodedBytes += 6
-					else encodedBytes += 3
-					if (bytes + encodedBytes > limit) return undefined
-				}
-				bytes += encodedBytes
-				if (bytes > limit) return undefined
+				const encoded = Iterator.from(frame.value).reduce((measured, character) => {
+					const code = character.charCodeAt(0)
+					const width =
+						character.length === 2
+							? 4
+							: code === 0x22 ||
+								  code === 0x5c ||
+								  code === 0x08 ||
+								  code === 0x09 ||
+								  code === 0x0a ||
+								  code === 0x0c ||
+								  code === 0x0d
+								? 2
+								: code < 0x20 || (code >= 0xd800 && code <= 0xdfff)
+									? 6
+									: code < 0x80
+										? 1
+										: code < 0x800
+											? 2
+											: 3
+					const total = measured + width
+					if (bytes + total > limit) throw new RangeError('The JSON string exceeds its byte bound')
+					return total
+				}, 2)
+				const spent = bytes + encoded
+				if (spent > limit) return undefined
 				const text = JSON.stringify(frame.value)
 				if (!isString(text)) return undefined
-				frame.output.push(text)
+				if (frame.output === undefined) steps.push({ bytes: spent, keys, text })
+				else {
+					frame.output.push(text)
+					steps.push({ bytes: spent, keys })
+				}
 				continue
 			}
 			if (frame.operation === 'record') {
@@ -304,30 +298,26 @@ export function serializeJSON(value: unknown, limits: MCPJSONLimitOptions): stri
 					pending.push({ operation: 'string', value: name, output: frame.encoded })
 					continue
 				}
-				const entries: Array<{ readonly text: string; readonly value: unknown }> = []
-				for (let index = 0; index < frame.names.length; index += 1) {
-					const key = frame.names[index]
+				const entries = frame.names.map((key, index): MCPJSONProperty => {
 					const text = frame.encoded[index]
-					if (key === undefined || text === undefined) return undefined
+					if (text === undefined) throw new Error('A JSON property name was not encoded')
 					const descriptor = Reflect.getOwnPropertyDescriptor(frame.value, key)
 					if (
 						descriptor === undefined ||
 						descriptor.enumerable !== true ||
 						!Object.hasOwn(descriptor, 'value')
 					)
-						return undefined
-					entries.push({ text, value: descriptor.value })
-				}
+						throw new Error('A JSON property is not an enumerable data value')
+					return { text, value: descriptor.value }
+				})
 				ancestors.add(frame.value)
-				chunks.push('{')
+				steps.push({ bytes, keys, text: '{' })
 				pending.push({ operation: 'close', value: frame.value, text: '}' })
-				for (let index = entries.length - 1; index >= 0; index -= 1) {
-					const property = entries[index]
-					if (property === undefined) return undefined
+				for (const [index, property] of entries.toReversed().entries()) {
 					pending.push({ operation: 'value', value: property.value, depth: frame.depth + 1 })
 					pending.push({ operation: 'text', text: ':' })
 					pending.push({ operation: 'text', text: property.text })
-					if (index > 0) pending.push({ operation: 'text', text: ',' })
+					if (index < entries.length - 1) pending.push({ operation: 'text', text: ',' })
 				}
 				continue
 			}
@@ -336,22 +326,22 @@ export function serializeJSON(value: unknown, limits: MCPJSONLimitOptions): stri
 			const entry = frame.value
 			if (entry === null || isBoolean(entry)) {
 				const text = entry === null ? 'null' : entry ? 'true' : 'false'
-				bytes += text.length
-				if (bytes > limit) return undefined
-				chunks.push(text)
+				const spent = bytes + text.length
+				if (spent > limit) return undefined
+				steps.push({ bytes: spent, keys, text })
 				continue
 			}
 			if (isNumber(entry)) {
 				if (!isFiniteNumber(entry)) return undefined
 				const text = JSON.stringify(entry)
 				if (!isString(text)) return undefined
-				bytes += text.length
-				if (bytes > limit) return undefined
-				chunks.push(text)
+				const spent = bytes + text.length
+				if (spent > limit) return undefined
+				steps.push({ bytes: spent, keys, text })
 				continue
 			}
 			if (isString(entry)) {
-				pending.push({ operation: 'string', value: entry, output: chunks })
+				pending.push({ operation: 'string', value: entry })
 				continue
 			}
 			if (!isObject(entry) || ancestors.has(entry)) return undefined
@@ -369,58 +359,54 @@ export function serializeJSON(value: unknown, limits: MCPJSONLimitOptions): stri
 				)
 					return undefined
 				const length = lengthDescriptor.value
-				keys += length
-				bytes += 2 + (length === 0 ? 0 : length - 1)
-				if (bytes > limit || (breadth !== undefined && keys > breadth)) return undefined
+				const visited = keys + length
+				const spent = bytes + (2 + (length === 0 ? 0 : length - 1))
+				if (spent > limit || (breadth !== undefined && visited > breadth)) return undefined
 				if (length > 0 && frame.depth >= depth) return undefined
 				const names = Reflect.ownKeys(entry)
 				if (names.length !== length + 1) return undefined
-				let foundLength = false
-				for (const name of names) {
-					if (!isString(name)) return undefined
-					if (name === 'length') {
-						if (foundLength) return undefined
-						foundLength = true
-						continue
-					}
-					const index = Number(name)
-					if (!isInteger(index) || index < 0 || index >= length || String(index) !== name)
-						return undefined
-				}
-				if (!foundLength) return undefined
-				const values: unknown[] = []
-				for (let index = 0; index < length; index += 1) {
+				if (
+					!names.every((name) => {
+						if (!isString(name)) return false
+						if (name === 'length') return true
+						const index = Number(name)
+						return isInteger(index) && index >= 0 && index < length && String(index) === name
+					}) ||
+					!names.includes('length')
+				)
+					return undefined
+				const values = Array.from({ length }, (_, index): unknown => {
 					const descriptor = Reflect.getOwnPropertyDescriptor(entry, String(index))
 					if (
 						descriptor === undefined ||
 						descriptor.enumerable !== true ||
 						!Object.hasOwn(descriptor, 'value')
 					)
-						return undefined
-					values.push(descriptor.value)
-				}
+						throw new Error('A JSON array member is not an enumerable data value')
+					return descriptor.value
+				})
 				ancestors.add(entry)
-				chunks.push('[')
+				steps.push({ bytes: spent, keys: visited, text: '[' })
 				pending.push({ operation: 'close', value: entry, text: ']' })
-				for (let index = values.length - 1; index >= 0; index -= 1) {
-					const item = values[index]
+				for (const [index, item] of values.toReversed().entries()) {
 					pending.push({ operation: 'value', value: item, depth: frame.depth + 1 })
-					if (index > 0) pending.push({ operation: 'text', text: ',' })
+					if (index < values.length - 1) pending.push({ operation: 'text', text: ',' })
 				}
 				continue
 			}
 			if (!isRecord(entry)) return undefined
 			const ownKeys = Reflect.ownKeys(entry)
-			keys += ownKeys.length
-			bytes += 2 + (ownKeys.length === 0 ? 0 : ownKeys.length - 1) + ownKeys.length
-			if (bytes > limit || (breadth !== undefined && keys > breadth)) return undefined
+			const visited = keys + ownKeys.length
+			const spent = bytes + (2 + (ownKeys.length === 0 ? 0 : ownKeys.length - 1) + ownKeys.length)
+			if (spent > limit || (breadth !== undefined && visited > breadth)) return undefined
 			if (ownKeys.length > 0 && frame.depth >= depth) return undefined
-			const names: string[] = []
-			for (const key of ownKeys) {
-				if (!isString(key)) return undefined
-				names.push(key)
-			}
-			names.sort()
+			const names = ownKeys
+				.map((key) => {
+					if (!isString(key)) throw new Error('A JSON property name is not a string')
+					return key
+				})
+				.toSorted()
+			steps.push({ bytes: spent, keys: visited })
 			pending.push({
 				operation: 'record',
 				value: entry,
@@ -430,7 +416,7 @@ export function serializeJSON(value: unknown, limits: MCPJSONLimitOptions): stri
 				depth: frame.depth,
 			})
 		}
-		return chunks.join('')
+		return steps.map((step) => step.text ?? '').join('')
 	})
 	return serialized.success ? serialized.value : undefined
 }
@@ -627,13 +613,15 @@ export function buildCallOutcome(name: string, result: unknown): MCPCallOutcome 
 	if (isRecord(result) && result['isError'] === true) {
 		throw new MCPToolError(text.length > 0 ? text : `MCP tool '${name}' failed`)
 	}
-	let value: unknown
-	if (isRecord(result) && Object.hasOwn(result, 'structuredContent')) {
-		value = result['structuredContent']
-	} else if (text.length > 0) {
-		const parsed = parseJSON(text)
-		value = parsed === undefined ? text : parsed
-	}
+	const structured = isRecord(result) && Object.hasOwn(result, 'structuredContent')
+	const parsed = structured || text.length === 0 ? undefined : parseJSON(text)
+	const value = structured
+		? result['structuredContent']
+		: text.length > 0
+			? parsed === undefined
+				? text
+				: parsed
+			: undefined
 	const outcome: MCPCallOutcome = { resultType: 'complete', value }
 	return Object.freeze(outcome)
 }
@@ -1265,14 +1253,12 @@ export function deliverMessage(
 ): void {
 	// The one boundary in this package that keeps its own `try`: the caught value IS the
 	// report here, so `parseJSON`'s `undefined` would discard what this emit exists to carry.
-	let parsed: unknown
-	try {
-		parsed = JSON.parse(text)
-	} catch (error) {
-		emitter.emit('error', error)
+	const parsed = attempt(() => JSON.parse(text))
+	if (!parsed.success) {
+		emitter.emit('error', parsed.error)
 		return
 	}
-	const message = parseJSONRPCMessage(parsed)
+	const message = parseJSONRPCMessage(parsed.value)
 	if (message === undefined) {
 		emitter.emit('error', new Error(fault))
 		return
@@ -1503,7 +1489,11 @@ export function encodeSentinel(value: string): string {
  * ```
  */
 export function countHeaderAnnotations(value: unknown): number {
-	let total = 0
+	return Iterator.from(walkHeaderAnnotations(value)).reduce<number>((count) => count + 1, 0)
+}
+
+/** Yields annotation values while preserving the schema's depth-first traversal order. */
+export function* walkHeaderAnnotations(value: unknown): Generator<unknown, void, unknown> {
 	const seen = new Set<object>()
 	const pending: unknown[] = [value]
 	while (pending.length > 0) {
@@ -1517,11 +1507,10 @@ export function countHeaderAnnotations(value: unknown): number {
 		if (!isRecord(node) || seen.has(node)) continue
 		seen.add(node)
 		for (const [key, member] of Object.entries(node)) {
-			if (key === MCP_HEADER_ANNOTATION) total += 1
+			if (key === MCP_HEADER_ANNOTATION) yield member
 			else pending.push(member)
 		}
 	}
-	return total
 }
 
 /**
@@ -1674,15 +1663,19 @@ export function buildHeaderProjection(
 	parameters: readonly MCPHeaderParameter[],
 	values: unknown,
 ): Readonly<Record<string, string>> {
-	const headers: Record<string, string> = {}
-	for (const parameter of parameters) {
-		let carried: unknown = values
-		for (const key of parameter.path) carried = isRecord(carried) ? carried[key] : undefined
-		if (carried === undefined || carried === null) continue
-		const text = renderHeaderValue(carried, parameter.primitive)
-		if (text !== undefined) headers[`${MCP_PARAM_PREFIX}${parameter.name}`] = encodeSentinel(text)
-	}
-	return headers
+	return Object.fromEntries(
+		Iterator.from(parameters).flatMap((parameter) => {
+			const carried = Iterator.from(parameter.path).reduce<unknown>(
+				(value, key) => (isRecord(value) ? value[key] : undefined),
+				values,
+			)
+			if (carried === undefined || carried === null) return []
+			const text = renderHeaderValue(carried, parameter.primitive)
+			return text === undefined
+				? []
+				: [[`${MCP_PARAM_PREFIX}${parameter.name}`, encodeSentinel(text)]]
+		}),
+	)
 }
 
 /**
@@ -1787,224 +1780,13 @@ export async function sendStream(
 	transport: MCPTransportInterface,
 ): Promise<void> {
 	try {
-		let next = await stream.next()
-		while (!next.done) {
+		while (true) {
+			const next = await stream.next()
+			const done = next.done
 			await transport.send(next.value)
-			next = await stream.next()
+			if (done) break
 		}
-		await transport.send(next.value)
 	} finally {
 		await stream[Symbol.asyncDispose]()
-	}
-}
-
-// The environment-agnostic PORT binders — the keystone that lets an
-// {@link MCPDispatcherInterface} / {@link MCPClientInterface} run over any
-// {@link MCPTransportInterface} (a Node stdio pair, a browser MessagePort, a Web
-// Worker `self`) with no per-environment dispatch/correlation wiring duplicated at
-// each face. Both are TOTAL: a `send` throw or rejection is caught and never
-// escapes as an unhandled rejection.
-
-/**
- * Pipes an {@link MCPTransportInterface} into an {@link MCPDispatcherInterface} — every
- * inbound message runs through `server.handle`, and a defined reply is written back
- * through `transport.send`.
- *
- * @remarks
- * `server.handle` already turns a malformed message into a serialized `-32700` /
- * `-32600` reply and a notification into `undefined` (no reply), so this binder parses
- * nothing the server would parse differently: it decodes each inbound message through
- * {@link decodeBoundedMessage} under `server.limit`, the server's own bound, so a message
- * the server would refuse is never parsed here either and still receives its `-32700` from
- * the one place that words it. A held-open reply arrives as an
- * {@link import('./types.js').MCPTextStreamControllerInterface} instead of a string: this is
- * the one place that pumps it, writing each notification in order and then the generator's
- * returned terminating response ({@link sendStream}). A `transport.send` throw or rejection —
- * mid-stream included — is caught and routed
- * to `server.emitter`'s `error` event (never rethrown, never an unhandled rejection);
- * a listener on that event that itself throws is swallowed (the end of the line —
- * the caller's own bug, never this binder's). A fault raised after its own request was
- * cancelled reports nothing, because a cancellation is not a fault.
- *
- * **This binder owns every exchange it starts, and ends each one on every exit.** It holds one
- * `AbortController` per live request, keyed by the request's id and deleted whenever that
- * request leaves — normally, by a throw, or by cancellation — and it supplies that signal to
- * `handle` as {@link import('./types.js').MCPDispatchOptions}. These consequences follow.
- * An inbound `notifications/cancelled` aborts the request it names, which is how the message-
- * based cancellation path reaches a tool on the carriers that have one (stdio, WebSocket,
- * `MessagePort`); a cancelled request writes no response, because a peer that asked for a call
- * to stop is not answered by it; and the transport's `closed` signal aborts every request
- * still in flight, so an exchange being pumped when the carrier dies ends with it instead of
- * writing into a socket nobody is holding.
- *
- * `listen`/`closed` are replace semantics (§ port contract): the returned unbind
- * detaches by replacing this binder's own handlers with no-ops, so a subsequent
- * `bindServer` call on the same transport is never double-dispatched by a stale
- * subscription left behind — an unbind→rebind cycle yields exactly one reply per
- * request. Unbinding is itself an owner exit: it aborts and retires every request still in
- * flight before detaching, so `unbind()` then `close()` and `close()` then `unbind()` end the
- * same exchanges. It does not close the transport; that remains the caller's decision.
- *
- * @param server - The transport-agnostic server to dispatch inbound messages over
- * @param transport - The duplex channel to pipe the server over
- * @returns Detach this binder from the transport (does not close it)
- *
- * @example
- * ```ts
- * const unbind = bindServer(server, transport)
- * // ... later, detach without closing:
- * unbind()
- * ```
- */
-export function bindServer(
-	server: MCPDispatcherInterface,
-	transport: MCPTransportInterface,
-): () => void {
-	let active = true
-	// The per-live-request registry. It lives HERE rather than on the method registry because
-	// the controller a cancellation must reach is created per dispatch and published to no
-	// member — the binder is the one place that both mints the request's lifetime and sees the
-	// next inbound frame, so it is the only place the two can meet.
-	const live = new Map<JSONRPCId, AbortController>()
-	transport.listen(async (message) => {
-		if (!active) return
-		const decoded = decodeBoundedMessage(message, {
-			bytes: server.limit.message,
-			depth: server.limit.depth,
-		})
-		const cancelled = decoded === undefined ? undefined : readCancelledId(decoded)
-		if (cancelled !== undefined) {
-			live.get(cancelled)?.abort()
-			return
-		}
-		const id = decoded === undefined || !('method' in decoded) ? undefined : decoded.id
-		const request = new AbortController()
-		if (id !== undefined) live.set(id, request)
-		try {
-			const answer = await server.handle(message, { signal: request.signal })
-			if (answer === undefined) return
-			// A cancelled request writes nothing — and a held-open answer is RELEASED rather
-			// than dropped, because dropping one is exactly the abandonment this binder owns.
-			if (isString(answer)) {
-				if (!request.signal.aborted) await transport.send(answer)
-			} else if (request.signal.aborted) await answer[Symbol.asyncDispose]()
-			else await sendStream(answer, transport)
-		} catch (error) {
-			// A cancellation is not a fault. Once this request has been aborted, whatever the
-			// pump raises IS the abort arriving, and reporting it as a contained fault would
-			// put an operator's `error` feed one entry behind every peer that cancels.
-			if (!request.signal.aborted) {
-				try {
-					server.emitter.emit('error', error)
-				} catch {
-					// A throwing `error` listener is the caller's own bug — the end of the line.
-				}
-			}
-		} finally {
-			// Only ever retire OUR OWN entry: a peer reusing a live id would otherwise have the
-			// first request's exit delete the second request's controller and silence its cancel.
-			if (id !== undefined && live.get(id) === request) live.delete(id)
-		}
-	})
-	transport.closed(() => {
-		active = false
-		for (const pending of live.values()) pending.abort()
-		live.clear()
-	})
-	return () => {
-		active = false
-		for (const pending of live.values()) pending.abort()
-		live.clear()
-		transport.listen(() => {})
-		transport.closed(() => {})
-	}
-}
-
-/**
- * Pipes an {@link MCPTransportInterface} into an {@link MCPClientInterface} — every
- * inbound message is decoded and delivered onto the client's own transport
- * (`client.transport.emitter`'s `message` / `close` events), resolving/rejecting the
- * client's correlated pending requests exactly as a direct reply would.
- *
- * @remarks
- * The client's outbound writes flow through `client.transport.send` — its existing,
- * unmodified request/response correlation — so `client` must have been constructed
- * with a {@link import('./types.js').MCPMessageTransportInterface} that itself carries
- * the same `transport` (see {@link import('./factories.js').createDuplexClientTransport},
- * the additive factory that adapts an {@link MCPTransportInterface} into that shape);
- * this binder then completes the inbound half by decoding each message and pushing it
- * onto `client.transport.emitter` (an {@link import('@orkestrel/emitter').EmitterInterface}
- * exposes `emit`, so no client modification is needed). A malformed / non-JSON-RPC
- * inbound message is dropped (total — never throws); a delivery fault is routed to
- * `client.transport.emitter`'s `error` event (never rethrown). The returned unbind
- * detaches this binder (further inbound messages and the transport's `closed` signal are
- * ignored) without closing the transport.
- *
- * `listen`/`closed` are replace semantics (§ port contract): the returned unbind
- * detaches by replacing this binder's own handlers with no-ops, so a subsequent
- * `bindClient` call on the same transport is never double-dispatched by a stale
- * subscription left behind — an unbind→rebind cycle delivers exactly one `message`
- * emit per inbound reply.
- *
- * **This binder needs no live-request registry, and the asymmetry with {@link bindServer} is
- * real rather than an omission.** A server binder holds the lifetime of work it started, so an
- * inbound `notifications/cancelled` has something to reach; a client binder starts no work —
- * `MCPClient` already owns its pending entries and already writes the cancellation frame
- * itself when a caller's `signal` aborts, on a carrier declaring `duplex`. Adding a registry
- * here would be a second correlation table for ids the client is already correlating, and a
- * pair of tables for one fact drift. The one obligation this binder does carry is delivery: a
- * malformed / non-JSON-RPC inbound message is dropped (total — never throws).
- *
- * @param client - The transport-agnostic client whose transport to deliver messages onto
- * @param transport - The duplex channel to pipe the client over
- * @returns Detach this binder from the transport (does not close it)
- *
- * @example
- * ```ts
- * const client = createMCPClient({ transport: createDuplexClientTransport(transport) })
- * const unbind = bindClient(client, transport)
- * await client.connect()
- * // ... later, detach without closing:
- * unbind()
- * ```
- */
-export function bindClient(
-	client: MCPClientInterface,
-	transport: MCPTransportInterface,
-): () => void {
-	let active = true
-	transport.listen((message) => {
-		if (!active) return
-		let parsed: unknown
-		try {
-			parsed = JSON.parse(message)
-		} catch {
-			return
-		}
-		const decoded = parseJSONRPCMessage(parsed)
-		if (decoded === undefined) return
-		try {
-			client.transport.emitter.emit('message', decoded)
-		} catch (error) {
-			try {
-				client.transport.emitter.emit('error', error)
-			} catch {
-				// A throwing `error` listener is the caller's own bug — the end of the line.
-			}
-		}
-	})
-	transport.closed(() => {
-		if (!active) return
-		active = false
-		try {
-			client.transport.emitter.emit('close')
-		} catch {
-			// A throwing `close` listener is the caller's own bug — the end of the line.
-		}
-	})
-	return () => {
-		active = false
-		transport.listen(() => {})
-		transport.closed(() => {})
 	}
 }

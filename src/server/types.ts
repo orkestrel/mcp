@@ -110,7 +110,7 @@ export type MCPCallerHandler<TState = unknown> = (
  * Options shared by the MCP Streamable-HTTP POST handler and route factory.
  *
  * @remarks
- * - `streaming` — when `true` (the default) the transport MAY answer with a
+ * - `stream` — when `true` (the default) the transport MAY answer with a
  *   Server-Sent-Events response (one `data:` event carrying the JSON-RPC reply, then
  *   the stream ends) whenever the client's `Accept` header includes
  *   `text/event-stream`; when `false` it always answers with a plain JSON body. Either
@@ -130,7 +130,7 @@ export type MCPCallerHandler<TState = unknown> = (
  *   `undefined` omits caller context; a throw propagates.
  */
 export interface HTTPHandlerOptions<TState = unknown> {
-	readonly streaming?: boolean
+	readonly stream?: boolean
 	/** Requires the session layer's value; `origins` is ignored when `enabled` is `false`. */
 	readonly origin?: MCPOriginOptions
 	readonly keepalive?: MCPKeepaliveOptions
@@ -216,6 +216,20 @@ export interface MCPSessionMiddlewareOptions {
 	/** Requires the route layer's value; `origins` is ignored when `enabled` is `false`. */
 	readonly origin?: MCPOriginOptions
 	readonly keepalive?: MCPKeepaliveOptions
+	/** Supplies the session table; omission creates an isolated in-memory table. */
+	readonly store?: MCPSessionStoreInterface
+}
+
+/** Stores negotiated legacy sessions and removes entries at an explicit idle cutoff. */
+export interface MCPSessionStoreInterface {
+	/** Reads the session associated with an opaque protocol identifier. */
+	get(id: string): MCPSessionEntry | undefined
+	/** Publishes an entry under the identifier its session owns. */
+	set(entry: MCPSessionEntry): void
+	/** Removes a session and reports whether its identifier was present. */
+	delete(id: string): boolean
+	/** Removes every entry last touched at or before the idle cutoff. */
+	sweep(cutoff: number): void
 }
 
 /**

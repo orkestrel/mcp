@@ -1,165 +1,49 @@
-import type {
-	JSONRPCInvocation,
-	JSONRPCMessage,
-	JSONRPCResponse,
-	MCPMessageTransportEventMap,
-	MCPMessageTransportInterface,
-} from '@src/core'
-import { createEmitter } from '@orkestrel/emitter'
+import type { JSONRPCMessage } from '@src/core'
+import { createLegacyPeer, buildLegacyHandshakeResponse, MCPFixtureCell } from '../../setup'
 import { describe, expect, it } from 'vitest'
 import {
 	createMCPClient,
 	createMCPLegacyClientTransport,
 	isMCPError,
 	MCP_META_CAPABILITIES,
-	MCP_META_CLIENT,
 	MCP_META_VERSION,
 	MCP_HANDSHAKE_VERSION,
 	MCP_UNSUPPORTED_VERSION,
 } from '@src/core'
-import { isRecord } from '@orkestrel/contract'
 import { waitForDelay } from '@orkestrel/test'
 
-interface LegacyPeerInterface extends MCPMessageTransportInterface {
-	readonly sent: readonly JSONRPCMessage[]
-	readonly violations: readonly string[]
-	readonly closed: number
-	readonly lifecycle: readonly string[]
-	deliver(message: JSONRPCMessage): void
-	release(): void
-}
-
-interface LegacyPeerOptions {
-	readonly drop?: (method: string, count: number) => boolean
-	readonly park?: (method: string, count: number) => boolean
-	readonly reply?: (
-		request: JSONRPCInvocation,
-		count: number,
-	) => JSONRPCResponse | Error | undefined
-	readonly refuse?: boolean
-	readonly version?: unknown
-}
-
-function createLegacyPeer(options?: LegacyPeerOptions): LegacyPeerInterface {
-	const emitter = createEmitter<MCPMessageTransportEventMap>()
-	const sent: JSONRPCMessage[] = []
-	const violations: string[] = []
-	const lifecycle: string[] = []
-	const held: Array<() => void> = []
-	let closed = 0
-	return {
-		emitter,
-		session: undefined,
-		duplex: true,
-		get sent() {
-			return sent
-		},
-		get violations() {
-			return violations
-		},
-		get closed() {
-			return closed
-		},
-		get lifecycle() {
-			return lifecycle
-		},
-		async start() {
-			lifecycle.push('start')
-		},
-		async send(message) {
-			sent.push(message)
-			if (!('method' in message)) return
-			const count = sent.length
-			if (options?.park?.(message.method, count) === true) {
-				await new Promise<void>((resolve) => {
-					held.push(resolve)
-				})
-			}
-			const metadata = message.params?.['_meta']
-			if (
-				isRecord(metadata) &&
-				(Object.hasOwn(metadata, MCP_META_VERSION) ||
-					Object.hasOwn(metadata, MCP_META_CAPABILITIES) ||
-					Object.hasOwn(metadata, MCP_META_CLIENT))
-			) {
-				violations.push(`modern metadata reached ${message.method}`)
-			}
-			const scripted = options?.reply?.(message, count)
-			if (scripted instanceof Error) throw scripted
-			if (scripted !== undefined) {
-				emitter.emit('message', scripted)
-				return
-			}
-			if (options?.drop?.(message.method, count) === true) return
-			if (message.id === undefined) return
-			if (message.method === 'initialize') {
-				emitter.emit(
-					'message',
-					options?.refuse === true
-						? {
-								jsonrpc: '2.0',
-								id: message.id,
-								error: { code: -32602, message: 'Legacy handshake refused' },
-							}
-						: {
-								jsonrpc: '2.0',
-								id: message.id,
-								result: {
-									protocolVersion: options?.version ?? '2025-11-25',
-									capabilities: { tools: {} },
-									serverInfo: { name: 'legacy-peer', version: '1.0.0' },
-								},
-							},
-				)
-				return
-			}
-			if (message.method === 'tools/list') {
-				emitter.emit('message', {
-					jsonrpc: '2.0',
-					id: message.id,
-					result: {
-						tools: [{ name: 'echo', description: 'Echoes input', inputSchema: { type: 'object' } }],
-					},
-				})
-				return
-			}
-			if (message.method === 'tools/call') {
-				emitter.emit('message', {
-					jsonrpc: '2.0',
-					id: message.id,
-					result: {
-						content: [{ type: 'text', text: '{"echoed":"legacy"}' }],
-						structuredContent: { echoed: 'legacy' },
-					},
-				})
-			}
-		},
-		async close() {
-			closed += 1
-			lifecycle.push('close')
-		},
-		deliver(message) {
-			emitter.emit('message', message)
-		},
-		release() {
-			for (const resolve of held.splice(0)) resolve()
-		},
-	}
-}
-
-function initializeResponse(id: string | number, protocol: unknown): JSONRPCResponse {
-	return {
-		jsonrpc: '2.0',
-		id,
-		result: {
-			protocolVersion: protocol,
-			capabilities: { tools: {} },
-			serverInfo: { name: 'legacy-peer', version: '1.0.0' },
-		},
-	}
-}
-
 describe('MCPLegacyClientTransport', () => {
+	it('delivers an id-0 response after the accepted handshake as a message', async () => {
+		const peer = createLegacyPeer()
+		const transport = createMCPLegacyClientTransport(peer)
+		const messages: JSONRPCMessage[] = []
+		transport.emitter.on('message', (message) => messages.push(message))
+		await transport.start()
+
+		const response: JSONRPCMessage = { jsonrpc: '2.0', id: 0, result: { tools: [] } }
+		peer.deliver(response)
+
+		expect(messages).toEqual([response])
+		await transport.close()
+	})
+
+	it('ignores a forwarded request deadline after close', async () => {
+		const peer = createLegacyPeer({ drop: (method) => method === 'tools/list' })
+		const transport = createMCPLegacyClientTransport(peer, { timeout: 20 })
+		const messages: JSONRPCMessage[] = []
+		const errors: unknown[] = []
+		transport.emitter.on('message', (message) => messages.push(message))
+		transport.emitter.on('error', (error) => errors.push(error))
+		await transport.start()
+		await transport.send({ jsonrpc: '2.0', id: 7, method: 'tools/list' })
+
+		await transport.close()
+		await waitForDelay(30)
+
+		expect(messages).toEqual([])
+		expect(errors).toEqual([])
+	})
+
 	it('keeps the adapter pin on the legacy handshake and exposes the modern revision', async () => {
 		const peer = createLegacyPeer({ version: '2025-06-18' })
 		const client = createMCPClient({
@@ -229,7 +113,7 @@ describe('MCPLegacyClientTransport', () => {
 		const peer = createLegacyPeer({
 			reply: (request) =>
 				request.method === 'initialize' && request.id !== undefined
-					? initializeResponse(request.id, 42)
+					? buildLegacyHandshakeResponse(request.id, 42)
 					: undefined,
 		})
 		const client = createMCPClient({ transport: createMCPLegacyClientTransport(peer) })
@@ -263,11 +147,11 @@ describe('MCPLegacyClientTransport', () => {
 	})
 
 	it('preserves legacy instructions in discovery and clears them across reconnect', async () => {
-		let handshakes = 0
+		const handshakes = new MCPFixtureCell(0)
 		const peer = createLegacyPeer({
 			reply: (request) => {
 				if (request.method !== 'initialize' || request.id === undefined) return undefined
-				handshakes += 1
+				handshakes.value += 1
 				return {
 					jsonrpc: '2.0',
 					id: request.id,
@@ -275,7 +159,7 @@ describe('MCPLegacyClientTransport', () => {
 						protocolVersion: MCP_HANDSHAKE_VERSION,
 						capabilities: { tools: {} },
 						serverInfo: { name: 'legacy-peer', version: '1.0.0' },
-						...(handshakes === 1 ? { instructions: 'Use read-only tools' } : {}),
+						...(handshakes.value === 1 ? { instructions: 'Use read-only tools' } : {}),
 					},
 				}
 			},
@@ -430,16 +314,16 @@ describe('MCPLegacyClientTransport', () => {
 	it('surfaces a clear failure when the peer refuses the legacy handshake', async () => {
 		const peer = createLegacyPeer({ refuse: true })
 		const client = createMCPClient({ transport: createMCPLegacyClientTransport(peer) })
-		let failure: unknown
+		const failure = new MCPFixtureCell<unknown>(undefined)
 
 		try {
 			await client.connect()
 		} catch (error) {
-			failure = error
+			failure.value = error
 		}
 
-		expect(isMCPError(failure)).toBe(true)
-		expect(failure).toMatchObject({ message: 'Legacy handshake refused', code: -32602 })
+		expect(isMCPError(failure.value)).toBe(true)
+		expect(failure.value).toMatchObject({ message: 'Legacy handshake refused', code: -32602 })
 		expect(peer.closed).toBe(1)
 	})
 
@@ -480,18 +364,18 @@ describe('MCPLegacyClientTransport', () => {
 	})
 
 	it('completes the adapter-owned handshake before closing a superseded connect', async () => {
-		let client = createMCPClient({ transport: createLegacyPeer() })
+		const client = new MCPFixtureCell(createMCPClient({ transport: createLegacyPeer() }))
 		const peer = createLegacyPeer({
 			reply: (request) => {
 				if (request.method !== 'initialize' || request.id === undefined) return undefined
-				void client.disconnect()
-				return initializeResponse(request.id, MCP_HANDSHAKE_VERSION)
+				void client.value.disconnect()
+				return buildLegacyHandshakeResponse(request.id, MCP_HANDSHAKE_VERSION)
 			},
 		})
-		client = createMCPClient({ transport: createMCPLegacyClientTransport(peer) })
+		client.value = createMCPClient({ transport: createMCPLegacyClientTransport(peer) })
 
-		await expect(client.connect()).rejects.toThrow('MCP client disconnected')
-		expect(client.connected).toBe(false)
+		await expect(client.value.connect()).rejects.toThrow('MCP client disconnected')
+		expect(client.value.connected).toBe(false)
 		expect(peer.sent).toMatchObject([
 			{ method: 'initialize' },
 			{ method: 'notifications/initialized' },
@@ -543,12 +427,12 @@ describe('MCPLegacyClientTransport', () => {
 	})
 
 	it('surfaces a failing adapter initialized notification on reconnect', async () => {
-		let notifications = 0
+		const notifications = new MCPFixtureCell(0)
 		const peer = createLegacyPeer({
 			reply: (request) => {
 				if (request.method !== 'notifications/initialized') return undefined
-				notifications += 1
-				return notifications > 1 ? new Error('initialized notification failed') : undefined
+				notifications.value += 1
+				return notifications.value > 1 ? new Error('initialized notification failed') : undefined
 			},
 		})
 		const client = createMCPClient({ transport: createMCPLegacyClientTransport(peer) })
@@ -569,19 +453,19 @@ describe('MCPLegacyClientTransport', () => {
 		await client.connect()
 		await client.disconnect()
 
-		let reconnected = false
+		const reconnected = new MCPFixtureCell(false)
 		const reconnecting = client.connect().then(() => {
-			reconnected = true
+			reconnected.value = true
 		})
 		await waitForDelay(20)
 
-		expect(reconnected).toBe(false)
+		expect(reconnected.value).toBe(false)
 		expect(client.connected).toBe(false)
 
 		peer.release()
 		await reconnecting
 
-		expect(reconnected).toBe(true)
+		expect(reconnected.value).toBe(true)
 		expect(client.connected).toBe(true)
 	})
 

@@ -1,7 +1,4 @@
 import type { JSONRPCMessage } from '@src/core'
-import type { StartedServerInterface } from '../../../setupServer.js'
-import type { Duplex } from 'node:stream'
-import { createServer as createHTTPServer } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
 	createMCPClient,
@@ -9,19 +6,16 @@ import {
 	MCP_META_SERVER,
 	MCP_MODERN_VERSION,
 } from '@src/core'
-import { isRecord } from '@orkestrel/contract'
-import { createDispatcher } from '@orkestrel/router'
-import { createServer } from '@orkestrel/server'
-import { createWebSocketClientTransport, createWebSocketServer } from '@src/server'
-import {
-	computeWebSocketAccept,
-	encodeWebSocketFrame,
-	WEBSOCKET_OPCODE_CLOSE,
-	WEBSOCKET_OPCODE_TEXT,
-} from '@orkestrel/websocket'
+import { createWebSocketClientTransport } from '@src/server'
 import { createTeardown, waitForDelay } from '@orkestrel/test'
-import { createCalculatorServer, MODERN_METADATA } from '../../../setup.js'
-import { startServer, startUpgradeServer } from '../../../setupServer.js'
+import { MCPFixtureCell, MODERN_METADATA } from '../../../setup.js'
+import {
+	startWs,
+	startBogusAcceptServer,
+	startHoldingPeer,
+	startClosingPeer,
+	startUpgradeServer,
+} from '../../../setupServer.js'
 
 // src/server/mcp/WebSocketClientTransport.ts — the WebSocket CLIENT transport (the egress
 // mirror of createWebSocketServer), proven END TO END against the shipped createWebSocketServer
@@ -44,60 +38,9 @@ afterEach(() => teardown.destroy())
 
 // Stand up a server exposing the stub-tool MCPServer over WebSocket (the spine upgrade seam) on
 // an ephemeral port. `path` defaults to /mcp; pass a custom one to exercise the path option.
-async function startWs(path?: string): Promise<StartedServerInterface> {
-	const dispatcher = createDispatcher<unknown>()
-	const server = createServer<unknown>({ dispatcher, state: () => undefined })
-	server.upgrade(
-		createWebSocketServer(createCalculatorServer(), {
-			emitter: server.emitter,
-			...(path === undefined ? {} : { path }),
-		}),
-	)
-	const handle = await startServer(server)
-	teardown.add(() => handle.stop())
-	return handle
-}
-
-// Stand up a RAW `node:http` server that ANSWERS the upgrade with a structurally-valid 101
-// (right `Upgrade` / `Connection` headers) but a BOGUS `Sec-WebSocket-Accept` — so the client's
-// `start()` reaches the accept-validation branch and must reject on the mismatch (the security
-// check is otherwise vacuously covered: the happy path never feeds a wrong accept). Returns the
-// bound `http://…` base; tracked for `afterEach` close.
-async function startBogusAcceptServer(): Promise<string> {
-	const sockets: Duplex[] = []
-	const server = createHTTPServer()
-	teardown.add(
-		() =>
-			new Promise<void>((resolve) => {
-				for (const socket of sockets) socket.destroy()
-				if (!server.listening) resolve()
-				else server.close(() => resolve())
-			}),
-	)
-	server.on('upgrade', (_request, socket) => {
-		sockets.push(socket) // captured so teardown can destroy this detached upgrade socket
-		// The client `socket.destroy()`s its end on the accept mismatch, so this server end sees an
-		// ECONNRESET — swallow it (an expected, non-fatal teardown), never an uncaught 'error'.
-		socket.on('error', () => {})
-		// A well-formed switching-protocols line + headers, but a deliberately WRONG accept value
-		// (never `computeWebSocketAccept(key)`), so the handshake fails the accept check.
-		socket.write(
-			'HTTP/1.1 101 Switching Protocols\r\n' +
-				'Upgrade: websocket\r\n' +
-				'Connection: Upgrade\r\n' +
-				'Sec-WebSocket-Accept: wrong\r\n' +
-				'\r\n',
-		)
-	})
-	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-	const address: unknown = server.address()
-	const port = isRecord(address) && typeof address.port === 'number' ? address.port : 0
-	return `http://127.0.0.1:${port}`
-}
-
 describe('WebSocketClientTransport — drive a remote MCP server over WebSocket frames', () => {
 	it('connect → tools() → call(add): a value round-trips over real frames (ws:// url)', async () => {
-		const handle = await startWs()
+		const handle = await startWs(teardown)
 		// `handle.base` is http://… — use a ws:// url to prove the scheme conversion path.
 		const url = `${handle.base.replace('http://', 'ws://')}/mcp`
 		const client = createMCPClient({ transport: createWebSocketClientTransport({ url }) })
@@ -115,7 +58,7 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 	})
 
 	it('accepts an http:// url too (no scheme conversion needed)', async () => {
-		const handle = await startWs()
+		const handle = await startWs(teardown)
 		const client = createMCPClient({
 			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
 		})
@@ -126,7 +69,7 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 	})
 
 	it('a remote erroring tool throws locally (isError → throw)', async () => {
-		const handle = await startWs()
+		const handle = await startWs(teardown)
 		const client = createMCPClient({
 			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
 		})
@@ -138,7 +81,7 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 	it('connect() rejects when the server declines the upgrade (wrong path)', async () => {
 		// The server claims only /mcp; a transport pointed at /nope gets its upgrade declined +
 		// the socket destroyed, so the client handshake (start, run by connect) rejects.
-		const handle = await startWs()
+		const handle = await startWs(teardown)
 		const client = createMCPClient({
 			transport: createWebSocketClientTransport({ url: `${handle.base}/nope` }),
 		})
@@ -149,7 +92,7 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 	})
 
 	it('reaches a custom upgrade path when configured on both ends', async () => {
-		const handle = await startWs('/rpc')
+		const handle = await startWs(teardown, '/rpc')
 		const client = createMCPClient({
 			transport: createWebSocketClientTransport({ url: `${handle.base}/rpc` }),
 		})
@@ -159,7 +102,7 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 	})
 
 	it('the transport session is undefined for the stateless v1', async () => {
-		const handle = await startWs()
+		const handle = await startWs(teardown)
 		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
 		const client = createMCPClient({ transport })
 		await client.connect()
@@ -211,19 +154,19 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 	})
 
 	it('ignores the old socket close after a new socket has replaced it', async () => {
-		const handle = await startWs()
+		const handle = await startWs(teardown)
 		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
 		const messages: JSONRPCMessage[] = []
-		let closed = 0
+		const closed = new MCPFixtureCell(0)
 		transport.emitter.on('message', (message) => messages.push(message))
-		transport.emitter.on('close', () => (closed += 1))
+		transport.emitter.on('close', () => (closed.value += 1))
 		await transport.start()
 
 		await transport.close()
 		await transport.start()
 		await waitForDelay(60)
 
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 		// `server/discover` is the canary because it is the modern era's own required RPC.
 		// 2026-07-28 removes `ping`, so the reply that proves the replacement socket carries
 		// traffic has to be one the bare server still answers.
@@ -254,16 +197,16 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 	})
 
 	it('a socket that is never restarted still fires close exactly once', async () => {
-		const handle = await startWs()
+		const handle = await startWs(teardown)
 		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
-		let closed = 0
-		transport.emitter.on('close', () => (closed += 1))
+		const closed = new MCPFixtureCell(0)
+		transport.emitter.on('close', () => (closed.value += 1))
 		await transport.start()
 
 		await transport.close()
 		await waitForDelay(60)
 
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 	})
 
 	it('close() during a suspended start() leaves no bound socket and re-emits nothing', async () => {
@@ -316,7 +259,7 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 		// handshake-accept check (accept === computeWebSocketAccept(key)) must FAIL, so start()
 		// rejects and the socket is destroyed. This PINS that security check: without it (or with a
 		// broken compare) the bogus accept would be silently accepted and this would hang/pass-green.
-		const base = await startBogusAcceptServer()
+		const base = await startBogusAcceptServer(teardown)
 		const transport = createWebSocketClientTransport({ url: `${base}/mcp` })
 		await expect(transport.start()).rejects.toThrow(/Sec-WebSocket-Accept mismatch/)
 		// The happy-path connect (a CORRECT accept → start() resolves) is the control, already
@@ -328,106 +271,6 @@ describe('WebSocketClientTransport — drive a remote MCP server over WebSocket 
 // test decides when a frame reaches the client. `send` writes one unmasked text frame (the
 // server-to-client direction, RFC 6455 §5.3), which is how a frame still on the wire when a
 // client closes is reproduced deterministically.
-interface HoldingPeerInterface {
-	readonly base: string
-	send(text: string): void
-	stop(): Promise<void>
-}
-
-async function startHoldingPeer(): Promise<HoldingPeerInterface> {
-	const sockets: Duplex[] = []
-	const server = createHTTPServer()
-	teardown.add(
-		() =>
-			new Promise<void>((resolve) => {
-				for (const socket of sockets) socket.destroy()
-				if (!server.listening) resolve()
-				else server.close(() => resolve())
-			}),
-	)
-	server.on('upgrade', (request, socket) => {
-		const key = request.headers['sec-websocket-key']
-		if (typeof key !== 'string') {
-			socket.destroy()
-			return
-		}
-		sockets.push(socket)
-		// The client destroys its half on close, so this end reads an ECONNRESET — an expected
-		// outcome of the path under test, never an uncaught 'error'.
-		socket.on('error', () => {})
-		socket.resume()
-		socket.write(
-			'HTTP/1.1 101 Switching Protocols\r\n' +
-				'Upgrade: websocket\r\n' +
-				'Connection: Upgrade\r\n' +
-				`Sec-WebSocket-Accept: ${computeWebSocketAccept(key)}\r\n\r\n`,
-		)
-	})
-	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-	const address: unknown = server.address()
-	const port = isRecord(address) && typeof address.port === 'number' ? address.port : 0
-	return {
-		base: `http://127.0.0.1:${port}`,
-		send(text: string): void {
-			for (const socket of sockets) {
-				socket.write(encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, text))
-			}
-		},
-		stop(): Promise<void> {
-			return new Promise<void>((resolve) => {
-				for (const socket of sockets) socket.destroy()
-				server.close(() => resolve())
-			})
-		},
-	}
-}
-
-// A raw peer that answers the upgrade with a real `101` and an unmasked close frame in ONE
-// write, so the close arrives in the handshake `head` the client hands `createNodeWebSocket`.
-// The wrapper decodes that head inside its own constructor — before the transport has bound a
-// single listener — so the socket the transport installs is already past OPEN and its `close`
-// has already fired at nobody. That is the state where the transport's own flag knows nothing
-// and the socket's `readyState` is the only source that does.
-async function startClosingPeer(): Promise<string> {
-	const sockets: Duplex[] = []
-	const server = createHTTPServer()
-	teardown.add(
-		() =>
-			new Promise<void>((resolve) => {
-				for (const socket of sockets) socket.destroy()
-				if (!server.listening) resolve()
-				else server.close(() => resolve())
-			}),
-	)
-	server.on('upgrade', (request, socket) => {
-		const key = request.headers['sec-websocket-key']
-		if (typeof key !== 'string') {
-			socket.destroy()
-			return
-		}
-		sockets.push(socket)
-		// The client half-closes when it processes the close frame, so this end reads an end /
-		// reset that is the expected outcome of the path under test, never an uncaught 'error'.
-		socket.on('error', () => {})
-		socket.resume()
-		socket.write(
-			Buffer.concat([
-				Buffer.from(
-					'HTTP/1.1 101 Switching Protocols\r\n' +
-						'Upgrade: websocket\r\n' +
-						'Connection: Upgrade\r\n' +
-						`Sec-WebSocket-Accept: ${computeWebSocketAccept(key)}\r\n\r\n`,
-				),
-				encodeWebSocketFrame(WEBSOCKET_OPCODE_CLOSE, Buffer.alloc(0)),
-			]),
-		)
-	})
-	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-	const address: unknown = server.address()
-	const port = isRecord(address) && typeof address.port === 'number' ? address.port : 0
-	return `http://127.0.0.1:${port}`
-}
-
 describe('WebSocketClientTransport — close releases what the connect acquired', () => {
 	it('close() during a pending upgrade cancels the request instead of waiting for the peer', async () => {
 		// The peer holds the handshake for 400ms, so an upgrade this transport cannot cancel
@@ -453,7 +296,7 @@ describe('WebSocketClientTransport — close releases what the connect acquired'
 	})
 
 	it('rejects a send issued after close() as not connected', async () => {
-		const handle = await startWs()
+		const handle = await startWs(teardown)
 		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
 		await transport.start()
 
@@ -479,14 +322,14 @@ describe('WebSocketClientTransport — close releases what the connect acquired'
 		// own flag is clear — the wrapper's `readyState` is the SECOND source that knows the
 		// channel is gone, the same reading the server-side carrier makes. Without it the wrapper
 		// drops the write, reports nothing, and this `send` resolves on a frame nobody wrote.
-		const base = await startClosingPeer()
+		const base = await startClosingPeer(teardown)
 		const transport = createWebSocketClientTransport({ url: `${base}/mcp` })
-		let closed = 0
-		transport.emitter.on('close', () => (closed += 1))
+		const closed = new MCPFixtureCell(0)
+		transport.emitter.on('close', () => (closed.value += 1))
 
 		await transport.start()
 
-		expect(closed).toBe(0) // the transport learned nothing — the state is the socket's alone
+		expect(closed.value).toBe(0) // the transport learned nothing — the state is the socket's alone
 		await expect(transport.send({ jsonrpc: '2.0', id: 1, method: 'ping' })).rejects.toThrow(
 			'WebSocket transport is not connected',
 		)
@@ -498,7 +341,7 @@ describe('WebSocketClientTransport — close releases what the connect acquired'
 		// The faces diverge here, and the guide says so: the browser face holds a pre-open send
 		// and flushes it when its socket opens, while this one holds no connection to flush a
 		// message onto and refuses rather than promising a write it cannot schedule.
-		const handle = await startWs()
+		const handle = await startWs(teardown)
 		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
 
 		await expect(transport.send({ jsonrpc: '2.0', id: 1, method: 'ping' })).rejects.toThrow(
@@ -526,7 +369,7 @@ describe('WebSocketClientTransport — close releases what the connect acquired'
 	})
 
 	it('close() releases the socket subscriptions — a later frame emits nothing', async () => {
-		const peer = await startHoldingPeer()
+		const peer = await startHoldingPeer(teardown)
 		const transport = createWebSocketClientTransport({ url: `${peer.base}/mcp` })
 		const messages: JSONRPCMessage[] = []
 		const errors: unknown[] = []

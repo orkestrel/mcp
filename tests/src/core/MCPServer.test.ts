@@ -5,45 +5,80 @@ import type {
 	JSONRPCRequest,
 	JSONRPCResponse,
 	MCPCallResult,
-	MCPCompletion,
-	MCPCompletionInterface,
-	MCPCompletionParams,
-	MCPContinuationInterface,
-	MCPDispatcherInterface,
 	MCPMethodOptions,
-	MCPElicitForm,
 	MCPElicitSchema,
 	MCPInputContext,
-	MCPInputRequestMap,
-	MCPInputResponseMap,
-	MCPInputResult,
 	MCPInputRound,
-	MCPInputState,
-	MCPPaginationParams,
-	MCPPromptGetParams,
-	MCPPromptGetResult,
-	MCPPromptManagerInterface,
-	MCPPromptPage,
 	MCPProgress,
 	MCPProgressInterface,
 	MCPServerEventMap,
-	MCPServerInterface,
-	MCPServerOptions,
 	MCPStream,
-	MCPStreamControllerInterface,
 	MCPSubscriptionFilter,
 	MCPSubscriptionHandler,
-	MCPSubscriptionOptions,
-	MCPTask,
 	MCPTaskContext,
 	MCPTaskDetail,
-	MCPTaskManagerInterface,
-	MCPTaskOptions,
 	MCPTextStream,
 } from '@src/core'
-import type { JSONValue } from '@orkestrel/contract'
 import type { EmitterErrorHandler } from '@orkestrel/emitter'
-import type { ToolManagerEventMap, ToolManagerInterface, ToolSuccess } from '@orkestrel/tool'
+import type { ToolManagerEventMap, ToolSuccess } from '@orkestrel/tool'
+import {
+	MCPFixtureCell,
+	MemoryContinuation,
+	MemoryPromptManager,
+	MemoryCompletion,
+	createRound,
+	buildMixedCall,
+	createServerProgress,
+	createHeldMethod,
+	drainStream,
+	drainText,
+	readStreamAnswer,
+	readTextAnswer,
+	createServerTools,
+	createTestServer,
+	readUnaryAnswer,
+	readResultRecord,
+	readStreamFault,
+	readTextFault,
+	buildModernCall,
+	createFaultServer,
+	createHandlerFaultServer,
+	createSourceFaultServer,
+	createIdleStream,
+	createIdleSource,
+	createModernFaults,
+	createLegacyFaults,
+	createInputProbe,
+	buildFormCall,
+	readInputRound,
+	createSilentSource,
+	readSealedState,
+	buildTaskCall,
+	buildTaskRequest,
+	readCreatedTask,
+	createTaskFixtureServer,
+	createFixedTasks,
+	createMutableTasks,
+	createDeferredTasks,
+	createGuessableTasks,
+	readAbsentTask,
+	createWatchedTasks,
+	MCP_EVENTS,
+	APPROVAL_FORM,
+	MIXED_ROUND,
+	MIXED_ANSWERS,
+	FORM_METADATA,
+	APPROVAL_SCHEMA,
+	TASK_CAPABILITIES,
+	TASK_METADATA,
+	TASK_METHODS,
+	createFaultContinuation,
+	createStartFaultTasks,
+	createStubbornTasks,
+	createReadFaultTasks,
+	createRecordedTasks,
+	declineAsyncTask,
+} from '../../setup.js'
 import {
 	bindClient,
 	bindServer,
@@ -116,327 +151,49 @@ import {
 // the same registry every dispatch resolves from, per-request options reaching a handler,
 // and the held-open stream arm crossing both the typed and the string boundary.
 
-const MCP_EVENTS = ['request'] as const
-
 // The one continuation fixture: a real integrity port over an in-process map, plus the
 // observations an MRTR proof needs from it — the exact canonical payloads it was asked to
 // seal, with a callback that lets a test advance its injected clock during sealing.
-class MemoryContinuation implements MCPContinuationInterface {
-	readonly #values = new Map<string, string>()
-	readonly #sealed: string[] = []
-	readonly #opened: string[] = []
-	readonly #seal: ((count: number) => void) | undefined
-	#payload: string | undefined
-
-	constructor(seal?: (count: number) => void) {
-		this.#seal = seal
-	}
-
-	/** Every canonical payload the server asked this port to protect, in order. */
-	get sealed(): readonly string[] {
-		return this.#sealed
-	}
-
-	/** Every carrier the server asked this port to recover, in order. */
-	get opened(): readonly string[] {
-		return this.#opened
-	}
-
-	/** Make `open` succeed while handing back a payload the server never authored. */
-	corrupt(payload: string): void {
-		this.#payload = payload
-	}
-
-	async seal(value: string): Promise<string> {
-		this.#sealed.push(value)
-		await this.#seal?.(this.#sealed.length)
-		const key = crypto.randomUUID()
-		this.#values.set(key, value)
-		return key
-	}
-
-	async open(value: string): Promise<string | undefined> {
-		this.#opened.push(value)
-		return this.#payload ?? this.#values.get(value)
-	}
-}
-
-class MemoryPromptManager implements MCPPromptManagerInterface {
-	readonly #cursors: Array<string | undefined> = []
-	readonly #requests: MCPPromptGetParams[] = []
-	readonly #options: MCPMethodOptions[] = []
-
-	get cursors(): ReadonlyArray<string | undefined> {
-		return this.#cursors
-	}
-
-	get requests(): readonly MCPPromptGetParams[] {
-		return this.#requests
-	}
-
-	get options(): readonly MCPMethodOptions[] {
-		return this.#options
-	}
-
-	prompts(pagination: MCPPaginationParams, options: MCPMethodOptions): MCPPromptPage {
-		this.#cursors.push(pagination.cursor)
-		this.#options.push(options)
-		return pagination.cursor === undefined
-			? {
-					prompts: [
-						{
-							name: 'greet',
-							title: 'Greeting',
-							arguments: [{ name: 'person', required: true }],
-						},
-					],
-					nextCursor: 'second',
-				}
-			: { prompts: [{ name: 'summarize', description: 'Summarize one resource' }] }
-	}
-
-	prompt(
-		params: MCPPromptGetParams,
-		options: MCPMethodOptions,
-	): MCPPromptGetResult | MCPInputResult | undefined {
-		this.#requests.push(params)
-		this.#options.push(options)
-		if (params.name === 'input') {
-			return { resultType: 'input_required', requestState: 'prompt-state' }
-		}
-		// The arm that ASKS the client something. The carrier-only arm above asks nothing, so
-		// only this one reaches the server's capability gate.
-		if (params.name === 'round') {
-			return {
-				resultType: 'input_required',
-				inputRequests: { context: { method: 'sampling/createMessage', params: {} } },
-				requestState: 'prompt-state',
-			}
-		}
-		if (params.name !== 'greet') return undefined
-		return {
-			resultType: 'complete',
-			description: 'A rendered greeting',
-			messages: [
-				{ role: 'user', content: { type: 'text', text: `Hello ${params.arguments?.['person']}` } },
-				{
-					role: 'assistant',
-					content: {
-						type: 'resource',
-						resource: { uri: 'memory://resource/greeting', text: 'Welcome' },
-					},
-				},
-			],
-		}
-	}
-}
-
-class MemoryCompletion implements MCPCompletionInterface {
-	readonly #requests: MCPCompletionParams[] = []
-
-	get requests(): readonly MCPCompletionParams[] {
-		return this.#requests
-	}
-
-	complete(params: MCPCompletionParams, _options: MCPMethodOptions): MCPCompletion | undefined {
-		this.#requests.push(params)
-		if (params.ref.type === 'ref/prompt') {
-			if (params.ref.name === 'many') {
-				return { values: Array.from({ length: 105 }, (_, index) => `candidate-${index}`) }
-			}
-			return params.ref.name === 'greet' ? { values: ['Ada', 'Grace'], total: 2 } : undefined
-		}
-		return params.ref.uri === 'memory://resource/{name}'
-			? { values: ['one', 'two'], hasMore: false }
-			: undefined
-	}
-}
 
 // The question every proof that does not care WHAT was asked asks.
-const APPROVAL_FORM: MCPElicitForm = {
-	message: 'Approve?',
-	requestedSchema: { type: 'object', properties: {} },
-}
 
 // One round carrying a single form elicitation under `approval`. The key belongs to the
 // CONSUMER now, so it is fixed here and read back by name rather than discovered from a round.
-function createRound(request: MCPElicitForm = APPROVAL_FORM, state?: JSONValue): MCPInputRound {
-	const requests: MCPInputRequestMap = {
-		approval: { method: 'elicitation/create', params: request },
-	}
-	return state === undefined ? { requests } : { requests, state }
-}
 
 // One round of all three kinds at once — the shape the protocol permits and the mechanism
 // could not express while it minted one key and issued one form.
-const MIXED_ROUND: MCPInputRequestMap = Object.freeze({
-	user_name: {
-		method: 'elicitation/create',
-		params: {
-			message: 'What is your name?',
-			requestedSchema: {
-				type: 'object',
-				properties: { name: { type: 'string' } },
-				required: ['name'],
-			},
-		},
-	},
-	greeting: {
-		method: 'sampling/createMessage',
-		params: {
-			messages: [{ role: 'user', content: { type: 'text', text: 'Generate a greeting' } }],
-			maxTokens: 50,
-		},
-	},
-	client_roots: { method: 'roots/list', params: {} },
-})
 
 // The client's answers to that round, one legal shape per kind.
-const MIXED_ANSWERS: MCPInputResponseMap = Object.freeze({
-	user_name: { action: 'accept', content: { name: 'Ada' } },
-	greeting: {
-		role: 'assistant',
-		content: { type: 'text', text: 'Hello, Ada.' },
-		model: 'test-model',
-		stopReason: 'endTurn',
-	},
-	client_roots: { roots: [{ uri: 'file:///workspace', name: 'workspace' }] },
-})
 
 // A `tools/call` from a client that declared every kind `MIXED_ROUND` asks for.
-function mixedCall(): Readonly<Record<string, unknown>> {
-	return {
-		name: 'echo',
-		_meta: {
-			[MCP_META_VERSION]: '2026-07-28',
-			[MCP_META_CAPABILITIES]: { elicitation: {}, sampling: {}, roots: {} },
-		},
-	}
-}
 
 // A REAL held-open modern method (a genuine async generator, not a fake):
 // two progress notifications, then the terminating response as the generator's `return`.
-async function* progress(id: JSONRPCId): MCPStream {
-	yield { jsonrpc: '2.0', method: 'notifications/progress', params: { step: 1 } }
-	yield { jsonrpc: '2.0', method: 'notifications/progress', params: { step: 2 } }
-	return buildJSONRPCResult(id, { done: true })
-}
 
 // The registered handler for it — an `MCPMethodHandler` whose answer is the stream arm. It
 // narrows nothing: the seam carries the request arm, so `request.id` is always there.
-async function holdOpen(request: JSONRPCRequest): Promise<MCPStream> {
-	return progress(request.id)
-}
 
 // Drain a typed held-open answer into its yielded notifications and its terminating
 // response — kept APART, because the terminating value is a `return`, not a `yield`, and
 // that distinction is the contract under test.
-async function drainStream(
-	stream: MCPStream,
-): Promise<readonly [readonly JSONRPCNotification[], JSONRPCResponse]> {
-	const messages: JSONRPCNotification[] = []
-	let next = await stream.next()
-	while (!next.done) {
-		messages.push(next.value)
-		next = await stream.next()
-	}
-	return [messages, next.value]
-}
 
 // The string-boundary mirror of `drainStream`.
-async function drainText(stream: MCPTextStream): Promise<readonly [readonly string[], string]> {
-	const messages: string[] = []
-	let next = await stream.next()
-	while (!next.done) {
-		messages.push(next.value)
-		next = await stream.next()
-	}
-	return [messages, next.value]
-}
 
 // Narrow a dispatch answer to its HELD-OPEN arm — the mirror of `responseOf`. The arm is
 // the CONTROLLED contract, because dispatch wraps whatever a method produced.
-function streamOf(
-	answer: JSONRPCResponse | MCPStreamControllerInterface | undefined,
-): MCPStreamControllerInterface {
-	if (answer === undefined || !(Symbol.asyncIterator in answer)) {
-		throw new Error('expected a held-open stream, got a unary answer')
-	}
-	return answer
-}
 
 // Narrow a `handle` answer to its held-open arm (a string is the unary arm).
-function textOf(answer: string | MCPTextStream | undefined): MCPTextStream {
-	if (answer === undefined || typeof answer === 'string') {
-		throw new Error('expected a serialized held-open stream, got a unary answer')
-	}
-	return answer
-}
 
 // A real ToolManager seeded with deterministic stub tools: `echo` returns its args
 // verbatim, `sum` adds two numbers (with a declared inputSchema), and `boom` throws
 // (so the manager isolates the throw into a result error → an MCP isError result).
-function tools(): ToolManagerInterface {
-	const manager = createToolManager()
-	manager.add(createTool({ name: 'echo', execute: (args) => args }))
-	manager.add(
-		createTool({
-			name: 'sum',
-			description: 'Add two numbers',
-			parameters: {
-				type: 'object',
-				properties: { a: { type: 'number' }, b: { type: 'number' } },
-			},
-			execute: (args) => Number(args['a']) + Number(args['b']),
-		}),
-	)
-	manager.add(
-		createTool({
-			name: 'boom',
-			execute: () => {
-				throw new Error('tool exploded')
-			},
-		}),
-	)
-	return manager
-}
-
-function server(error?: EmitterErrorHandler, subscription?: MCPSubscriptionOptions) {
-	const mcp = createMCPServer({
-		identity: { name: 'test-server', version: '1.2.3' },
-		tools: tools(),
-		...(error === undefined ? {} : { error }),
-		...(subscription === undefined ? {} : { subscription }),
-	})
-	return Object.assign(createMCPLegacy(mcp), {
-		identity: mcp.identity,
-		handshake: mcp.handshake,
-		methods: mcp.methods,
-	})
-}
 
 // Narrow a dispatch answer to its UNARY arm. `dispatch` now answers either a response or
 // a held-open MCPStream; every method exercised below is unary, so a stream here is a
 // defect and fails loudly rather than passing silently.
-function responseOf(answer: JSONRPCResponse | MCPStream | undefined): JSONRPCResponse | undefined {
-	if (answer !== undefined && Symbol.asyncIterator in answer) {
-		throw new Error('expected a unary response, got a held-open stream')
-	}
-	return answer
-}
 
 // Narrow a dispatch response to its `result` as a record (the MCP result payloads are
 // always records) — a guard standing in for an assertion, no `as`.
-function resultOf(response: JSONRPCResponse | undefined): Record<string, unknown> {
-	if (response === undefined) throw new Error('expected a response, got undefined')
-	const result = response.result
-	if (typeof result !== 'object' || result === null) {
-		throw new Error('expected an object result')
-	}
-	const record: Record<string, unknown> = {}
-	for (const [key, value] of Object.entries(result)) record[key] = value
-	return record
-}
 
 // Real registry events drive the stream. The release proof retains independent recorders,
 // so listener membership distinguishes the server's cleanup from a cleared emitter.
@@ -452,7 +209,7 @@ describe('MCPServer — registry notifications', () => {
 		const writes: Array<Promise<void>> = []
 		try {
 			await fixture.stream.next()
-			for (let index = 0; index < 32; index += 1) {
+			for (const [index] of Array.from({ length: 32 }).entries()) {
 				writes.push(
 					writer
 						.write({
@@ -465,7 +222,7 @@ describe('MCPServer — registry notifications', () => {
 			}
 			await waitForDelay(100)
 			expect(resolved.calls).toEqual([[0]])
-			for (let index = 0; index < 32; index += 1) {
+			for (const [index] of Array.from({ length: 32 }).entries()) {
 				expect(await fixture.stream.next()).toMatchObject({
 					done: false,
 					value: { method: 'notifications/prompts/list_changed', params: { index } },
@@ -491,7 +248,7 @@ describe('MCPServer — registry notifications', () => {
 		const writes: Array<Promise<void>> = []
 		try {
 			await fixture.stream.next()
-			for (let index = 0; index < 3; index += 1) {
+			for (const [index] of Array.from({ length: 3 }).entries()) {
 				const write = writer.write({
 					jsonrpc: '2.0',
 					method: 'notifications/prompts/list_changed',
@@ -630,10 +387,10 @@ describe('MCPServer — registry notifications', () => {
 		const fixture = await createRegistrySubscription()
 		try {
 			await fixture.stream.next()
-			for (let index = 0; index < 32; index += 1) {
+			Array.from({ length: 32 }).forEach(() => {
 				fixture.tools.add(createTool({ name: 'changing', execute: () => 'changed' }))
 				fixture.tools.clear()
-			}
+			})
 			expect(await fixture.stream.next()).toMatchObject({
 				done: false,
 				value: { method: 'notifications/tools/list_changed' },
@@ -867,7 +624,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 	it('rejects an oversized valid wire message as -32700 before parsing it', async () => {
 		const mcp = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { message: 32 },
 		})
 		const peer = createHostilePeer(mcp)
@@ -882,18 +639,19 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 		const absentServer = createMCPLegacy(
 			createMCPServer({
 				identity: { name: 'bounded', version: '1.0.0' },
-				tools: tools(),
+				tools: createServerTools(),
 				limit: { metadata: 0 },
 			}),
 		)
-		const absent = responseOf(
-			await absentServer.dispatch(createJSONRPCRequest({ method: 'tools/list' })),
+		const absentMessage = await absentServer.dispatch(
+			createJSONRPCRequest({ method: 'tools/list' }),
 		)
+		const absent = readUnaryAnswer(absentMessage)
 		expect(absent?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
 
 		const sizeServer = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { metadata: 180 },
 		})
 		const sizePeer = createHostilePeer(sizeServer)
@@ -915,7 +673,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 
 		const keyServer = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { metadata: 1_024, keys: 2 },
 		})
 		const keyPeer = createHostilePeer(keyServer)
@@ -934,7 +692,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 	it('rejects prototype-pollution metadata sent by a real peer', async () => {
 		const mcp = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 		})
 		const peer = createHostilePeer(mcp)
 		await peer.send(
@@ -948,7 +706,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 	it('accepts absent requestState and bounds it before verification and after signing', async () => {
 		const absent = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { state: 0 },
 			input: {
 				continuation: new MemoryContinuation(),
@@ -957,7 +715,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 				selector: () => undefined,
 			},
 		})
-		const absentResponse = responseOf(
+		const absentResponse = readUnaryAnswer(
 			await absent.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
@@ -965,11 +723,11 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 				}),
 			),
 		)
-		expect(resultOf(absentResponse)['resultType']).toBe('complete')
+		expect(readResultRecord(absentResponse)['resultType']).toBe('complete')
 
 		const incoming = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { state: 64 },
 			input: {
 				continuation: new MemoryContinuation(),
@@ -997,7 +755,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 
 		const outgoing = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { state: 256 },
 			input: {
 				continuation: new MemoryContinuation(),
@@ -1027,7 +785,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 
 		const signed = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { state: 150 },
 			input: {
 				continuation: new MemoryContinuation(),
@@ -1078,7 +836,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 		const writer = source.writable.getWriter()
 		const mcp = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { subscriptions: 1 },
 			subscription: {
 				notifications: { promptsListChanged: true },
@@ -1115,7 +873,7 @@ describe('MCPServer — hostile-input and live-resource limits over the wire', (
 
 describe('MCPServer — published limits', () => {
 	it('publishes every resolved bound, with the defaults for each omitted leaf', () => {
-		const mcp = server()
+		const mcp = createTestServer()
 
 		expect(mcp.limit).toEqual(DEFAULT_MCP_LIMITS)
 	})
@@ -1123,7 +881,7 @@ describe('MCPServer — published limits', () => {
 	it('publishes the configured value and sanitizes a hostile one back to its default', () => {
 		const mcp = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { message: 4096, subscriptions: Number.NaN },
 		})
 
@@ -1134,7 +892,7 @@ describe('MCPServer — published limits', () => {
 	// Published state that a consumer could move under a check that already ran would be a
 	// bound in name only, so the object is frozen rather than merely typed readonly.
 	it('is frozen, so a bound cannot be moved out from under the checks that read it', () => {
-		const mcp = server()
+		const mcp = createTestServer()
 
 		expect(Object.isFrozen(mcp.limit)).toBe(true)
 		expect(mcp.limit).toBe(mcp.limit)
@@ -1144,7 +902,7 @@ describe('MCPServer — published limits', () => {
 // The subscription CLOSURE claim, pinned as a conformance claim rather than left implied.
 // The cancellation page and the subscriptions page of the dated revision disagree about how a
 // server ends a `subscriptions/listen` exchange: the cancellation page says it MUST send `notifications/cancelled` naming the
-// listen request, while the subscriptions page it cites as its authority says the server
+// listen request, while the subscriptions page it cites as its authority says the createTestServer
 // `SHOULD` send the empty `subscriptions/listen` RESULT and attributes the notification to the
 // client alone. The schema carries no subscription-specific variant, so it corroborates
 // neither. This server implements the page that owns the mechanism, and this test is what
@@ -1153,11 +911,11 @@ describe('MCPServer — graceful subscription closure', () => {
 	it('ends a gracefully closed subscription with the empty result, correlated by the listen id', async () => {
 		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const writer = source.writable.getWriter()
-		const mcp = server(undefined, {
+		const mcp = createTestServer(undefined, {
 			notifications: { promptsListChanged: true },
 			producer: () => source.readable,
 		})
-		const stream = streamOf(
+		const stream = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'subscriptions/listen',
@@ -1194,7 +952,7 @@ describe('MCPServer — graceful subscription closure', () => {
 
 describe('MCPServer — identity', () => {
 	it('exposes the name and version from options', () => {
-		const mcp = server()
+		const mcp = createTestServer()
 
 		expect(mcp.identity.name).toBe('test-server')
 		expect(mcp.identity.version).toBe('1.2.3')
@@ -1205,9 +963,11 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 	it('answers a legacy initialize on the bare modern server as an unregistered method', async () => {
 		const mcp = createMCPServer({
 			identity: { name: 'modern-server', version: '2.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 		})
-		const response = responseOf(await mcp.dispatch(createJSONRPCRequest({ method: 'initialize' })))
+		const response = readUnaryAnswer(
+			await mcp.dispatch(createJSONRPCRequest({ method: 'initialize' })),
+		)
 
 		expect(response?.error).toEqual({
 			code: JSONRPC_METHOD_NOT_FOUND,
@@ -1221,9 +981,9 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 	it('names the absent protocol version on a registered modern method', async () => {
 		const mcp = createMCPServer({
 			identity: { name: 'modern-server', version: '2.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 		})
-		const response = responseOf(
+		const response = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/list',
@@ -1239,7 +999,7 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 	})
 
 	it('keeps the legacy method responses byte-identical and unstamped', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 
 		expect(await mcp.handle('{"jsonrpc":"2.0","method":"initialize","id":1}')).toBe(
 			'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"test-server","version":"1.2.3"}}}',
@@ -1260,8 +1020,8 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 	})
 
 	it('rejects malformed modern metadata with -32602', async () => {
-		const response = responseOf(
-			await server().dispatch(
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(
 				createJSONRPCRequest({
 					method: 'tools/list',
 					params: { _meta: { [MCP_META_VERSION]: '2026-07-28' } },
@@ -1274,12 +1034,12 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 	})
 
 	it('treats a present non-string version as modern and rejects it with -32602', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const events = createRecorders<MCPServerEventMap, (typeof MCP_EVENTS)[number]>(
 			mcp.emitter,
 			MCP_EVENTS,
 		)
-		const response = responseOf(
+		const response = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/list',
@@ -1298,8 +1058,8 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 	})
 
 	it('rejects an unsupported modern version with -32022 and exact retry data', async () => {
-		const response = responseOf(
-			await server().dispatch(
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(
 				createJSONRPCRequest({
 					method: 'tools/list',
 					params: {
@@ -1323,11 +1083,11 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 		const identity = { name: 'modern-server', version: '2.0.0' }
 		const mcp = createMCPServer({
 			identity,
-			tools: tools(),
+			tools: createServerTools(),
 			instructions: 'Use the available tools.',
 			cache: { ttl: 123, scope: 'public' },
 		})
-		const response = responseOf(
+		const response = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'server/discover',
@@ -1348,15 +1108,15 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 	})
 
 	it('returns a stamped cacheable modern tools/list result', async () => {
-		const response = responseOf(
-			await server().dispatch(
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(
 				createJSONRPCRequest({
 					method: 'tools/list',
 					params: { _meta: MODERN_METADATA },
 				}),
 			),
 		)
-		const result = resultOf(response)
+		const result = readResultRecord(response)
 
 		expect(result['resultType']).toBe('complete')
 		expect(result['ttlMs']).toBe(DEFAULT_MCP_CACHE_TTL)
@@ -1368,8 +1128,8 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 	})
 
 	it('returns a stamped non-cacheable modern tools/call result', async () => {
-		const response = responseOf(
-			await server().dispatch(
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
 					params: {
@@ -1380,7 +1140,7 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 				}),
 			),
 		)
-		const result = resultOf(response)
+		const result = readResultRecord(response)
 
 		expect(result['content']).toEqual([{ type: 'text', text: '7' }])
 		expect(result['structuredContent']).toBe(7)
@@ -1400,7 +1160,7 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 			tools: manager,
 			limit: { content: 512 },
 		})
-		const response = responseOf(
+		const response = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
@@ -1408,7 +1168,7 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 				}),
 			),
 		)
-		const result = resultOf(response)
+		const result = readResultRecord(response)
 
 		expect(result['content']).toEqual([{ type: 'text', text: '' }])
 		expect(result['resultType']).toBe('complete')
@@ -1419,8 +1179,8 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 	it.each(['initialize', 'does/not/exist'])(
 		'returns -32601 for modern method %s',
 		async (method) => {
-			const response = responseOf(
-				await server().dispatch(
+			const response = readUnaryAnswer(
+				await createTestServer().dispatch(
 					createJSONRPCRequest({ method, params: { _meta: MODERN_METADATA } }),
 				),
 			)
@@ -1430,18 +1190,18 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 	)
 
 	it('refuses modern ping because the modern revision removed it', async () => {
-		const response = responseOf(await server().dispatch(modernRequest('ping')))
+		const response = readUnaryAnswer(await createTestServer().dispatch(modernRequest('ping')))
 
 		expect(response?.error?.code).toBe(JSONRPC_METHOD_NOT_FOUND)
 	})
 
 	it('returns no response for a modern notification after emitting its era', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const events = createRecorders<MCPServerEventMap, (typeof MCP_EVENTS)[number]>(
 			mcp.emitter,
 			MCP_EVENTS,
 		)
-		const response = responseOf(
+		const response = readUnaryAnswer(
 			await mcp.dispatch({
 				jsonrpc: '2.0',
 				method: 'tools/list',
@@ -1456,13 +1216,13 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 
 describe('MCPServer — W01 modern execution and progress', () => {
 	it('rejects every present non-record modern arguments value before policy or execution', async () => {
-		let selections = 0
-		let executions = 0
+		const selections = new MCPFixtureCell(0)
+		const executions = new MCPFixtureCell(0)
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			execution: () => {
-				executions += 1
+				executions.value += 1
 				return { resultType: 'complete', content: [{ type: 'text', text: 'unexpected' }] }
 			},
 			input: {
@@ -1470,14 +1230,14 @@ describe('MCPServer — W01 modern execution and progress', () => {
 				ttl: 1_000,
 				principal: () => 'operator-1',
 				selector: () => {
-					selections += 1
+					selections.value += 1
 					return undefined
 				},
 			},
 		})
 
 		for (const argumentsValue of [null, [], 'invalid', 1]) {
-			const answer = responseOf(
+			const answer = readUnaryAnswer(
 				await mcp.dispatch(
 					createJSONRPCRequest({
 						method: 'tools/call',
@@ -1491,8 +1251,8 @@ describe('MCPServer — W01 modern execution and progress', () => {
 			)
 			expect(answer?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
 		}
-		expect(selections).toBe(0)
-		expect(executions).toBe(0)
+		expect(selections.value).toBe(0)
+		expect(executions.value).toBe(0)
 	})
 
 	it('returns an explicitly produced complete rich result without guessing through ToolManager', async () => {
@@ -1534,7 +1294,7 @@ describe('MCPServer — W01 modern execution and progress', () => {
 			},
 		})
 
-		const response = responseOf(
+		const response = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
@@ -1553,12 +1313,12 @@ describe('MCPServer — W01 modern execution and progress', () => {
 		}
 		const rejected = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			execution: async () => {
 				throw new Error('provider detail must not escape')
 			},
 		})
-		const rejectedAnswer = responseOf(
+		const rejectedAnswer = readUnaryAnswer(
 			await rejected.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
@@ -1573,10 +1333,10 @@ describe('MCPServer — W01 modern execution and progress', () => {
 			const execution = new Proxy(() => valid, { apply: () => runtime })
 			const mcp = createMCPServer({
 				identity: { name: 'test-server', version: '1.2.3' },
-				tools: tools(),
+				tools: createServerTools(),
 				execution,
 			})
-			const answer = responseOf(
+			const answer = readUnaryAnswer(
 				await mcp.dispatch(
 					createJSONRPCRequest({
 						method: 'tools/call',
@@ -1589,26 +1349,26 @@ describe('MCPServer — W01 modern execution and progress', () => {
 	})
 
 	it('keeps modern Tool text and structured content on one owned observation', async () => {
-		let valueReads = 0
+		const valueReads = new MCPFixtureCell(0)
 		const target: ToolSuccess = { id: 'call', name: 'probe', success: true, value: { count: 1 } }
 		const result = new Proxy(target, {
 			getOwnPropertyDescriptor(source, property) {
 				const descriptor = Reflect.getOwnPropertyDescriptor(source, property)
 				if (property !== 'value' || descriptor === undefined) return descriptor
-				valueReads += 1
+				valueReads.value += 1
 				return {
 					...descriptor,
-					value: { count: valueReads },
+					value: { count: valueReads.value },
 				}
 			},
 		})
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			execution: () => result,
 		})
 
-		const answer = responseOf(
+		const answer = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
@@ -1616,11 +1376,11 @@ describe('MCPServer — W01 modern execution and progress', () => {
 				}),
 			),
 		)
-		const payload = resultOf(answer)
+		const payload = readResultRecord(answer)
 
 		expect(payload['content']).toEqual([{ type: 'text', text: '{"count":1}' }])
 		expect(payload['structuredContent']).toEqual({ count: 1 })
-		expect(valueReads).toBe(1)
+		expect(valueReads.value).toBe(1)
 	})
 
 	it('returns an owned explicit MCP result and bounds produced content before stamping', async () => {
@@ -1632,10 +1392,10 @@ describe('MCPServer — W01 modern execution and progress', () => {
 		}
 		const owned = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			execution: () => explicit,
 		})
-		const answer = responseOf(
+		const answer = readUnaryAnswer(
 			await owned.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
@@ -1654,11 +1414,11 @@ describe('MCPServer — W01 modern execution and progress', () => {
 
 		const bounded = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { content: 100 },
 			execution: () => ({ id: 'call', name: 'probe', success: true, value: 1 }),
 		})
-		const boundedAnswer = responseOf(
+		const boundedAnswer = readUnaryAnswer(
 			await bounded.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
@@ -1698,7 +1458,7 @@ describe('MCPServer — W01 modern execution and progress', () => {
 		).toBe(
 			'{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Server execution returned an invalid tool result"}}',
 		)
-		const modern = responseOf(
+		const modern = readUnaryAnswer(
 			await modernServer.dispatch(
 				createJSONRPCRequest({
 					id: 2,
@@ -1711,13 +1471,13 @@ describe('MCPServer — W01 modern execution and progress', () => {
 	})
 
 	it('keeps the collapsed pipeline bounded and inert over hostile tool values', async () => {
-		let getterCalls = 0
+		const getterCalls = new MCPFixtureCell(0)
 		const cycle: Record<string, unknown> = {}
 		cycle['self'] = cycle
 		const accessor = Object.defineProperty({}, 'value', {
 			enumerable: true,
 			get() {
-				getterCalls += 1
+				getterCalls.value += 1
 				return Number.NaN
 			},
 		})
@@ -1732,18 +1492,19 @@ describe('MCPServer — W01 modern execution and progress', () => {
 		)
 
 		for (const name of ['cycle', 'accessor']) {
-			const answer = responseOf(
-				await mcp.dispatch(createJSONRPCRequest({ method: 'tools/call', params: { name } })),
+			const answerMessage = await mcp.dispatch(
+				createJSONRPCRequest({ method: 'tools/call', params: { name } }),
 			)
+			const answer = readUnaryAnswer(answerMessage)
 			expect(answer?.error?.code).toBe(JSONRPC_INTERNAL_ERROR)
 		}
-		expect(getterCalls).toBe(0)
+		expect(getterCalls.value).toBe(0)
 	})
 
 	it('yields backpressured progress on the original call stream before its terminal result', async () => {
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			execution: async ({ progress: reporter }) => {
 				if (reporter === undefined) throw new Error('expected progress reporter')
 				await reporter.report({ progress: 1, total: 2, message: 'halfway' })
@@ -1783,14 +1544,14 @@ describe('MCPServer — W01 modern execution and progress', () => {
 	})
 
 	it('keeps the normal ToolManager path unary and executes it exactly once despite a token', async () => {
-		let executions = 0
+		const executions = new MCPFixtureCell(0)
 		const manager = createToolManager()
 		manager.add(
 			createTool({
 				name: 'once',
 				execute: () => {
-					executions += 1
-					return executions
+					executions.value += 1
+					return executions.value
 				},
 			}),
 		)
@@ -1809,14 +1570,14 @@ describe('MCPServer — W01 modern execution and progress', () => {
 			}),
 		)
 
-		expect(responseOf(answer)?.result).toMatchObject({ structuredContent: 1 })
-		expect(executions).toBe(1)
+		expect(readUnaryAnswer(answer)?.result).toMatchObject({ structuredContent: 1 })
+		expect(executions.value).toBe(1)
 	})
 
 	it('rejects a repeated progress value explicitly', async () => {
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			execution: async ({ progress: reporter }) => {
 				if (reporter === undefined) throw new Error('expected progress reporter')
 				await reporter.report({ progress: 1 })
@@ -1858,7 +1619,7 @@ describe('MCPServer — W01 modern execution and progress', () => {
 		for (const [payload, content] of scenarios) {
 			const mcp = createMCPServer({
 				identity: { name: 'test-server', version: '1.2.3' },
-				tools: tools(),
+				tools: createServerTools(),
 				limit: { content },
 				execution: async ({ progress: reporter }) => {
 					if (reporter === undefined) throw new Error('expected progress reporter')
@@ -1866,7 +1627,7 @@ describe('MCPServer — W01 modern execution and progress', () => {
 					return { resultType: 'complete', content: [{ type: 'text', text: 'unexpected' }] }
 				},
 			})
-			const answer = streamOf(
+			const answer = readStreamAnswer(
 				await mcp.dispatch(
 					createJSONRPCRequest({
 						method: 'tools/call',
@@ -1884,14 +1645,14 @@ describe('MCPServer — W01 modern execution and progress', () => {
 	})
 
 	it('rejects a fractional progress token before tool execution', async () => {
-		let executions = 0
-		let reporter: MCPProgressInterface | undefined
+		const executions = new MCPFixtureCell(0)
+		const reporter = new MCPFixtureCell<MCPProgressInterface | undefined>(undefined)
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			execution: ({ progress: progressReporter }) => {
-				executions += 1
-				reporter = progressReporter
+				executions.value += 1
+				reporter.value = progressReporter
 				return { resultType: 'complete', content: [{ type: 'text', text: 'done' }] }
 			},
 		})
@@ -1905,24 +1666,24 @@ describe('MCPServer — W01 modern execution and progress', () => {
 			}),
 		)
 
-		expect(responseOf(answer)?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
-		expect(reporter).toBeUndefined()
-		expect(executions).toBe(0)
+		expect(readUnaryAnswer(answer)?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(reporter.value).toBeUndefined()
+		expect(executions.value).toBe(0)
 	})
 
 	it('completes one explicit valid-token execution that reports no progress', async () => {
-		let executions = 0
-		let reporter: MCPProgressInterface | undefined
+		const executions = new MCPFixtureCell(0)
+		const reporter = new MCPFixtureCell<MCPProgressInterface | undefined>(undefined)
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			execution: ({ progress: progressReporter }) => {
-				executions += 1
-				reporter = progressReporter
+				executions.value += 1
+				reporter.value = progressReporter
 				return { resultType: 'complete', content: [{ type: 'text', text: 'done' }] }
 			},
 		})
-		const answer = streamOf(
+		const answer = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
@@ -1937,24 +1698,24 @@ describe('MCPServer — W01 modern execution and progress', () => {
 
 		expect(notifications).toEqual([])
 		expect(terminal.result).toMatchObject({ resultType: 'complete' })
-		expect(reporter).toBeDefined()
-		expect(executions).toBe(1)
+		expect(reporter.value).toBeDefined()
+		expect(executions.value).toBe(1)
 	})
 
 	it('settles an active progress stream and stops reports on external abort', async () => {
 		const controller = new AbortController()
-		let reporter: MCPProgressInterface | undefined
-		let signal: AbortSignal | undefined
+		const reporter = new MCPFixtureCell<MCPProgressInterface | undefined>(undefined)
+		const signal = new MCPFixtureCell<AbortSignal | undefined>(undefined)
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			execution: ({ progress: progressReporter, signal: received }) => {
-				reporter = progressReporter
-				signal = received
+				reporter.value = progressReporter
+				signal.value = received
 				return new Promise(() => undefined)
 			},
 		})
-		const answer = streamOf(
+		const answer = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
@@ -1969,12 +1730,12 @@ describe('MCPServer — W01 modern execution and progress', () => {
 		const pending = answer.next()
 		await waitForDelay()
 		controller.abort(new Error('request aborted'))
-		if (reporter === undefined) throw new Error('expected captured reporter')
-		const late = reporter.report({ progress: 1 })
+		if (reporter.value === undefined) throw new Error('expected captured reporter')
+		const late = reporter.value.report({ progress: 1 })
 
 		await expect(pending).rejects.toThrow('request aborted')
 		await expect(late).rejects.toThrow('Progress reporter is stopped')
-		expect(signal?.aborted).toBe(true)
+		expect(signal.value?.aborted).toBe(true)
 	})
 
 	// A request whose caller has already gone runs NOTHING: the controlled stream refuses its
@@ -1983,16 +1744,16 @@ describe('MCPServer — W01 modern execution and progress', () => {
 	it('settles a pre-aborted progress stream without executing or answering', async () => {
 		const controller = new AbortController()
 		controller.abort(new Error('request aborted'))
-		let executions = 0
+		const executions = new MCPFixtureCell(0)
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			execution: () => {
-				executions += 1
+				executions.value += 1
 				return { resultType: 'complete', content: [{ type: 'text', text: 'unexpected' }] }
 			},
 		})
-		const answer = streamOf(
+		const answer = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
@@ -2006,14 +1767,14 @@ describe('MCPServer — W01 modern execution and progress', () => {
 		)
 
 		await expect(answer.next()).rejects.toThrow('request aborted')
-		expect(executions).toBe(0)
+		expect(executions.value).toBe(0)
 	})
 
 	it('aborts execution and rejects late reports when the response generator returns', async () => {
 		const seen: { signal?: AbortSignal; reporter?: MCPProgressInterface } = {}
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			execution: async ({ signal, progress: reporter }) => {
 				if (reporter === undefined) throw new Error('expected progress reporter')
 				seen.signal = signal
@@ -2051,7 +1812,7 @@ describe('MCPServer — multi-round-trip input', () => {
 		const caller = Object.freeze({ subject: 'principal-user' })
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			input: {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
@@ -2089,21 +1850,12 @@ describe('MCPServer — multi-round-trip input', () => {
 	// outcome and cannot act on being told it was at fault. The client-side arm — a carrier
 	// the port cannot recover — is `-32602`, and lives in the W02-B taxonomy row.
 	it('contains continuation open rejection and an out-of-bound opened value', async () => {
-		let sealed = ''
-		let mode: 'reject' | 'oversize' = 'reject'
-		const continuation: MCPContinuationInterface = {
-			async seal(value) {
-				sealed = value
-				return 'carrier'
-			},
-			async open() {
-				if (mode === 'reject') throw new Error('continuation provider detail')
-				return `${sealed.slice(0, -1)},"padding":"${'x'.repeat(1024)}"}`
-			},
-		}
+		const sealed = new MCPFixtureCell('')
+		const mode = new MCPFixtureCell<'reject' | 'oversize'>('reject')
+		const continuation = createFaultContinuation(sealed, mode)
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { state: 512 },
 			input: {
 				continuation,
@@ -2119,13 +1871,14 @@ describe('MCPServer — multi-round-trip input', () => {
 				[MCP_META_CAPABILITIES]: { elicitation: {} },
 			},
 		}
-		const first = responseOf(
-			await mcp.dispatch(createJSONRPCRequest({ id: 40, method: 'tools/call', params })),
+		const firstMessage = await mcp.dispatch(
+			createJSONRPCRequest({ id: 40, method: 'tools/call', params }),
 		)
+		const first = readUnaryAnswer(firstMessage)
 		if (!isMCPInputResult(first?.result)) throw new Error('expected input_required')
-		expect(parseMCPInputState(sealed)).toMatchObject({ id: 40, expiry: expect.any(Number) })
-		expect(sealed).not.toContain('"expires"')
-		expect(sealed).not.toContain('"origin"')
+		expect(parseMCPInputState(sealed.value)).toMatchObject({ id: 40, expiry: expect.any(Number) })
+		expect(sealed.value).not.toContain('"expires"')
+		expect(sealed.value).not.toContain('"origin"')
 		const key = Object.keys(first.result.inputRequests ?? {})[0]
 		if (key === undefined) throw new Error('expected an input request key')
 		const retry = {
@@ -2134,16 +1887,18 @@ describe('MCPServer — multi-round-trip input', () => {
 			inputResponses: { [key]: { action: 'accept' } },
 		}
 
-		const rejected = responseOf(
-			await mcp.dispatch(createJSONRPCRequest({ id: 41, method: 'tools/call', params: retry })),
+		const rejectedMessage = await mcp.dispatch(
+			createJSONRPCRequest({ id: 41, method: 'tools/call', params: retry }),
 		)
+		const rejected = readUnaryAnswer(rejectedMessage)
 		expect(rejected?.error?.code).toBe(JSONRPC_INTERNAL_ERROR)
 		expect(rejected?.error?.message).not.toContain('continuation provider detail')
 
-		mode = 'oversize'
-		const oversized = responseOf(
-			await mcp.dispatch(createJSONRPCRequest({ id: 42, method: 'tools/call', params: retry })),
+		mode.value = 'oversize'
+		const oversizedMessage = await mcp.dispatch(
+			createJSONRPCRequest({ id: 42, method: 'tools/call', params: retry }),
 		)
+		const oversized = readUnaryAnswer(oversizedMessage)
 		expect(oversized?.error?.code).toBe(JSONRPC_INTERNAL_ERROR)
 		expect(oversized?.error?.message).toBe('Server error')
 	})
@@ -2151,7 +1906,7 @@ describe('MCPServer — multi-round-trip input', () => {
 	it('contains rejected input hooks and rejects invalid resolved policy values', async () => {
 		const base = {
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 		}
 		const cases = [
 			{
@@ -2258,7 +2013,7 @@ describe('MCPServer — multi-round-trip input', () => {
 		})
 
 		for (const scenario of cases) {
-			const answer = responseOf(await scenario.server.dispatch(request))
+			const answer = readUnaryAnswer(await scenario.server.dispatch(request))
 			expect(answer?.error?.code).toBe(scenario.code)
 			expect(answer?.error?.message).not.toContain('provider detail')
 		}
@@ -2268,7 +2023,7 @@ describe('MCPServer — multi-round-trip input', () => {
 		const seen: MCPInputContext[] = []
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			input: {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
@@ -2291,7 +2046,7 @@ describe('MCPServer — multi-round-trip input', () => {
 				},
 			},
 		})
-		const first = responseOf(
+		const first = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 'origin-1',
@@ -2344,7 +2099,7 @@ describe('MCPServer — multi-round-trip input', () => {
 				[MCP_META_CAPABILITIES]: { elicitation: {} },
 			},
 		}
-		const retry = responseOf(
+		const retry = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({ id: 'retry-2', method: 'tools/call', params: retryParams }),
 			),
@@ -2371,7 +2126,7 @@ describe('MCPServer — multi-round-trip input', () => {
 		const seen: MCPInputContext[] = []
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			input: {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
@@ -2382,9 +2137,9 @@ describe('MCPServer — multi-round-trip input', () => {
 				},
 			},
 		})
-		const first = responseOf(
+		const first = readUnaryAnswer(
 			await mcp.dispatch(
-				createJSONRPCRequest({ id: 'mixed-1', method: 'tools/call', params: mixedCall() }),
+				createJSONRPCRequest({ id: 'mixed-1', method: 'tools/call', params: buildMixedCall() }),
 			),
 		)
 		if (!isMCPInputResult(first?.result)) throw new Error('expected an input-required result')
@@ -2393,17 +2148,17 @@ describe('MCPServer — multi-round-trip input', () => {
 
 		expect(first.result.inputRequests).toEqual(MIXED_ROUND)
 
-		const retry = responseOf(
+		const retry = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 'mixed-2',
 					method: 'tools/call',
-					params: { ...mixedCall(), requestState, inputResponses: MIXED_ANSWERS },
+					params: { ...buildMixedCall(), requestState, inputResponses: MIXED_ANSWERS },
 				}),
 			),
 		)
 
-		expect(resultOf(retry)['resultType']).toBe('complete')
+		expect(readResultRecord(retry)['resultType']).toBe('complete')
 		expect(seen[1]?.responses).toEqual(MIXED_ANSWERS)
 	})
 
@@ -2416,13 +2171,13 @@ describe('MCPServer — multi-round-trip input', () => {
 		],
 		['every kind but roots', { elicitation: {}, sampling: {} }, { roots: {} }],
 	])('refuses a round the client cannot answer with %s', async (_, capabilities, required) => {
-		let executions = 0
+		const executions = new MCPFixtureCell(0)
 		const manager = createToolManager()
 		manager.add(
 			createTool({
 				name: 'echo',
 				execute: () => {
-					executions += 1
+					executions.value += 1
 					return 'ran'
 				},
 			}),
@@ -2437,7 +2192,7 @@ describe('MCPServer — multi-round-trip input', () => {
 				selector: () => ({ requests: MIXED_ROUND }),
 			},
 		})
-		const response = responseOf(
+		const response = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
@@ -2457,18 +2212,18 @@ describe('MCPServer — multi-round-trip input', () => {
 			message: 'Server requires a client capability this request did not declare',
 			data: { requiredCapabilities: required },
 		})
-		expect(executions).toBe(0)
+		expect(executions.value).toBe(0)
 	})
 
 	it('rejects mutated state, a reused id, and an omitted response without running the tool', async () => {
-		let executions = 0
+		const executions = new MCPFixtureCell(0)
 		const manager = createToolManager()
 		manager.add(
 			createTool({
 				name: 'count',
 				execute: () => {
-					executions += 1
-					return executions
+					executions.value += 1
+					return executions.value
 				},
 			}),
 		)
@@ -2489,9 +2244,10 @@ describe('MCPServer — multi-round-trip input', () => {
 				[MCP_META_CAPABILITIES]: { elicitation: {} },
 			},
 		}
-		const first = responseOf(
-			await mcp.dispatch(createJSONRPCRequest({ id: 11, method: 'tools/call', params })),
+		const firstMessage = await mcp.dispatch(
+			createJSONRPCRequest({ id: 11, method: 'tools/call', params }),
 		)
+		const first = readUnaryAnswer(firstMessage)
 		if (!isMCPInputResult(first?.result)) throw new Error('expected input_required')
 		const key = Object.keys(first.result.inputRequests ?? {})[0]
 		const token = first.result.requestState
@@ -2499,7 +2255,7 @@ describe('MCPServer — multi-round-trip input', () => {
 		const response = { [key]: { action: 'accept' } }
 		const mutated = `${token.slice(0, -1)}${token.endsWith('A') ? 'B' : 'A'}`
 
-		const mutatedAnswer = responseOf(
+		const mutatedAnswer = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 12,
@@ -2508,7 +2264,7 @@ describe('MCPServer — multi-round-trip input', () => {
 				}),
 			),
 		)
-		const reusedAnswer = responseOf(
+		const reusedAnswer = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 11,
@@ -2517,7 +2273,7 @@ describe('MCPServer — multi-round-trip input', () => {
 				}),
 			),
 		)
-		const omittedAnswer = responseOf(
+		const omittedAnswer = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 13,
@@ -2526,7 +2282,7 @@ describe('MCPServer — multi-round-trip input', () => {
 				}),
 			),
 		)
-		const changedArguments = responseOf(
+		const changedArguments = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 14,
@@ -2540,7 +2296,7 @@ describe('MCPServer — multi-round-trip input', () => {
 				}),
 			),
 		)
-		const changedName = responseOf(
+		const changedName = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 15,
@@ -2554,7 +2310,7 @@ describe('MCPServer — multi-round-trip input', () => {
 				}),
 			),
 		)
-		const changedVersion = responseOf(
+		const changedVersion = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 16,
@@ -2571,7 +2327,7 @@ describe('MCPServer — multi-round-trip input', () => {
 				}),
 			),
 		)
-		const changedMethod = responseOf(
+		const changedMethod = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 17,
@@ -2580,7 +2336,7 @@ describe('MCPServer — multi-round-trip input', () => {
 				}),
 			),
 		)
-		const changedKey = responseOf(
+		const changedKey = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 18,
@@ -2607,18 +2363,18 @@ describe('MCPServer — multi-round-trip input', () => {
 		// only a registered handler can reach the point where it would matter.
 		expect(changedMethod?.error?.code).toBe(JSONRPC_METHOD_NOT_FOUND)
 		expect(changedKey?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
-		expect(executions).toBe(0)
+		expect(executions.value).toBe(0)
 	})
 
 	it('binds principal and a real short TTL inside the protected payload', async () => {
-		let principal = 'operator-1'
+		const principal = new MCPFixtureCell('operator-1')
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			input: {
 				continuation: new MemoryContinuation(),
 				ttl: 15,
-				principal: () => principal,
+				principal: () => principal.value,
 				selector: (context) => (context.responses === undefined ? createRound() : undefined),
 			},
 		})
@@ -2629,17 +2385,18 @@ describe('MCPServer — multi-round-trip input', () => {
 				[MCP_META_CAPABILITIES]: { elicitation: {} },
 			},
 		}
-		const first = responseOf(
-			await mcp.dispatch(createJSONRPCRequest({ id: 20, method: 'tools/call', params })),
+		const firstMessage = await mcp.dispatch(
+			createJSONRPCRequest({ id: 20, method: 'tools/call', params }),
 		)
+		const first = readUnaryAnswer(firstMessage)
 		if (!isMCPInputResult(first?.result)) throw new Error('expected input_required')
 		const key = Object.keys(first.result.inputRequests ?? {})[0]
 		const token = first.result.requestState
 		if (key === undefined || token === undefined) throw new Error('missing input state')
 		const responses = { [key]: { action: 'accept' } }
 
-		principal = 'operator-2'
-		const wrongPrincipal = responseOf(
+		principal.value = 'operator-2'
+		const wrongPrincipal = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 21,
@@ -2648,9 +2405,9 @@ describe('MCPServer — multi-round-trip input', () => {
 				}),
 			),
 		)
-		principal = 'operator-1'
+		principal.value = 'operator-1'
 		await waitForDelay(30)
-		const expired = responseOf(
+		const expired = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 22,
@@ -2665,29 +2422,29 @@ describe('MCPServer — multi-round-trip input', () => {
 	})
 
 	it('reaches modern input policy and refuses its result at the legacy revision boundary', async () => {
-		let selections = 0
+		const selections = new MCPFixtureCell(0)
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			input: {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
 				principal: () => 'operator-1',
 				selector: () => {
-					selections += 1
+					selections.value += 1
 					return createRound()
 				},
 			},
 		})
 		const legacy = createMCPLegacy(mcp)
 
-		expect(responseOf(await mcp.dispatch(modernRequest('prompts/get')))?.error?.code).toBe(
+		expect(readUnaryAnswer(await mcp.dispatch(modernRequest('prompts/get')))?.error?.code).toBe(
 			JSONRPC_METHOD_NOT_FOUND,
 		)
-		expect(responseOf(await mcp.dispatch(modernRequest('resources/read')))?.error?.code).toBe(
+		expect(readUnaryAnswer(await mcp.dispatch(modernRequest('resources/read')))?.error?.code).toBe(
 			JSONRPC_METHOD_NOT_FOUND,
 		)
-		expect(responseOf(await mcp.dispatch(modernRequest('tools/list')))?.result).toMatchObject({
+		expect(readUnaryAnswer(await mcp.dispatch(modernRequest('tools/list')))?.result).toMatchObject({
 			resultType: 'complete',
 		})
 		expect(
@@ -2697,7 +2454,7 @@ describe('MCPServer — multi-round-trip input', () => {
 		).toBe(
 			'{"jsonrpc":"2.0","id":4,"error":{"code":-32000,"message":"Legacy protocol 2025-11-25 cannot represent an input-required result"}}',
 		)
-		expect(selections).toBe(1)
+		expect(selections.value).toBe(1)
 	})
 })
 
@@ -2715,10 +2472,10 @@ describe('MCPServer — the modern method seam', () => {
 				return Reflect.get(source, property)
 			},
 		})
-		const answer = responseOf(
+		const answer = readUnaryAnswer(
 			await createMCPServer({
 				identity: { name: 'test-server', version: '1.2.3' },
-				tools: tools(),
+				tools: createServerTools(),
 			}).dispatch(request),
 		)
 
@@ -2728,7 +2485,7 @@ describe('MCPServer — the modern method seam', () => {
 		})
 	})
 	it('registers the built-in modern methods on the registry it dispatches from', () => {
-		const mcp = server()
+		const mcp = createTestServer()
 
 		expect(mcp.methods.method('ping')).toBeUndefined()
 		expect(mcp.methods.method('server/discover')).toBeTypeOf('function')
@@ -2741,12 +2498,12 @@ describe('MCPServer — the modern method seam', () => {
 	// hard-coded arm list: the SAME method flips from unknown to answered purely by
 	// registering it, with no other change.
 	it('turns a -32601 method into an answered one by registering it', async () => {
-		const mcp = server()
-		const before = responseOf(await mcp.dispatch(modernRequest('demo/probe')))
+		const mcp = createTestServer()
+		const before = readUnaryAnswer(await mcp.dispatch(modernRequest('demo/probe')))
 		mcp.methods.add('demo/probe', async (request) =>
 			buildJSONRPCResult(request.id, { probed: true }),
 		)
-		const after = responseOf(await mcp.dispatch(modernRequest('demo/probe')))
+		const after = readUnaryAnswer(await mcp.dispatch(modernRequest('demo/probe')))
 
 		expect(before?.error?.code).toBe(JSONRPC_METHOD_NOT_FOUND)
 		expect(before?.error?.message).toContain('demo/probe')
@@ -2757,15 +2514,15 @@ describe('MCPServer — the modern method seam', () => {
 	// than ahead of it: replacing one changes what dispatch answers. A surviving
 	// hard-coded arm would win and this would still return the real tool list.
 	it('replaces a built-in modern method when one is registered over it', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		mcp.methods.add('tools/list', async (request) => buildJSONRPCResult(request.id, { tools: [] }))
-		const response = responseOf(await mcp.dispatch(modernRequest('tools/list')))
+		const response = readUnaryAnswer(await mcp.dispatch(modernRequest('tools/list')))
 
 		expect(response?.result).toEqual({ tools: [] })
 	})
 
 	it('routes a translated legacy method through a replaced modern method', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		mcp.methods.add('tools/list', async (request) =>
 			buildJSONRPCResult(request.id, { resultType: 'complete', tools: [] }),
 		)
@@ -2776,13 +2533,13 @@ describe('MCPServer — the modern method seam', () => {
 	})
 
 	it('never reaches a registered method when the modern metadata is unsupported', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const seen: JSONRPCInvocation[] = []
 		mcp.methods.add('demo/probe', async (request) => {
 			seen.push(request)
 			return buildJSONRPCResult(request.id, { resultType: 'complete' })
 		})
-		const response = responseOf(
+		const response = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'demo/probe',
@@ -2798,15 +2555,16 @@ describe('MCPServer — the modern method seam', () => {
 	})
 
 	it('never reaches a registered method for a legacy request of the same name', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const seen: JSONRPCInvocation[] = []
 		mcp.methods.add('demo/probe', async (request) => {
 			seen.push(request)
 			return buildJSONRPCResult(request.id, { resultType: 'complete' })
 		})
-		const response = responseOf(
-			await mcp.dispatch(createJSONRPCRequest({ method: 'demo/probe', id: 4 })),
+		const responseMessage = await mcp.dispatch(
+			createJSONRPCRequest({ method: 'demo/probe', id: 4 }),
 		)
+		const response = readUnaryAnswer(responseMessage)
 
 		expect(response?.error?.code).toBe(JSONRPC_METHOD_NOT_FOUND)
 		expect(seen).toEqual([])
@@ -2816,7 +2574,7 @@ describe('MCPServer — the modern method seam', () => {
 	// still leaves the handler holding a real, never-aborting one, so no handler downstream
 	// has to case on absence.
 	it('resolves a signal for every handler even when the caller supplied none', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const seen: MCPMethodOptions[] = []
 		mcp.methods.add('demo/probe', async (request, options) => {
 			seen.push(options)
@@ -2832,7 +2590,7 @@ describe('MCPServer — the modern method seam', () => {
 	})
 
 	it('passes direct dispatch caller context to the registered handler', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const caller = Object.freeze({ subject: 'dispatch-user' })
 		const seen: unknown[] = []
 		mcp.methods.add('demo/probe', async (request, options) => {
@@ -2845,7 +2603,7 @@ describe('MCPServer — the modern method seam', () => {
 	})
 
 	it('passes direct handle caller context to the registered handler', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const caller = Object.freeze({ subject: 'handle-user' })
 		const seen: unknown[] = []
 		mcp.methods.add('demo/probe', async (request, options) => {
@@ -2862,7 +2620,7 @@ describe('MCPServer — the modern method seam', () => {
 	// a producer needs is exactly that composition, so identity is the wrong assertion here
 	// and the caller's abort still reaching the handler is the right one.
 	it('composes the caller’s abort signal into the handler’s lifetime through dispatch', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const controller = new AbortController()
 		const seen: MCPMethodOptions[] = []
 		mcp.methods.add('demo/probe', async (request, options) => {
@@ -2878,7 +2636,7 @@ describe('MCPServer — the modern method seam', () => {
 	})
 
 	it('composes the caller’s abort signal into the handler’s lifetime through handle', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const controller = new AbortController()
 		const seen: MCPMethodOptions[] = []
 		mcp.methods.add('demo/probe', async (request, options) => {
@@ -2892,13 +2650,13 @@ describe('MCPServer — the modern method seam', () => {
 	})
 
 	it('aborts the handler’s lifetime once the stream it produced has closed', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const seen: MCPMethodOptions[] = []
 		mcp.methods.add('demo/stream', async (request, options) => {
 			seen.push(options)
-			return progress(request.id)
+			return createServerProgress(request.id)
 		})
-		const stream = streamOf(await mcp.dispatch(modernRequest('demo/stream', 12)))
+		const stream = readStreamAnswer(await mcp.dispatch(modernRequest('demo/stream', 12)))
 
 		expect(seen[0]?.signal.aborted).toBe(false)
 		await drainStream(stream)
@@ -2907,10 +2665,10 @@ describe('MCPServer — the modern method seam', () => {
 	})
 
 	it('returns a handler’s held-open stream from dispatch, terminating with its response', async () => {
-		const mcp = server()
-		mcp.methods.add('demo/stream', holdOpen)
+		const mcp = createTestServer()
+		mcp.methods.add('demo/stream', createHeldMethod)
 		const [messages, response] = await drainStream(
-			streamOf(await mcp.dispatch(modernRequest('demo/stream', 11))),
+			readStreamAnswer(await mcp.dispatch(modernRequest('demo/stream', 11))),
 		)
 
 		expect(messages).toEqual([
@@ -2923,9 +2681,11 @@ describe('MCPServer — the modern method seam', () => {
 	})
 
 	it('mirrors a held-open answer as a serialized stream through handle', async () => {
-		const mcp = server()
-		mcp.methods.add('demo/stream', holdOpen)
-		const answer = textOf(await mcp.handle(JSON.stringify(modernRequest('demo/stream', 12))))
+		const mcp = createTestServer()
+		mcp.methods.add('demo/stream', createHeldMethod)
+		const answer = readTextAnswer(
+			await mcp.handle(JSON.stringify(modernRequest('demo/stream', 12))),
+		)
 		const [messages, response] = await drainText(answer)
 
 		// The string boundary hands back the controlled entity itself, so a transport holding
@@ -2939,8 +2699,8 @@ describe('MCPServer — the modern method seam', () => {
 	})
 
 	it('answers nothing for a held-open method dispatched as a notification', async () => {
-		const mcp = server()
-		mcp.methods.add('demo/stream', holdOpen)
+		const mcp = createTestServer()
+		mcp.methods.add('demo/stream', createHeldMethod)
 
 		expect(
 			await mcp.dispatch(createJSONRPCNotification('demo/stream', { _meta: MODERN_METADATA })),
@@ -2954,13 +2714,13 @@ describe('MCPServer — the modern method seam', () => {
 	// its own deadline expired. The handler here reaches the registry the way a JavaScript
 	// consumer's does: through the ONE fact a runtime registration can check.
 	it('contains a registered handler that answers nothing for a request', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const events = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
-		const untyped: unknown = async () => undefined
+		const untyped: unknown = declineAsyncTask
 		if (!isMCPMethodHandler(untyped)) throw new Error('expected a callable handler')
 		mcp.methods.add('demo/silent', untyped)
 
-		const response = responseOf(await mcp.dispatch(modernRequest('demo/silent')))
+		const response = readUnaryAnswer(await mcp.dispatch(modernRequest('demo/silent')))
 
 		expect(response?.error?.code).toBe(JSONRPC_INTERNAL_ERROR)
 		// Detail-free on the wire, legible on the channel built for it — the same split every
@@ -2976,9 +2736,9 @@ describe('MCPServer — the modern method seam', () => {
 	})
 
 	it('contains the same handler through the string boundary', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const events = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
-		const untyped: unknown = async () => undefined
+		const untyped: unknown = declineAsyncTask
 		if (!isMCPMethodHandler(untyped)) throw new Error('expected a callable handler')
 		mcp.methods.add('demo/silent', untyped)
 
@@ -2998,7 +2758,7 @@ describe('MCPServer — the modern method seam', () => {
 	// notification. If the notification short-circuit were what the deleted ternaries had been
 	// standing in for, this is where it would show.
 	it('never invokes a consumer-registered handler for a notification', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const seen: JSONRPCRequest[] = []
 		mcp.methods.add('demo/probe', async (request) => {
 			seen.push(request)
@@ -3028,7 +2788,7 @@ describe('MCPServer — modern subscriptions/listen', () => {
 		const options: MCPMethodOptions[] = []
 		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const writer = source.writable.getWriter()
-		const mcp = server(undefined, {
+		const mcp = createTestServer(undefined, {
 			notifications: {
 				promptsListChanged: true,
 				resourceSubscriptions: ['resource://kept'],
@@ -3039,7 +2799,7 @@ describe('MCPServer — modern subscriptions/listen', () => {
 				return source.readable
 			},
 		})
-		const stream = streamOf(
+		const stream = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'subscriptions/listen',
@@ -3130,11 +2890,12 @@ describe('MCPServer — modern subscriptions/listen', () => {
 	})
 
 	it('rejects a missing notification filter and keeps the legacy method frozen', async () => {
-		const mcp = server()
-		const invalid = responseOf(await mcp.dispatch(modernRequest('subscriptions/listen')))
-		const legacy = responseOf(
-			await mcp.dispatch(createJSONRPCRequest({ method: 'subscriptions/listen', id: 7 })),
+		const mcp = createTestServer()
+		const invalid = readUnaryAnswer(await mcp.dispatch(modernRequest('subscriptions/listen')))
+		const legacyMessage = await mcp.dispatch(
+			createJSONRPCRequest({ method: 'subscriptions/listen', id: 7 }),
 		)
+		const legacy = readUnaryAnswer(legacyMessage)
 
 		expect(invalid?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
 		expect(legacy?.error?.code).toBe(JSONRPC_METHOD_NOT_FOUND)
@@ -3143,8 +2904,8 @@ describe('MCPServer — modern subscriptions/listen', () => {
 
 describe('MCPServer — initialize', () => {
 	it('returns the default protocol version, the tools capability, and serverInfo', async () => {
-		const response = responseOf(await server().dispatch(createJSONRPCRequest()))
-		const result = resultOf(response)
+		const response = readUnaryAnswer(await createTestServer().dispatch(createJSONRPCRequest()))
+		const result = readResultRecord(response)
 
 		expect(response?.id).toBe(1)
 		expect(result['protocolVersion']).toBe(MCP_HANDSHAKE_VERSION)
@@ -3153,35 +2914,41 @@ describe('MCPServer — initialize', () => {
 	})
 
 	it('falls back when the requested protocol version requires unsupported batching', async () => {
-		const response = responseOf(
-			await server().dispatch(createJSONRPCRequest({ params: { protocolVersion: '2025-03-26' } })),
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(
+				createJSONRPCRequest({ params: { protocolVersion: '2025-03-26' } }),
+			),
 		)
 
-		expect(resultOf(response)['protocolVersion']).toBe(MCP_HANDSHAKE_VERSION)
+		expect(readResultRecord(response)['protocolVersion']).toBe(MCP_HANDSHAKE_VERSION)
 	})
 
 	it('falls back to the default for an unsupported requested version', async () => {
-		const response = responseOf(
-			await server().dispatch(createJSONRPCRequest({ params: { protocolVersion: '1999-01-01' } })),
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(
+				createJSONRPCRequest({ params: { protocolVersion: '1999-01-01' } }),
+			),
 		)
 
-		expect(resultOf(response)['protocolVersion']).toBe(MCP_HANDSHAKE_VERSION)
+		expect(readResultRecord(response)['protocolVersion']).toBe(MCP_HANDSHAKE_VERSION)
 	})
 
 	it('ignores a non-string requested version (falls back to the default)', async () => {
-		const response = responseOf(
-			await server().dispatch(createJSONRPCRequest({ params: { protocolVersion: 42 } })),
+		const responseMessage = await createTestServer().dispatch(
+			createJSONRPCRequest({ params: { protocolVersion: 42 } }),
 		)
+		const response = readUnaryAnswer(responseMessage)
 
-		expect(resultOf(response)['protocolVersion']).toBe(MCP_HANDSHAKE_VERSION)
+		expect(readResultRecord(response)['protocolVersion']).toBe(MCP_HANDSHAKE_VERSION)
 	})
 })
 
 describe('MCPServer — ping', () => {
 	it('returns an empty result', async () => {
-		const response = responseOf(
-			await server().dispatch(createJSONRPCRequest({ method: 'ping', id: 7 })),
+		const responseMessage = await createTestServer().dispatch(
+			createJSONRPCRequest({ method: 'ping', id: 7 }),
 		)
+		const response = readUnaryAnswer(responseMessage)
 
 		expect(response?.id).toBe(7)
 		expect(response?.result).toEqual({})
@@ -3190,10 +2957,11 @@ describe('MCPServer — ping', () => {
 
 describe('MCPServer — tools/list', () => {
 	it('lists the registered tools with inputSchema mapped from parameters', async () => {
-		const response = responseOf(
-			await server().dispatch(createJSONRPCRequest({ method: 'tools/list', id: 2 })),
+		const responseMessage = await createTestServer().dispatch(
+			createJSONRPCRequest({ method: 'tools/list', id: 2 }),
 		)
-		const list = resultOf(response)['tools']
+		const response = readUnaryAnswer(responseMessage)
+		const list = readResultRecord(response)['tools']
 
 		expect(list).toEqual([
 			{ name: 'echo', inputSchema: { type: 'object' } },
@@ -3210,15 +2978,15 @@ describe('MCPServer — tools/list', () => {
 	})
 
 	it('keeps tools/list in deterministic registry order', async () => {
-		const mcp = server()
-		const first = responseOf(
+		const mcp = createTestServer()
+		const first = readUnaryAnswer(
 			await mcp.dispatch(createJSONRPCRequest({ method: 'tools/list', id: 20 })),
 		)
-		const second = responseOf(
+		const second = readUnaryAnswer(
 			await mcp.dispatch(createJSONRPCRequest({ method: 'tools/list', id: 21 })),
 		)
 
-		expect(resultOf(second)['tools']).toEqual(resultOf(first)['tools'])
+		expect(readResultRecord(second)['tools']).toEqual(readResultRecord(first)['tools'])
 	})
 
 	it('lists an empty tool set for an empty registry', async () => {
@@ -3228,9 +2996,11 @@ describe('MCPServer — tools/list', () => {
 				tools: createToolManager(),
 			}),
 		)
-		const response = responseOf(await mcp.dispatch(createJSONRPCRequest({ method: 'tools/list' })))
+		const response = readUnaryAnswer(
+			await mcp.dispatch(createJSONRPCRequest({ method: 'tools/list' })),
+		)
 
-		expect(resultOf(response)['tools']).toEqual([])
+		expect(readResultRecord(response)['tools']).toEqual([])
 	})
 })
 
@@ -3298,7 +3068,7 @@ describe('MCPServer — tools/call', () => {
 				})
 			},
 		})
-		const response = responseOf(
+		const response = readUnaryAnswer(
 			await identityServer.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
@@ -3309,8 +3079,8 @@ describe('MCPServer — tools/call', () => {
 			),
 		)
 		expect(seen).toEqual([caller])
-		expect(resultOf(response)['structuredContent']).toEqual(caller)
-		const absent = responseOf(
+		expect(readResultRecord(response)['structuredContent']).toEqual(caller)
+		const absent = readUnaryAnswer(
 			await identityServer.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
@@ -3319,7 +3089,7 @@ describe('MCPServer — tools/call', () => {
 			),
 		)
 		expect(seen).toEqual([caller, undefined])
-		expect(resultOf(absent)['structuredContent']).toBe('absent')
+		expect(readResultRecord(absent)['structuredContent']).toBe('absent')
 	})
 
 	it('advertises titles and mapped annotation hints on tools/list', async () => {
@@ -3336,8 +3106,8 @@ describe('MCPServer — tools/call', () => {
 			identity: { name: 'metadata', version: '1' },
 			tools: metadataTools,
 		})
-		const response = responseOf(await metadataServer.dispatch(modernRequest('tools/list')))
-		expect(resultOf(response)['tools']).toEqual([
+		const response = readUnaryAnswer(await metadataServer.dispatch(modernRequest('tools/list')))
+		expect(readResultRecord(response)['tools']).toEqual([
 			{
 				name: 'inspect',
 				title: 'Inspect record',
@@ -3356,8 +3126,8 @@ describe('MCPServer — tools/call', () => {
 			identity: { name: 'metadata', version: '1' },
 			tools: metadataTools,
 		})
-		const response = responseOf(await metadataServer.dispatch(modernRequest('tools/list')))
-		expect(resultOf(response)['tools']).toEqual([
+		const response = readUnaryAnswer(await metadataServer.dispatch(modernRequest('tools/list')))
+		expect(readResultRecord(response)['tools']).toEqual([
 			{ name: 'inspect', inputSchema: { type: 'object' } },
 		])
 	})
@@ -3400,8 +3170,8 @@ describe('MCPServer — tools/call', () => {
 	})
 
 	it('executes a tool and carries its value as structured content and JSON text', async () => {
-		const response = responseOf(
-			await server().dispatch(
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
 					id: 3,
@@ -3409,7 +3179,7 @@ describe('MCPServer — tools/call', () => {
 				}),
 			),
 		)
-		const result = resultOf(response)
+		const result = readResultRecord(response)
 
 		expect(result['content']).toEqual([{ type: 'text', text: '7' }])
 		expect(result['structuredContent']).toBe(7)
@@ -3417,8 +3187,8 @@ describe('MCPServer — tools/call', () => {
 	})
 
 	it('round-trips a structured value unchanged alongside serialized JSON', async () => {
-		const response = responseOf(
-			await server().dispatch(
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
 					id: 3,
@@ -3427,7 +3197,7 @@ describe('MCPServer — tools/call', () => {
 			),
 		)
 
-		const result = resultOf(response)
+		const result = readResultRecord(response)
 
 		expect(result['content']).toEqual([
 			{ type: 'text', text: JSON.stringify({ hello: 'world', n: 1 }) },
@@ -3436,18 +3206,18 @@ describe('MCPServer — tools/call', () => {
 	})
 
 	it('defaults arguments to an empty record when omitted', async () => {
-		const response = responseOf(
-			await server().dispatch(
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(
 				createJSONRPCRequest({ method: 'tools/call', id: 3, params: { name: 'echo' } }),
 			),
 		)
 
-		expect(resultOf(response)['content']).toEqual([{ type: 'text', text: '{}' }])
+		expect(readResultRecord(response)['content']).toEqual([{ type: 'text', text: '{}' }])
 	})
 
 	it('maps an erroring tool to an isError result carrying the error text', async () => {
-		const response = responseOf(
-			await server().dispatch(
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
 					id: 4,
@@ -3455,15 +3225,15 @@ describe('MCPServer — tools/call', () => {
 				}),
 			),
 		)
-		const result = resultOf(response)
+		const result = readResultRecord(response)
 
 		expect(result['isError']).toBe(true)
 		expect(result['content']).toEqual([{ type: 'text', text: 'tool exploded' }])
 	})
 
 	it('maps an unknown tool name to an isError result (the manager not-found error)', async () => {
-		const response = responseOf(
-			await server().dispatch(
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
 					id: 4,
@@ -3471,15 +3241,17 @@ describe('MCPServer — tools/call', () => {
 				}),
 			),
 		)
-		const result = resultOf(response)
+		const result = readResultRecord(response)
 
 		expect(result['isError']).toBe(true)
 		expect(result['content']).toEqual([{ type: 'text', text: 'tool not found: missing' }])
 	})
 
 	it('rejects a missing tool name with -32602 invalid params', async () => {
-		const response = responseOf(
-			await server().dispatch(createJSONRPCRequest({ method: 'tools/call', id: 5, params: {} })),
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(
+				createJSONRPCRequest({ method: 'tools/call', id: 5, params: {} }),
+			),
 		)
 
 		expect(response?.result).toBeUndefined()
@@ -3487,8 +3259,8 @@ describe('MCPServer — tools/call', () => {
 	})
 
 	it('rejects a non-string tool name with -32602 invalid params', async () => {
-		const response = responseOf(
-			await server().dispatch(
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(
 				createJSONRPCRequest({ method: 'tools/call', id: 5, params: { name: 42 } }),
 			),
 		)
@@ -3499,23 +3271,27 @@ describe('MCPServer — tools/call', () => {
 
 describe('MCPServer — notifications & unknown methods', () => {
 	it('returns no response for a request without an id (a notification)', async () => {
-		const response = responseOf(await server().dispatch(createJSONRPCNotification('ping')))
+		const response = readUnaryAnswer(
+			await createTestServer().dispatch(createJSONRPCNotification('ping')),
+		)
 
 		expect(response).toBeUndefined()
 	})
 
 	it('returns no response for notifications/initialized', async () => {
-		const response = responseOf(
-			await server().dispatch(createJSONRPCNotification('notifications/initialized')),
+		const responseMessage = await createTestServer().dispatch(
+			createJSONRPCNotification('notifications/initialized'),
 		)
+		const response = readUnaryAnswer(responseMessage)
 
 		expect(response).toBeUndefined()
 	})
 
 	it('returns -32601 for an unknown method', async () => {
-		const response = responseOf(
-			await server().dispatch(createJSONRPCRequest({ method: 'does/not/exist', id: 9 })),
+		const responseMessage = await createTestServer().dispatch(
+			createJSONRPCRequest({ method: 'does/not/exist', id: 9 }),
 		)
+		const response = readUnaryAnswer(responseMessage)
 
 		expect(response?.id).toBe(9)
 		expect(response?.error?.code).toBe(JSONRPC_METHOD_NOT_FOUND)
@@ -3523,9 +3299,10 @@ describe('MCPServer — notifications & unknown methods', () => {
 	})
 
 	it('returns no response for an unknown-method notification (no id)', async () => {
-		const response = responseOf(
-			await server().dispatch(createJSONRPCNotification('does/not/exist')),
+		const responseMessage = await createTestServer().dispatch(
+			createJSONRPCNotification('does/not/exist'),
 		)
+		const response = readUnaryAnswer(responseMessage)
 
 		expect(response).toBeUndefined()
 	})
@@ -3533,13 +3310,13 @@ describe('MCPServer — notifications & unknown methods', () => {
 
 describe('MCPServer — handle (string boundary)', () => {
 	it('parses, dispatches, and serializes a request to a response string', async () => {
-		const reply = await server().handle('{"jsonrpc":"2.0","method":"ping","id":1}')
+		const reply = await createTestServer().handle('{"jsonrpc":"2.0","method":"ping","id":1}')
 
 		expect(reply).toBe(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }))
 	})
 
 	it('round-trips a tools/call over the string boundary', async () => {
-		const reply = await server().handle(
+		const reply = await createTestServer().handle(
 			'{"jsonrpc":"2.0","method":"tools/call","id":2,"params":{"name":"sum","arguments":{"a":3,"b":4}}}',
 		)
 
@@ -3557,7 +3334,7 @@ describe('MCPServer — handle (string boundary)', () => {
 
 	// An unreadable id is OMITTED from the envelope, never sent as `null`.
 	it('returns a -32700 parse-error response that omits the id it could not read', async () => {
-		const reply = await server().handle('{ not json )')
+		const reply = await createTestServer().handle('{ not json )')
 
 		expect(reply).toBe(
 			JSON.stringify({
@@ -3569,7 +3346,7 @@ describe('MCPServer — handle (string boundary)', () => {
 	})
 
 	it('returns a -32600 invalid-request response that omits the id it could not read', async () => {
-		const reply = await server().handle('{"jsonrpc":"2.0","id":1,"result":{}}')
+		const reply = await createTestServer().handle('{"jsonrpc":"2.0","id":1,"result":{}}')
 
 		expect(reply).toBe(
 			JSON.stringify({
@@ -3581,13 +3358,15 @@ describe('MCPServer — handle (string boundary)', () => {
 	})
 
 	it('returns a -32600 invalid-request response for a parsed value that is not a message', async () => {
-		const reply = await server().handle('[1, 2, 3]')
+		const reply = await createTestServer().handle('[1, 2, 3]')
 
 		expect(reply).toContain(String(JSONRPC_INVALID_REQUEST))
 	})
 
 	it('returns undefined (no reply) for a notification string', async () => {
-		const reply = await server().handle('{"jsonrpc":"2.0","method":"notifications/initialized"}')
+		const reply = await createTestServer().handle(
+			'{"jsonrpc":"2.0","method":"notifications/initialized"}',
+		)
 
 		expect(reply).toBeUndefined()
 	})
@@ -3595,7 +3374,7 @@ describe('MCPServer — handle (string boundary)', () => {
 
 describe('MCPServer — request event', () => {
 	it('fires request with the method and id at the top of dispatch', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const events = createRecorders<MCPServerEventMap, (typeof MCP_EVENTS)[number]>(
 			mcp.emitter,
 			MCP_EVENTS,
@@ -3610,7 +3389,7 @@ describe('MCPServer — request event', () => {
 	})
 
 	it('fires request with no id for a notification, which has none to report', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const events = createRecorders<MCPServerEventMap, (typeof MCP_EVENTS)[number]>(
 			mcp.emitter,
 			MCP_EVENTS,
@@ -3621,7 +3400,7 @@ describe('MCPServer — request event', () => {
 	})
 
 	it('fires request through handle as well (parse → dispatch path)', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const events = createRecorders<MCPServerEventMap, (typeof MCP_EVENTS)[number]>(
 			mcp.emitter,
 			MCP_EVENTS,
@@ -3633,13 +3412,13 @@ describe('MCPServer — request event', () => {
 
 	it('EMIT SAFETY: a throwing request listener cannot corrupt the dispatch, and routes to the error handler', async () => {
 		const errors = createRecorder<readonly [error: unknown, event: string]>()
-		const mcp = server(errors.handler)
+		const mcp = createTestServer(errors.handler)
 		mcp.emitter.on('request', () => {
 			throw new Error('request observer blew up')
 		})
 
 		// THE LOAD-BEARING ASSERTION: the dispatch still produces its response.
-		const response = responseOf(await mcp.dispatch(modernRequest('tools/list')))
+		const response = readUnaryAnswer(await mcp.dispatch(modernRequest('tools/list')))
 
 		expect(response?.result).toMatchObject({ resultType: 'complete', tools: expect.any(Array) })
 		// The error handler received (error, event) — note the arg order.
@@ -3648,7 +3427,7 @@ describe('MCPServer — request event', () => {
 
 	it('EMIT SAFETY: a throwing error handler neither escapes nor recurses', async () => {
 		const errors = createRecorder<readonly [error: unknown, event: string]>()
-		const mcp = server((error, event) => {
+		const mcp = createTestServer((error, event) => {
 			errors.handler(error, event)
 			throw new Error('error handler blew up too')
 		})
@@ -3657,7 +3436,7 @@ describe('MCPServer — request event', () => {
 		})
 
 		// The dispatch STILL produces a response — neither throw escaped.
-		const response = responseOf(await mcp.dispatch(modernRequest('tools/list')))
+		const response = readUnaryAnswer(await mcp.dispatch(modernRequest('tools/list')))
 
 		expect(response?.result).toMatchObject({ resultType: 'complete', tools: expect.any(Array) })
 		// Fired exactly once (its own throw was swallowed, not re-entered — no recursion).
@@ -3673,94 +3452,23 @@ describe('MCPServer — request event', () => {
 // site at a time is a migration that has not been proved.
 
 // One modern fault scenario: the server that produces it and the request that provokes it.
-interface FaultScenario {
-	readonly name: string
-	readonly server: MCPDispatcherInterface
-	readonly request: JSONRPCRequest
-}
 
 // Reduce any dispatch answer to the error code it finally carries — draining a held-open
 // answer to its terminal, because a stream's fault IS its return value.
-async function faultOf(
-	answer: JSONRPCResponse | MCPStream | undefined,
-): Promise<number | undefined> {
-	if (answer === undefined) return undefined
-	if (Symbol.asyncIterator in answer) return (await drainStream(answer))[1].error?.code
-	return answer.error?.code
-}
 
 // The string-boundary mirror: `handle` and `dispatch` are different code paths, so every
 // sweep runs through both rather than assuming the second mirrors the first.
-async function faultOfText(
-	answer: string | MCPTextStream | undefined,
-): Promise<number | undefined> {
-	if (answer === undefined) return undefined
-	const text = typeof answer === 'string' ? answer : (await drainText(answer))[1]
-	const parsed: unknown = JSON.parse(text)
-	return isJSONRPCErrorResponse(parsed) ? parsed.error.code : undefined
-}
-
-function modernCall(params: Readonly<Record<string, unknown>>, id: JSONRPCId = 1): JSONRPCRequest {
-	return createJSONRPCRequest({
-		method: 'tools/call',
-		id,
-		params: { ...params, _meta: MODERN_METADATA },
-	})
-}
-
-function faultingServer(execution: () => never): MCPServerInterface {
-	return createMCPServer({
-		identity: { name: 'test-server', version: '1.2.3' },
-		tools: tools(),
-		execution,
-	})
-}
-
-function throwingHandlerServer(): MCPServerInterface {
-	const mcp = server()
-	mcp.methods.add('demo/boom', () => {
-		throw new Error('handler detail must not escape')
-	})
-	return mcp
-}
-
-function throwingSourceServer(): MCPServerInterface {
-	return server(undefined, {
-		notifications: { promptsListChanged: true },
-		producer: () => {
-			throw new Error('subscription source detail')
-		},
-	})
-}
-
-function boundedTools(name: string, value: unknown): ToolManagerInterface {
-	const manager = createToolManager()
-	manager.add(createTool({ name, execute: () => value }))
-	return manager
-}
 
 // A real execution handler, so the malformed-result scenario proxies a genuine one rather
 // than inventing a callable that never had the right shape.
-function completeExecution(): MCPCallResult {
-	return { resultType: 'complete', content: [{ type: 'text', text: 'complete' }] }
-}
 
 // A consumer's own held-open method that parks and never produces anything — the producer
 // a wrapping seam has to survive, since nothing about it will ever settle on its own.
-async function* parking(): MCPStream {
-	await new Promise<void>(() => undefined)
-	yield { jsonrpc: '2.0', method: 'notifications/progress' }
-	return buildJSONRPCResult('parked-1', { resultType: 'complete' })
-}
 
 // The subscription mirror of `parking`: a producer suspended inside its OWN await before it
 // ever reaches a `yield`. A generator parked here answers neither `return()` nor `throw()`,
 // because both queue behind the `next()` it has not settled — which is exactly the steady
 // state of a real subscription with no notification pending.
-async function* parkingSource(): AsyncGenerator<JSONRPCNotification> {
-	await new Promise<void>(() => undefined)
-	yield { jsonrpc: '2.0', method: 'notifications/prompts/list_changed' }
-}
 
 // Every distinct modern fault the server contains, in one population. A fault absent from
 // this list is a site the sweep never visited, so the list is the sweep's own membership
@@ -3771,269 +3479,17 @@ async function* parkingSource(): AsyncGenerator<JSONRPCNotification> {
 // scenario below — except the type-narrowing floor in `#normalize`, which is unreachable at
 // runtime and says so where it lives. A sweep that visits most sites and cannot name the
 // one it missed is a sweep that does not know what it covers.
-function modernFaults(): readonly FaultScenario[] {
-	const listen: JSONRPCRequest = createJSONRPCRequest({
-		method: 'subscriptions/listen',
-		id: 'listen-fault',
-		params: { notifications: { promptsListChanged: true }, _meta: MODERN_METADATA },
-	})
-	const elicitMetadata = {
-		[MCP_META_VERSION]: '2026-07-28',
-		[MCP_META_CAPABILITIES]: { elicitation: {} },
-	}
-	return [
-		{
-			name: 'registered handler throw',
-			server: throwingHandlerServer(),
-			request: modernRequest('demo/boom'),
-		},
-		{
-			name: 'execution provider throw',
-			server: faultingServer(() => {
-				throw new Error('provider detail must not escape')
-			}),
-			request: modernCall({ name: 'echo' }),
-		},
-		{
-			name: 'malformed executor result',
-			server: createMCPServer({
-				identity: { name: 'test-server', version: '1.2.3' },
-				tools: tools(),
-				execution: new Proxy(completeExecution, { apply: () => 7 }),
-			}),
-			request: modernCall({ name: 'echo' }),
-		},
-		{
-			name: 'unserializable tool value',
-			server: createMCPServer({
-				identity: { name: 'test-server', version: '1.2.3' },
-				tools: boundedTools('unserializable', { size: 1n }),
-			}),
-			request: modernCall({ name: 'unserializable' }),
-		},
-		{
-			name: 'produced content beyond the bound',
-			server: createMCPServer({
-				identity: { name: 'bounded', version: '1.0.0' },
-				tools: boundedTools('large', 'x'.repeat(64)),
-				limit: { content: 24 },
-			}),
-			request: modernCall({ name: 'large' }),
-		},
-		// The value FITS and the wrapped payload does not: `snapshotToolResult` bounds the tool's
-		// own value, and the modern content envelope built around it is bounded a second time. A
-		// server whose bound sits between the two reaches a site no "oversized value" scenario
-		// can, which is why this row exists beside the one above rather than instead of it.
-		{
-			name: 'wrapped content beyond the bound',
-			server: createMCPServer({
-				identity: { name: 'bounded', version: '1.0.0' },
-				tools: boundedTools('fits', 'x'.repeat(16)),
-				limit: { content: 20 },
-			}),
-			request: modernCall({ name: 'fits' }),
-		},
-		{
-			name: 'subscription capacity exhausted',
-			server: createMCPServer({
-				identity: { name: 'bounded', version: '1.0.0' },
-				tools: tools(),
-				limit: { subscriptions: 0 },
-				subscription: {
-					notifications: { promptsListChanged: true },
-					producer: () => new TransformStream<JSONRPCNotification, JSONRPCNotification>().readable,
-				},
-			}),
-			request: listen,
-		},
-		{ name: 'subscription source throw', server: throwingSourceServer(), request: listen },
-		{
-			name: 'continuation provider throw',
-			server: createMCPServer({
-				identity: { name: 'test-server', version: '1.2.3' },
-				tools: tools(),
-				input: {
-					continuation: {
-						async seal() {
-							return 'carrier'
-						},
-						async open() {
-							throw new Error('continuation detail must not escape')
-						},
-					},
-					ttl: 1_000,
-					principal: () => 'operator-1',
-					selector: () => createRound(),
-				},
-			}),
-			request: createJSONRPCRequest({
-				method: 'tools/call',
-				id: 'continuation-fault',
-				params: {
-					name: 'echo',
-					requestState: 'carrier',
-					inputResponses: { key: { action: 'accept' } },
-					_meta: elicitMetadata,
-				},
-			}),
-		},
-		// A port that OPENS SUCCESSFULLY is a different failure from one that throws, and it is
-		// the provider's contract failure rather than the client's invalid state: the client
-		// never wrote these bytes. Both arms below need a port that answers, so a throwing-open
-		// scenario cannot stand in for either.
-		{
-			name: 'continuation port opens beyond the state bound',
-			server: createMCPServer({
-				identity: { name: 'test-server', version: '1.2.3' },
-				tools: tools(),
-				limit: { state: 16 },
-				input: {
-					continuation: {
-						async seal() {
-							return 'carrier'
-						},
-						async open() {
-							return 'x'.repeat(64)
-						},
-					},
-					ttl: 1_000,
-					principal: () => 'operator-1',
-					selector: () => createRound(),
-				},
-			}),
-			request: createJSONRPCRequest({
-				method: 'tools/call',
-				id: 'opened-oversized',
-				params: {
-					name: 'echo',
-					requestState: 'carrier',
-					inputResponses: { key: { action: 'accept' } },
-					_meta: elicitMetadata,
-				},
-			}),
-		},
-		{
-			name: 'continuation port opens a malformed payload',
-			server: createMCPServer({
-				identity: { name: 'test-server', version: '1.2.3' },
-				tools: tools(),
-				input: {
-					continuation: {
-						async seal() {
-							return 'carrier'
-						},
-						async open() {
-							return 'this server never authored these bytes'
-						},
-					},
-					ttl: 1_000,
-					principal: () => 'operator-1',
-					selector: () => createRound(),
-				},
-			}),
-			request: createJSONRPCRequest({
-				method: 'tools/call',
-				id: 'opened-malformed',
-				params: {
-					name: 'echo',
-					requestState: 'carrier',
-					inputResponses: { key: { action: 'accept' } },
-					_meta: elicitMetadata,
-				},
-			}),
-		},
-		{
-			name: 'principal provider throw',
-			server: createMCPServer({
-				identity: { name: 'test-server', version: '1.2.3' },
-				tools: tools(),
-				input: {
-					continuation: new MemoryContinuation(),
-					ttl: 1_000,
-					principal: () => {
-						throw new Error('principal detail must not escape')
-					},
-					selector: () => createRound(),
-				},
-			}),
-			request: createJSONRPCRequest({
-				method: 'tools/call',
-				id: 'principal-fault',
-				params: { name: 'echo', _meta: elicitMetadata },
-			}),
-		},
-	]
-}
 
 // The positive control the sweeps above cannot do without. An assertion that `-32000` is
 // ABSENT passes as loudly when the branch that would emit it never ran, so the same
 // assertion is aimed at the legacy branch, where it must find `-32000` every time.
-function legacyFaults(): readonly FaultScenario[] {
-	const cycle: Record<string, unknown> = {}
-	cycle['self'] = cycle
-	const failing = createToolManager()
-	failing.add(
-		createTool({
-			name: 'boom',
-			execute: () => {
-				throw new Error('y'.repeat(64))
-			},
-		}),
-	)
-	return [
-		{
-			name: 'legacy hostile tool value',
-			server: createMCPLegacy(
-				createMCPServer({
-					identity: { name: 'legacy', version: '1.0.0' },
-					tools: boundedTools('cycle', cycle),
-				}),
-			),
-			request: createJSONRPCRequest({
-				method: 'tools/call',
-				id: 'legacy-1',
-				params: { name: 'cycle' },
-			}),
-		},
-		{
-			name: 'legacy content beyond the bound',
-			server: createMCPLegacy(
-				createMCPServer({
-					identity: { name: 'legacy', version: '1.0.0' },
-					tools: boundedTools('large', 'x'.repeat(64)),
-					limit: { content: 24 },
-				}),
-			),
-			request: createJSONRPCRequest({
-				method: 'tools/call',
-				id: 'legacy-2',
-				params: { name: 'large' },
-			}),
-		},
-		{
-			name: 'legacy failure text beyond the bound',
-			server: createMCPLegacy(
-				createMCPServer({
-					identity: { name: 'legacy', version: '1.0.0' },
-					tools: failing,
-					limit: { content: 24 },
-				}),
-			),
-			request: createJSONRPCRequest({
-				method: 'tools/call',
-				id: 'legacy-3',
-				params: { name: 'boom' },
-			}),
-		},
-	]
-}
 
 describe('MCPServer — W02-A: the modern internal-error code', () => {
 	it('answers every modern fault -32603 and none -32000, through dispatch', async () => {
-		const scenarios = modernFaults()
+		const scenarios = createModernFaults()
 		const codes: Array<number | undefined> = []
 		for (const scenario of scenarios) {
-			codes.push(await faultOf(await scenario.server.dispatch(scenario.request)))
+			codes.push(await readStreamFault(await scenario.server.dispatch(scenario.request)))
 		}
 
 		expect(codes).toEqual(scenarios.map(() => JSONRPC_INTERNAL_ERROR))
@@ -4041,10 +3497,12 @@ describe('MCPServer — W02-A: the modern internal-error code', () => {
 	})
 
 	it('answers every modern fault -32603 and none -32000, through handle', async () => {
-		const scenarios = modernFaults()
+		const scenarios = createModernFaults()
 		const codes: Array<number | undefined> = []
 		for (const scenario of scenarios) {
-			codes.push(await faultOfText(await scenario.server.handle(JSON.stringify(scenario.request))))
+			codes.push(
+				await readTextFault(await scenario.server.handle(JSON.stringify(scenario.request))),
+			)
 		}
 
 		expect(codes).toEqual(scenarios.map(() => JSONRPC_INTERNAL_ERROR))
@@ -4053,13 +3511,13 @@ describe('MCPServer — W02-A: the modern internal-error code', () => {
 
 	// The translated door runs the identical normalization and error-code pipeline.
 	it('answers collapsed legacy tool faults -32603 through dispatch and handle', async () => {
-		const scenarios = legacyFaults()
+		const scenarios = createLegacyFaults()
 		const dispatched: Array<number | undefined> = []
 		const handled: Array<number | undefined> = []
 		for (const scenario of scenarios) {
-			dispatched.push(await faultOf(await scenario.server.dispatch(scenario.request)))
+			dispatched.push(await readStreamFault(await scenario.server.dispatch(scenario.request)))
 			handled.push(
-				await faultOfText(await scenario.server.handle(JSON.stringify(scenario.request))),
+				await readTextFault(await scenario.server.handle(JSON.stringify(scenario.request))),
 			)
 		}
 
@@ -4076,10 +3534,10 @@ describe('MCPServer — W02-A: the modern internal-error code', () => {
 
 describe('MCPServer — W02-A: the broadened error event', () => {
 	it('reports a contained registered-handler throw exactly once and answers detail-free', async () => {
-		const mcp = throwingHandlerServer()
+		const mcp = createHandlerFaultServer()
 		const faults = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
 
-		const response = responseOf(await mcp.dispatch(modernRequest('demo/boom')))
+		const response = readUnaryAnswer(await mcp.dispatch(modernRequest('demo/boom')))
 
 		expect(response?.error?.code).toBe(JSONRPC_INTERNAL_ERROR)
 		expect(JSON.stringify(response)).not.toContain('handler detail')
@@ -4093,12 +3551,12 @@ describe('MCPServer — W02-A: the broadened error event', () => {
 	it('carries the caught value to the observer and never to the wire', async () => {
 		const detail = 'unique-detail-8f3a2c'
 		const thrown = new Error(detail)
-		const mcp = faultingServer(() => {
+		const mcp = createFaultServer(() => {
 			throw thrown
 		})
 		const faults = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
 
-		const serialized = await mcp.handle(JSON.stringify(modernCall({ name: 'echo' })))
+		const serialized = await mcp.handle(JSON.stringify(buildModernCall({ name: 'echo' })))
 
 		expect(typeof serialized).toBe('string')
 		expect(String(serialized)).not.toContain(detail)
@@ -4107,9 +3565,9 @@ describe('MCPServer — W02-A: the broadened error event', () => {
 	})
 
 	it('reports a contained subscription-source throw once, as one detail-free terminal', async () => {
-		const mcp = throwingSourceServer()
+		const mcp = createSourceFaultServer()
 		const faults = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
-		const stream = streamOf(
+		const stream = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'subscriptions/listen',
@@ -4128,7 +3586,7 @@ describe('MCPServer — W02-A: the broadened error event', () => {
 	})
 
 	it('reports nothing for a request that simply completes', async () => {
-		const mcp = server()
+		const mcp = createTestServer()
 		const faults = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
 
 		await mcp.dispatch(modernRequest('tools/list'))
@@ -4143,7 +3601,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 		const writer = source.writable.getWriter()
 		const mcp = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { subscriptions: 1 },
 			subscription: {
 				notifications: { promptsListChanged: true },
@@ -4151,11 +3609,11 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 			},
 		})
 		const params = { notifications: { promptsListChanged: true }, _meta: MODERN_METADATA }
-		const first = streamOf(
+		const first = readStreamAnswer(
 			await mcp.dispatch(createJSONRPCRequest({ method: 'subscriptions/listen', id: 'a', params })),
 		)
 		await first.next()
-		const second = streamOf(
+		const second = readStreamAnswer(
 			await mcp.dispatch(createJSONRPCRequest({ method: 'subscriptions/listen', id: 'b', params })),
 		)
 
@@ -4166,7 +3624,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 		await writer.close()
 		const [, terminal] = await drainStream(first)
 		expect(terminal.error).toBeUndefined()
-		const third = streamOf(
+		const third = readStreamAnswer(
 			await mcp.dispatch(createJSONRPCRequest({ method: 'subscriptions/listen', id: 'c', params })),
 		)
 		expect((await third.next()).done).toBe(false)
@@ -4174,30 +3632,33 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 	})
 
 	it('owns a produced notification before matching and stamping it', async () => {
-		let reads = 0
+		const reads = new MCPFixtureCell(0)
 		const params = new Proxy(
 			{ uri: 'resource://kept' },
 			{
 				get(target, property, receiver) {
 					if (property !== 'uri') return Reflect.get(target, property, receiver)
-					reads += 1
-					return reads === 1 ? 'resource://kept' : 'resource://leaked'
+					reads.value += 1
+					return reads.value === 1 ? 'resource://kept' : 'resource://leaked'
 				},
 				getOwnPropertyDescriptor(target, property) {
 					const descriptor = Reflect.getOwnPropertyDescriptor(target, property)
 					if (property !== 'uri' || descriptor === undefined) return descriptor
-					reads += 1
-					return { ...descriptor, value: reads === 1 ? 'resource://kept' : 'resource://leaked' }
+					reads.value += 1
+					return {
+						...descriptor,
+						value: reads.value === 1 ? 'resource://kept' : 'resource://leaked',
+					}
 				},
 			},
 		)
 		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const writer = source.writable.getWriter()
-		const mcp = server(undefined, {
+		const mcp = createTestServer(undefined, {
 			notifications: { resourceSubscriptions: ['resource://kept'] },
 			producer: () => source.readable,
 		})
-		const stream = streamOf(
+		const stream = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'subscriptions/listen',
@@ -4224,11 +3685,11 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 	it('drops a produced notification carrying a value that is not exact JSON', async () => {
 		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const writer = source.writable.getWriter()
-		const mcp = server(undefined, {
+		const mcp = createTestServer(undefined, {
 			notifications: { resourceSubscriptions: ['resource://kept'] },
 			producer: () => source.readable,
 		})
-		const stream = streamOf(
+		const stream = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'subscriptions/listen',
@@ -4263,15 +3724,15 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 		const controller = new AbortController()
 		const mcp = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { subscriptions: 1 },
 			subscription: {
 				notifications: { promptsListChanged: true },
-				producer: () => parkingSource(),
+				producer: () => createIdleSource(),
 			},
 		})
 		const params = { notifications: { promptsListChanged: true }, _meta: MODERN_METADATA }
-		const abandoned = streamOf(
+		const abandoned = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({ method: 'subscriptions/listen', id: 'parked-a', params }),
 				{ signal: controller.signal },
@@ -4284,7 +3745,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 		await expect(stuck).rejects.toThrow('client went away')
 		await waitForDelay()
 
-		const admitted = streamOf(
+		const admitted = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({ method: 'subscriptions/listen', id: 'parked-b', params }),
 			),
@@ -4301,15 +3762,15 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 	it('returns the capacity slot when an owner stops a subscription parked on its source', async () => {
 		const mcp = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { subscriptions: 1 },
 			subscription: {
 				notifications: { promptsListChanged: true },
-				producer: () => parkingSource(),
+				producer: () => createIdleSource(),
 			},
 		})
 		const params = { notifications: { promptsListChanged: true }, _meta: MODERN_METADATA }
-		const stopped = streamOf(
+		const stopped = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({ method: 'subscriptions/listen', id: 'stopped-a', params }),
 			),
@@ -4321,7 +3782,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 		await expect(stuck).rejects.toBeInstanceOf(DOMException)
 		await waitForDelay()
 
-		const admitted = streamOf(
+		const admitted = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({ method: 'subscriptions/listen', id: 'stopped-b', params }),
 			),
@@ -4339,7 +3800,7 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const mcp = createMCPServer({
 			identity: { name: 'bounded', version: '1.0.0' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { subscriptions: 1 },
 			subscription: {
 				notifications: { promptsListChanged: true },
@@ -4347,13 +3808,13 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 			},
 		})
 		const params = { notifications: { promptsListChanged: true }, _meta: MODERN_METADATA }
-		const live = streamOf(
+		const live = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({ method: 'subscriptions/listen', id: 'live-a', params }),
 			),
 		)
 		await live.next()
-		const refused = streamOf(
+		const refused = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({ method: 'subscriptions/listen', id: 'live-b', params }),
 			),
@@ -4368,11 +3829,11 @@ describe('MCPServer — W02-A: subscription capacity and containment', () => {
 	it('produces no terminal for a subscription its caller aborted', async () => {
 		const controller = new AbortController()
 		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
-		const mcp = server(undefined, {
+		const mcp = createTestServer(undefined, {
 			notifications: { promptsListChanged: true },
 			producer: () => source.readable,
 		})
-		const stream = streamOf(
+		const stream = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'subscriptions/listen',
@@ -4396,8 +3857,8 @@ describe('MCPServer — W02-A: what the egress boundary keeps doing', () => {
 	// revision reserves for cancellation, which this package recognizes nowhere and must
 	// therefore treat as an ordinary unanswered call rather than a special case.
 	it('answers no notification, through dispatch or handle', async () => {
-		const mcp = server()
-		mcp.methods.add('demo/stream', holdOpen)
+		const mcp = createTestServer()
+		mcp.methods.add('demo/stream', createHeldMethod)
 		const methods = [
 			'server/discover',
 			'tools/list',
@@ -4429,27 +3890,27 @@ describe('MCPServer — W02-A: what the egress boundary keeps doing', () => {
 			{},
 		)
 		revocable.revoke()
-		let reads = 0
+		const reads = new MCPFixtureCell(0)
 		const drifting = new Proxy(
 			{ id: 'call', name: 'probe', success: true, value: 1 },
 			{
 				getOwnPropertyDescriptor(target, property) {
 					const descriptor = Reflect.getOwnPropertyDescriptor(target, property)
 					if (property !== 'value' || descriptor === undefined) return descriptor
-					reads += 1
-					return { ...descriptor, value: reads }
+					reads.value += 1
+					return { ...descriptor, value: reads.value }
 				},
 			},
 		)
 		for (const result of [revocable.proxy, drifting]) {
 			const mcp = createMCPServer({
 				identity: { name: 'test-server', version: '1.2.3' },
-				tools: tools(),
+				tools: createServerTools(),
 				execution: () => {
 					throw result
 				},
 			})
-			const answer = responseOf(await mcp.dispatch(modernCall({ name: 'probe' })))
+			const answer = readUnaryAnswer(await mcp.dispatch(buildModernCall({ name: 'probe' })))
 
 			expect(answer?.error?.code).toBe(JSONRPC_INTERNAL_ERROR)
 			expect(answer?.error?.message).toBe('Server error')
@@ -4459,9 +3920,9 @@ describe('MCPServer — W02-A: what the egress boundary keeps doing', () => {
 	// At the seam a consumer owns: a REGISTERED handler's own generator is controlled
 	// too, so a producer that never settles cannot hold the answer open forever.
 	it('controls a consumer’s own generator, so stopping it settles against a parked producer', async () => {
-		const mcp = server()
-		mcp.methods.add('demo/parked', async () => parking())
-		const stream = streamOf(await mcp.dispatch(modernRequest('demo/parked', 'parked-1')))
+		const mcp = createTestServer()
+		mcp.methods.add('demo/parked', async () => createIdleStream())
+		const stream = readStreamAnswer(await mcp.dispatch(modernRequest('demo/parked', 'parked-1')))
 		const reading = stream.next().catch((error: unknown) => error)
 		await waitForDelay()
 
@@ -4481,124 +3942,23 @@ describe('MCPServer — W02-A: what the egress boundary keeps doing', () => {
 
 // The modern metadata of a client that DOES declare form elicitation, so the capability gate
 // is open and the ordering proofs measure something other than the gate.
-const FORM_METADATA: Readonly<Record<string, unknown>> = Object.freeze({
-	[MCP_META_VERSION]: '2026-07-28',
-	[MCP_META_CAPABILITIES]: Object.freeze({ elicitation: {} }),
-})
 
 // A schema with one required boolean and one bounded integer beside it — enough shape that
 // an accepted response can be wrong in a way only the ISSUED schema knows about.
-const APPROVAL_SCHEMA: MCPElicitSchema = {
-	type: 'object',
-	properties: {
-		approved: { type: 'boolean' },
-		count: { type: 'integer', minimum: 1, maximum: 5 },
-	},
-	required: ['approved'],
-}
 
 // One MRTR server wired for observation: every provider call keeps what it saw, the
 // continuation port keeps every payload it was asked to protect, and the tool records the
 // arguments it actually ran with. Real providers and a real ToolManager throughout.
-interface InputProbeInterface {
-	readonly server: MCPServerInterface
-	readonly continuation: MemoryContinuation
-	/** The resolved options every `principal` call observed — its length is the call count. */
-	readonly principals: readonly MCPMethodOptions[]
-	/** Every selector context, in order — its length is the selector's call count. */
-	readonly selections: readonly MCPInputContext[]
-	/** Every argument record the tool actually executed with — its length is the run count. */
-	readonly executions: ReadonlyArray<Readonly<Record<string, unknown>>>
-}
-
-function inputProbe(
-	options: {
-		/** How many form rounds the selector asks for before it lets the call through. */
-		readonly rounds?: number
-		readonly schema?: MCPElicitSchema
-		readonly ttl?: number
-		readonly clock?: () => number
-		readonly selector?: (context: MCPInputContext) => void
-		readonly seal?: (count: number) => void
-	} = {},
-): InputProbeInterface {
-	const principals: MCPMethodOptions[] = []
-	const selections: MCPInputContext[] = []
-	const executions: Array<Readonly<Record<string, unknown>>> = []
-	const continuation = new MemoryContinuation(options.seal)
-	const rounds = options.rounds ?? 1
-	const schema: MCPElicitSchema = options.schema ?? { type: 'object', properties: {} }
-	const manager = createToolManager()
-	manager.add(
-		createTool({
-			name: 'echo',
-			execute: (args) => {
-				executions.push(args)
-				return args
-			},
-		}),
-	)
-	const probed = createMCPServer({
-		identity: { name: 'test-server', version: '1.2.3' },
-		tools: manager,
-		input: {
-			continuation,
-			...(options.clock === undefined ? {} : { clock: options.clock }),
-			ttl: options.ttl ?? 1_000,
-			principal: (_request, resolved) => {
-				principals.push(resolved)
-				return 'operator-1'
-			},
-			selector: async (context) => {
-				selections.push(context)
-				await options.selector?.(context)
-				return selections.length > rounds
-					? undefined
-					: createRound(
-							{ message: `Approve round ${selections.length}?`, requestedSchema: schema },
-							{ round: selections.length },
-						)
-			},
-		},
-	})
-	return { server: probed, continuation, principals, selections, executions }
-}
 
 // A modern `tools/call` carrying form-capable metadata; `params` names only what varies.
-function formCall(id: JSONRPCId, params: Readonly<Record<string, unknown>> = {}): JSONRPCRequest {
-	return createJSONRPCRequest({
-		id,
-		method: 'tools/call',
-		params: { name: 'echo', _meta: FORM_METADATA, ...params },
-	})
-}
 
 // Narrow one produced round to the values a client must echo back, plus what was issued.
-function roundOf(response: JSONRPCResponse | undefined): {
-	readonly key: string
-	readonly requestState: string
-	readonly issued: unknown
-} {
-	if (!isMCPInputResult(response?.result)) throw new Error('expected an input_required result')
-	const key = Object.keys(response.result.inputRequests ?? {})[0]
-	const requestState = response.result.requestState
-	if (key === undefined || requestState === undefined) {
-		throw new Error('expected the consumer’s key and protected request state')
-	}
-	return { key, requestState, issued: response.result.inputRequests?.[key] }
-}
 
 // A subscription source that ends the moment it is opened — the acknowledgement and the
 // terminal with nothing between them, for a scenario whose claim is about what the producer
 // RECEIVED rather than about what it produced.
-async function* silent(): AsyncGenerator<JSONRPCNotification> {}
 
 // Parse the nth payload the server sealed — the protected state exactly as it wrote it.
-function sealedState(probe: InputProbeInterface, index: number): MCPInputState {
-	const state = parseMCPInputState(probe.continuation.sealed[index])
-	if (state === undefined) throw new Error(`expected sealed state at index ${index}`)
-	return state
-}
 
 describe('MCPServer — W02-B: admission and the owned argument record', () => {
 	// The sleeper: two argument-less calls share ONE frozen record, so a tool that
@@ -4631,16 +3991,18 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 			tools: manager,
 		})
 
-		await mcp.dispatch(modernCall({ name: 'observe' }, 'absent-1'))
-		await mcp.dispatch(modernCall({ name: 'observe' }, 'absent-2'))
-		const mutated = responseOf(await mcp.dispatch(modernCall({ name: 'mutate' }, 'absent-3')))
+		await mcp.dispatch(buildModernCall({ name: 'observe' }, 'absent-1'))
+		await mcp.dispatch(buildModernCall({ name: 'observe' }, 'absent-2'))
+		const mutated = readUnaryAnswer(
+			await mcp.dispatch(buildModernCall({ name: 'mutate' }, 'absent-3')),
+		)
 
 		expect(seen).toHaveLength(2)
 		expect(seen[0]).toBe(EMPTY_MCP_ARGUMENTS)
 		expect(seen[0]).toBe(seen[1])
 		expect(Object.isFrozen(EMPTY_MCP_ARGUMENTS)).toBe(true)
 		expect(Object.getPrototypeOf(EMPTY_MCP_ARGUMENTS)).toBe(null)
-		expect(resultOf(mutated)['isError']).toBe(true)
+		expect(readResultRecord(mutated)['isError']).toBe(true)
 	})
 
 	// ONE argument reference reaches the digest, the selector, the canonical
@@ -4650,7 +4012,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 		const calls: Array<Readonly<Record<string, unknown>>> = []
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			execution: (context) => {
 				calls.push(context.call.arguments)
 				return { id: context.call.id, name: context.call.name, success: true, value: 1 }
@@ -4666,7 +4028,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 			},
 		})
 
-		await mcp.dispatch(formCall('identity-1', { arguments: { value: 7 } }))
+		await mcp.dispatch(buildFormCall('identity-1', { arguments: { value: 7 } }))
 
 		expect(calls).toHaveLength(2)
 		expect(calls[0]).toBe(calls[1])
@@ -4686,7 +4048,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 		const request: JSONRPCRequest = { jsonrpc: '2.0', method: 'tools/call', id: 'own-1', params }
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			on: {
 				request: (method, id, era) => {
 					observed.push([method, id, era])
@@ -4706,10 +4068,10 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 			},
 		})
 
-		const answer = responseOf(await mcp.dispatch(request))
+		const answer = readUnaryAnswer(await mcp.dispatch(request))
 
 		expect(observed).toEqual([['tools/call', 'own-1', 'modern']])
-		expect(resultOf(answer)['structuredContent']).toEqual({ value: 'original' })
+		expect(readResultRecord(answer)['structuredContent']).toEqual({ value: 'original' })
 	})
 
 	// Both directions: the `request` event fires ahead of the `_meta` bound check, so
@@ -4718,7 +4080,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 	it('fires request before the _meta bound check, in both directions, carrying only scalars', async () => {
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { metadata: 256 },
 		})
 		const events = createRecorders<MCPServerEventMap, (typeof MCP_EVENTS)[number]>(
@@ -4726,7 +4088,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 			MCP_EVENTS,
 		)
 
-		const refused = responseOf(
+		const refused = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 'bound-1',
@@ -4735,7 +4097,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 				}),
 			),
 		)
-		const admitted = responseOf(await mcp.dispatch(modernRequest('tools/list', 'bound-2')))
+		const admitted = readUnaryAnswer(await mcp.dispatch(modernRequest('tools/list', 'bound-2')))
 
 		expect(refused?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
 		expect(admitted?.result).toMatchObject({ resultType: 'complete' })
@@ -4756,7 +4118,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 		const revocable = Proxy.revocable<Record<string, unknown>>({ subject: 'agent' }, {})
 		revocable.revoke()
 		const seen: unknown[] = []
-		const mcp = server()
+		const mcp = createTestServer()
 		mcp.methods.add('demo/caller', async (request, options) => {
 			seen.push(options.caller)
 			return buildJSONRPCResult(request.id, {})
@@ -4774,7 +4136,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 	it('treats hostile own keys as inert data at both doors', async () => {
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 		})
 		const hostile = {
 			jsonrpc: '2.0',
@@ -4788,10 +4150,13 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 		}
 		const wire = JSON.stringify(hostile)
 
-		const dispatched = responseOf(await mcp.dispatch(createJSONRPCRequest(JSON.parse(wire))))
+		const dispatched = readUnaryAnswer(await mcp.dispatch(createJSONRPCRequest(JSON.parse(wire))))
 		const handled = await mcp.handle(wire)
 
-		expect(resultOf(dispatched)['structuredContent']).toEqual({ constructor: 'c', prototype: 'p' })
+		expect(readResultRecord(dispatched)['structuredContent']).toEqual({
+			constructor: 'c',
+			prototype: 'p',
+		})
 		expect(typeof handled).toBe('string')
 		expect(Object.prototype).not.toHaveProperty('polluted')
 		expect({}).not.toHaveProperty('polluted')
@@ -4804,9 +4169,9 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// asked, the capability is checked BEFORE the principal resolver, and the counter is the
 	// proof: a `-32021` says nothing about whether the resolver already ran.
 	it('checks the form capability before the principal resolver is reached', async () => {
-		const probe = inputProbe()
+		const probe = createInputProbe()
 
-		const refused = responseOf(
+		const refused = readUnaryAnswer(
 			await probe.server.dispatch(
 				createJSONRPCRequest({
 					id: 'order-1',
@@ -4831,8 +4196,8 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// `_meta` is the second, on the first-round door and the retry door alike — the same
 	// `-32602` the ingress gives it, in the same words, so one condition has one answer.
 	it('separates an empty declaration from an unparsable one, at both MRTR doors', async () => {
-		const probe = inputProbe()
-		const gated = responseOf(
+		const probe = createInputProbe()
+		const gated = readUnaryAnswer(
 			await probe.server.dispatch(
 				createJSONRPCRequest({
 					id: 'reading-1',
@@ -4844,7 +4209,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 				}),
 			),
 		)
-		const first = responseOf(
+		const first = readUnaryAnswer(
 			await probe.server.dispatch(
 				createJSONRPCRequest({
 					id: 'reading-2',
@@ -4856,10 +4221,10 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 				}),
 			),
 		)
-		const continued = inputProbe()
-		const issued = responseOf(await continued.server.dispatch(formCall('reading-3')))
-		const round = roundOf(issued)
-		const retry = responseOf(
+		const continued = createInputProbe()
+		const issued = readUnaryAnswer(await continued.server.dispatch(buildFormCall('reading-3')))
+		const round = readInputRound(issued)
+		const retry = readUnaryAnswer(
 			await continued.server.dispatch(
 				createJSONRPCRequest({
 					id: 'reading-4',
@@ -4895,18 +4260,18 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// CLIENT half of SEP-2322's stateless arm is `MCPCallOptions.input.state`, which is
 	// optional because a different peer may issue a round with no state to return.
 	it('refuses a retry carrying answers with no state, and one carrying state with no answers', async () => {
-		const probe = inputProbe()
-		const issued = responseOf(await probe.server.dispatch(formCall('pairing-1')))
-		const round = roundOf(issued)
-		const stateless = responseOf(
+		const probe = createInputProbe()
+		const issued = readUnaryAnswer(await probe.server.dispatch(buildFormCall('pairing-1')))
+		const round = readInputRound(issued)
+		const stateless = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('pairing-2', {
+				buildFormCall('pairing-2', {
 					inputResponses: { [round.key]: { action: 'accept' } },
 				}),
 			),
 		)
-		const answerless = responseOf(
-			await probe.server.dispatch(formCall('pairing-3', { requestState: round.requestState })),
+		const answerless = readUnaryAnswer(
+			await probe.server.dispatch(buildFormCall('pairing-3', { requestState: round.requestState })),
 		)
 
 		expect(stateless?.error).toEqual({
@@ -4937,7 +4302,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		)
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			input: {
 				continuation,
 				ttl: 1_000,
@@ -4946,12 +4311,12 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 			},
 		})
 
-		const first = responseOf(await mcp.dispatch(formCall('own-schema-1')))
+		const first = readUnaryAnswer(await mcp.dispatch(buildFormCall('own-schema-1')))
 		// Deferred mutation of the very objects the selector handed back — a provider is free
 		// to keep and rewrite what it returned, and nothing the server issued may follow.
 		Reflect.set(schema, 'properties', { approved: { type: 'string' } })
 		Reflect.set(selected, 'state', { round: 99 })
-		const round = roundOf(first)
+		const round = readInputRound(first)
 		const state = parseMCPInputState(continuation.sealed[0])
 
 		expect(round.issued).toEqual({
@@ -4977,10 +4342,10 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// EXACT issued schema, and the accepted response is checked against THAT schema rather
 	// than against the shape of a response in general.
 	it('binds the issued schema into protected state and enforces it on the accepted response', async () => {
-		const probe = inputProbe({ schema: APPROVAL_SCHEMA })
-		const first = responseOf(await probe.server.dispatch(formCall('schema-1')))
-		const round = roundOf(first)
-		const state = sealedState(probe, 0)
+		const probe = createInputProbe({ schema: APPROVAL_SCHEMA })
+		const first = readUnaryAnswer(await probe.server.dispatch(buildFormCall('schema-1')))
+		const round = readInputRound(first)
+		const state = readSealedState(probe, 0)
 		const answers: Array<JSONRPCResponse | undefined> = []
 		const contents: ReadonlyArray<Readonly<Record<string, unknown>>> = [
 			{ approved: true, count: 2.5 },
@@ -4991,9 +4356,9 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 
 		for (const [index, content] of contents.entries()) {
 			answers.push(
-				responseOf(
+				readUnaryAnswer(
 					await probe.server.dispatch(
-						formCall(`schema-refused-${index}`, {
+						buildFormCall(`schema-refused-${index}`, {
 							requestState: round.requestState,
 							inputResponses: { [round.key]: { action: 'accept', content } },
 						}),
@@ -5001,9 +4366,9 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 				),
 			)
 		}
-		const accepted = responseOf(
+		const accepted = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('schema-accepted', {
+				buildFormCall('schema-accepted', {
 					requestState: round.requestState,
 					inputResponses: {
 						[round.key]: { action: 'accept', content: { approved: true, count: 2, extra: 'kept' } },
@@ -5030,9 +4395,9 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// ahead of the seal wherever a round is issued — and on a FIRST round ahead of the principal
 	// resolver too, so a client whose round this server may not send costs no principal lookup.
 	it('checks the capability before the principal resolver and the seal on a first round', async () => {
-		const probe = inputProbe()
+		const probe = createInputProbe()
 
-		const refused = responseOf(
+		const refused = readUnaryAnswer(
 			await probe.server.dispatch(
 				createJSONRPCRequest({
 					id: 'first-cap-1',
@@ -5055,11 +4420,11 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// what the gate measures there is the NEXT round. A retry the selector answers with
 	// `undefined` sends nothing, so it runs the tool however the client's declaration narrowed.
 	it('gates the next round rather than the answered one on a retry', async () => {
-		const probe = inputProbe()
-		const first = responseOf(await probe.server.dispatch(formCall('retry-cap-1')))
-		const round = roundOf(first)
+		const probe = createInputProbe()
+		const first = readUnaryAnswer(await probe.server.dispatch(buildFormCall('retry-cap-1')))
+		const round = readInputRound(first)
 
-		const answered = responseOf(
+		const answered = readUnaryAnswer(
 			await probe.server.dispatch(
 				createJSONRPCRequest({
 					id: 'retry-cap-2',
@@ -5083,23 +4448,23 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// opens successfully onto a payload this server never authored is the PROVIDER's contract
 	// failure (`-32603`, detail-free, reported once on `error`).
 	it('separates an unrecoverable carrier from a malformed opened payload', async () => {
-		const probe = inputProbe()
+		const probe = createInputProbe()
 		const faults = createRecorders<MCPServerEventMap, 'error'>(probe.server.emitter, ['error'])
-		const first = responseOf(await probe.server.dispatch(formCall('taxonomy-1')))
-		const round = roundOf(first)
+		const first = readUnaryAnswer(await probe.server.dispatch(buildFormCall('taxonomy-1')))
+		const round = readInputRound(first)
 
-		const unrecoverable = responseOf(
+		const unrecoverable = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('taxonomy-2', {
+				buildFormCall('taxonomy-2', {
 					requestState: 'not-a-carrier',
 					inputResponses: { [round.key]: { action: 'accept' } },
 				}),
 			),
 		)
 		probe.continuation.corrupt('{"principal":"operator-1"}')
-		const malformed = responseOf(
+		const malformed = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('taxonomy-3', {
+				buildFormCall('taxonomy-3', {
 					requestState: round.requestState,
 					inputResponses: { [round.key]: { action: 'accept' } },
 				}),
@@ -5115,9 +4480,9 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// Every structural binding is verified before the principal resolver runs. The
 	// counter is the claim — a structurally invalid retry answers `-32602` either way.
 	it('verifies every structural binding before resolving the principal', async () => {
-		const probe = inputProbe()
-		const first = responseOf(await probe.server.dispatch(formCall('structure-1')))
-		const round = roundOf(first)
+		const probe = createInputProbe()
+		const first = readUnaryAnswer(await probe.server.dispatch(buildFormCall('structure-1')))
+		const round = readInputRound(first)
 		const principals = probe.principals.length
 		const refusals: Array<number | undefined> = []
 		const retries: ReadonlyArray<readonly [JSONRPCId, Readonly<Record<string, unknown>>]> = [
@@ -5129,9 +4494,9 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 
 		for (const [id, overrides] of retries) {
 			refusals.push(
-				responseOf(
+				readUnaryAnswer(
 					await probe.server.dispatch(
-						formCall(id, {
+						buildFormCall(id, {
 							requestState: round.requestState,
 							inputResponses: { [round.key]: { action: 'accept' } },
 							...overrides,
@@ -5156,29 +4521,29 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// binds round 1's id under either rule. Round 3 is where sealing the CURRENT id starts
 	// binding round 2's id instead of round 1's.
 	it('binds the original id across three rounds while re-minting the round and its expiry', async () => {
-		const probe = inputProbe({ rounds: 2, schema: APPROVAL_SCHEMA })
+		const probe = createInputProbe({ rounds: 2, schema: APPROVAL_SCHEMA })
 
-		const first = responseOf(await probe.server.dispatch(formCall('origin-1')))
-		const round1 = roundOf(first)
-		const second = responseOf(
+		const first = readUnaryAnswer(await probe.server.dispatch(buildFormCall('origin-1')))
+		const round1 = readInputRound(first)
+		const second = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('round-2', {
+				buildFormCall('round-2', {
 					requestState: round1.requestState,
 					inputResponses: { [round1.key]: { action: 'accept', content: { approved: true } } },
 				}),
 			),
 		)
-		const round2 = roundOf(second)
-		const third = responseOf(
+		const round2 = readInputRound(second)
+		const third = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('round-3', {
+				buildFormCall('round-3', {
 					requestState: round2.requestState,
 					inputResponses: { [round2.key]: { action: 'accept', content: { approved: false } } },
 				}),
 			),
 		)
-		const one = sealedState(probe, 0)
-		const two = sealedState(probe, 1)
+		const one = readSealedState(probe, 0)
+		const two = readSealedState(probe, 1)
 
 		expect(probe.continuation.sealed).toHaveLength(2)
 		expect(one.id).toBe('origin-1')
@@ -5202,13 +4567,13 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// Extra response keys are IGNORED — the server assigned exactly one key and cares
 	// about exactly that one. Omitting the issued key remains a refusal.
 	it('ignores extra inputResponses keys and still requires the issued one', async () => {
-		const probe = inputProbe()
-		const first = responseOf(await probe.server.dispatch(formCall('extra-1')))
-		const round = roundOf(first)
+		const probe = createInputProbe()
+		const first = readUnaryAnswer(await probe.server.dispatch(buildFormCall('extra-1')))
+		const round = readInputRound(first)
 
-		const extra = responseOf(
+		const extra = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('extra-2', {
+				buildFormCall('extra-2', {
 					requestState: round.requestState,
 					inputResponses: {
 						[round.key]: { action: 'accept' },
@@ -5218,9 +4583,9 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 				}),
 			),
 		)
-		const omitted = responseOf(
+		const omitted = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('extra-3', {
+				buildFormCall('extra-3', {
 					requestState: round.requestState,
 					inputResponses: { unrelated: { action: 'decline' } },
 				}),
@@ -5234,13 +4599,15 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 
 	it('refuses an expired continuation before retry selection', async () => {
 		const clock = createManualClock(2 * Date.now())
-		const probe = inputProbe({ ttl: 20, clock: clock.now })
-		const round = roundOf(responseOf(await probe.server.dispatch(formCall('admission-1'))))
+		const probe = createInputProbe({ ttl: 20, clock: clock.now })
+		const round = readInputRound(
+			readUnaryAnswer(await probe.server.dispatch(buildFormCall('admission-1'))),
+		)
 		clock.advance(20)
 
-		const retry = responseOf(
+		const retry = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('admission-2', {
+				buildFormCall('admission-2', {
 					requestState: round.requestState,
 					inputResponses: { [round.key]: { action: 'accept' } },
 				}),
@@ -5254,7 +4621,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 
 	it('refuses a continuation that expires before resealing reaches the provider', async () => {
 		const clock = createManualClock(2 * Date.now())
-		const probe = inputProbe({
+		const probe = createInputProbe({
 			rounds: 2,
 			ttl: 4,
 			// A ticking source lets the prior window lapse between selection and sealing.
@@ -5263,11 +4630,13 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 				return clock.now()
 			},
 		})
-		const round = roundOf(responseOf(await probe.server.dispatch(formCall('preseal-1'))))
+		const round = readInputRound(
+			readUnaryAnswer(await probe.server.dispatch(buildFormCall('preseal-1'))),
+		)
 
-		const retry = responseOf(
+		const retry = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('preseal-2', {
+				buildFormCall('preseal-2', {
 					requestState: round.requestState,
 					inputResponses: { [round.key]: { action: 'accept' } },
 				}),
@@ -5285,19 +4654,19 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// reaches the tool.
 	it('rechecks expiry after the selector’s await, so an expired continuation never executes', async () => {
 		const clock = createManualClock(2 * Date.now())
-		const probe = inputProbe({
+		const probe = createInputProbe({
 			ttl: 20,
 			clock: clock.now,
 			selector: (context) => {
 				if (context.responses !== undefined) clock.advance(21)
 			},
 		})
-		const first = responseOf(await probe.server.dispatch(formCall('expiry-1')))
-		const round = roundOf(first)
+		const first = readUnaryAnswer(await probe.server.dispatch(buildFormCall('expiry-1')))
+		const round = readInputRound(first)
 
-		const late = responseOf(
+		const late = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('expiry-2', {
+				buildFormCall('expiry-2', {
 					requestState: round.requestState,
 					inputResponses: { [round.key]: { action: 'accept' } },
 				}),
@@ -5314,7 +4683,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// a round built on a continuation that has already lapsed.
 	it('rechecks the prior expiry after the seal await', async () => {
 		const clock = createManualClock(2 * Date.now())
-		const probe = inputProbe({
+		const probe = createInputProbe({
 			rounds: 2,
 			ttl: 25,
 			clock: clock.now,
@@ -5322,13 +4691,13 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 				if (count === 2) clock.advance(16)
 			},
 		})
-		const first = responseOf(await probe.server.dispatch(formCall('reseal-1')))
-		const round = roundOf(first)
+		const first = readUnaryAnswer(await probe.server.dispatch(buildFormCall('reseal-1')))
+		const round = readInputRound(first)
 		clock.advance(10)
 
-		const second = responseOf(
+		const second = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('reseal-2', {
+				buildFormCall('reseal-2', {
 					requestState: round.requestState,
 					inputResponses: { [round.key]: { action: 'accept' } },
 				}),
@@ -5346,9 +4715,9 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// being pointed at a round it never made, and will go looking for a carrier it never had.
 	it('tells a first-round caller its state expired rather than naming a retry', async () => {
 		const clock = createManualClock(2 * Date.now())
-		const probe = inputProbe({ ttl: 20, clock: clock.now, seal: () => clock.advance(21) })
+		const probe = createInputProbe({ ttl: 20, clock: clock.now, seal: () => clock.advance(21) })
 
-		const first = responseOf(await probe.server.dispatch(formCall('unissued-1')))
+		const first = readUnaryAnswer(await probe.server.dispatch(buildFormCall('unissued-1')))
 
 		expect(first?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
 		expect(first?.error?.message).toBe(
@@ -5361,7 +4730,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// still gets the retry wording, so the split names the round the caller is actually in.
 	it('still names the retry when a further round reseals past the prior window', async () => {
 		const clock = createManualClock(2 * Date.now())
-		const probe = inputProbe({
+		const probe = createInputProbe({
 			rounds: 2,
 			ttl: 25,
 			clock: clock.now,
@@ -5369,13 +4738,13 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 				if (count === 2) clock.advance(16)
 			},
 		})
-		const first = responseOf(await probe.server.dispatch(formCall('named-1')))
-		const round = roundOf(first)
+		const first = readUnaryAnswer(await probe.server.dispatch(buildFormCall('named-1')))
+		const round = readInputRound(first)
 		clock.advance(10)
 
-		const second = responseOf(
+		const second = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('named-2', {
+				buildFormCall('named-2', {
 					requestState: round.requestState,
 					inputResponses: { [round.key]: { action: 'accept' } },
 				}),
@@ -5393,21 +4762,21 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// protected state answers twice under two fresh ids. If single use is ever introduced —
 	// as an accident or as a design change — this is the row that fires.
 	it('introduces no consume-once: one protected state answers twice under fresh ids', async () => {
-		const probe = inputProbe()
-		const first = responseOf(await probe.server.dispatch(formCall('replay-1')))
-		const round = roundOf(first)
+		const probe = createInputProbe()
+		const first = readUnaryAnswer(await probe.server.dispatch(buildFormCall('replay-1')))
+		const round = readInputRound(first)
 
-		const once = responseOf(
+		const once = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('replay-2', {
+				buildFormCall('replay-2', {
 					requestState: round.requestState,
 					inputResponses: { [round.key]: { action: 'accept' } },
 				}),
 			),
 		)
-		const twice = responseOf(
+		const twice = readUnaryAnswer(
 			await probe.server.dispatch(
-				formCall('replay-3', {
+				buildFormCall('replay-3', {
 					requestState: round.requestState,
 					inputResponses: { [round.key]: { action: 'accept' } },
 				}),
@@ -5425,7 +4794,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 		for (const failing of ['selector', 'principal'] as const) {
 			const mcp = createMCPServer({
 				identity: { name: 'test-server', version: '1.2.3' },
-				tools: tools(),
+				tools: createServerTools(),
 				input: {
 					continuation: new MemoryContinuation(),
 					ttl: 1_000,
@@ -5441,7 +4810,7 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 			})
 			const faults = createRecorders<MCPServerEventMap, 'error'>(mcp.emitter, ['error'])
 
-			const answer = responseOf(await mcp.dispatch(formCall(`contained-${failing}`)))
+			const answer = readUnaryAnswer(await mcp.dispatch(buildFormCall(`contained-${failing}`)))
 
 			expect(answer?.error?.code).toBe(JSONRPC_INTERNAL_ERROR)
 			expect(JSON.stringify(answer)).not.toContain('provider detail')
@@ -5452,10 +4821,10 @@ describe('MCPServer — W02-B: MRTR ordering, binding, and re-entry', () => {
 	// `input_required` is produced by the built-in `tools/call` and by nothing else,
 	// even under an input policy that would ask on every call it reached.
 	it('produces input_required from the built-in tools/call alone', async () => {
-		const probe = inputProbe()
+		const probe = createInputProbe()
 		const answers = [
-			responseOf(await probe.server.dispatch(modernRequest('server/discover', 'only-1'))),
-			responseOf(await probe.server.dispatch(modernRequest('tools/list', 'only-2'))),
+			readUnaryAnswer(await probe.server.dispatch(modernRequest('server/discover', 'only-1'))),
+			readUnaryAnswer(await probe.server.dispatch(modernRequest('tools/list', 'only-2'))),
 		]
 
 		for (const answer of answers) {
@@ -5474,7 +4843,7 @@ describe('MCPServer — W02-B: custom carriers and the resolved-option seam', ()
 		const seen: JSONRPCInvocation[] = []
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			limit: { metadata: 512 },
 		})
 		mcp.methods.add('prompts/get', async (request) => {
@@ -5512,7 +4881,7 @@ describe('MCPServer — W02-B: custom carriers and the resolved-option seam', ()
 		]
 		const refusals: Array<number | undefined> = []
 
-		const answered = responseOf(
+		const answered = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 'carrier-1',
@@ -5528,7 +4897,7 @@ describe('MCPServer — W02-B: custom carriers and the resolved-option seam', ()
 		)
 		const delivered = seen[0]
 		for (const request of malformed) {
-			refusals.push(responseOf(await mcp.dispatch(request))?.error?.code)
+			refusals.push(readUnaryAnswer(await mcp.dispatch(request))?.error?.code)
 		}
 
 		expect(answered?.result).toEqual({ resultType: 'complete' })
@@ -5561,17 +4930,17 @@ describe('MCPServer — W02-B: custom carriers and the resolved-option seam', ()
 	// together.
 	it('resolves options into every built-in registration', async () => {
 		const listened: MCPMethodOptions[] = []
-		const probe = inputProbe()
+		const probe = createInputProbe()
 		const caller = Object.freeze({ subject: 'options-user' })
 		const controller = new AbortController()
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			subscription: {
 				notifications: {},
 				producer: (_notifications, options) => {
 					listened.push(options)
-					return silent()
+					return createSilentSource()
 				},
 			},
 		})
@@ -5579,8 +4948,8 @@ describe('MCPServer — W02-B: custom carriers and the resolved-option seam', ()
 			(name) => mcp.methods.method(name)?.length,
 		)
 
-		await probe.server.dispatch(formCall('propagate-1'), { caller, signal: controller.signal })
-		const stream = streamOf(
+		await probe.server.dispatch(buildFormCall('propagate-1'), { caller, signal: controller.signal })
+		const stream = readStreamAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 'propagate-2',
@@ -5611,75 +4980,27 @@ describe('MCPServer — W02-B: custom carriers and the resolved-option seam', ()
 // capability gate, a connect-time declaration for the per-request rule, and a manager that
 // binds the request's signal for the lifetime hazard.
 
-const TASK_CAPABILITIES: Readonly<Record<string, unknown>> = Object.freeze({
-	extensions: Object.freeze({ [MCP_EXTENSION_TASKS]: Object.freeze({}) }),
-})
-const TASK_METADATA: Readonly<Record<string, unknown>> = Object.freeze({
-	[MCP_META_VERSION]: '2026-07-28',
-	[MCP_META_CAPABILITIES]: TASK_CAPABILITIES,
-})
-
-const TASK_METHODS = Object.freeze(['tasks/get', 'tasks/update', 'tasks/cancel'] as const)
-
 // A modern `tools/call` whose client DECLARES the tasks extension on the request itself,
 // which is the only place the extension recognizes a declaration.
-function taskCall(params: Readonly<Record<string, unknown>>, id: JSONRPCId = 1): JSONRPCRequest {
-	return createJSONRPCRequest({
-		method: 'tools/call',
-		id,
-		params: { ...params, _meta: TASK_METADATA },
-	})
-}
 
 // One `tasks/*` request from a client that DECLARED the extension on the request itself.
-function taskRequest(
-	method: string,
-	params: Readonly<Record<string, unknown>>,
-	id: JSONRPCId = 1,
-): JSONRPCRequest {
-	return createJSONRPCRequest({ method, id, params: { ...params, _meta: TASK_METADATA } })
-}
 
 // Create one task through the deferral seam and answer the handle the client received —
 // the only way a `taskId` legitimately reaches a client, so every lifecycle test below
 // starts where a real one does.
-async function createdTask(mcp: MCPServerInterface, id: JSONRPCId = 'create'): Promise<string> {
-	const answer = resultOf(responseOf(await mcp.dispatch(taskCall({ name: 'echo' }, id))))
-	const taskId = answer['taskId']
-	if (typeof taskId !== 'string') throw new Error('expected a created task to carry a taskId')
-	return taskId
-}
-
-function taskServer(
-	task: MCPTaskOptions,
-	extra: Partial<MCPServerOptions> = {},
-): MCPServerInterface {
-	return createMCPServer({
-		identity: { name: 'test-server', version: '1.2.3' },
-		tools: tools(),
-		task,
-		...extra,
-	})
-}
 
 // A manager that answers one fixed creation and nothing else — the inert stub for the
 // scenarios about what MCP does with what a manager returned.
-function fixedTaskManager(created: MCPTask): MCPTaskManagerInterface {
-	return {
-		start: () => Promise.resolve(created),
-		task: () => Promise.resolve(undefined),
-		update: () => Promise.resolve(),
-		abort: () => Promise.resolve(),
-	}
-}
 
 describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	it('defers a declared call and answers the manager task as a flat modern result', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'operation-1' })
 
-		const answer = resultOf(
-			responseOf(await mcp.dispatch(taskCall({ name: 'echo', arguments: { a: 1 } }, 'defer-1'))),
+		const answer = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildTaskCall({ name: 'echo', arguments: { a: 1 } }, 'defer-1')),
+			),
 		)
 
 		expect(answer['resultType']).toBe('task')
@@ -5703,7 +5024,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	it('refuses a deployment-selected task when the request lacks the capability', async () => {
 		const tasks = new TestTaskManager()
 		const deferrals: MCPTaskContext[] = []
-		const mcp = taskServer({
+		const mcp = createTaskFixtureServer({
 			tasks,
 			deferral: (context) => {
 				deferrals.push(context)
@@ -5711,9 +5032,10 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 			},
 		})
 
-		const answer = responseOf(
-			await mcp.dispatch(modernCall({ name: 'echo', arguments: { a: 1 } }, 'plain-1')),
-		)?.error
+		const answerResponse = await mcp.dispatch(
+			buildModernCall({ name: 'echo', arguments: { a: 1 } }, 'plain-1'),
+		)
+		const answer = readUnaryAnswer(answerResponse)?.error
 
 		expect(answer?.code).toBe(MCP_MISSING_CAPABILITY)
 		expect(deferrals).toHaveLength(1)
@@ -5724,7 +5046,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// wrongly accept — the capability declared during `initialize` and absent from the call.
 	it('does not reuse a capability declared at connect time for a later request', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'operation-1' })
 
 		await mcp.dispatch(
 			createJSONRPCRequest({
@@ -5733,7 +5055,8 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 				params: { protocolVersion: '2025-11-25', capabilities: TASK_CAPABILITIES },
 			}),
 		)
-		const answer = responseOf(await mcp.dispatch(modernCall({ name: 'echo' }, 'connect-2')))?.error
+		const answerResponse = await mcp.dispatch(buildModernCall({ name: 'echo' }, 'connect-2'))
+		const answer = readUnaryAnswer(answerResponse)?.error
 
 		expect(answer?.code).toBe(MCP_MISSING_CAPABILITY)
 		expect(tasks.starts).toHaveLength(0)
@@ -5741,10 +5064,12 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 
 	it('runs the call inline when the deferral policy declines', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, deferral: () => undefined })
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => undefined })
 
-		const answer = resultOf(
-			responseOf(await mcp.dispatch(taskCall({ name: 'echo', arguments: { a: 1 } }, 'decline-1'))),
+		const answer = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildTaskCall({ name: 'echo', arguments: { a: 1 } }, 'decline-1')),
+			),
 		)
 
 		expect(answer['resultType']).toBe('complete')
@@ -5756,10 +5081,14 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// whatever the policy minted travels to the manager unchanged, twice.
 	it('forwards a repeated operation key to the manager unchanged', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, deferral: () => ' Operation/One ' })
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => ' Operation/One ' })
 
-		const first = resultOf(responseOf(await mcp.dispatch(taskCall({ name: 'echo' }, 'reuse-1'))))
-		const second = resultOf(responseOf(await mcp.dispatch(taskCall({ name: 'echo' }, 'reuse-2'))))
+		const first = readResultRecord(
+			readUnaryAnswer(await mcp.dispatch(buildTaskCall({ name: 'echo' }, 'reuse-1'))),
+		)
+		const second = readResultRecord(
+			readUnaryAnswer(await mcp.dispatch(buildTaskCall({ name: 'echo' }, 'reuse-2'))),
+		)
 
 		expect(tasks.starts.map((entry) => entry[0])).toEqual([' Operation/One ', ' Operation/One '])
 		expect(second['taskId']).toBe(first['taskId'])
@@ -5771,7 +5100,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	it('resolves the multi-round input mechanism before it considers a task', async () => {
 		const tasks = new TestTaskManager()
 		const deferrals: MCPTaskContext[] = []
-		const mcp = taskServer(
+		const mcp = createTaskFixtureServer(
 			{
 				tasks,
 				deferral: (context) => {
@@ -5789,8 +5118,8 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 			},
 		)
 
-		const answer = resultOf(
-			responseOf(
+		const answer = readResultRecord(
+			readUnaryAnswer(
 				await mcp.dispatch(
 					createJSONRPCRequest({
 						id: 'precedence-1',
@@ -5817,7 +5146,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	it('answers a unary task instead of opening a progress stream', async () => {
 		const tasks = new TestTaskManager()
 		const reported: MCPProgressInterface[] = []
-		const mcp = taskServer(
+		const mcp = createTaskFixtureServer(
 			{ tasks, deferral: () => 'operation-1' },
 			{
 				execution: (context) => {
@@ -5836,7 +5165,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 		)
 
 		expect(answer !== undefined && Symbol.asyncIterator in answer).toBe(false)
-		expect(resultOf(responseOf(answer))['resultType']).toBe('task')
+		expect(readResultRecord(readUnaryAnswer(answer))['resultType']).toBe('task')
 		expect(reported).toHaveLength(0)
 	})
 
@@ -5845,14 +5174,14 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	it('supplies the call in hand with no cancellation signal of its own', async () => {
 		const tasks = new TestTaskManager()
 		const deferrals: MCPTaskContext[] = []
-		const mcp = taskServer({
+		const mcp = createTaskFixtureServer({
 			tasks,
 			deferral: (context) => {
 				deferrals.push(context)
 				return 'operation-1'
 			},
 		})
-		const call = taskCall({ name: 'sum', arguments: { a: 2, b: 3 } }, 'context-1')
+		const call = buildTaskCall({ name: 'sum', arguments: { a: 2, b: 3 } }, 'context-1')
 
 		await mcp.dispatch(call, { caller: 'asserted' })
 
@@ -5877,12 +5206,12 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// the TSDoc names does not exist and the paragraph must be deleted.
 	it('loses the task when the manager binds the request signal to the work', async () => {
 		const tasks = new TestTaskManager({ bind: true, work: 30 })
-		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'operation-1' })
 		const lifetime = new AbortController()
 
-		const answer = resultOf(
-			responseOf(
-				await mcp.dispatch(taskCall({ name: 'echo' }, 'bound-1'), { signal: lifetime.signal }),
+		const answer = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildTaskCall({ name: 'echo' }, 'bound-1'), { signal: lifetime.signal }),
 			),
 		)
 		// Exactly what `createMCPHandler` does: the request's signal ends with the response.
@@ -5898,12 +5227,14 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 
 	it('keeps the task when the manager gives the work a lifetime it owns', async () => {
 		const tasks = new TestTaskManager({ bind: false, work: 30 })
-		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'operation-1' })
 		const lifetime = new AbortController()
 
-		const answer = resultOf(
-			responseOf(
-				await mcp.dispatch(taskCall({ name: 'echo' }, 'unbound-1'), { signal: lifetime.signal }),
+		const answer = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildTaskCall({ name: 'echo' }, 'unbound-1'), {
+					signal: lifetime.signal,
+				}),
 			),
 		)
 		lifetime.abort()
@@ -5920,10 +5251,12 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// status from the result rather than from a protocol error.
 	it('answers a successful task result for a task the manager started as input_required', async () => {
 		const tasks = new TestTaskManager({ asking: true })
-		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'operation-1' })
 
-		const response = responseOf(await mcp.dispatch(taskCall({ name: 'echo' }, 'asking-1')))
-		const answer = resultOf(response)
+		const response = readUnaryAnswer(
+			await mcp.dispatch(buildTaskCall({ name: 'echo' }, 'asking-1')),
+		)
+		const answer = readResultRecord(response)
 
 		expect(response?.error).toBeUndefined()
 		expect(answer['resultType']).toBe('task')
@@ -5934,7 +5267,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 
 	it('contains a deferral policy throw as a detail-free internal error', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({
+		const mcp = createTaskFixtureServer({
 			tasks,
 			deferral: () => {
 				throw new Error('deferral policy detail')
@@ -5943,7 +5276,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 		const faults: unknown[] = []
 		mcp.emitter.on('error', (error) => void faults.push(error))
 
-		const response = responseOf(await mcp.dispatch(taskCall({ name: 'echo' }, 'throw-1')))
+		const response = readUnaryAnswer(await mcp.dispatch(buildTaskCall({ name: 'echo' }, 'throw-1')))
 
 		expect(response?.error?.code).toBe(JSONRPC_INTERNAL_ERROR)
 		expect(JSON.stringify(response)).not.toContain('deferral policy detail')
@@ -5951,19 +5284,12 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	})
 
 	it('contains a manager start throw as a detail-free internal error', async () => {
-		const failing: MCPTaskManagerInterface = {
-			start: () => {
-				throw new Error('manager start detail')
-			},
-			task: () => Promise.resolve(undefined),
-			update: () => Promise.resolve(),
-			abort: () => Promise.resolve(),
-		}
-		const mcp = taskServer({ tasks: failing, deferral: () => 'operation-1' })
+		const failing = createStartFaultTasks()
+		const mcp = createTaskFixtureServer({ tasks: failing, deferral: () => 'operation-1' })
 		const faults: unknown[] = []
 		mcp.emitter.on('error', (error) => void faults.push(error))
 
-		const response = responseOf(await mcp.dispatch(taskCall({ name: 'echo' }, 'throw-2')))
+		const response = readUnaryAnswer(await mcp.dispatch(buildTaskCall({ name: 'echo' }, 'throw-2')))
 
 		expect(response?.error?.code).toBe(JSONRPC_INTERNAL_ERROR)
 		expect(JSON.stringify(response)).not.toContain('manager start detail')
@@ -5971,7 +5297,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	})
 
 	it('refuses a task the manager returned outside the content bound', async () => {
-		const oversized = fixedTaskManager({
+		const oversized = createFixedTasks({
 			taskId: 'task-1',
 			status: 'working',
 			statusMessage: 'x'.repeat(4_096),
@@ -5979,12 +5305,14 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 			lastUpdatedAt: '1970-01-01T00:00:01.000Z',
 			ttlMs: null,
 		})
-		const mcp = taskServer(
+		const mcp = createTaskFixtureServer(
 			{ tasks: oversized, deferral: () => 'operation-1' },
 			{ limit: { content: 512 } },
 		)
 
-		const response = responseOf(await mcp.dispatch(taskCall({ name: 'echo' }, 'oversize-1')))
+		const response = readUnaryAnswer(
+			await mcp.dispatch(buildTaskCall({ name: 'echo' }, 'oversize-1')),
+		)
 
 		expect(response?.error?.code).toBe(JSONRPC_INTERNAL_ERROR)
 		expect(response?.error?.message).toBe('Server execution returned an invalid or oversized task')
@@ -5994,7 +5322,7 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// `statusMessage` must not become a `null`, and an absent `pollIntervalMs` must not
 	// become a number this server invented.
 	it('carries the manager optional members exactly as it produced them', async () => {
-		const hinted = fixedTaskManager({
+		const hinted = createFixedTasks({
 			taskId: 'task-2',
 			status: 'working',
 			statusMessage: 'queued behind two others',
@@ -6003,17 +5331,17 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 			ttlMs: 60_000,
 			pollIntervalMs: 2_500,
 		})
-		const mcp = taskServer({ tasks: hinted, deferral: () => 'operation-1' })
+		const mcp = createTaskFixtureServer({ tasks: hinted, deferral: () => 'operation-1' })
 
-		const hintedAnswer = resultOf(
-			responseOf(await mcp.dispatch(taskCall({ name: 'echo' }, 'optional-1'))),
+		const hintedAnswer = readResultRecord(
+			readUnaryAnswer(await mcp.dispatch(buildTaskCall({ name: 'echo' }, 'optional-1'))),
 		)
-		const bare = resultOf(
-			responseOf(
-				await taskServer({
+		const bare = readResultRecord(
+			readUnaryAnswer(
+				await createTaskFixtureServer({
 					tasks: new TestTaskManager(),
 					deferral: () => 'operation-1',
-				}).dispatch(taskCall({ name: 'echo' }, 'optional-2')),
+				}).dispatch(buildTaskCall({ name: 'echo' }, 'optional-2')),
 			),
 		)
 
@@ -6030,13 +5358,18 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// hear about, not a second spelling of absence quietly routed down the inline path.
 	it('refuses an empty deferral key rather than silently running the call inline', async () => {
 		const tasks = new TestTaskManager()
-		const inline = taskServer({ tasks: new TestTaskManager(), deferral: () => undefined })
-		const faulty = taskServer({ tasks, deferral: () => '' })
+		const inline = createTaskFixtureServer({
+			tasks: new TestTaskManager(),
+			deferral: () => undefined,
+		})
+		const faulty = createTaskFixtureServer({ tasks, deferral: () => '' })
 
-		const declined = resultOf(
-			responseOf(await inline.dispatch(taskCall({ name: 'echo' }, 'empty-1'))),
+		const declined = readResultRecord(
+			readUnaryAnswer(await inline.dispatch(buildTaskCall({ name: 'echo' }, 'empty-1'))),
 		)
-		const refused = responseOf(await faulty.dispatch(taskCall({ name: 'echo' }, 'empty-2')))
+		const refused = readUnaryAnswer(
+			await faulty.dispatch(buildTaskCall({ name: 'echo' }, 'empty-2')),
+		)
 
 		// The control, drawn from the answer an empty key must NOT be confused with.
 		expect(declined['resultType']).toBe('complete')
@@ -6049,9 +5382,9 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// extension — the era boundary keeps the whole mechanism off the old wire.
 	it('refuses a selected task at the legacy revision boundary', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = createMCPLegacy(taskServer({ tasks, deferral: () => 'operation-1' }))
+		const mcp = createMCPLegacy(createTaskFixtureServer({ tasks, deferral: () => 'operation-1' }))
 
-		const answer = responseOf(
+		const answer = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 'legacy-1',
@@ -6066,13 +5399,18 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	})
 
 	it('advertises the extension through discovery only when it is configured', async () => {
-		const configured = taskServer({ tasks: new TestTaskManager(), deferral: () => undefined })
+		const configured = createTaskFixtureServer({
+			tasks: new TestTaskManager(),
+			deferral: () => undefined,
+		})
 
-		const advertised = resultOf(
-			responseOf(await configured.dispatch(modernRequest('server/discover', 'discover-1'))),
+		const advertised = readResultRecord(
+			readUnaryAnswer(await configured.dispatch(modernRequest('server/discover', 'discover-1'))),
 		)
-		const plain = resultOf(
-			responseOf(await server().dispatch(modernRequest('server/discover', 'discover-2'))),
+		const plain = readResultRecord(
+			readUnaryAnswer(
+				await createTestServer().dispatch(modernRequest('server/discover', 'discover-2')),
+			),
 		)
 
 		expect(advertised['capabilities']).toEqual({
@@ -6087,22 +5425,27 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 	// CONFIGURED half is the control drawn from outside the unconfigured population — without
 	// it, a registration that never happened at all would pass this test unremarked.
 	it('leaves an unconfigured server answering exactly what it answered before', async () => {
-		const mcp = server()
-		const configured = taskServer({ tasks: new TestTaskManager(), deferral: () => undefined })
+		const mcp = createTestServer()
+		const configured = createTaskFixtureServer({
+			tasks: new TestTaskManager(),
+			deferral: () => undefined,
+		})
 
-		const called = resultOf(
-			responseOf(await mcp.dispatch(modernCall({ name: 'echo', arguments: { a: 1 } }, 'inert-1'))),
+		const called = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildModernCall({ name: 'echo', arguments: { a: 1 } }, 'inert-1')),
+			),
 		)
 		const missing = await Promise.all(
 			TASK_METHODS.map(
 				async (method) =>
-					responseOf(await mcp.dispatch(modernRequest(method, 'inert-2')))?.error?.code,
+					readUnaryAnswer(await mcp.dispatch(modernRequest(method, 'inert-2')))?.error?.code,
 			),
 		)
 		const registered = await Promise.all(
 			TASK_METHODS.map(
 				async (method) =>
-					responseOf(await configured.dispatch(modernRequest(method, 'inert-3')))?.error?.code,
+					readUnaryAnswer(await configured.dispatch(modernRequest(method, 'inert-3')))?.error?.code,
 			),
 		)
 
@@ -6136,74 +5479,22 @@ describe('MCPServer — W03-A: the stable Tasks extension', () => {
 // A manager whose store is a map the test rewrites between reads — the instrument for terminal
 // immutability, which is a claim about MCP holding NO cache rather than about a manager
 // behaving. `start` answers whatever was seeded under the key it was given.
-function mutableTaskManager(details: Map<string, MCPTaskDetail>): MCPTaskManagerInterface {
-	return {
-		start: (key) => {
-			const found = details.get(key)
-			if (found === undefined) throw new Error('unseeded operation key')
-			return Promise.resolve(found)
-		},
-		task: (id) => Promise.resolve(details.get(id)),
-		update: () => Promise.resolve(),
-		abort: () => Promise.resolve(),
-	}
-}
 
 // A manager that resolves `start` BEFORE its write lands — outside the persists-then-resolves
 // population entirely rather than a slower member of it.
-function deferredWriteTaskManager(): MCPTaskManagerInterface {
-	const details = new Map<string, MCPTaskDetail>()
-	const created: MCPTaskDetail = {
-		taskId: 'task-late',
-		status: 'working',
-		createdAt: '1970-01-01T00:00:01.000Z',
-		lastUpdatedAt: '1970-01-01T00:00:01.000Z',
-		ttlMs: null,
-	}
-	return {
-		start: () => {
-			void waitForDelay(20).then(() => void details.set(created.taskId, created))
-			return Promise.resolve(created)
-		},
-		task: (id) => Promise.resolve(details.get(id)),
-		update: () => Promise.resolve(),
-		abort: () => Promise.resolve(),
-	}
-}
 
 // A manager that mints the handle FROM the key and deduplicates on the bare key —
 // obligations `start`'s TSDoc states and this package cannot enforce, violated together
 // because one fixture demonstrates both consequences.
-function guessableTaskManager(): MCPTaskManagerInterface {
-	const details = new Map<string, MCPTaskDetail>()
-	return {
-		start: (key) => {
-			const existing = details.get(key)
-			if (existing !== undefined) return Promise.resolve(existing)
-			const created: MCPTaskDetail = {
-				taskId: key,
-				status: 'working',
-				createdAt: '1970-01-01T00:00:01.000Z',
-				lastUpdatedAt: '1970-01-01T00:00:01.000Z',
-				ttlMs: null,
-			}
-			details.set(key, created)
-			return Promise.resolve(created)
-		},
-		task: (id) => Promise.resolve(details.get(id)),
-		update: () => Promise.resolve(),
-		abort: () => Promise.resolve(),
-	}
-}
 
 describe('MCPServer — W03-B: reading one durable task', () => {
 	it('answers a task snapshot as a complete result, never a task result', async () => {
 		const tasks = new TestTaskManager({ asking: true })
-		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
-		const taskId = await createdTask(mcp)
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'operation-1' })
+		const taskId = await readCreatedTask(mcp)
 
-		const answer = resultOf(
-			responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId }, 'get-1'))),
+		const answer = readResultRecord(
+			readUnaryAnswer(await mcp.dispatch(buildTaskRequest('tasks/get', { taskId }, 'get-1'))),
 		)
 
 		// `complete`, not `task`. Only CREATION announces a task; reading one is an ordinary
@@ -6248,11 +5539,16 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 				{ taskId: 'stopped', status: 'cancelled', createdAt: 'a', lastUpdatedAt: 'b', ttlMs: null },
 			],
 		])
-		const mcp = taskServer({ tasks: mutableTaskManager(details), deferral: () => undefined })
+		const mcp = createTaskFixtureServer({
+			tasks: createMutableTasks(details),
+			deferral: () => undefined,
+		})
 
 		const answers = await Promise.all(
 			[...details.keys()].map(async (taskId) =>
-				resultOf(responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId }, taskId)))),
+				readResultRecord(
+					readUnaryAnswer(await mcp.dispatch(buildTaskRequest('tasks/get', { taskId }, taskId))),
+				),
 			),
 		)
 
@@ -6277,24 +5573,27 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 	it('answers never-existed, purged, and unauthorized with one byte-identical refusal', async () => {
 		const purged = new TestTaskManager({ ttl: 60_000 })
 		const guarded = new TestTaskManager({ owner: 'owner-1' })
-		const absent = taskServer({ tasks: new TestTaskManager(), deferral: () => 'operation-1' })
-		const expiring = taskServer({ tasks: purged, deferral: () => 'operation-1' })
-		const owned = taskServer({ tasks: guarded, deferral: () => 'operation-1' })
-		const expired = await createdTask(expiring, 'purge-seed')
-		const theirs = await createdTask(owned, 'owner-seed')
+		const absent = createTaskFixtureServer({
+			tasks: new TestTaskManager(),
+			deferral: () => 'operation-1',
+		})
+		const expiring = createTaskFixtureServer({ tasks: purged, deferral: () => 'operation-1' })
+		const owned = createTaskFixtureServer({ tasks: guarded, deferral: () => 'operation-1' })
+		const expired = await readCreatedTask(expiring, 'purge-seed')
+		const theirs = await readCreatedTask(owned, 'owner-seed')
 		purged.purge()
 
 		const responses = await Promise.all([
-			absent.dispatch(taskRequest('tasks/get', { taskId: 'never-minted' }, 'same-id')),
-			expiring.dispatch(taskRequest('tasks/get', { taskId: expired }, 'same-id')),
-			owned.dispatch(taskRequest('tasks/get', { taskId: theirs }, 'same-id'), {
+			absent.dispatch(buildTaskRequest('tasks/get', { taskId: 'never-minted' }, 'same-id')),
+			expiring.dispatch(buildTaskRequest('tasks/get', { taskId: expired }, 'same-id')),
+			owned.dispatch(buildTaskRequest('tasks/get', { taskId: theirs }, 'same-id'), {
 				caller: 'someone-else',
 			}),
 		])
-		const wire = responses.map((response) => JSON.stringify(responseOf(response)))
+		const wire = responses.map((response) => JSON.stringify(readUnaryAnswer(response)))
 
 		expect(new Set(wire).size).toBe(1)
-		expect(responseOf(responses[0])?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(readUnaryAnswer(responses[0])?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
 		// The last store really did hold that task — this is indistinguishability, not
 		// managers that all happened to be empty.
 		expect(
@@ -6307,12 +5606,12 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 	// against: `null` is the extension's spelling for "no expiry", not a zero-length one.
 	it('keeps reading a task whose ttlMs is null through a purge that removes the rest', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
-		const taskId = await createdTask(mcp, 'eternal-seed')
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'operation-1' })
+		const taskId = await readCreatedTask(mcp, 'eternal-seed')
 
 		tasks.purge()
-		const answer = resultOf(
-			responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId }, 'eternal-1'))),
+		const answer = readResultRecord(
+			readUnaryAnswer(await mcp.dispatch(buildTaskRequest('tasks/get', { taskId }, 'eternal-1'))),
 		)
 
 		expect(answer['ttlMs']).toBeNull()
@@ -6320,16 +5619,16 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 	})
 
 	it('refuses an absent, non-string, empty, or over-bound taskId with invalid params', async () => {
-		const mcp = taskServer(
+		const mcp = createTaskFixtureServer(
 			{ tasks: new TestTaskManager(), deferral: () => undefined },
 			{ limit: { state: 32 } },
 		)
 
 		const refusals = await Promise.all(
-			[{}, { taskId: 7 }, { taskId: '' }, { taskId: 'x'.repeat(64) }].map(
-				async (params) =>
-					responseOf(await mcp.dispatch(taskRequest('tasks/get', params, 'bad-1')))?.error,
-			),
+			[{}, { taskId: 7 }, { taskId: '' }, { taskId: 'x'.repeat(64) }].map(async (params) => {
+				const response = await mcp.dispatch(buildTaskRequest('tasks/get', params, 'bad-1'))
+				return readUnaryAnswer(response)?.error
+			}),
 		)
 
 		expect(refusals.map((error) => error?.code)).toEqual([
@@ -6375,18 +5674,23 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 				},
 			],
 		])
-		const bounded = taskServer(
-			{ tasks: mutableTaskManager(oversized), deferral: () => undefined },
+		const bounded = createTaskFixtureServer(
+			{ tasks: createMutableTasks(oversized), deferral: () => undefined },
 			{ limit: { content: 512 } },
 		)
-		const lying = taskServer({ tasks: mutableTaskManager(malformed), deferral: () => undefined })
+		const lying = createTaskFixtureServer({
+			tasks: createMutableTasks(malformed),
+			deferral: () => undefined,
+		})
 
-		const large = responseOf(
-			await bounded.dispatch(taskRequest('tasks/get', { taskId: 'big' }, 'big-1')),
+		const largeMessage = await bounded.dispatch(
+			buildTaskRequest('tasks/get', { taskId: 'big' }, 'big-1'),
 		)
-		const bad = responseOf(
-			await lying.dispatch(taskRequest('tasks/get', { taskId: 'lying' }, 'lie-1')),
+		const large = readUnaryAnswer(largeMessage)
+		const badMessage = await lying.dispatch(
+			buildTaskRequest('tasks/get', { taskId: 'lying' }, 'lie-1'),
 		)
+		const bad = readUnaryAnswer(badMessage)
 
 		expect(large?.error?.code).toBe(JSONRPC_INTERNAL_ERROR)
 		expect(large?.error?.message).toBe('Server execution returned an invalid or oversized task')
@@ -6410,15 +5714,19 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 				},
 			],
 		])
-		const mcp = taskServer({ tasks: mutableTaskManager(details), deferral: () => undefined })
+		const mcp = createTaskFixtureServer({
+			tasks: createMutableTasks(details),
+			deferral: () => undefined,
+		})
 
-		const response = responseOf(
-			await mcp.dispatch(taskRequest('tasks/get', { taskId: 'broke' }, 'fail-1')),
+		const responseMessage = await mcp.dispatch(
+			buildTaskRequest('tasks/get', { taskId: 'broke' }, 'fail-1'),
 		)
+		const response = readUnaryAnswer(responseMessage)
 
 		expect(response?.error).toBeUndefined()
-		expect(resultOf(response)['resultType']).toBe('complete')
-		expect(resultOf(response)['status']).toBe('failed')
+		expect(readResultRecord(response)['resultType']).toBe('complete')
+		expect(readResultRecord(response)['status']).toBe('failed')
 	})
 
 	// Terminal immutability is the MANAGER's obligation, so what is provable here is the
@@ -6439,10 +5747,15 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 				},
 			],
 		])
-		const mcp = taskServer({ tasks: mutableTaskManager(details), deferral: () => undefined })
+		const mcp = createTaskFixtureServer({
+			tasks: createMutableTasks(details),
+			deferral: () => undefined,
+		})
 
-		const before = resultOf(
-			responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId: 'settled' }, 'mutate-1'))),
+		const before = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildTaskRequest('tasks/get', { taskId: 'settled' }, 'mutate-1')),
+			),
 		)
 		details.set('settled', {
 			taskId: 'settled',
@@ -6451,8 +5764,10 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 			lastUpdatedAt: 'c',
 			ttlMs: null,
 		})
-		const after = resultOf(
-			responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId: 'settled' }, 'mutate-2'))),
+		const after = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildTaskRequest('tasks/get', { taskId: 'settled' }, 'mutate-2')),
+			),
 		)
 
 		expect(before['status']).toBe('completed')
@@ -6478,13 +5793,20 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 				{ taskId: 'bare', status: 'working', createdAt: 'a', lastUpdatedAt: 'b', ttlMs: null },
 			],
 		])
-		const mcp = taskServer({ tasks: mutableTaskManager(details), deferral: () => undefined })
+		const mcp = createTaskFixtureServer({
+			tasks: createMutableTasks(details),
+			deferral: () => undefined,
+		})
 
-		const hinted = resultOf(
-			responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId: 'hinted' }, 'hint-1'))),
+		const hinted = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildTaskRequest('tasks/get', { taskId: 'hinted' }, 'hint-1')),
+			),
 		)
-		const bare = resultOf(
-			responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId: 'bare' }, 'hint-2'))),
+		const bare = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildTaskRequest('tasks/get', { taskId: 'bare' }, 'hint-2')),
+			),
 		)
 
 		expect(hinted['ttlMs']).toBe(30_000)
@@ -6499,36 +5821,16 @@ describe('MCPServer — W03-B: reading one durable task', () => {
 // cannot put behind that signature and every other language that implements this published
 // contract reaches for daily — installed through `Reflect` for exactly that reason, because
 // the port's threat model is that a manager's declared types are a promise, not a proof.
-function absentTask(): Promise<null> {
-	return Promise.resolve(null)
-}
 
 // A manager that RECORDS every `update` and `abort` it is asked to perform, over whatever
 // `task` read the scenario supplies. Both write methods answer `void`, so what was invoked
 // is the only observable that says whether the probe decided before authorizing anything.
-function watchedTaskManager(
-	read: MCPTaskManagerInterface['task'],
-	invoked: string[],
-): MCPTaskManagerInterface {
-	return {
-		start: () => Promise.reject(new Error('nothing is created here')),
-		task: read,
-		update: (id) => {
-			invoked.push(`update:${id}`)
-			return Promise.resolve()
-		},
-		abort: (id) => {
-			invoked.push(`abort:${id}`)
-			return Promise.resolve()
-		},
-	}
-}
 
 describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 	it('forwards every input response verbatim and answers an empty complete result', async () => {
 		const forwarded: Array<Readonly<Record<string, unknown>>> = []
 		const tasks = new TestTaskManager({ asking: true })
-		const mcp = taskServer({
+		const mcp = createTaskFixtureServer({
 			tasks: {
 				start: (key, context, options) => tasks.start(key, context, options),
 				task: (id, options) => tasks.task(id, options),
@@ -6540,12 +5842,12 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 			},
 			deferral: () => 'operation-1',
 		})
-		const taskId = await createdTask(mcp, 'update-seed')
+		const taskId = await readCreatedTask(mcp, 'update-seed')
 
-		const answer = resultOf(
-			responseOf(
+		const answer = readResultRecord(
+			readUnaryAnswer(
 				await mcp.dispatch(
-					taskRequest(
+					buildTaskRequest(
 						'tasks/update',
 						// One key the task published, one it never did, and one that is nobody's:
 						// MCP holds none of the task's keys, so each travels and the manager
@@ -6571,29 +5873,34 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 	// the task holds.
 	it('forwards an already-satisfied key again and still answers success', async () => {
 		const tasks = new TestTaskManager({ asking: true })
-		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
-		const taskId = await createdTask(mcp, 'repeat-seed')
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'operation-1' })
+		const taskId = await readCreatedTask(mcp, 'repeat-seed')
 		const responses = { taskId, inputResponses: { approval: { action: 'accept' } } }
 
-		const first = responseOf(await mcp.dispatch(taskRequest('tasks/update', responses, 'repeat-1')))
-		const second = responseOf(
-			await mcp.dispatch(taskRequest('tasks/update', responses, 'repeat-2')),
+		const first = readUnaryAnswer(
+			await mcp.dispatch(buildTaskRequest('tasks/update', responses, 'repeat-1')),
 		)
+		const secondMessage = await mcp.dispatch(
+			buildTaskRequest('tasks/update', responses, 'repeat-2'),
+		)
+		const second = readUnaryAnswer(secondMessage)
 
 		expect(first?.error).toBeUndefined()
 		expect(second?.error).toBeUndefined()
-		expect(resultOf(second)['resultType']).toBe('complete')
+		expect(readResultRecord(second)['resultType']).toBe('complete')
 	})
 
 	it('refuses an update whose inputResponses are absent or not an object', async () => {
 		const tasks = new TestTaskManager({ asking: true })
-		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
-		const taskId = await createdTask(mcp, 'shape-seed')
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'operation-1' })
+		const taskId = await readCreatedTask(mcp, 'shape-seed')
 
 		const refusals = await Promise.all(
 			[{ taskId }, { taskId, inputResponses: 'yes' }, { taskId, inputResponses: 1 }].map(
-				async (params) =>
-					responseOf(await mcp.dispatch(taskRequest('tasks/update', params, 'shape-1')))?.error,
+				async (params) => {
+					const response = await mcp.dispatch(buildTaskRequest('tasks/update', params, 'shape-1'))
+					return readUnaryAnswer(response)?.error
+				},
 			),
 		)
 
@@ -6618,30 +5925,18 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 			],
 		])
 		const asks: string[] = []
-		const stubborn: MCPTaskManagerInterface = {
-			start: () => Promise.reject(new Error('nothing is created here')),
-			task: (id) => Promise.resolve(details.get(id)),
-			update: () => Promise.resolve(),
-			abort: (id) => {
-				asks.push(id)
-				details.set(id, {
-					taskId: id,
-					status: 'completed',
-					createdAt: 'a',
-					lastUpdatedAt: 'c',
-					ttlMs: null,
-					result: { resultType: 'complete', content: [{ type: 'text', text: 'finished anyway' }] },
-				})
-				return Promise.resolve()
-			},
-		}
-		const mcp = taskServer({ tasks: stubborn, deferral: () => undefined })
+		const stubborn = createStubbornTasks(details, asks)
+		const mcp = createTaskFixtureServer({ tasks: stubborn, deferral: () => undefined })
 
-		const answer = resultOf(
-			responseOf(await mcp.dispatch(taskRequest('tasks/cancel', { taskId: 'stubborn' }, 'stop-1'))),
+		const answer = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildTaskRequest('tasks/cancel', { taskId: 'stubborn' }, 'stop-1')),
+			),
 		)
-		const after = resultOf(
-			responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId: 'stubborn' }, 'stop-2'))),
+		const after = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildTaskRequest('tasks/get', { taskId: 'stubborn' }, 'stop-2')),
+			),
 		)
 
 		expect(asks).toEqual(['stubborn'])
@@ -6656,13 +5951,13 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 
 	it('stops a cooperating task and reports the cancelled snapshot afterwards', async () => {
 		const tasks = new TestTaskManager({ work: 200 })
-		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
-		const taskId = await createdTask(mcp, 'cancel-seed')
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'operation-1' })
+		const taskId = await readCreatedTask(mcp, 'cancel-seed')
 
-		await mcp.dispatch(taskRequest('tasks/cancel', { taskId }, 'cancel-1'))
+		await mcp.dispatch(buildTaskRequest('tasks/cancel', { taskId }, 'cancel-1'))
 		await tasks.settle()
-		const after = resultOf(
-			responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId }, 'cancel-2'))),
+		const after = readResultRecord(
+			readUnaryAnswer(await mcp.dispatch(buildTaskRequest('tasks/get', { taskId }, 'cancel-2'))),
 		)
 
 		expect(after['status']).toBe('cancelled')
@@ -6673,14 +5968,14 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 	// the one `tasks/get` answers — byte-identical across every method.
 	it('refuses an update and a cancellation of an unresolved task identically to a read', async () => {
 		const guarded = new TestTaskManager({ owner: 'owner-1' })
-		const mcp = taskServer({ tasks: guarded, deferral: () => 'operation-1' })
-		const theirs = await createdTask(mcp, 'reject-seed')
+		const mcp = createTaskFixtureServer({ tasks: guarded, deferral: () => 'operation-1' })
+		const theirs = await readCreatedTask(mcp, 'reject-seed')
 
 		const refusals = await Promise.all(
 			TASK_METHODS.map(async (method) =>
-				responseOf(
+				readUnaryAnswer(
 					await mcp.dispatch(
-						taskRequest(method, { taskId: theirs, inputResponses: {} }, 'same-id'),
+						buildTaskRequest(method, { taskId: theirs, inputResponses: {} }, 'same-id'),
 						{ caller: 'someone-else' },
 					),
 				),
@@ -6702,9 +5997,9 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 	// returned off-contract, which a declared return type accepts and the union does not.
 	it('refuses an update and a cancellation it could not prove, invoking neither', async () => {
 		const invoked: string[] = []
-		const foreign = watchedTaskManager(() => Promise.resolve(undefined), invoked)
-		Reflect.set(foreign, 'task', absentTask)
-		const lying = watchedTaskManager(
+		const foreign = createWatchedTasks(() => Promise.resolve(undefined), invoked)
+		Reflect.set(foreign, 'task', readAbsentTask)
+		const lying = createWatchedTasks(
 			() =>
 				Promise.resolve({
 					taskId: 'lying',
@@ -6718,20 +6013,26 @@ describe('MCPServer — W03-B: answering and stopping one durable task', () => {
 				}),
 			invoked,
 		)
-		const ghosted = taskServer({ tasks: foreign, deferral: () => undefined })
-		const unproven = taskServer({ tasks: lying, deferral: () => undefined })
+		const ghosted = createTaskFixtureServer({ tasks: foreign, deferral: () => undefined })
+		const unproven = createTaskFixtureServer({ tasks: lying, deferral: () => undefined })
 
 		const refusals = await Promise.all([
-			ghosted.dispatch(taskRequest('tasks/update', { taskId: 'x', inputResponses: {} }, 'same')),
-			ghosted.dispatch(taskRequest('tasks/cancel', { taskId: 'x' }, 'same')),
-			unproven.dispatch(taskRequest('tasks/update', { taskId: 'x', inputResponses: {} }, 'same')),
-			unproven.dispatch(taskRequest('tasks/cancel', { taskId: 'x' }, 'same')),
+			ghosted.dispatch(
+				buildTaskRequest('tasks/update', { taskId: 'x', inputResponses: {} }, 'same'),
+			),
+			ghosted.dispatch(buildTaskRequest('tasks/cancel', { taskId: 'x' }, 'same')),
+			unproven.dispatch(
+				buildTaskRequest('tasks/update', { taskId: 'x', inputResponses: {} }, 'same'),
+			),
+			unproven.dispatch(buildTaskRequest('tasks/cancel', { taskId: 'x' }, 'same')),
 		])
 
 		expect(invoked).toEqual([])
-		expect(new Set(refusals.map((response) => JSON.stringify(responseOf(response)))).size).toBe(1)
-		expect(responseOf(refusals[0])?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
-		expect(responseOf(refusals[0])?.error?.message).toBe(
+		expect(
+			new Set(refusals.map((response) => JSON.stringify(readUnaryAnswer(response)))).size,
+		).toBe(1)
+		expect(readUnaryAnswer(refusals[0])?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(readUnaryAnswer(refusals[0])?.error?.message).toBe(
 			'Invalid params: no task is available for that `taskId`',
 		)
 	})
@@ -6741,12 +6042,12 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 	// The `-32021` payload, and the reason there is ONE code rather than a separate one: the
 	// elicitation refusal and this one are instances of the same condition, told apart by their data.
 	it('refuses a non-declaring client with the generic capability code and the tasks payload', async () => {
-		const mcp = taskServer({ tasks: new TestTaskManager(), deferral: () => undefined })
+		const mcp = createTaskFixtureServer({ tasks: new TestTaskManager(), deferral: () => undefined })
 
 		const refusals = await Promise.all(
 			TASK_METHODS.map(
 				async (method) =>
-					responseOf(await mcp.dispatch(modernRequest(method, 'undeclared-1')))?.error,
+					readUnaryAnswer(await mcp.dispatch(modernRequest(method, 'undeclared-1')))?.error,
 			),
 		)
 
@@ -6766,7 +6067,7 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 	it('distinguishes the elicitation instance from the tasks instance by payload alone', async () => {
 		const elicited = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
-			tools: tools(),
+			tools: createServerTools(),
 			input: {
 				continuation: new MemoryContinuation(),
 				ttl: 1_000,
@@ -6774,14 +6075,17 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 				selector: () => createRound(),
 			},
 		})
-		const deferred = taskServer({ tasks: new TestTaskManager(), deferral: () => undefined })
+		const deferred = createTaskFixtureServer({
+			tasks: new TestTaskManager(),
+			deferral: () => undefined,
+		})
 
-		const forInput = responseOf(
-			await elicited.dispatch(modernCall({ name: 'echo' }, 'instance-1')),
-		)?.error
-		const forTasks = responseOf(
-			await deferred.dispatch(modernRequest('tasks/get', 'instance-2')),
-		)?.error
+		const forInputResponse = await elicited.dispatch(
+			buildModernCall({ name: 'echo' }, 'instance-1'),
+		)
+		const forInput = readUnaryAnswer(forInputResponse)?.error
+		const forTasksResponse = await deferred.dispatch(modernRequest('tasks/get', 'instance-2'))
+		const forTasks = readUnaryAnswer(forTasksResponse)?.error
 
 		expect(forInput?.code).toBe(forTasks?.code)
 		expect(forInput?.code).toBe(MCP_MISSING_CAPABILITY)
@@ -6796,12 +6100,14 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 	// this client never asked for one. Same omission, opposite outcome.
 	it('refuses that same undeclared client when deployment policy selects a task', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'operation-1' })
 
-		const refused = responseOf(await mcp.dispatch(modernRequest('tasks/get', 'contrast-1')))?.error
-		const called = responseOf(
-			await mcp.dispatch(modernCall({ name: 'echo', arguments: { a: 1 } }, 'contrast-2')),
-		)?.error
+		const refusedResponse = await mcp.dispatch(modernRequest('tasks/get', 'contrast-1'))
+		const refused = readUnaryAnswer(refusedResponse)?.error
+		const calledResponse = await mcp.dispatch(
+			buildModernCall({ name: 'echo', arguments: { a: 1 } }, 'contrast-2'),
+		)
+		const called = readUnaryAnswer(calledResponse)?.error
 
 		expect(refused?.code).toBe(MCP_MISSING_CAPABILITY)
 		expect(called?.code).toBe(MCP_MISSING_CAPABILITY)
@@ -6812,8 +6118,8 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 	// accept — declared once at connect time and absent from the `tasks/*` request itself.
 	it('ignores a capability declared at connect time but not on the tasks request', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
-		const taskId = await createdTask(mcp, 'session-seed')
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'operation-1' })
+		const taskId = await readCreatedTask(mcp, 'session-seed')
 
 		await mcp.dispatch(
 			createJSONRPCRequest({
@@ -6822,7 +6128,7 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 				params: { protocolVersion: '2025-11-25', capabilities: TASK_CAPABILITIES },
 			}),
 		)
-		const response = responseOf(
+		const response = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 'session-2',
@@ -6839,9 +6145,9 @@ describe('MCPServer — W03-B: the capability gate on every tasks method', () =>
 	// METHOD: a client that never declared it is refused before its `taskId` is read at all, so
 	// a request that is BOTH undeclared and malformed answers the capability code.
 	it('refuses a non-declaring client before it inspects the parameters', async () => {
-		const mcp = taskServer({ tasks: new TestTaskManager(), deferral: () => undefined })
+		const mcp = createTaskFixtureServer({ tasks: new TestTaskManager(), deferral: () => undefined })
 
-		const response = responseOf(
+		const response = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 'order-1',
@@ -6860,39 +6166,53 @@ describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () 
 	// `taskId` this server handed out is not yet retrievable. MCP's own half of the rule —
 	// awaiting `start` before it builds the answer — is intact and is not enough on its own.
 	it('hands out a taskId a prompt read cannot find when the manager resolves before it persists', async () => {
-		const mcp = taskServer({ tasks: deferredWriteTaskManager(), deferral: () => 'operation-1' })
+		const mcp = createTaskFixtureServer({
+			tasks: createDeferredTasks(),
+			deferral: () => 'operation-1',
+		})
 
-		const taskId = await createdTask(mcp, 'durable-1')
-		const prompt = responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId }, 'durable-2')))
+		const taskId = await readCreatedTask(mcp, 'durable-1')
+		const prompt = readUnaryAnswer(
+			await mcp.dispatch(buildTaskRequest('tasks/get', { taskId }, 'durable-2')),
+		)
 		await waitForDelay(40)
-		const later = responseOf(await mcp.dispatch(taskRequest('tasks/get', { taskId }, 'durable-3')))
+		const later = readUnaryAnswer(
+			await mcp.dispatch(buildTaskRequest('tasks/get', { taskId }, 'durable-3')),
+		)
 
 		expect(taskId).toBe('task-late')
 		expect(prompt?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
 		// The same handle works once the write lands, which is what makes the window silent.
-		expect(resultOf(later)['taskId']).toBe('task-late')
+		expect(readResultRecord(later)['taskId']).toBe('task-late')
 	})
 
 	// Entropy and principal scoping, violated together: a handle derived from the key is a handle
 	// a stranger can GUESS, and a key that is not scoped to its principal hands a second
 	// principal the first's task without any guessing at all.
 	it('lets a second principal reach the first principal task when the manager derives the handle from the key', async () => {
-		const mcp = taskServer({ tasks: guessableTaskManager(), deferral: () => 'shared-operation' })
+		const mcp = createTaskFixtureServer({
+			tasks: createGuessableTasks(),
+			deferral: () => 'shared-operation',
+		})
 
-		const mine = resultOf(
-			responseOf(
-				await mcp.dispatch(taskCall({ name: 'echo' }, 'principal-1'), { caller: 'principal-one' }),
+		const mine = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildTaskCall({ name: 'echo' }, 'principal-1'), {
+					caller: 'principal-one',
+				}),
 			),
 		)
-		const theirs = resultOf(
-			responseOf(
-				await mcp.dispatch(taskCall({ name: 'echo' }, 'principal-2'), { caller: 'principal-two' }),
+		const theirs = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildTaskCall({ name: 'echo' }, 'principal-2'), {
+					caller: 'principal-two',
+				}),
 			),
 		)
-		const guessed = resultOf(
-			responseOf(
+		const guessed = readResultRecord(
+			readUnaryAnswer(
 				await mcp.dispatch(
-					taskRequest('tasks/get', { taskId: 'shared-operation' }, 'principal-3'),
+					buildTaskRequest('tasks/get', { taskId: 'shared-operation' }, 'principal-3'),
 					{
 						caller: 'a-stranger',
 					},
@@ -6910,22 +6230,26 @@ describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () 
 	// store that answers `undefined` to a caller the task does not belong to.
 	it('keeps a second principal out when the manager mints an opaque handle and scopes it', async () => {
 		const tasks = new TestTaskManager({ owner: 'principal-one' })
-		const mcp = taskServer({ tasks, deferral: () => 'shared-operation' })
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'shared-operation' })
 
-		const mine = resultOf(
-			responseOf(
-				await mcp.dispatch(taskCall({ name: 'echo' }, 'scoped-1'), { caller: 'principal-one' }),
+		const mine = readResultRecord(
+			readUnaryAnswer(
+				await mcp.dispatch(buildTaskCall({ name: 'echo' }, 'scoped-1'), {
+					caller: 'principal-one',
+				}),
 			),
 		)
-		const guessed = responseOf(
-			await mcp.dispatch(taskRequest('tasks/get', { taskId: 'shared-operation' }, 'scoped-2'), {
-				caller: 'principal-two',
-			}),
+		const guessed = readUnaryAnswer(
+			await mcp.dispatch(
+				buildTaskRequest('tasks/get', { taskId: 'shared-operation' }, 'scoped-2'),
+				{ caller: 'principal-two' },
+			),
 		)
-		const theirs = responseOf(
-			await mcp.dispatch(taskRequest('tasks/get', { taskId: String(mine['taskId']) }, 'scoped-2'), {
-				caller: 'principal-two',
-			}),
+		const theirs = readUnaryAnswer(
+			await mcp.dispatch(
+				buildTaskRequest('tasks/get', { taskId: String(mine['taskId']) }, 'scoped-2'),
+				{ caller: 'principal-two' },
+			),
 		)
 
 		expect(String(mine['taskId'])).not.toBe('shared-operation')
@@ -6935,29 +6259,17 @@ describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () 
 	})
 
 	it('contains a manager throw on every tasks method as a detail-free internal error', async () => {
-		const failing: MCPTaskManagerInterface = {
-			start: () =>
-				Promise.resolve({
-					taskId: 'task-1',
-					status: 'working',
-					createdAt: 'a',
-					lastUpdatedAt: 'b',
-					ttlMs: null,
-				}),
-			task: () => {
-				throw new Error('manager read detail')
-			},
-			update: () => Promise.resolve(),
-			abort: () => Promise.resolve(),
-		}
-		const mcp = taskServer({ tasks: failing, deferral: () => undefined })
+		const failing = createReadFaultTasks()
+		const mcp = createTaskFixtureServer({ tasks: failing, deferral: () => undefined })
 		const faults: unknown[] = []
 		mcp.emitter.on('error', (error) => void faults.push(error))
 
 		const responses = await Promise.all(
 			TASK_METHODS.map(async (method) =>
-				responseOf(
-					await mcp.dispatch(taskRequest(method, { taskId: 'task-1', inputResponses: {} }, method)),
+				readUnaryAnswer(
+					await mcp.dispatch(
+						buildTaskRequest(method, { taskId: 'task-1', inputResponses: {} }, method),
+					),
 				),
 			),
 		)
@@ -6976,29 +6288,20 @@ describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () 
 	it('hands every tasks method the resolved per-request options', async () => {
 		const seen: MCPMethodOptions[] = []
 		const tasks = new TestTaskManager({ asking: true })
-		const recording: MCPTaskManagerInterface = {
-			start: (key, context, options) => tasks.start(key, context, options),
-			task: (id, options) => {
-				seen.push(options)
-				return tasks.task(id, options)
-			},
-			update: (id, responses, options) => {
-				seen.push(options)
-				return tasks.update(id, responses, options)
-			},
-			abort: (id, options) => {
-				seen.push(options)
-				return tasks.abort(id, options)
-			},
-		}
-		const mcp = taskServer({ tasks: recording, deferral: () => 'operation-1' })
-		const taskId = await createdTask(mcp, 'options-seed')
+		const recording = createRecordedTasks(tasks, seen)
+		const mcp = createTaskFixtureServer({ tasks: recording, deferral: () => 'operation-1' })
+		const taskId = await readCreatedTask(mcp, 'options-seed')
 
-		await mcp.dispatch(taskRequest('tasks/get', { taskId }, 'options-1'), { caller: 'asserted' })
-		await mcp.dispatch(taskRequest('tasks/update', { taskId, inputResponses: {} }, 'options-2'), {
+		await mcp.dispatch(buildTaskRequest('tasks/get', { taskId }, 'options-1'), {
 			caller: 'asserted',
 		})
-		await mcp.dispatch(taskRequest('tasks/cancel', { taskId }, 'options-3'), { caller: 'asserted' })
+		await mcp.dispatch(
+			buildTaskRequest('tasks/update', { taskId, inputResponses: {} }, 'options-2'),
+			{ caller: 'asserted' },
+		)
+		await mcp.dispatch(buildTaskRequest('tasks/cancel', { taskId }, 'options-3'), {
+			caller: 'asserted',
+		})
 
 		// One read per method plus the update and the abort themselves.
 		expect(seen).toHaveLength(5)
@@ -7010,7 +6313,7 @@ describe('MCPServer — W03-B: the contract obligations MCP cannot enforce', () 
 	// the same narrowing every other built-in does rather than a second dispatch rule.
 	it('answers a tasks notification with nothing at all', async () => {
 		const tasks = new TestTaskManager()
-		const mcp = taskServer({ tasks, deferral: () => 'operation-1' })
+		const mcp = createTaskFixtureServer({ tasks, deferral: () => 'operation-1' })
 
 		const answers = await Promise.all(
 			TASK_METHODS.map(async (method) =>
@@ -7044,12 +6347,12 @@ describe('MCPServer — W03-B: the tasks family on a subscriptions/listen stream
 		for (const tasks of [new TestTaskManager(), purged, guarded]) {
 			const closed = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 			await closed.writable.close()
-			const mcp = taskServer(
+			const mcp = createTaskFixtureServer(
 				{ tasks, deferral: () => undefined },
 				{ subscription: { notifications: {}, producer: () => closed.readable } },
 			)
 			const [messages, response] = await drainStream(
-				streamOf(await mcp.dispatch(request, { caller: 'owner-2' })),
+				readStreamAnswer(await mcp.dispatch(request, { caller: 'owner-2' })),
 			)
 			acknowledgements.push(JSON.stringify(messages))
 			terminals.push(JSON.stringify(response))
@@ -7080,13 +6383,13 @@ describe('MCPServer — W03-B: the tasks family on a subscriptions/listen stream
 		tasks.seed('task-a')
 		const closed = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		await closed.writable.close()
-		const mcp = taskServer(
+		const mcp = createTaskFixtureServer(
 			{ tasks, deferral: () => undefined },
 			{ subscription: { notifications: {}, producer: () => closed.readable } },
 		)
 
 		const [messages] = await drainStream(
-			streamOf(
+			readStreamAnswer(
 				await mcp.dispatch(
 					createSubscriptionRequest('listen-order', {
 						taskIds: ['task-b', 'task-gone', 'task-a', 'task-b'],
@@ -7113,13 +6416,16 @@ describe('MCPServer — W03-B: the tasks family on a subscriptions/listen stream
 		const closed = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		await closed.writable.close()
 		// A producer with no manager: nothing can authorize an identifier.
-		const unmanaged = server(undefined, { notifications: {}, producer: () => closed.readable })
+		const unmanaged = createTestServer(undefined, {
+			notifications: {},
+			producer: () => closed.readable,
+		})
 		// A manager with no producer: nothing can carry a transition.
-		const unproduced = taskServer({ tasks, deferral: () => undefined })
+		const unproduced = createTaskFixtureServer({ tasks, deferral: () => undefined })
 		const request = createSubscriptionRequest('listen-off', { taskIds: ['task-a'] })
 
-		const [fromUnmanaged] = await drainStream(streamOf(await unmanaged.dispatch(request)))
-		const [fromUnproduced] = await drainStream(streamOf(await unproduced.dispatch(request)))
+		const [fromUnmanaged] = await drainStream(readStreamAnswer(await unmanaged.dispatch(request)))
+		const [fromUnproduced] = await drainStream(readStreamAnswer(await unproduced.dispatch(request)))
 
 		expect(fromUnmanaged[0]?.params?.['notifications']).toEqual({})
 		expect(fromUnproduced[0]?.params?.['notifications']).toEqual({})
@@ -7135,11 +6441,11 @@ describe('MCPServer — W03-B: the tasks family on a subscriptions/listen stream
 		tasks.seed('task-live')
 		const source = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		const writer = source.writable.getWriter()
-		const mcp = taskServer(
+		const mcp = createTaskFixtureServer(
 			{ tasks, deferral: () => undefined },
 			{ subscription: { notifications: {}, producer: () => source.readable } },
 		)
-		const stream = streamOf(
+		const stream = readStreamAnswer(
 			await mcp.dispatch(createSubscriptionRequest('listen-live', { taskIds: ['task-live'] })),
 		)
 
@@ -7181,7 +6487,7 @@ describe('MCPServer — W03-B: the tasks family on a subscriptions/listen stream
 		const tasks = new TestTaskManager()
 		const closed = new TransformStream<JSONRPCNotification, JSONRPCNotification>()
 		await closed.writable.close()
-		const mcp = taskServer(
+		const mcp = createTaskFixtureServer(
 			{ tasks, deferral: () => undefined },
 			{ subscription: { notifications: {}, producer: () => closed.readable } },
 		)
@@ -7189,7 +6495,7 @@ describe('MCPServer — W03-B: the tasks family on a subscriptions/listen stream
 		const refusals = await Promise.all(
 			[{ taskIds: 'task-a' }, { taskIds: ['task-a', 7] }, { taskIds: {} }].map(
 				async (notifications) =>
-					responseOf(
+					readUnaryAnswer(
 						await mcp.dispatch(
 							createJSONRPCRequest({
 								method: 'subscriptions/listen',
@@ -7315,7 +6621,7 @@ describe('MCP resources/read', () => {
 			tools: createToolManager(),
 			resources,
 		})
-		const found = responseOf(
+		const found = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'resources/read',
@@ -7323,7 +6629,7 @@ describe('MCP resources/read', () => {
 				}),
 			),
 		)
-		const missing = responseOf(
+		const missing = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 2,
@@ -7401,7 +6707,7 @@ describe('MCP resources/read', () => {
 			tools: createToolManager(),
 			resources,
 		})
-		const refused = responseOf(
+		const refused = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'resources/read',
@@ -7409,7 +6715,7 @@ describe('MCP resources/read', () => {
 				}),
 			),
 		)
-		const allowed = responseOf(
+		const allowed = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 2,
@@ -7501,7 +6807,7 @@ describe('MCP resource capability and registration', () => {
 			tools: createToolManager(),
 			resources: new MemoryResourceManager(),
 		})
-		const listed = responseOf(
+		const listed = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'resources/list',
@@ -7509,7 +6815,7 @@ describe('MCP resource capability and registration', () => {
 				}),
 			),
 		)
-		const prompts = responseOf(
+		const prompts = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 2,
@@ -7712,7 +7018,7 @@ describe('MCP prompts/get', () => {
 			tools: createToolManager(),
 			prompts: new MemoryPromptManager(),
 		})
-		const refused = responseOf(
+		const refused = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'prompts/get',
@@ -7720,7 +7026,7 @@ describe('MCP prompts/get', () => {
 				}),
 			),
 		)
-		const allowed = responseOf(
+		const allowed = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 2,
@@ -7756,7 +7062,7 @@ describe('MCP prompts/get', () => {
 			tools: createToolManager(),
 			prompts,
 		})
-		const valid = responseOf(
+		const valid = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'prompts/get',
@@ -7764,7 +7070,7 @@ describe('MCP prompts/get', () => {
 				}),
 			),
 		)
-		const invalid = responseOf(
+		const invalid = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 2,
@@ -7773,7 +7079,7 @@ describe('MCP prompts/get', () => {
 				}),
 			),
 		)
-		const missing = responseOf(
+		const missing = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 3,
@@ -7825,7 +7131,7 @@ describe('MCP completion/complete', () => {
 				},
 			}),
 		)
-		const missing = responseOf(
+		const missing = readUnaryAnswer(
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					id: 3,
@@ -7870,7 +7176,7 @@ describe('MCP completion/complete', () => {
 				},
 			}),
 		)
-		const response = responseOf(answer)
+		const response = readUnaryAnswer(answer)
 		if (response === undefined) throw new Error('expected a completion response')
 
 		expect(response.result?.['completion']).toMatchObject({ hasMore: true })
@@ -7895,12 +7201,12 @@ describe('MCP prompt and completion capability gating', () => {
 			tools: createToolManager(),
 			completion: new MemoryCompletion(),
 		})
-		const listed = responseOf(
+		const listed = readUnaryAnswer(
 			await prompts.dispatch(
 				createJSONRPCRequest({ method: 'prompts/list', params: { _meta: MODERN_METADATA } }),
 			),
 		)
-		const resources = responseOf(
+		const resources = readUnaryAnswer(
 			await prompts.dispatch(
 				createJSONRPCRequest({
 					id: 2,

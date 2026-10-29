@@ -1,13 +1,9 @@
 import type { MCPMessageTransportEventMap, JSONRPCMessage } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { ProcessExit } from '@orkestrel/process'
 import type { StdioClientTransportInterface, StdioClientTransportOptions } from '../types.js'
-import { createInterface } from 'node:readline'
-import { Supervisor } from '@orkestrel/process/server'
-import { PROCESS_GRACE } from '@orkestrel/process'
 import { Emitter } from '@orkestrel/emitter'
-import { DEFAULT_MCP_DELIVERY, MCP_STDIO_GRACE } from '../constants.js'
-import { dispatchLines } from '../helpers.js'
+import { DEFAULT_MCP_DELIVERY } from '../constants.js'
+import { StdioLifetime } from '../StdioLifetime.js'
 
 /**
  * Drives a child process MCP server over newline-delimited JSON-RPC on `stdin`/`stdout` —
@@ -32,7 +28,8 @@ import { dispatchLines } from '../helpers.js'
  *   that failed, or for one that remained unconfirmed through `delivery`. A call made without a
  *   live child rejects as not connected; a `false` answer from a live child rejects as unable to
  *   deliver. The supervisor does not disclose which cause produced that answer.
- * - **`close()`** ends the child's input and waits up to {@link MCP_STDIO_GRACE} for native exit,
+ * - **`close()`** ends the child's input and waits up to
+ *   {@link import('../constants.js').MCP_STDIO_GRACE} for native exit,
  *   including any pending input flush. Only after that wait does the supervisor terminate a child
  *   that remains alive. Teardown freezes `evidence`, closes the reader, and settles `exit`, then
  *   fires `close` once (idempotent).
@@ -44,7 +41,7 @@ import { dispatchLines } from '../helpers.js'
  *   A line already framed behind the one being delivered is dropped rather than
  *   emitted onto a transport whose teardown has begun. A `close()` issued while that teardown runs
  *   joins it rather than opening a second one, so it resolves only after `close` has fired, and a
- *   `start()` issued while it runs waits behind the same barrier, so lifetimes never overlap. A
+ *   `start()` waits while the previous lifetime has not yet reported `close`, so lifetimes never overlap. A
  *   descendant can retain an inherited stdout pipe after the child exits; the supervisor's `drain`
  *   bound cuts that wait off independently of the input grace. Escalation belongs to the host:
  *   a POSIX host signals the
@@ -73,20 +70,18 @@ import { dispatchLines } from '../helpers.js'
  */
 export class StdioClientTransport implements StdioClientTransportInterface {
 	readonly #emitter: Emitter<MCPMessageTransportEventMap>
-	readonly #command: string
-	readonly #args: readonly string[]
-	readonly #env: Readonly<Record<string, string>> | undefined
-	readonly #delivery: number
-	#process: Supervisor | undefined = undefined
-	#closing: Promise<void> | undefined = undefined
-	#closed = false
+	readonly #options: StdioClientTransportOptions
+	#lifetime: StdioLifetime | undefined
 
 	constructor(options: StdioClientTransportOptions) {
 		this.#emitter = new Emitter<MCPMessageTransportEventMap>()
-		this.#command = options.command
-		this.#args = options.args ?? []
-		this.#env = options.env
-		this.#delivery = options.delivery ?? DEFAULT_MCP_DELIVERY
+		const { command, args = [], env, delivery = DEFAULT_MCP_DELIVERY } = options
+		this.#options = Object.freeze({
+			command,
+			args,
+			...(env === undefined ? {} : { env }),
+			delivery,
+		})
 	}
 
 	get emitter(): EmitterInterface<MCPMessageTransportEventMap> {
@@ -98,79 +93,20 @@ export class StdioClientTransport implements StdioClientTransportInterface {
 	}
 
 	get duplex(): boolean {
-		// A spawned child's stdin stays writable for the process's life, so a client frame
-		// reaches the peer at any moment — stdio is the transport MCP defines cancellation on.
 		return true
 	}
 
 	get evidence(): string | undefined {
-		// The held child answers every reading: its live tail while it runs (`''` while it has
-		// written nothing), and the value the supervisor FROZE at its terminal moment afterwards.
-		// The frozen value never moves again, so the ended lifetime's tail stays readable off the
-		// child itself and a detached descendant writing to the inherited stderr after the cutoff
-		// cannot grow it. The reference is therefore held past the end of the lifetime and released
-		// only when `start()` installs a replacement.
-		return this.#process?.evidence
+		return this.#lifetime?.evidence
 	}
 
 	async start(): Promise<void> {
-		// A teardown still running owns the ending lifetime until it has reported `close`, so a
-		// replacement WAITS on that barrier rather than racing it. This is what makes the ordering
-		// rule total rather than usually right: `#closing` is assigned in the same synchronous turn
-		// the `close()` or the exit that installed it runs in, and the call that installed it is the
-		// only one that clears it, only after it has resolved. No child is therefore ever installed
-		// while an older child's teardown is outstanding, so no interleaving can strand a `close`
-		// listener on a tail the replacement already replaced.
-		// The wait covers EVERY barrier this call meets, not only the first. A `close()` issued
-		// while this one was resuming installs a NEWER barrier, and clearing that one would strand
-		// the teardown it belongs to: a later `close()` would find no barrier, find this transport
-		// already closed, and resolve through a no-op before the running teardown had reported
-		// `close`. Waiting that newer barrier out keeps the same guard and leaves nothing behind —
-		// a barrier still assigned when this call installs its child is one a later `close()`
-		// resolves through as a no-op while that child is live.
-		let closing = this.#closing
-		while (closing !== undefined) {
-			await closing
-			if (this.#closing === closing) {
-				this.#closing = undefined
-				break
-			}
-			closing = this.#closing
-		}
-		// Already spawned and still open — a second `start()` (such as through `connect()`)
-		// short-circuits (idempotent). An ENDED child stays held for its frozen tail, so the held
-		// reference no longer answers whether a lifetime is open; this transport's own closed state
-		// does, and a held ended child is exactly what a replacement replaces.
-		if (this.#process !== undefined && !this.#closed) return
-		this.#closed = false
-		const child = new Supervisor(
-			{
-				command: {
-					file: this.#command,
-					arguments: [...this.#args],
-					...(this.#env === undefined ? {} : { environment: this.#env }),
-				},
-				workspace: process.cwd(),
-				grace: PROCESS_GRACE,
-				delivery: this.#delivery,
-				writable: true,
-			},
-			{
-				// The supervisor retains stderr; this transport exposes it through evidence.
-				chunk: () => undefined,
-				fault: (cause) => this.#emitter.emit('error', cause),
-				close: () => reader.close(),
-				terminal: () => undefined,
-				teardown: () => reader.close(),
-			},
-		)
-		const reader = createInterface({ input: child.stdout, crlfDelay: Infinity })
-		this.#process = child
-		reader.on('line', (line: string) => {
-			if (this.#closed || this.#process !== child) return
-			dispatchLines(this.#emitter, [line])
-		})
-		void child.exit.then((exit) => this.#onExit(child, exit))
+		const previous = this.#lifetime
+		if (previous !== undefined && !previous.closed) return previous.opened
+		const lifetime = new StdioLifetime(this.#emitter, this.#options, previous)
+		this.#lifetime = lifetime
+		if (previous !== undefined && !previous.reported) await previous.ended
+		lifetime.open()
 	}
 
 	/**
@@ -184,106 +120,14 @@ export class StdioClientTransport implements StdioClientTransportInterface {
 	 *   resolves `false`
 	 */
 	async send(message: JSONRPCMessage): Promise<void> {
-		// A closed lifetime's child is still HELD for its tail, and a tail is not a channel: this
-		// transport's own closed state is what says the channel is gone, so a write issued after a
-		// `close()` or after the child's own exit reports not-connected here rather than depending
-		// on the supervisor to answer for a channel it has already torn down.
-		const child = this.#closed ? undefined : this.#process
+		const child = this.#lifetime?.child
 		if (child === undefined) throw new Error('stdio transport is not connected')
-		// The supervisor's `deliver` never rejects: it ANSWERS `false` when the channel was closed,
-		// destroyed, ended, the write failed, or the delivery bound elapsed. Awaiting that answer is
-		// what keeps a dead peer from vanishing — an unawaited call resolves this `send` before the
-		// line reaches the host. The answer does not disclose which cause produced it.
 		const delivered = await child.deliver(Buffer.from(`${JSON.stringify(message)}\n`, 'utf8'))
 		if (!delivered) throw new Error('stdio transport could not deliver the message')
 	}
 
 	async close(): Promise<void> {
-		// A CLOSED lifetime with no barrier assigned has already reached its terminal moment and
-		// reported it, so there is nothing to tear down and nothing to join: return directly. Going
-		// through `??=` here would assign the resolved promise an early-returning teardown produces
-		// and leave that NO-OP barrier behind, which is not inert — a `start()` a later `close`
-		// listener calls waits on every barrier it meets, so it would park on the microtask queue
-		// and open its replacement after the emit rather than inside it, and the natural-exit
-		// restart this transport documents would stop reaching the listeners after it.
-		if (this.#closed && this.#closing === undefined) return
-		// Concurrent calls share ONE teardown. A second `close()` that returned early would resolve
-		// before this lifetime had reached its terminal moment, and a consumer reading `evidence`
-		// off that resolution would find a tail still moving under it. A barrier assigned over a
-		// closed lifetime is exactly that case — an explicit teardown still running, or the report
-		// barrier a natural exit holds across its `error` — so those still join it here.
-		this.#closing ??= this.#teardown()
-		await this.#closing
-	}
-
-	// End input before the supervisor's bounded teardown and report `close` once. Teardown resolves
-	// at the child's terminal moment, so `evidence` is frozen and the reader is closed when this
-	// resumes. The child's own exit ends the lifetime the same way.
-	async #teardown(): Promise<void> {
-		if (this.#closed) return
-		this.#closed = true
-		const child = this.#process
-		if (child !== undefined) {
-			// end() can wait indefinitely on a full pipe. Start it without awaiting the flush:
-			// the same bound covers input delivery and native exit, independently of drain.
-			const expired = Promise.withResolvers<void>()
-			const timer = setTimeout(expired.resolve, MCP_STDIO_GRACE)
-			try {
-				void child.end()
-				await Promise.race([child.ending, expired.promise])
-			} finally {
-				clearTimeout(timer)
-			}
-			// The child stays HELD past this point. Its frozen tail is what `evidence` answers for
-			// the ended lifetime, and only the next `start()` replaces the reference.
-			// The supervisor skips signalling a child whose native exit was already observed.
-			await child.destroy()
-			this.#report(await child.exit)
-		}
-		this.#emitter.emit('close')
-	}
-
-	// The current child process reached its terminal moment — report a cut-off tail, then fire this
-	// transport's `close` once. A child an explicit close superseded reports its own exit after
-	// `start()` has installed a replacement; peer identity keeps that old exit from reporting on a
-	// tail no reader can reach any more or emitting a second close. A teardown already reported
-	// this lifetime, so the closed state stops the second report rather than the first.
-	#onExit(child: Supervisor, exit: ProcessExit): void {
-		if (this.#process !== child) return
-		if (this.#closed) return
-		this.#closed = true
-		// The report below emits SYNCHRONOUSLY, so a listener on that fault channel runs before this
-		// lifetime has said it ended, and a `start()` it calls there would install its replacement
-		// first: the `close` that followed would then reach every listener over a child the reader
-		// can no longer see. A barrier held across the report is what orders those two — the
-		// `start()` parks on it and resumes on the microtask queue, after `close` has been delivered
-		// — and it is the same barrier `close()` holds across an explicit teardown's own report. A
-		// `close()` called from that same listener finds this barrier through `??=` instead of
-		// opening a second teardown, and resolves against it as the no-op an ended lifetime makes
-		// it, after `close` has fired.
-		const barrier = Promise.withResolvers<void>()
-		this.#closing ??= barrier.promise
-		this.#report(exit)
-		// Release and clear before the emit, so a `start()` called from a `close` listener finds no
-		// barrier and opens the next lifetime inside that emit — the restart this transport
-		// documents on a natural exit. Clear only this lifetime's own barrier: a barrier that is not
-		// this one belongs to a teardown still running, and discarding it would let a later
-		// `close()` resolve through a no-op before that teardown had reported its own `close`.
-		barrier.resolve()
-		if (this.#closing === barrier.promise) this.#closing = undefined
-		this.#emitter.emit('close')
-	}
-
-	// A terminal moment the `drain` bound cut off rather than the child's own stream close leaves
-	// `evidence` holding the tail as of that cutoff, and later diagnostics may have existed. Say so
-	// on the fault channel, or a consumer reads a cut-off tail as the child's whole output.
-	#report(exit: ProcessExit): void {
-		if (exit.drained) return
-		this.#emitter.emit(
-			'error',
-			new Error(
-				'stdio transport evidence may be incomplete: the child streams stayed open past the supervisor drain bound',
-			),
-		)
+		this.#lifetime ??= new StdioLifetime(this.#emitter, this.#options, undefined)
+		await this.#lifetime.close()
 	}
 }

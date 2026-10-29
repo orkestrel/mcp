@@ -1,7 +1,4 @@
-import type { JSONRPCMessage, MCPDispatcherInterface } from '@src/core'
-import type { MiddlewareHandler } from '@orkestrel/server'
-import type { StartedServerInterface } from '../../setupServer.js'
-import { spawn } from 'node:child_process'
+import type { JSONRPCMessage } from '@src/core'
 import { createServer as createHTTPServer } from 'node:http'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -31,20 +28,30 @@ import {
 	createMCPRoutes,
 	createStdioServer,
 	createWebSocketClientTransport,
-	createWebSocketServer,
 	StdioServerTransport,
 } from '@src/server'
 import { WEBSOCKET_CLOSE_NORMAL, WEBSOCKET_OPCODE_CLOSE } from '@orkestrel/websocket'
 import { createTeardown, waitForAbort, waitForDelay } from '@orkestrel/test'
 import {
 	collectSSE,
+	MCPFixtureCell,
 	createCalculatorServer,
 	createJSONRPCNotification,
 	createJSONRPCRequest,
 	MODERN_METADATA,
 	postJSON,
 } from '../../setup.js'
-import { closeResource, openClientSocket, startServer, upgradeRequest } from '../../setupServer.js'
+import {
+	closeResource,
+	openClientSocket,
+	startServer,
+	upgradeRequest,
+	startMCP,
+	startWsMCP,
+	driveStdioChild,
+	createStdioPair,
+	readStdioLine,
+} from '../../setupServer.js'
 
 // src/server/factories.ts — createMCPRoutes, the stateless Streamable-HTTP MCP
 // transport, proven over a REAL @orkestrel/server + a REAL MCPServer over a REAL
@@ -74,12 +81,12 @@ describe('handshake acceptance over stdio', () => {
 			const input = new PassThrough()
 			const output = new PassThrough()
 			const chunks: string[] = []
-			let calls = 0
+			const calls = new MCPFixtureCell(0)
 			const mcp = createMCPServer({
 				identity: { name: 'ready', version: '1.0.0' },
 				tools: createToolManager(),
 				handshake: () => {
-					calls += 1
+					calls.value += 1
 					return readiness.promise
 				},
 			})
@@ -94,7 +101,7 @@ describe('handshake acceptance over stdio', () => {
 			handle.start()
 			input.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
 			await waitForDelay()
-			expect(calls).toBe(1)
+			expect(calls.value).toBe(1)
 			expect(chunks).toEqual([])
 			input.write(
 				`${JSON.stringify({
@@ -107,7 +114,7 @@ describe('handshake acceptance over stdio', () => {
 			await waitForDelay()
 			expect(chunks).toHaveLength(1)
 			expect(JSON.parse(chunks[0] ?? '')).toMatchObject({ id: 2, result: {} })
-			expect(calls).toBe(1)
+			expect(calls.value).toBe(1)
 			readiness.resolve()
 			await waitForDelay()
 			expect(chunks).toHaveLength(2)
@@ -170,12 +177,12 @@ describe('handshake acceptance over stdio', () => {
 			const output = new PassThrough()
 			const chunks: string[] = []
 			const errors: unknown[] = []
-			let signal: AbortSignal | undefined
+			const signal = new MCPFixtureCell<AbortSignal | undefined>(undefined)
 			const mcp = createMCPServer({
 				identity: { name: 'ready', version: '1.0.0' },
 				tools: createToolManager(),
 				async handshake(options) {
-					signal = options.signal
+					signal.value = options.signal
 					await waitForAbort(options.signal)
 					throw new Error('aborted setup')
 				},
@@ -202,12 +209,12 @@ describe('handshake acceptance over stdio', () => {
 			else await transport.start()
 			input.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
 			await waitForDelay()
-			expect(signal?.aborted).toBe(false)
+			expect(signal.value?.aborted).toBe(false)
 			if (closure === 'handle stop') handle?.stop()
 			else if (closure === 'transport close') await transport?.close()
 			else input.end()
 			await waitForDelay()
-			expect(signal?.aborted).toBe(true)
+			expect(signal.value?.aborted).toBe(true)
 			expect(chunks).toEqual([])
 			expect(errors).toEqual([])
 		},
@@ -240,7 +247,7 @@ describe('handshake acceptance over stdio', () => {
 describe('teardown failure handling', () => {
 	it('runs every real server disposer after one fails', async () => {
 		const failureTeardown = createTeardown()
-		let failure: Error | undefined
+		const failure = new MCPFixtureCell<Error | undefined>(undefined)
 		const released = createHTTPServer()
 		failureTeardown.add(
 			() =>
@@ -264,7 +271,7 @@ describe('teardown failure handling', () => {
 					stopped.close((error) => {
 						if (error === undefined) resolve()
 						else {
-							failure = error
+							failure.value = error
 							reject(error)
 						}
 					})
@@ -281,14 +288,14 @@ describe('teardown failure handling', () => {
 			})
 		})
 
-		let thrown: unknown
+		const thrown = new MCPFixtureCell<unknown>(undefined)
 		try {
 			await failureTeardown.destroy()
 		} catch (error) {
-			thrown = error
+			thrown.value = error
 		}
-		expect(thrown).toBe(failure)
-		expect(thrown).toMatchObject({ code: 'ERR_SERVER_NOT_RUNNING' })
+		expect(thrown.value).toBe(failure.value)
+		expect(thrown.value).toMatchObject({ code: 'ERR_SERVER_NOT_RUNNING' })
 		expect(released.listening).toBe(false)
 	})
 })
@@ -308,44 +315,13 @@ describe('createMCPContinuation', () => {
 // A minimal bearer-token check middleware, hand-rolled locally (no @orkestrel/middleware
 // dependency) — enough to prove the transport composes auth IN FRONT rather than
 // baking it in.
-function createBearerGuard(secret: string): MiddlewareHandler<unknown> {
-	return (request, _context, next) => {
-		const header = request.headers.get('authorization')
-		if (header !== `Bearer ${secret}`) {
-			return Response.json({ error: 'unauthorized' }, { status: 401 })
-		}
-		return next()
-	}
-}
-
-// Stand up a server with the stateless MCP transport mounted (optionally with extra
-// middleware / route options), started on an ephemeral port.
-async function startMCP(options?: {
-	readonly streaming?: boolean
-	readonly path?: string
-	readonly guardSecret?: string
-}): Promise<StartedServerInterface> {
-	const dispatcher = createDispatcher<unknown>()
-	dispatcher.add(
-		createMCPRoutes(createMCPLegacy(createCalculatorServer()), {
-			...(options?.streaming !== undefined ? { streaming: options.streaming } : {}),
-			...(options?.path !== undefined ? { path: options.path } : {}),
-		}),
-	)
-	const server = createServer<unknown>({ dispatcher, state: () => undefined })
-	if (options?.guardSecret !== undefined) server.use(createBearerGuard(options.guardSecret))
-	const handle = await startServer(server)
-	teardown.add(() => closeResource(handle))
-	return handle
-}
-
 describe('createMCPRoutes — dispatch the MCP methods', () => {
 	it('exposes a raw server as modern-only and a decorated server as both eras', async () => {
 		// `server/discover` is the modern era's own required RPC and the canary here. The
 		// removed `ping` cannot be one: 2026-07-28 deletes it, so a bare server answers it
 		// -32601 and the request would measure the removal rather than the transport.
 		const dispatcher = createDispatcher<unknown>()
-		dispatcher.add(createMCPRoutes(createCalculatorServer(), { streaming: false }))
+		dispatcher.add(createMCPRoutes(createCalculatorServer(), { stream: false }))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
 		const handle = await startServer(server)
 		teardown.add(() => closeResource(handle))
@@ -378,7 +354,7 @@ describe('createMCPRoutes — dispatch the MCP methods', () => {
 		)
 		expect((await bare.json()).error.code).toBe(-32601)
 
-		const decorated = await startMCP()
+		const decorated = await startMCP(teardown)
 		const handshake = await postJSON(
 			decorated.base,
 			createJSONRPCRequest({ params: { protocolVersion: '2025-06-18' } }),
@@ -387,7 +363,7 @@ describe('createMCPRoutes — dispatch the MCP methods', () => {
 	})
 
 	it('POST initialize → 200 + the negotiated handshake result', async () => {
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ params: { protocolVersion: '2025-06-18' } }),
@@ -405,7 +381,7 @@ describe('createMCPRoutes — dispatch the MCP methods', () => {
 	})
 
 	it('POST tools/list → the registry tools, each with an inputSchema', async () => {
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ method: 'tools/list', id: 2 }),
@@ -421,7 +397,7 @@ describe('createMCPRoutes — dispatch the MCP methods', () => {
 	})
 
 	it('POST tools/call → executes a stub tool, the content round-trips at 200', async () => {
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ method: 'tools/call', id: 3, params: { name: 'add', arguments: {} } }),
@@ -437,7 +413,7 @@ describe('createMCPRoutes — dispatch the MCP methods', () => {
 	})
 
 	it('POST tools/call on an erroring tool → isError:true in the body at 200', async () => {
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCRequest({
@@ -457,7 +433,7 @@ describe('createMCPRoutes — dispatch the MCP methods', () => {
 
 describe('createMCPRoutes — transport vs in-band outcomes', () => {
 	it('POST with a supported protocol-version header → 200', async () => {
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		const response = await postJSON(handle.base, createJSONRPCRequest({ method: 'ping', id: 12 }), {
 			headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' },
 		})
@@ -467,7 +443,7 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 	})
 
 	it('POST with an unsupported protocol-version header → 400 + a JSON-RPC error body', async () => {
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		const response = await postJSON(handle.base, createJSONRPCRequest({ method: 'ping', id: 13 }), {
 			headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2099-01-01' },
 		})
@@ -488,7 +464,7 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 	})
 
 	it('POST a notification (no id) → 202 with an empty body', async () => {
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCNotification('notifications/initialized'),
@@ -499,7 +475,7 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 	})
 
 	it('POST malformed JSON → 400 + a JSON-RPC -32700 (Parse error) body', async () => {
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		// A malformed body is a TRANSPORT failure: HTTP 400 carrying the JSON-RPC parse error.
 		const response = await fetch(`${handle.base}/mcp`, {
 			method: 'POST',
@@ -515,7 +491,7 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 	})
 
 	it('POST a non-request payload (a response) → 400 + a JSON-RPC -32600 body', async () => {
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		// A well-formed JSON-RPC RESPONSE is not a request — Invalid Request, HTTP 400 + -32600.
 		const response = await postJSON(handle.base, { jsonrpc: '2.0', id: 9, result: { ok: true } })
 		expect(response.status).toBe(400)
@@ -526,7 +502,7 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 	})
 
 	it('POST an unknown method (id-bearing) → 200 + an IN-BAND -32601 error', async () => {
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		// method-not-found is a DISPATCH result — the JSON-RPC error rides in the body at HTTP 200.
 		const response = await postJSON(
 			handle.base,
@@ -544,7 +520,7 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 
 describe('createMCPRoutes — the Streamable-HTTP SSE response', () => {
 	it('frames the reply as an SSE data: event when the client Accepts text/event-stream', async () => {
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ method: 'tools/list', id: 6 }),
@@ -570,7 +546,7 @@ describe('createMCPRoutes — the Streamable-HTTP SSE response', () => {
 	})
 
 	it('still answers JSON for an event-stream Accept when streaming is disabled', async () => {
-		const handle = await startMCP({ streaming: false })
+		const handle = await startMCP(teardown, { stream: false })
 		const response = await postJSON(handle.base, createJSONRPCRequest({ method: 'ping', id: 7 }), {
 			headers: {
 				accept: 'text/event-stream',
@@ -585,7 +561,7 @@ describe('createMCPRoutes — the Streamable-HTTP SSE response', () => {
 
 describe('createMCPRoutes — the spine answers other verbs', () => {
 	it('GET the transport path → 405 (the spine auto, no GET route registered)', async () => {
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		// createMCPRoutes registers only POST; GET/DELETE (the session-push / session tier) get the
 		// spine's automatic 405 with an Allow header naming the registered method. A createMCPSession
 		// middleware in front is what serves the resumable GET / DELETE.
@@ -595,7 +571,7 @@ describe('createMCPRoutes — the spine answers other verbs', () => {
 	})
 
 	it('mounts at a custom path when one is supplied', async () => {
-		const handle = await startMCP({ path: '/rpc' })
+		const handle = await startMCP(teardown, { path: '/rpc' })
 		const response = await postJSON(handle.base, createJSONRPCRequest({ method: 'ping', id: 8 }), {
 			path: '/rpc',
 			headers: { [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' },
@@ -608,7 +584,7 @@ describe('createMCPRoutes — the spine answers other verbs', () => {
 describe('createMCPRoutes — mechanism, not policy', () => {
 	it('behind a bearer guard, a POST without a token → 401 (auth composes IN FRONT)', async () => {
 		const secret = 'mcp-guard-secret'
-		const handle = await startMCP({ guardSecret: secret })
+		const handle = await startMCP(teardown, { guardSecret: secret })
 		// No Authorization header — the guard short-circuits BEFORE the transport handler.
 		const denied = await postJSON(handle.base, createJSONRPCRequest({ method: 'ping', id: 10 }))
 		expect(denied.status).toBe(401)
@@ -629,14 +605,14 @@ describe('createMCPRoutes — the stateless default (no session middleware)', ()
 		// The regression guard: `createMCPRoutes` alone mints nothing — the response carries no
 		// session header. The session header is set ONLY by a `createMCPSession` middleware mounted
 		// in front (proven in middlewares.test.ts).
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		const response = await postJSON(handle.base, createJSONRPCRequest())
 		expect(response.status).toBe(200)
 		expect(response.headers.get(MCP_SESSION_HEADER)).toBeNull()
 	})
 
 	it('names the missing protocol header on a headerless legacy tools/list round trip', async () => {
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		const response = await postJSON(
 			handle.base,
 			createJSONRPCRequest({ method: 'tools/list', id: 2 }),
@@ -651,7 +627,7 @@ describe('createMCPRoutes — the stateless default (no session middleware)', ()
 	it('DELETE {path} → the spine automatic 405 (no DELETE route registered)', async () => {
 		// `createMCPRoutes` registers only POST, so the spine 405s DELETE (Allow names POST). A
 		// `createMCPSession` middleware in front is what serves DELETE → 204.
-		const handle = await startMCP()
+		const handle = await startMCP(teardown)
 		const response = await fetch(`${handle.base}/mcp`, { method: 'DELETE' })
 		expect(response.status).toBe(405)
 		expect(response.headers.get('allow')).toContain('POST')
@@ -675,22 +651,9 @@ describe('createMCPRoutes — the stateless default (no session middleware)', ()
 // Stand up a server exposing the stub-tool MCPServer over WebSocket on an ephemeral port. The
 // WS client transport accepts the `http://` base directly (it converts `ws(s)`→`http(s)`
 // internally; an `http://` URL passes through to the same upgrade endpoint).
-async function startWsMCP(
-	mcp: MCPDispatcherInterface = createCalculatorServer(),
-): Promise<StartedServerInterface> {
-	const dispatcher = createDispatcher<unknown>()
-	const server = createServer<unknown>({ dispatcher, state: () => undefined })
-	// Ingress over the spine upgrade seam, following the spine's own lifecycle: `emitter` is
-	// what lets `stop()` end the sockets this handler claimed.
-	server.upgrade(createWebSocketServer(mcp, { emitter: server.emitter }))
-	const handle = await startServer(server)
-	teardown.add(() => closeResource(handle))
-	return handle
-}
-
 describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-transports WS e2e', () => {
 	it('serves a legacy initialize and tools/call through the decorator over a real socket', async () => {
-		const handle = await startWsMCP(createMCPLegacy(createCalculatorServer()))
+		const handle = await startWsMCP(teardown, createMCPLegacy(createCalculatorServer()))
 		const client = createMCPClient({
 			transport: createMCPLegacyClientTransport(
 				createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
@@ -705,7 +668,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 	})
 
 	it('CONTROL — a bare server refuses initialize at either shape, naming the method, over a real socket', async () => {
-		const handle = await startWsMCP()
+		const handle = await startWsMCP(teardown)
 		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
 		teardown.add(() => closeResource(transport))
 
@@ -739,7 +702,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 	})
 
 	it('connect → tools/list → tools/call(add): a value round-trips over real WebSocket frames', async () => {
-		const handle = await startWsMCP()
+		const handle = await startWsMCP(teardown)
 		const client = createMCPClient({
 			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
 		})
@@ -762,7 +725,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 	})
 
 	it('a remote erroring tool throws locally (isError → throw)', async () => {
-		const handle = await startWsMCP()
+		const handle = await startWsMCP(teardown)
 		const client = createMCPClient({
 			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
 		})
@@ -774,7 +737,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 	})
 
 	it('declines a non-WebSocket request to the path (the spine destroys the socket)', async () => {
-		const handle = await startWsMCP()
+		const handle = await startWsMCP(teardown)
 		// A plain HTTP request to /mcp is not a WebSocket upgrade — the upgrade handler is never
 		// even consulted (no Upgrade header), so /mcp 404s (no route registered, only an upgrade).
 		const response = await fetch(`${handle.base}/mcp`)
@@ -782,7 +745,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 	})
 
 	it('declines a WebSocket upgrade to the wrong path (the spine destroys the un-upgraded socket)', async () => {
-		const handle = await startWsMCP()
+		const handle = await startWsMCP(teardown)
 		// A real WS upgrade (Connection: Upgrade + a key + version 13) but to /nope — the handler
 		// returns false on the path mismatch, so the spine destroys the un-upgraded socket. (The
 		// CLAIM + 101 handshake to the configured /mcp path is proven by the connect() e2e above,
@@ -796,7 +759,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 	})
 
 	it('declines a WebSocket upgrade missing the Sec-WebSocket-Version: 13 header', async () => {
-		const handle = await startWsMCP()
+		const handle = await startWsMCP(teardown)
 		// Right path + a key, but no `Sec-WebSocket-Version` — the handler declines (RFC 6455
 		// requires version 13), so the spine destroys the un-upgraded socket.
 		const outcome = await upgradeRequest(handle.base, '/mcp', {
@@ -806,7 +769,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 	})
 
 	it('claims an upgrade without selecting a subprotocol when the client offers none', async () => {
-		const handle = await startWsMCP()
+		const handle = await startWsMCP(teardown)
 		const outcome = await upgradeRequest(handle.base, '/mcp', {
 			'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
 			'Sec-WebSocket-Version': '13',
@@ -816,7 +779,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 	})
 
 	it('claims an upgrade without selecting a subprotocol when the client offers another one', async () => {
-		const handle = await startWsMCP()
+		const handle = await startWsMCP(teardown)
 		const outcome = await upgradeRequest(handle.base, '/mcp', {
 			'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
 			'Sec-WebSocket-Version': '13',
@@ -827,7 +790,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 	})
 
 	it('selects the configured subprotocol when the client offers it', async () => {
-		const handle = await startWsMCP()
+		const handle = await startWsMCP(teardown)
 		const outcome = await upgradeRequest(handle.base, '/mcp', {
 			'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
 			'Sec-WebSocket-Version': '13',
@@ -854,7 +817,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 
 describe('createWebSocketServer — the spine stop closes every socket it claimed', () => {
 	it('closes a live socket with an RFC 6455 close frame, so stop settles in milliseconds', async () => {
-		const handle = await startWsMCP()
+		const handle = await startWsMCP(teardown)
 		const socket = await openClientSocket(handle.base, DEFAULT_MCP_PATH)
 		teardown.add(() => socket.close())
 
@@ -871,7 +834,7 @@ describe('createWebSocketServer — the spine stop closes every socket it claime
 	}, 20_000)
 
 	it('CONTROL — a server with no WebSocket at all still stops immediately', async () => {
-		const handle = await startWsMCP()
+		const handle = await startWsMCP(teardown)
 
 		const started = performance.now()
 		await handle.server.stop()
@@ -880,7 +843,7 @@ describe('createWebSocketServer — the spine stop closes every socket it claime
 	}, 20_000)
 
 	it('a client that already went away neither throws nor holds the stop path', async () => {
-		const handle = await startWsMCP()
+		const handle = await startWsMCP(teardown)
 		const socket = await openClientSocket(handle.base, DEFAULT_MCP_PATH)
 		teardown.add(() => socket.close())
 		// The peer vanishes without a close frame — the socket the handler owns is already dead
@@ -911,7 +874,7 @@ describe('createWebSocketServer — the spine stop detaches each claimed binding
 				return { id: context.call.id, name: context.call.name, success: true, value: 0 }
 			},
 		})
-		const handle = await startWsMCP(mcp)
+		const handle = await startWsMCP(teardown, mcp)
 		const transport = createWebSocketClientTransport({
 			url: `${handle.base}${DEFAULT_MCP_PATH}`,
 		})
@@ -938,100 +901,6 @@ describe('createWebSocketServer — the spine stop detaches each claimed binding
 		await transport.close()
 	}, 20_000)
 })
-
-async function driveStdioChild(
-	mcp: MCPDispatcherInterface,
-	mode: 'legacy' | 'bare',
-): Promise<number | null> {
-	const child = spawn(
-		process.execPath,
-		[
-			'-e',
-			`
-const mode = process.argv[1]
-let buffer = ''
-let stage = 'initialize'
-
-function fail(message) {
-	process.stderr.write(message + '\\n')
-	process.exit(1)
-}
-
-function send(message) {
-	process.stdout.write(JSON.stringify(message) + '\\n')
-}
-
-function receive(message) {
-	if (stage === 'initialize') {
-		if (mode === 'bare') {
-			if (message.error?.code !== -32601) fail('bare raw legacy initialize was not refused -32601')
-			if (message.error?.message !== 'Method not found: initialize') {
-				fail('bare raw legacy initialize refusal did not name initialize: ' + message.error?.message)
-			}
-			stage = 'control'
-			send({
-				jsonrpc: '2.0',
-				id: 2,
-				method: 'initialize',
-				params: {
-					_meta: {
-						'io.modelcontextprotocol/protocolVersion': '2026-07-28',
-						'io.modelcontextprotocol/clientCapabilities': {},
-					},
-				},
-			})
-			return
-		}
-		if (message.result?.protocolVersion !== '2025-06-18') fail('legacy initialize failed')
-		stage = 'call'
-		send({ jsonrpc: '2.0', method: 'notifications/initialized' })
-		send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'add', arguments: {} } })
-		return
-	}
-	if (stage === 'control') {
-		if (message.error?.code !== -32601) fail('bare modern-shaped initialize did not answer -32601')
-		if (message.error?.message !== 'Method not found: initialize') {
-			fail('bare modern-shaped initialize refusal did not name initialize: ' + message.error?.message)
-		}
-		process.exit(0)
-	}
-	if (message.result?.content?.[0]?.text !== '5') fail('legacy tools/call failed')
-	process.exit(0)
-}
-
-process.stdin.setEncoding('utf8')
-process.stdin.on('data', (chunk) => {
-	buffer += chunk
-	let newline = buffer.indexOf('\\n')
-	while (newline !== -1) {
-		const line = buffer.slice(0, newline)
-		buffer = buffer.slice(newline + 1)
-		if (line.length > 0) receive(JSON.parse(line))
-		newline = buffer.indexOf('\\n')
-	}
-})
-
-send({
-	jsonrpc: '2.0',
-	id: 1,
-	method: 'initialize',
-	params: { protocolVersion: '2025-06-18' },
-})
-`,
-			mode,
-		],
-		{ stdio: ['pipe', 'pipe', 'inherit'] },
-	)
-	const handle = createStdioServer(mcp, { input: child.stdout, output: child.stdin })
-	handle.start()
-	return new Promise<number | null>((resolve, reject) => {
-		child.once('error', reject)
-		child.once('exit', (code) => {
-			handle.stop()
-			resolve(code)
-		})
-	})
-}
 
 // createStdioServer — the new seam: it now pipes its transport through the core
 // bindServer port (through createDuplexServerTransport) rather than a hand-rolled pump. Proven
@@ -1078,29 +947,12 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 		expect(input.writableEnded).toBe(false)
 	})
 
-	function stdio() {
-		const input = new PassThrough()
-		const output = new PassThrough()
-		return { input, output }
-	}
-
-	async function readLine(output: PassThrough): Promise<string> {
-		return new Promise((resolve) => {
-			let buffer = ''
-			output.on('data', (chunk: Buffer) => {
-				buffer += chunk.toString()
-				const newline = buffer.indexOf('\n')
-				if (newline !== -1) resolve(buffer.slice(0, newline))
-			})
-		})
-	}
-
 	it('dispatches an inbound request line and writes the reply line back', async () => {
-		const { input, output } = stdio()
+		const { input, output } = createStdioPair()
 		const handle = createStdioServer(createCalculatorServer(), { input, output })
 		handle.start()
 
-		const reply = readLine(output)
+		const reply = readStdioLine(output)
 		input.write(
 			`${JSON.stringify(
 				createJSONRPCRequest({
@@ -1123,7 +975,7 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 	})
 
 	it('writes nothing for a notification (no id → no reply)', async () => {
-		const { input, output } = stdio()
+		const { input, output } = createStdioPair()
 		const handle = createStdioServer(createCalculatorServer(), { input, output })
 		handle.start()
 
@@ -1140,7 +992,7 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 	// has one (stdio) aborts the named request, the TOOL observes it through the execution
 	// handler's own signal, and the cancelled request writes no line back.
 	it('honours an inbound cancellation: the tool sees the abort and no reply line is written', async () => {
-		const { input, output } = stdio()
+		const { input, output } = createStdioPair()
 		const observed: string[] = []
 		const tools = createToolManager()
 		tools.add(createTool({ name: 'slow', execute: () => 0 }))
@@ -1179,7 +1031,7 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 	})
 
 	it('ignores a stray response line (not a request) rather than dispatching it', async () => {
-		const { input, output } = stdio()
+		const { input, output } = createStdioPair()
 		const handle = createStdioServer(createCalculatorServer(), { input, output })
 		handle.start()
 
@@ -1196,7 +1048,7 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 	// pump once, `stop()` ends that handle permanently, and each takes effect on `input` at
 	// once. A repeated `stop()` is pinned by the release row earlier in this block.
 	it('arms the pump once however many times start() is called', async () => {
-		const { input, output } = stdio()
+		const { input, output } = createStdioPair()
 		const handle = createStdioServer(createCalculatorServer(), { input, output })
 		handle.start()
 		handle.start()
@@ -1221,7 +1073,7 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 	})
 
 	it('arms nothing on a start() after stop(), so serving again takes a fresh handle', async () => {
-		const { input, output } = stdio()
+		const { input, output } = createStdioPair()
 		const handle = createStdioServer(createCalculatorServer(), { input, output })
 		handle.start()
 		handle.stop()
@@ -1244,7 +1096,7 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 	})
 
 	it('subscribes to input on start() and releases it on stop(), each synchronously', () => {
-		const { input, output } = stdio()
+		const { input, output } = createStdioPair()
 		const handle = createStdioServer(createCalculatorServer(), { input, output })
 		const counts = [input.listenerCount('data')]
 

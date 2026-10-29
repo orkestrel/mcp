@@ -30,8 +30,6 @@ import {
 	buildJSONRPCResult,
 	computeMissingCapabilities,
 	isMCPError,
-	isMCPToolError,
-	isMCPInputRequest,
 	isAbsoluteURI,
 	isBoundedJSON,
 	isBoundedString,
@@ -62,10 +60,7 @@ import {
 	isMCPBlobResource,
 	isMCPCallResult,
 	isMCPClientCapabilities,
-	isMCPCompletion,
 	isMCPCompletionParams,
-	isMCPCompletionReference,
-	isMCPCompletionResult,
 	isMCPContent,
 	isMCPIcon,
 	isMCPIdentity,
@@ -94,7 +89,6 @@ import {
 	isMCPSampleContent,
 	isMCPSampleResult,
 	isMCPServerCapabilities,
-	isMCPStringArguments,
 	isJSONRPCError,
 	isMCPNotificationMetaObject,
 	isMCPTaskDetail,
@@ -132,6 +126,12 @@ import {
 	createJSONRPCRequest,
 	createThrowingKeys,
 	GUARD_KEY_NAMES,
+	PUBLISHED_GUARDS,
+	sweepGuard,
+	readFixtureKeys,
+	MCPFixtureCell,
+	MCPValueFixture,
+	declineFixtureTask,
 } from '../../setup.js'
 
 // The JSON-RPC 2.0 wire guards (total functions over an already-parsed
@@ -164,8 +164,7 @@ describe('bounded hostile values', () => {
 		expect(isBoundedJSON('\ud800', { bytes: 8, depth: 0 })).toBe(true)
 		expect(isBoundedJSON({ outer: { inner: true } }, { bytes: 64, keys: 1, depth: 2 })).toBe(false)
 
-		let deep: unknown = null
-		for (let depth = 0; depth < 33; depth += 1) deep = [deep]
+		const deep = Array.from({ length: 33 }).reduce<unknown>((nested) => [nested], null)
 		expect(isBoundedJSON(deep, { bytes: 128, depth: 32 })).toBe(false)
 		expect(isBoundedJSON({}, { bytes: Number.NaN, depth: Number.NaN })).toBe(false)
 	})
@@ -202,9 +201,7 @@ describe('bounded hostile values', () => {
 		const symbol = { ok: true }
 		Object.defineProperty(symbol, Symbol('hidden'), { enumerable: true, value: true })
 		const hidden = Object.defineProperty({}, 'value', { enumerable: false, value: true })
-		const instance = new (class {
-			readonly value = true
-		})()
+		const instance = new MCPValueFixture()
 
 		for (const value of [{ value: undefined }, { value: BigInt(1) }, symbol, hidden, instance]) {
 			expect(isBoundedJSON(value, { bytes: 128, keys: 8, depth: 8 })).toBe(false)
@@ -226,19 +223,19 @@ describe('bounded hostile values', () => {
 	})
 
 	it('rejects exhausted budgets before retrieving child descriptors', () => {
-		let descriptors = 0
+		const descriptors = new MCPFixtureCell(0)
 		const value = new Proxy(
 			{ child: true },
 			{
 				getOwnPropertyDescriptor(target, property) {
-					descriptors += 1
+					descriptors.value += 1
 					return Reflect.getOwnPropertyDescriptor(target, property)
 				},
 			},
 		)
 
 		expect(isBoundedJSON(value, { bytes: 1, keys: 0, depth: 0 })).toBe(false)
-		expect(descriptors).toBe(0)
+		expect(descriptors.value).toBe(0)
 	})
 
 	it('counts array indices as keys and accepts a shared acyclic graph', () => {
@@ -1563,19 +1560,14 @@ describe('isJSONRPCRequest / isJSONRPCNotification — mutual exclusivity', () =
 			{ jsonrpc: '2.0', method: 'ping', params: { a: 1 } },
 			{ jsonrpc: '2.0', id: 1 },
 		]
-		let overlaps = 0
-		for (const value of corpus) {
-			if (isJSONRPCRequest(value) && isJSONRPCNotification(value)) overlaps += 1
-		}
+		const overlaps = corpus.filter(
+			(value) => isJSONRPCRequest(value) && isJSONRPCNotification(value),
+		).length
 
 		expect(overlaps).toBe(0)
 		// The negative control that proves the counter can register an overlap at all: two
 		// predicates that DO both hold, over the same corpus and the same loop.
-		let control = 0
-		for (const value of corpus) {
-			if (isJSONRPCId(value) || value === undefined) control += 0
-			else control += 1
-		}
+		const control = corpus.filter((value) => !(isJSONRPCId(value) || value === undefined)).length
 		expect(control).toBeGreaterThan(0)
 	})
 
@@ -1645,10 +1637,7 @@ describe('isMCPResult / isMCPLegacyResult', () => {
 			{ resultType: 5 },
 			{ resultType: 'complete', _meta: { 'bad key': 1 } },
 		]
-		let overlaps = 0
-		for (const value of corpus) {
-			if (isMCPResult(value) && isMCPLegacyResult(value)) overlaps += 1
-		}
+		const overlaps = corpus.filter((value) => isMCPResult(value) && isMCPLegacyResult(value)).length
 
 		expect(overlaps).toBe(0)
 		// `isMCPLegacyResult` admits any exact-JSON record with no `resultType`, and some
@@ -1690,10 +1679,9 @@ describe('isJSONRPCResultResponse / isJSONRPCErrorResponse — mutual exclusivit
 			{ jsonrpc: '2.0', id: 1 },
 			{ jsonrpc: '2.0', id: null, error: { code: -1, message: 'x' } },
 		]
-		let overlaps = 0
-		for (const value of corpus) {
-			if (isJSONRPCResultResponse(value) && isJSONRPCErrorResponse(value)) overlaps += 1
-		}
+		const overlaps = corpus.filter(
+			(value) => isJSONRPCResultResponse(value) && isJSONRPCErrorResponse(value),
+		).length
 
 		expect(overlaps).toBe(0)
 	})
@@ -2172,7 +2160,7 @@ describe('stable Tasks extension validators', () => {
 		// the way a guard demanding named members is: its empty and null-prototype rows are
 		// genuine acceptances. Totality over that corpus is proven for every published guard by
 		// the sweep later in this file; what this row owes is the non-object refusal.
-		for (const value of [undefined, null, 0, '', 'null', true, [], () => undefined, new Map()]) {
+		for (const value of [undefined, null, 0, '', 'null', true, [], declineFixtureTask, new Map()]) {
 			expect(isMCPNotificationMetaObject(value)).toBe(false)
 		}
 		// The disagreement with the stream's terminating result, where the same key is required.
@@ -2215,132 +2203,6 @@ describe('isJSONRPCError', () => {
 // So the claim is re-asked at EVERY published door, against the corpus AND against a throwing
 // accessor keyed to each name any guard reads — the class the corpus structurally could not
 // reach, which is how the defect survived a control that ran at it and passed.
-const TOTALITY_SCHEMA: MCPElicitSchema = Object.freeze({
-	type: 'object',
-	properties: Object.freeze({}),
-})
-
-// The issued request `isMCPInputResponse` is measured against, for the same reason.
-const TOTALITY_REQUEST: MCPInputRequest = Object.freeze({
-	method: 'elicitation/create',
-	params: Object.freeze({ message: 'Approve?', requestedSchema: TOTALITY_SCHEMA }),
-})
-
-// Every published guard as a unary call. The guards taking a second argument are given a
-// real one, because a guard starved of its bound would be answering a different question.
-const PUBLISHED_GUARDS: Readonly<Record<string, (value: unknown) => boolean>> = Object.freeze({
-	isMCPToolError,
-	isAbsoluteURI,
-	isBoundedJSON: (value) => isBoundedJSON(value, { bytes: 4_096, keys: 64, depth: 16 }),
-	isBoundedString: (value) => isBoundedString(value, 4_096),
-	isElicitContent: (value) => isElicitContent(value, TOTALITY_SCHEMA),
-	isFieldToken,
-	isInitializeRequest,
-	isPingRequest,
-	isJSONObject,
-	isJSONRPCError,
-	isJSONRPCErrorResponse,
-	isJSONRPCId,
-	isJSONRPCInvocation,
-	isJSONRPCMessage,
-	isJSONRPCNotification,
-	isJSONRPCRequest,
-	isJSONRPCResponse,
-	isJSONRPCResultResponse,
-	isMCPAnnotations,
-	isMCPBlobResource,
-	isMCPCallResult,
-	isMCPClientCapabilities,
-	isMCPCompletion,
-	isMCPCompletionParams,
-	isMCPCompletionReference,
-	isMCPCompletionResult,
-	isMCPContent,
-	isMCPElicitFieldSchema,
-	isMCPElicitForm,
-	isMCPElicitRequest,
-	isMCPElicitResult,
-	isMCPElicitSchema,
-	isMCPElicitURL,
-	isMCPError,
-	isMCPHeaderPrimitive,
-	isMCPIcon,
-	isMCPIdentity,
-	isMCPInputRequest,
-	isMCPInputRequestMap,
-	isMCPInputResponse: (value) => isMCPInputResponse(value, TOTALITY_REQUEST),
-	isMCPInputResult,
-	isMCPLegacyVersion,
-	isMCPLegacyResult,
-	isMCPLoggingLevel,
-	isMCPMetaKey,
-	isMCPMetaObject,
-	isMCPModernVersion,
-	isMCPProgress,
-	isMCPPaginationParams,
-	isMCPPrompt,
-	isMCPPromptArgument,
-	isMCPPromptGetResult,
-	isMCPPromptMessage,
-	isMCPPromptPage,
-	isMCPResource,
-	isMCPResourceContents,
-	isMCPResourcePage,
-	isMCPResourceTemplate,
-	isMCPResourceTemplatePage,
-	isMCPResult,
-	isMCPResultMetaObject,
-	isMCPRoot,
-	isMCPRootResult,
-	isMCPSampleContent,
-	isMCPSampleResult,
-	isMCPServerCapabilities,
-	isMCPStringArguments,
-	isMCPSubscriptionFilter,
-	isMCPConsumerFilter,
-	isMCPSubscriptionResult,
-	isMCPNotificationMetaObject,
-	isMCPTaskDetail,
-	isMCPTaskDetailResult,
-	isMCPTaskNotification,
-	isMCPTaskResult,
-	isMCPTaskStatus,
-	isMCPTextResource,
-	isMCPToolAnnotations,
-	isMCPVersion,
-	isModernRequest,
-	isRFC3339Date,
-	isRFC3339DateTime,
-	isStandardBase64,
-})
-
-// The sweep itself, so the guards and their control run the identical loop.
-function sweepGuard(
-	guard: (value: unknown) => boolean,
-	battery: readonly unknown[],
-): readonly number[] {
-	const escaped: number[] = []
-	for (const [index, value] of battery.entries()) {
-		try {
-			guard(value)
-		} catch {
-			escaped.push(index)
-		}
-	}
-	return escaped
-}
-
-// The instrument's negative control, drawn from OUTSIDE the population it certifies: the exact
-// shape `isJSONRPCError` shipped with — two named key reads and no boundary at all. The sweep
-// must REPORT this, or a clean run over the published guards has measured nothing.
-function readsKeysDirectly(value: unknown): boolean {
-	if (typeof value !== 'object' || value === null) return false
-	return (
-		typeof Reflect.get(value, 'code') === 'number' &&
-		typeof Reflect.get(value, 'message') === 'string'
-	)
-}
-
 describe('published guard totality — every door, not the one the defect arrived through', () => {
 	// The sweep is worthless if it silently covers half the surface, so the population is
 	// proven against the barrel before anything is read into the result.
@@ -2353,7 +2215,7 @@ describe('published guard totality — every door, not the one the defect arrive
 	})
 
 	it('reports the unbounded direct key read the published guards must not contain', () => {
-		expect(sweepGuard(readsKeysDirectly, createThrowingKeys(GUARD_KEY_NAMES)).length).toBe(1)
+		expect(sweepGuard(readFixtureKeys, createThrowingKeys(GUARD_KEY_NAMES)).length).toBe(1)
 		// The same battery, the same loop, the repaired guard: bounded where the control escapes.
 		expect(sweepGuard(isJSONRPCError, createThrowingKeys(GUARD_KEY_NAMES))).toEqual([])
 	})
@@ -2658,11 +2520,11 @@ describe('isMCPToolAnnotations', () => {
 		// a valid annotation record, so a hostile value whose members read cleanly answers
 		// `true`; refusal on a read that fails is the preceding case's claim.
 		for (const [index, value] of createHostileValues().entries()) {
-			let accepted: boolean | undefined
+			const accepted = new MCPFixtureCell<boolean | undefined>(undefined)
 			expect(() => {
-				accepted = isMCPToolAnnotations(value)
+				accepted.value = isMCPToolAnnotations(value)
 			}, `hostile value ${index}`).not.toThrow()
-			expect(typeof accepted, `hostile value ${index}`).toBe('boolean')
+			expect(typeof accepted.value, `hostile value ${index}`).toBe('boolean')
 		}
 	})
 })

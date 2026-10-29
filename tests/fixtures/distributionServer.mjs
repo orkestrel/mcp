@@ -36,7 +36,7 @@ const TYPES = {
 // page's own provider answer the same run.
 const SCRIPT = PAINT_SCRIPT
 
-let relayed = []
+const relayed = []
 
 // Answers with a file under one of the roots this fixture serves. The consumer installs no test
 // toolkit, so the containment check is written here rather than taken from one.
@@ -45,12 +45,8 @@ function serveUnder(root, target) {
 	if (path !== root && !path.startsWith(`${root}${sep}`)) {
 		return new Response('outside the served root', { status: 404 })
 	}
-	let body
-	try {
-		body = readFileSync(path)
-	} catch {
-		return new Response('no such file', { status: 404 })
-	}
+	const body = readFixtureFile(path)
+	if (body === undefined) return new Response('no such file', { status: 404 })
 	const dot = path.lastIndexOf('.')
 	const type = TYPES[path.slice(dot)] ?? 'application/octet-stream'
 	return new Response(body, { headers: { 'content-type': type } })
@@ -59,10 +55,7 @@ function serveUnder(root, target) {
 // Retains what one relay request carried, so the receipt states the conversation each turn
 // sent rather than only how many turns there were.
 async function record(request) {
-	let body = {}
-	try {
-		body = JSON.parse(await request.clone().text())
-	} catch {}
+	const body = await readRelayBody(request)
 	const messages = Array.isArray(body.messages) ? body.messages : []
 	relayed.push({
 		roles: messages.map((message) => message.role),
@@ -73,8 +66,7 @@ async function record(request) {
 // Reports what the relay route has taken since the last read, and clears it. A reading is the
 // scenario's own, so a second relay receipt cannot read the first one's total back.
 function reportRelayed() {
-	const taken = relayed
-	relayed = []
+	const taken = relayed.splice(0)
 	return new Response(JSON.stringify({ relay: taken.length, served: taken }), {
 		headers: { 'content-type': 'application/json; charset=utf-8' },
 	})
@@ -136,3 +128,19 @@ const server = createServer({
 })
 const port = await server.start()
 process.stdout.write(`ready ${port}\n`)
+
+function readFixtureFile(path) {
+	try {
+		return readFileSync(path)
+	} catch {
+		return undefined
+	}
+}
+
+async function readRelayBody(request) {
+	try {
+		return JSON.parse(await request.clone().text())
+	} catch {
+		return {}
+	}
+}

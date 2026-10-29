@@ -2996,7 +2996,7 @@ export interface MCPTaskClientInterface {
  *   deadline. An omitted `timeout` selects {@link DEFAULT_MCP_REQUEST_TIMEOUT}; an explicit
  *   timeout applies that deadline to the probe. The client's
  *   wait on the transport's `close` carries that same deadline, because it is the one wait neither
- *   the pending-request drain nor the supersession signal can reach; the deadline ends the wait,
+ *   the pending-request drain nor a request deadline can reach; the deadline ends the wait,
  *   not the close, so a retry joins that close rather than issuing a second one.
  * - **Transport-agnostic.** Imports only core siblings — JSON-RPC + the tool vocabulary
  *   + the timeout primitive — with no HTTP and no model; the concrete transport is
@@ -3075,10 +3075,9 @@ export interface MCPClientInterface {
 	 * one issued with nothing connected, no attempt in flight, and no connection left open by a
 	 * failed close does nothing. A `disconnect`
 	 * awaited during an in-flight {@link connect} supersedes that attempt instead of waiting
-	 * for it: the superseded `connect` rejects rather than resolving, and every wait it can be
-	 * parked in once the transport has opened is bounded — a pending request by the drain, a raw
-	 * wire write by the supersession signal, its own close by the request deadline — so it
-	 * settles. An attempt still suspended inside the transport's `start` settles only when that
+	 * for it: the superseded `connect` rejects rather than resolving. The pending-request drain
+	 * rejects its discovery request, and the request deadline bounds its wait on close.
+	 * An attempt still suspended inside the transport's `start` settles only when that
 	 * `start` does, because nothing here bounds the opening step. It closes the connection the
 	 * client owns when it runs, and closes nothing for an attempt still inside the transport's
 	 * `start` — that attempt owns nothing yet and closes what it opens itself. The transport's
@@ -3156,4 +3155,38 @@ export interface MCPClientInterface {
 		args: Readonly<Record<string, unknown>>,
 		options?: MCPCallOptions,
 	): Promise<MCPCallOutcome>
+}
+
+/** Owns one installed transport binding until it is detached. */
+export interface MCPBindingInterface {
+	/** Detaches the binding without closing its transport. */
+	stop(): void
+}
+
+/** Describes a pending operation in the bounded canonical JSON traversal. */
+export type MCPJSONFrame =
+	| { readonly operation: 'value'; readonly value: unknown; readonly depth: number }
+	| { readonly operation: 'string'; readonly value: string; readonly output?: string[] }
+	| { readonly operation: 'text'; readonly text: string }
+	| { readonly operation: 'close'; readonly value: object; readonly text: string }
+	| {
+			readonly operation: 'record'
+			readonly value: object
+			readonly names: readonly string[]
+			readonly encoded: string[]
+			readonly index: number
+			readonly depth: number
+	  }
+
+/** Records a traversal step's cumulative budget and its optional emitted JSON token. */
+export interface MCPJSONStep {
+	readonly bytes: number
+	readonly keys: number
+	readonly text?: string
+}
+
+/** Pairs a serialized property name with its once-read own data value. */
+export interface MCPJSONProperty {
+	readonly text: string
+	readonly value: unknown
 }

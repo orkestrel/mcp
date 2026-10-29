@@ -1,7 +1,6 @@
 import type {
 	HTTPClientTransportOptions,
 	MCPMessageTransportInterface,
-	MCPServerInterface,
 	MCPTransportInterface,
 } from '@src/core'
 import type {
@@ -24,11 +23,12 @@ import {
 	createMCPServer,
 	HTTPClientTransport,
 } from '@src/core'
-import { isString } from '@orkestrel/contract'
 import { DEFAULT_MCP_SERVER_NAME, DEFAULT_MCP_SERVER_VERSION } from './constants.js'
 import { isWebMCPDocument } from './validators.js'
 import { ModelContext } from './ModelContext.js'
+import { ScopeServer } from './ScopeServer.js'
 import { MessagePortTransport } from './transports/MessagePortTransport.js'
+import { ScopeTransport } from './transports/ScopeTransport.js'
 import { WebSocketClientTransport } from './transports/WebSocketClientTransport.js'
 
 /**
@@ -188,102 +188,7 @@ export function createScopeServer(
 	options: ScopeServerOptions,
 	scope: ScopeInterface = globalThis,
 ): ScopeServerInterface {
-	const server = createMCPServer({
-		tools: options.tools,
-		identity: {
-			name: options.name ?? DEFAULT_MCP_SERVER_NAME,
-			version: options.version ?? DEFAULT_MCP_SERVER_VERSION,
-		},
-	})
-	const scopeTransport = createScopeTransport(scope)
-	const unbindScope = bindServer(server, scopeTransport)
-	const teardowns = new Map<MessagePort, () => void>()
-	const onMessage = createScopeMessageListener(server, scopeTransport, teardowns, options)
-	scope.addEventListener('message', onMessage)
-	let stopped = false
-	return {
-		stop(): void {
-			if (stopped) return
-			stopped = true
-			scope.removeEventListener('message', onMessage)
-			unbindScope()
-			for (const teardown of teardowns.values()) teardown()
-			// One clear releases the bindings AND the ports they were keyed by, so a scope that
-			// outlives its handle — a Service Worker — retains neither.
-			teardowns.clear()
-		},
-	}
-}
-
-/**
- * Builds {@link createScopeServer}'s `message`-event listener — the unified dispatcher that
- * routes every inbound event on a hostable scope, portless or port-bearing, to the right
- * binding.
- *
- * @remarks
- * Port-bearing events (`event.ports.length > 0`) are gated by `options.accept` first
- * — when the gate returns `false` the event is dropped entirely (no binding, no reply).
- * Accepted events spawn a fresh `MessagePortTransport` over `event.ports[0]`,
- * `bindServer` `server` onto it, and record a teardown (`unbind` then `transport.close()`)
- * into `teardowns` keyed by that port. A port already present is ignored — repeated delivery
- * of the same `MessagePort` would create duplicate bindings over one port (→ duplicated
- * replies), so a repeat is silently dropped.
- *
- * The key is what makes `teardowns` the only place an accepted port is remembered. A separate
- * seen-port set would be a second collection over the same lifetime, and the scope server's
- * `stop` would have to remember to empty both — so a long-lived scope such as a Service Worker
- * would retain every port it ever accepted, closed and unbound ones included. Membership
- * answers "already bound?" and `clear()` drops the binding and the dedup together.
- *
- * This branch fires on either a Service-Worker-shaped scope (its normal per-client
- * channel) or a dedicated-worker-shaped one that happens to receive a port-bearing event
- * (the unified design's deliberate cross-case, needing no upfront shape flag). An event
- * with no ports and a string `data` is pushed onto `scopeTransport.deliver` (the
- * implicit, already-bound scope channel); any other event (no ports, non-string data)
- * is silently dropped — total, never throws.
- *
- * @param server - The `MCPServerInterface` every spawned/implicit binding dispatches over
- * @param scopeTransport - The implicit scope channel (already `bindServer`-bound) portless events deliver onto
- * @param teardowns - The shared teardown map the scope server's `stop` drains and clears, keyed by the accepted port; each port-bearing event adds one entry
- * @param options - The `ScopeServerOptions` (for `options.accept`)
- * @returns The `message`-event listener to register (and later remove) on the scope
- *
- * @example
- * ```ts
- * const teardowns = new Map<MessagePort, () => void>()
- * const scopeTransport = createScopeTransport(scope)
- * bindServer(server, scopeTransport)
- * const onMessage = createScopeMessageListener(server, scopeTransport, teardowns, options)
- * scope.addEventListener('message', onMessage)
- * ```
- */
-export function createScopeMessageListener(
-	server: MCPServerInterface,
-	scopeTransport: ScopeTransportInterface,
-	teardowns: Map<MessagePort, () => void>,
-	options: ScopeServerOptions,
-): (event: MessageEvent) => void {
-	return (event: MessageEvent): void => {
-		const ports = event.ports
-		if (ports.length > 0) {
-			// Gate: consult accept (origin/identity check) before binding.
-			if (options.accept !== undefined && !options.accept(event)) return
-			const port = ports[0]
-			if (port === undefined) return
-			// Deduplicate off the teardown map itself: repeated delivery of the same port would
-			// create duplicate bindings, and a second collection recording the same fact is one
-			// the handle's `stop` can forget to empty.
-			if (teardowns.has(port)) return
-			const transport = new MessagePortTransport({ port })
-			const unbind = bindServer(server, transport)
-			teardowns.set(port, () => {
-				unbind()
-				transport.close()
-			})
-			return
-		}
-		if (isString(event.data)) scopeTransport.deliver(event.data)
-	}
+	return new ScopeServer(options, scope)
 }
 
 /**
@@ -311,25 +216,7 @@ export function createScopeMessageListener(
  * ```
  */
 export function createScopeTransport(scope: ScopeInterface): ScopeTransportInterface {
-	let onMessage: ((message: string) => void) | undefined
-	let onClosed: (() => void) | undefined
-	return {
-		send(message: string): void {
-			scope.postMessage(message)
-		},
-		listen(handler: (message: string) => void): void {
-			onMessage = handler
-		},
-		closed(handler: () => void): void {
-			onClosed = handler
-		},
-		close(): void {
-			onClosed?.()
-		},
-		deliver(message: string): void {
-			onMessage?.(message)
-		},
-	}
+	return new ScopeTransport(scope)
 }
 
 /**
@@ -397,12 +284,12 @@ export function createPageServer(options: PageServerOptions): PageServerInterfac
 		transport: createDuplexClientTransport(driven),
 	})
 	const unbindClient = bindClient(client, driven)
-	let stopped = false
+	const lifetime = new AbortController()
 	return {
 		client,
 		stop(): void {
-			if (stopped) return
-			stopped = true
+			if (lifetime.signal.aborted) return
+			lifetime.abort()
 			// Close before unbinding, in this order: the binder's `closed` handler is what tells
 			// the client its transport is gone, and unbinding first would replace that handler
 			// with a no-op and leave the client reporting a connection nothing carries.

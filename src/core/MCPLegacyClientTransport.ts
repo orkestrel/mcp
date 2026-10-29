@@ -9,7 +9,6 @@ import type {
 	MCPIdentity,
 	MCPLegacyClientTransportOptions,
 	MCPLegacyVersion,
-	MCPServerCapabilities,
 } from './types.js'
 import { Emitter } from '@orkestrel/emitter'
 import { attempt, cloneJSONRecord, isString } from '@orkestrel/contract'
@@ -25,6 +24,7 @@ import {
 	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
 } from './constants.js'
 import { MCPError } from './errors.js'
+import { MCPLegacySession } from './MCPLegacySession.js'
 import {
 	buildJSONRPCError,
 	buildModernResult,
@@ -48,6 +48,8 @@ import {
  * `server/discover` locally from that handshake, removes modern request metadata before writes,
  * restores legacy results to modern complete-result shapes before delivery, and bounds retained
  * request correlations with the configured deadline.
+ * A request sent with no bound session is forwarded without correlation. The id-0
+ * handshake reservation opens when `start` publishes its session.
  */
 export class MCPLegacyClientTransport implements MCPMessageTransportInterface {
 	readonly #emitter = new Emitter<MCPMessageTransportEventMap>()
@@ -56,11 +58,7 @@ export class MCPLegacyClientTransport implements MCPMessageTransportInterface {
 	readonly #capabilities: MCPClientCapabilities
 	readonly #pin: MCPLegacyVersion | undefined
 	readonly #timeout: number
-	readonly #correlations = new Map<JSONRPCId, { readonly method: string }>()
-	#handshake: PromiseWithResolvers<JSONRPCResponse> | undefined = undefined
-	#instructions: string | undefined = undefined
-	#server: MCPIdentity | undefined = undefined
-	#supported: MCPServerCapabilities | undefined = undefined
+	#session: MCPLegacySession | undefined
 
 	/**
 	 * Creates a legacy client transport adapter.
@@ -101,9 +99,11 @@ export class MCPLegacyClientTransport implements MCPMessageTransportInterface {
 	}
 
 	async start(): Promise<void> {
+		const session = new MCPLegacySession()
+		this.#session = session
 		await this.#transport.start()
 		try {
-			await this.#initialize()
+			await this.#initialize(session)
 		} catch (error) {
 			try {
 				await this.#transport.close()
@@ -124,15 +124,15 @@ export class MCPLegacyClientTransport implements MCPMessageTransportInterface {
 			return
 		}
 		const id = message.id
-		let correlation: { readonly method: string } | undefined
-		if (id !== undefined) {
-			correlation = { method: message.method }
-			this.#correlations.set(id, correlation)
+		const session = this.#session
+		if (id !== undefined) session?.correlate(id, message.method)
+		const correlation = id === undefined ? undefined : session?.correlation(id)
+		if (id !== undefined && session !== undefined) {
 			const deadline = AbortSignal.timeout(this.#timeout)
 			deadline.addEventListener(
 				'abort',
 				() => {
-					if (this.#correlations.get(id) !== correlation) return
+					if (this.#session !== session || session.correlation(id) !== correlation) return
 					this.#reject(
 						id,
 						new MCPError(
@@ -147,67 +147,55 @@ export class MCPLegacyClientTransport implements MCPMessageTransportInterface {
 		try {
 			await this.#transport.send(modernInvocationToLegacy(message))
 		} catch (error) {
-			if (id !== undefined && this.#correlations.get(id) === correlation) {
-				this.#correlations.delete(id)
+			if (id !== undefined && session?.correlation(id) === correlation) {
+				session?.forget(id)
 			}
 			throw error
 		}
 	}
 
 	/**
-	 * Closes the wrapped transport and clears retained adapter state.
+	 * Closes the wrapped transport and releases the bound session.
 	 *
 	 * @remarks
-	 * The cleared handshake state — the server identity, the supported reading, and the retained
-	 * `instructions` value — is unobservable between `close()` and the next accepted handshake.
-	 * Discovery answers the pre-handshake refusal in that window, and the accepted handshake
-	 * reassigns the state unconditionally.
+	 * Discovery answers the pre-handshake refusal until another session accepts its handshake.
 	 *
 	 * @returns Resolves after the wrapped transport closes
 	 */
 	async close(): Promise<void> {
-		this.#instructions = undefined
-		this.#server = undefined
-		this.#supported = undefined
-		this.#correlations.clear()
+		this.#session = undefined
 		await this.#transport.close()
 	}
 
-	async #initialize(): Promise<void> {
-		const handshake = Promise.withResolvers<JSONRPCResponse>()
-		this.#handshake = handshake
-		try {
-			await this.#write({
-				jsonrpc: '2.0',
-				id: 0,
-				method: 'initialize',
-				params: {
-					protocolVersion: this.#pin ?? MCP_HANDSHAKE_VERSION,
-					capabilities: this.#capabilities,
-					clientInfo: this.#client,
-				},
-			})
-			const deadline = AbortSignal.timeout(this.#timeout)
-			deadline.addEventListener(
-				'abort',
-				() =>
-					handshake.reject(
-						new MCPError(
-							`Legacy MCP handshake timed out after ${this.#timeout}ms`,
-							MCP_UNSUPPORTED_VERSION,
-						),
+	async #initialize(session: MCPLegacySession): Promise<void> {
+		await this.#write({
+			jsonrpc: '2.0',
+			id: 0,
+			method: 'initialize',
+			params: {
+				protocolVersion: this.#pin ?? MCP_HANDSHAKE_VERSION,
+				capabilities: this.#capabilities,
+				clientInfo: this.#client,
+			},
+		})
+		const deadline = AbortSignal.timeout(this.#timeout)
+		deadline.addEventListener(
+			'abort',
+			() =>
+				session.expire(
+					new MCPError(
+						`Legacy MCP handshake timed out after ${this.#timeout}ms`,
+						MCP_UNSUPPORTED_VERSION,
 					),
-				{ once: true },
-			)
-			const response = await handshake.promise
-			this.#accept(response)
-			await this.#write({ jsonrpc: '2.0', method: 'notifications/initialized' })
-		} finally {
-			if (this.#handshake === handshake) this.#handshake = undefined
-		}
+				),
+			{ once: true },
+		)
+		const response = await session.response
+		this.#accept(session, response)
+		await this.#write({ jsonrpc: '2.0', method: 'notifications/initialized' })
 	}
 
-	#accept(response: JSONRPCResponse): void {
+	#accept(session: MCPLegacySession, response: JSONRPCResponse): void {
 		if (response.error !== undefined) {
 			throw new MCPError(response.error.message, response.error.code, response.error.data)
 		}
@@ -259,9 +247,7 @@ export class MCPLegacyClientTransport implements MCPMessageTransportInterface {
 				{ requested: this.#pin, negotiated: protocol },
 			)
 		}
-		this.#instructions = instructions
-		this.#server = identity
-		this.#supported = capabilities
+		session.accept(identity, capabilities, instructions)
 	}
 
 	async #write(message: JSONRPCMessage): Promise<void> {
@@ -285,8 +271,9 @@ export class MCPLegacyClientTransport implements MCPMessageTransportInterface {
 	}
 
 	#discover(id: JSONRPCId): void {
-		const identity = this.#server
-		const capabilities = this.#supported
+		const identity = this.#session?.identity
+		const capabilities = this.#session?.capabilities
+		const instructions = this.#session?.instructions
 		if (identity === undefined || capabilities === undefined) {
 			this.#reject(
 				id,
@@ -304,7 +291,7 @@ export class MCPLegacyClientTransport implements MCPMessageTransportInterface {
 				{
 					supportedVersions: [MCP_MODERN_VERSION],
 					capabilities,
-					...(this.#instructions === undefined ? {} : { instructions: this.#instructions }),
+					...(instructions === undefined ? {} : { instructions }),
 				},
 				identity,
 				0,
@@ -321,27 +308,26 @@ export class MCPLegacyClientTransport implements MCPMessageTransportInterface {
 			)
 			return
 		}
-		const handshake = this.#handshake
-		if (handshake !== undefined && isJSONRPCResponse(owned) && owned.id === 0) {
-			handshake.resolve(owned)
+		const session = this.#session
+		if (isJSONRPCResponse(owned) && owned.id === 0 && session?.claim(owned)) {
 			return
 		}
 		if (!isJSONRPCResponse(owned) || owned.id === undefined) {
 			this.#emitter.emit('message', owned)
 			return
 		}
-		const correlation = this.#correlations.get(owned.id)
+		const correlation = session?.correlation(owned.id)
 		if (correlation === undefined) {
 			this.#emitter.emit('message', owned)
 			return
 		}
-		this.#correlations.delete(owned.id)
+		session?.forget(owned.id)
 		const method = correlation.method
 		if (owned.error !== undefined) {
 			this.#emitter.emit('message', owned)
 			return
 		}
-		const identity = this.#server
+		const identity = session?.identity
 		if (identity === undefined || !isMCPLegacyResult(owned.result)) {
 			this.#reject(
 				owned.id,
@@ -357,7 +343,7 @@ export class MCPLegacyClientTransport implements MCPMessageTransportInterface {
 	}
 
 	#reject(id: JSONRPCId, error: MCPError): void {
-		this.#correlations.delete(id)
+		this.#session?.forget(id)
 		this.#emitter.emit('error', error)
 		this.#emitter.emit('message', buildJSONRPCError(id, error.code, error.message))
 	}

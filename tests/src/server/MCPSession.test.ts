@@ -1,9 +1,9 @@
-import type { JSONRPCMessage } from '@src/core'
-import type { SSEMessage, StreamInterface } from '@orkestrel/server'
+import { buildSessionMessage, SessionStreamRecorder } from '../../setupServer.js'
+
 import { describe, expect, it } from 'vitest'
 import { MCPSession } from '@src/server'
-import { createRecorder, waitForDelay } from '@orkestrel/test'
-import { createJSONRPCRequest, createManualClock } from '../../setup.js'
+import { waitForDelay } from '@orkestrel/test'
+import { createManualClock } from '../../setup.js'
 
 // src/server/MCPSession.ts — one MCP transport session, the per-session entity a
 // `createMCPSession` middleware owns, with its bounded resumable replay log FOLDED IN — one
@@ -17,43 +17,11 @@ import { createJSONRPCRequest, createManualClock } from '../../setup.js'
 // wire mint / validate / push / replay flow is proven through a real server in middlewares.test.ts.
 
 // A distinct JSON-RPC message per ordinal, so a replayed sequence is identifiable by content.
-function message(n: number): JSONRPCMessage {
-	return createJSONRPCRequest({ method: 'notifications/message', id: n })
-}
 
 // A REAL recording StreamInterface (single-use to this file, so local): its
 // `write` records each SSEMessage into an unbounded sink, so it reports available capacity;
 // behaviour — a genuine sink standing in for an open GET-SSE stream so `push`'s fan-out is
 // `drain` resolves immediately, `end` closes the sink, and callers read the live `writes` getter.
-class RecordingStream implements StreamInterface {
-	readonly response = new Response(null)
-	readonly #recorder = createRecorder<readonly [SSEMessage]>()
-	#closed = false
-
-	get closed(): boolean {
-		return this.#closed
-	}
-
-	get writes(): readonly SSEMessage[] {
-		return this.#recorder.calls.map(([event]) => event)
-	}
-
-	write(event: SSEMessage): boolean {
-		if (this.#closed) return false
-		this.#recorder.handler(event)
-		return true
-	}
-
-	comment(): void {}
-
-	drain(): Promise<void> {
-		return Promise.resolve()
-	}
-
-	end(): void {
-		this.#closed = true
-	}
-}
 
 describe('MCPSession — id', () => {
 	it('exposes the id it was constructed with', () => {
@@ -64,26 +32,28 @@ describe('MCPSession — id', () => {
 describe('MCPSession — push appends to the folded log with monotone ids', () => {
 	it('push returns a fresh base36 id each call (strictly increasing)', () => {
 		const session = new MCPSession('s')
-		const ids = [message(1), message(2), message(3)].map((m) => session.push(m))
+		const ids = [buildSessionMessage(1), buildSessionMessage(2), buildSessionMessage(3)].map((m) =>
+			session.push(m),
+		)
 		// base36 of 1,2,3 → '1','2','3' — monotone, never reused, never out of order.
 		expect(ids).toEqual(['1', '2', '3'])
 	})
 
 	it('a push with NO attached stream is still logged (replayable later)', () => {
 		const session = new MCPSession('s')
-		const first = session.push(message(1))
-		session.push(message(2))
+		const first = session.push(buildSessionMessage(1))
+		session.push(buildSessionMessage(2))
 		// No stream attached — the pushes are logged so a client that connects LATER replays them.
-		expect(session.replay(first).map((entry) => entry.message)).toEqual([message(2)])
+		expect(session.replay(first).map((entry) => entry.message)).toEqual([buildSessionMessage(2)])
 	})
 })
 
 describe('MCPSession — push fans out to attached streams', () => {
 	it('push writes the message to an attached stream as an id-tagged SSE event', () => {
 		const session = new MCPSession('s')
-		const stream = new RecordingStream()
+		const stream = new SessionStreamRecorder()
 		session.attach(stream)
-		const sent = message(1)
+		const sent = buildSessionMessage(1)
 		const id = session.push(sent)
 		expect(stream.writes).toHaveLength(1)
 		const event = stream.writes[0]
@@ -94,11 +64,11 @@ describe('MCPSession — push fans out to attached streams', () => {
 
 	it('push fans out to EVERY attached stream (the same id reaches both)', () => {
 		const session = new MCPSession('s')
-		const a = new RecordingStream()
-		const b = new RecordingStream()
+		const a = new SessionStreamRecorder()
+		const b = new SessionStreamRecorder()
 		session.attach(a)
 		session.attach(b)
-		session.push(message(1))
+		session.push(buildSessionMessage(1))
 		expect(a.writes).toHaveLength(1)
 		expect(b.writes).toHaveLength(1)
 		expect(a.writes[0]?.id).toBe(b.writes[0]?.id)
@@ -106,41 +76,44 @@ describe('MCPSession — push fans out to attached streams', () => {
 
 	it('a detached stream stops receiving pushes (but the message is still logged)', () => {
 		const session = new MCPSession('s')
-		const stream = new RecordingStream()
+		const stream = new SessionStreamRecorder()
 		session.attach(stream)
-		const first = session.push(message(1))
+		const first = session.push(buildSessionMessage(1))
 		session.detach(stream)
-		session.push(message(2)) // not delivered to the detached stream
+		session.push(buildSessionMessage(2)) // not delivered to the detached stream
 		expect(stream.writes).toHaveLength(1) // only the pre-detach push reached the stream
 		// BOTH are logged — a later reconnect can replay #2.
-		expect(session.replay(first).map((entry) => entry.message)).toEqual([message(2)])
+		expect(session.replay(first).map((entry) => entry.message)).toEqual([buildSessionMessage(2)])
 	})
 })
 
 describe('MCPSession — replay returns the strictly-after entries in order', () => {
 	it('replay(afterId) returns every entry after it, in append order', () => {
 		const session = new MCPSession('s')
-		const first = session.push(message(1))
-		session.push(message(2))
-		session.push(message(3))
+		const first = session.push(buildSessionMessage(1))
+		session.push(buildSessionMessage(2))
+		session.push(buildSessionMessage(3))
 		const replayed = session.replay(first)
-		expect(replayed.map((entry) => entry.message)).toEqual([message(2), message(3)])
+		expect(replayed.map((entry) => entry.message)).toEqual([
+			buildSessionMessage(2),
+			buildSessionMessage(3),
+		])
 		// The ids ride on each replayed entry (the value the client re-resumes from).
 		expect(replayed.every((entry) => typeof entry.id === 'string')).toBe(true)
 	})
 
 	it('replay(lastId) returns nothing when no entry follows the last id', () => {
 		const session = new MCPSession('s')
-		session.push(message(1))
-		const last = session.push(message(2))
+		session.push(buildSessionMessage(1))
+		const last = session.push(buildSessionMessage(2))
 		expect(session.replay(last)).toEqual([])
 	})
 
 	it('replay of an UNKNOWN / never-seen id returns nothing (the spec-sane resume)', () => {
 		// A cursor that names no retained entry → replay nothing (never re-deliver un-lost events).
 		const session = new MCPSession('s')
-		session.push(message(1))
-		session.push(message(2))
+		session.push(buildSessionMessage(1))
+		session.push(buildSessionMessage(2))
 		expect(session.replay('does-not-exist')).toEqual([])
 	})
 })
@@ -148,14 +121,14 @@ describe('MCPSession — replay returns the strictly-after entries in order', ()
 describe('MCPSession — capacity eviction (oldest dropped past the bound)', () => {
 	it('retains at most capacity entries, evicting the oldest', () => {
 		const session = new MCPSession('s', { capacity: 2 })
-		const first = session.push(message(1))
-		session.push(message(2))
-		session.push(message(3)) // pushes the count to 3 → the oldest (first) is evicted
+		const first = session.push(buildSessionMessage(1))
+		session.push(buildSessionMessage(2))
+		session.push(buildSessionMessage(3)) // pushes the count to 3 → the oldest (first) is evicted
 		// The first entry fell off the back — an evicted cursor replays nothing.
 		expect(session.replay(first)).toEqual([])
 		// The surviving tail (#2, #3) is intact — a cursor at #2 still replays #3.
 		const survivors = session.replay('2') // base36 id of the 2nd push
-		expect(survivors.map((entry) => entry.message)).toEqual([message(3)])
+		expect(survivors.map((entry) => entry.message)).toEqual([buildSessionMessage(3)])
 	})
 
 	it('an evicted-cursor replay yields nothing even though newer entries are retained', () => {
@@ -163,10 +136,10 @@ describe('MCPSession — capacity eviction (oldest dropped past the bound)', () 
 		// (the cursor fell off the back), not the surviving tail — else a far-behind client would be
 		// handed events out of its own sequence context.
 		const session = new MCPSession('s', { capacity: 2 })
-		const first = session.push(message(1))
-		session.push(message(2))
-		session.push(message(3))
-		session.push(message(4))
+		const first = session.push(buildSessionMessage(1))
+		session.push(buildSessionMessage(2))
+		session.push(buildSessionMessage(3))
+		session.push(buildSessionMessage(4))
 		expect(session.replay(first)).toEqual([])
 	})
 })
@@ -177,17 +150,17 @@ describe('MCPSession — lazy TTL eviction (injected clock)', () => {
 		// next push, leaving only the fresh one — so replay from the stale id finds nothing.
 		const clock = createManualClock()
 		const session = new MCPSession('s', { ttl: 1_000, clock: clock.now })
-		const stale = session.push(message(1))
+		const stale = session.push(buildSessionMessage(1))
 		clock.advance(1_000)
-		session.push(message(2)) // the push's sweep drops the t=0 entry
+		session.push(buildSessionMessage(2)) // the push's sweep drops the t=0 entry
 		expect(session.replay(stale)).toEqual([])
 	})
 
 	it('replay sweeps stale entries first, so an expired entry is never replayed', () => {
 		const clock = createManualClock()
 		const session = new MCPSession('s', { ttl: 1_000, clock: clock.now })
-		const first = session.push(message(1))
-		session.push(message(2))
+		const first = session.push(buildSessionMessage(1))
+		session.push(buildSessionMessage(2))
 		// Read at t=2000: both t=0 entries are stale and swept → replay finds neither.
 		clock.advance(2_000)
 		expect(session.replay(first)).toEqual([])
@@ -196,20 +169,20 @@ describe('MCPSession — lazy TTL eviction (injected clock)', () => {
 	it('an entry within the ttl window is retained', () => {
 		const clock = createManualClock()
 		const session = new MCPSession('s', { ttl: 1_000, clock: clock.now })
-		const first = session.push(message(1))
+		const first = session.push(buildSessionMessage(1))
 		clock.advance(999)
-		session.push(message(2)) // within the window — both retained
+		session.push(buildSessionMessage(2)) // within the window — both retained
 		// At t=999 (< ttl) the first is still live, so the cursor at it replays the second.
-		expect(session.replay(first).map((entry) => entry.message)).toEqual([message(2)])
+		expect(session.replay(first).map((entry) => entry.message)).toEqual([buildSessionMessage(2)])
 	})
 
 	it('with ttl disabled (0) an entry never ages out, however far the clock advances', () => {
 		const clock = createManualClock()
 		const session = new MCPSession('s', { ttl: 0, clock: clock.now })
-		const first = session.push(message(1))
+		const first = session.push(buildSessionMessage(1))
 		clock.advance(Number.MAX_SAFE_INTEGER)
-		session.push(message(2))
-		expect(session.replay(first).map((entry) => entry.message)).toEqual([message(2)])
+		session.push(buildSessionMessage(2))
+		expect(session.replay(first).map((entry) => entry.message)).toEqual([buildSessionMessage(2)])
 	})
 
 	it('an unset clock leaves the sweep on the host clock rather than a frozen instant', async () => {
@@ -217,9 +190,9 @@ describe('MCPSession — lazy TTL eviction (injected clock)', () => {
 		// millisecond and a real elapsed wait is the smallest reading that distinguishes a wired
 		// default from a clock stuck at construction.
 		const session = new MCPSession('s', { ttl: 1 })
-		const stale = session.push(message(1))
+		const stale = session.push(buildSessionMessage(1))
 		await waitForDelay(5)
-		session.push(message(2))
+		session.push(buildSessionMessage(2))
 		expect(session.replay(stale)).toEqual([])
 	})
 })
@@ -227,16 +200,16 @@ describe('MCPSession — lazy TTL eviction (injected clock)', () => {
 describe('MCPSession — push return id round-trips with the fanned-out event', () => {
 	it('the id push returns equals the attached stream event id and is replayable', () => {
 		const session = new MCPSession('s')
-		const stream = new RecordingStream()
+		const stream = new SessionStreamRecorder()
 		session.attach(stream)
-		session.push(message(1))
-		const id = session.push(message(2))
+		session.push(buildSessionMessage(1))
+		const id = session.push(buildSessionMessage(2))
 		// The 2nd push's returned id matches the 2nd fanned-out event, and replaying strictly after
 		// the FIRST event's id surfaces exactly the 2nd message (proving the log + fan-out agree).
 		const events = stream.writes
 		expect(events[1]?.id).toBe(id)
 		const firstId = events[0]?.id ?? ''
-		expect(session.replay(firstId).map((entry) => entry.message)).toEqual([message(2)])
+		expect(session.replay(firstId).map((entry) => entry.message)).toEqual([buildSessionMessage(2)])
 	})
 })
 
@@ -245,14 +218,14 @@ describe('MCPSession — replay entries carry id + message + timestamp', () => {
 	it('each replayed entry exposes its id, message, and timestamp', () => {
 		const clock = createManualClock(1_000)
 		const session = new MCPSession('s', { clock: clock.now })
-		const first = session.push(message(1))
+		const first = session.push(buildSessionMessage(1))
 		clock.advance(1_000)
-		session.push(message(2))
+		session.push(buildSessionMessage(2))
 		// Read at t=2000 (within the per-event TTL of both timestamps) so neither is TTL-swept; the
 		// strictly-after entry carries its id / message / appended timestamp.
 		const [entry] = session.replay(first)
 		expect(entry?.id).toBeDefined()
-		expect(entry?.message).toEqual(message(2))
+		expect(entry?.message).toEqual(buildSessionMessage(2))
 		expect(entry?.timestamp).toBe(2_000)
 	})
 })

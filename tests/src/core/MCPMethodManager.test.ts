@@ -5,8 +5,9 @@ import type {
 	MCPMethodHandler,
 	MCPStream,
 } from '@src/core'
-import { buildJSONRPCResult, MCPMethodManager } from '@src/core'
+import { MCPMethodManager } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
+import { respondFixtureMethod, respondAlternateMethod } from '../../setup.js'
 
 // MCPMethodManager is the modern method registry MCPServer dispatches through — a
 // name-keyed store of real handlers (real functions, no mocks). Covers
@@ -16,20 +17,12 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 // The seam carries the REQUEST arm alone, so neither handler narrows anything: a
 // notification never reaches this registry, and answering is not optional.
 
-async function ok(request: JSONRPCRequest): Promise<JSONRPCResponse> {
-	return buildJSONRPCResult(request.id, { from: 'ok' })
-}
-
-async function other(request: JSONRPCRequest): Promise<JSONRPCResponse> {
-	return buildJSONRPCResult(request.id, { from: 'other' })
-}
-
 describe('MCPMethodManager', () => {
 	it('resolves a registered method to the exact handler that was registered', () => {
 		const methods = new MCPMethodManager()
-		methods.add('tools/call', ok)
+		methods.add('tools/call', respondFixtureMethod)
 
-		expect(methods.method('tools/call')).toBe(ok)
+		expect(methods.method('tools/call')).toBe(respondFixtureMethod)
 	})
 
 	it('resolves an unregistered method to undefined (the -32601 signal, not a sentinel)', () => {
@@ -40,32 +33,32 @@ describe('MCPMethodManager', () => {
 
 	it('replaces the handler when a name is registered twice', () => {
 		const methods = new MCPMethodManager()
-		methods.add('tools/call', ok)
-		methods.add('tools/call', other)
+		methods.add('tools/call', respondFixtureMethod)
+		methods.add('tools/call', respondAlternateMethod)
 
-		expect(methods.method('tools/call')).toBe(other)
+		expect(methods.method('tools/call')).toBe(respondAlternateMethod)
 	})
 
 	it('keeps registrations independent per name', () => {
 		const methods = new MCPMethodManager()
-		methods.add('tools/call', ok)
-		methods.add('tools/list', other)
+		methods.add('tools/call', respondFixtureMethod)
+		methods.add('tools/list', respondAlternateMethod)
 
-		expect(methods.method('tools/call')).toBe(ok)
-		expect(methods.method('tools/list')).toBe(other)
+		expect(methods.method('tools/call')).toBe(respondFixtureMethod)
+		expect(methods.method('tools/list')).toBe(respondAlternateMethod)
 	})
 
 	it('registers an empty method name as an ordinary name', () => {
 		const methods = new MCPMethodManager()
-		methods.add('', ok)
+		methods.add('', respondFixtureMethod)
 
-		expect(methods.method('')).toBe(ok)
+		expect(methods.method('')).toBe(respondFixtureMethod)
 		expect(methods.method('tools/call')).toBeUndefined()
 	})
 
 	it('runs a resolved handler and returns its response', async () => {
 		const methods = new MCPMethodManager()
-		methods.add('tools/call', ok)
+		methods.add('tools/call', respondFixtureMethod)
 		const handler = methods.method('tools/call')
 		if (handler === undefined) throw new Error('expected a registered handler')
 

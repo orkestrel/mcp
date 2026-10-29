@@ -1,4 +1,10 @@
-import type { MCPMessageTransportEventMap, MCPStreamControllerInterface } from '@src/core'
+import type {
+	JSONRPCInvocation,
+	MCPDispatcherInterface,
+	MCPHeaderParameter,
+	MCPMessageTransportEventMap,
+	MCPStreamControllerInterface,
+} from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { StreamInterface } from '@orkestrel/server'
 import type { IncomingMessage } from 'node:http'
@@ -8,8 +14,49 @@ import {
 	JSONRPC_INVALID_REQUEST,
 	buildJSONRPCError,
 	MCP_SESSION_HEADER,
+	MCP_LOOKUP_PAGES,
+	buildHeaderParameters,
+	extractToolSchema,
 } from '@src/core'
-import { isString } from '@orkestrel/contract'
+import { attempt, isRecord, isString } from '@orkestrel/contract'
+
+/** Reads a request body, returning absence when the body cannot be read. */
+export async function readRequestText(request: Request): Promise<string | undefined> {
+	try {
+		return await request.text()
+	} catch {
+		return undefined
+	}
+}
+
+/** Resolves a named tool's header declarations through the bounded listing protocol. */
+export async function resolveHeaderParameters(
+	mcp: MCPDispatcherInterface,
+	invocation: JSONRPCInvocation,
+	called: string,
+	cursor?: string,
+	pages: number = MCP_LOOKUP_PAGES,
+): Promise<readonly MCPHeaderParameter[]> {
+	if (pages <= 0) return []
+	const answer = await mcp.dispatch({
+		jsonrpc: '2.0',
+		id: 0,
+		method: 'tools/list',
+		params: {
+			_meta: invocation.params?.['_meta'],
+			...(cursor === undefined ? {} : { cursor }),
+		},
+	})
+	if (Symbol.asyncIterator in answer) {
+		answer.stop()
+		return []
+	}
+	const schema = extractToolSchema(answer, called)
+	if (schema !== undefined) return buildHeaderParameters(schema) ?? []
+	const listing: unknown = answer.result
+	const next: unknown = isRecord(listing) ? listing['nextCursor'] : undefined
+	return isString(next) ? resolveHeaderParameters(mcp, invocation, called, next, pages - 1) : []
+}
 
 /**
  * Pumps a controlled held-open exchange onto an open SSE stream — one `data:` event per
@@ -53,12 +100,12 @@ export async function sendEventStream(
 		// a dispose that threw would otherwise escape past the outer catch that swallows the
 		// pump's own faults.
 		try {
-			let next = await stream.next()
-			while (next.done !== true) {
+			while (true) {
+				const next = await stream.next()
+				const done = next.done
 				sse.write({ data: JSON.stringify(next.value) })
-				next = await stream.next()
+				if (done) break
 			}
-			sse.write({ data: JSON.stringify(next.value) })
 		} finally {
 			await stream[Symbol.asyncDispose]()
 		}
@@ -86,7 +133,7 @@ export async function sendEventStream(
  * @remarks
  * Reads the fetch-standard `Request.headers.get('accept')` and returns `true` when it
  * contains `text/event-stream` (case-insensitive). The MCP `POST` handler uses it
- * (together with the `streaming` option) to pick the Streamable-HTTP SSE response
+ * (together with the `stream` option) to pick the Streamable-HTTP SSE response
  * framing over a plain JSON body; the JSON-RPC envelope is identical either way. Total
  * — an absent / unmatched header returns `false`.
  *
@@ -117,12 +164,9 @@ export function allowsOrigin(request: Request, options?: MCPOriginOptions): bool
 	if (options?.enabled === false) return true
 	const origin = request.headers.get('origin')
 	if (origin === null) return true
-	let parsed: URL
-	try {
-		parsed = new URL(origin)
-	} catch {
-		return false
-	}
+	const result = attempt(() => new URL(origin))
+	if (!result.success) return false
+	const parsed = result.value
 	if (parsed.origin !== origin) return false
 	if (
 		parsed.hostname === 'localhost' ||

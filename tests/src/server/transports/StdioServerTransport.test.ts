@@ -1,10 +1,16 @@
-import type { JSONRPCMessage, JSONRPCNotification, JSONRPCResponse, MCPStream } from '@src/core'
+import type { JSONRPCMessage, JSONRPCNotification, JSONRPCResponse } from '@src/core'
 import { PassThrough, Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { MCPStreamController, MCPTextStreamController, sendStream } from '@src/core'
 import { StdioServerTransport, createDuplexServerTransport } from '@src/server'
 import { waitForDelay } from '@orkestrel/test'
-import { createJSONRPCRequest } from '../../../setup.js'
+import {
+	createJSONRPCRequest,
+	MCPFixtureCell,
+	declineFixtureTask,
+	createFixtureResponseStream,
+} from '../../../setup.js'
+import { collectFixtureLines } from '../../../setupServer.js'
 
 // src/server/transports/StdioServerTransport.ts — the stdio SERVER bridge, driven END TO END
 // over a REAL pair of injectable `node:stream` PassThroughs standing in for
@@ -16,26 +22,6 @@ import { createJSONRPCRequest } from '../../../setup.js'
 // `close` fires the transport's `close` event (idempotent).
 
 // Collect every newline-terminated line written to `output`, split as they arrive.
-function collectLines(output: PassThrough): { readonly lines: () => readonly string[] } {
-	let buffer = ''
-	const lines: string[] = []
-	output.on('data', (chunk: Buffer | string) => {
-		buffer += chunk.toString()
-		const parts = buffer.split('\n')
-		buffer = parts[parts.length - 1] ?? ''
-		for (const line of parts.slice(0, -1)) lines.push(line)
-	})
-	return { lines: () => lines }
-}
-
-async function* responseStream(
-	notification: JSONRPCNotification,
-	response: JSONRPCResponse,
-): MCPStream {
-	yield notification
-	return response
-}
-
 describe('StdioServerTransport — inbound lines become transport messages', () => {
 	it('emits the parsed JSONRPCMessage for one complete newline-terminated input line', async () => {
 		const input = new PassThrough()
@@ -138,7 +124,7 @@ describe('StdioServerTransport — send writes response lines the peer decodes',
 	it('writes one newline-terminated JSON line per send', async () => {
 		const input = new PassThrough()
 		const output = new PassThrough()
-		const { lines } = collectLines(output)
+		const { lines } = collectFixtureLines(output)
 		const transport = new StdioServerTransport(input, output)
 		await transport.start()
 
@@ -153,7 +139,7 @@ describe('StdioServerTransport — send writes response lines the peer decodes',
 	it('writes one line per sequential send', async () => {
 		const input = new PassThrough()
 		const output = new PassThrough()
-		const { lines } = collectLines(output)
+		const { lines } = collectFixtureLines(output)
 		const transport = new StdioServerTransport(input, output)
 		await transport.start()
 
@@ -227,7 +213,11 @@ describe('StdioServerTransport — send writes response lines the peer decodes',
 		const response: JSONRPCResponse = { jsonrpc: '2.0', id: 1, result: { done: true } }
 		const closure = new AbortController()
 		const stream = new MCPTextStreamController(
-			new MCPStreamController(responseStream(notification, response), closure.signal, closure),
+			new MCPStreamController(
+				createFixtureResponseStream(notification, response),
+				closure.signal,
+				closure,
+			),
 		)
 		await transport.start()
 
@@ -365,14 +355,14 @@ describe('StdioServerTransport — lifecycle', () => {
 		const input = new PassThrough()
 		const output = new PassThrough()
 		const transport = new StdioServerTransport(input, output)
-		let closed = 0
-		transport.emitter.on('close', () => (closed += 1))
+		const closed = new MCPFixtureCell(0)
+		transport.emitter.on('close', () => (closed.value += 1))
 		await transport.start()
 
 		await transport.close()
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 		await transport.close()
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 		await transport.start()
 		expect([
 			input.listenerCount('data'),
@@ -385,14 +375,14 @@ describe('StdioServerTransport — lifecycle', () => {
 		const input = new PassThrough()
 		const output = new PassThrough()
 		const transport = new StdioServerTransport(input, output)
-		let closed = 0
-		transport.emitter.on('close', () => (closed += 1))
+		const closed = new MCPFixtureCell(0)
+		transport.emitter.on('close', () => (closed.value += 1))
 		await transport.start()
 
 		input.end()
 		await waitForDelay()
 
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 		expect([
 			input.listenerCount('data'),
 			input.listenerCount('close'),
@@ -455,7 +445,7 @@ describe('StdioServerTransport — input flow ownership', () => {
 	it('leaves an input flowing when the caller attached and detached a reader before start', async () => {
 		const input = new PassThrough()
 		const output = new PassThrough()
-		const reader = (): void => {}
+		const reader = declineFixtureTask
 		input.on('data', reader)
 		input.removeListener('data', reader)
 		// Removing the listener does not stop the flow the attach started.

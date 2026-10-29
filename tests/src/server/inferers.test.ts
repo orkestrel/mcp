@@ -1,4 +1,5 @@
 import type { MCPHeaderParameter } from '@src/core'
+import { createHeaderRequest } from '../../setupServer.js'
 import {
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_METHOD_NOT_FOUND,
@@ -96,9 +97,6 @@ describe('inferStatus', () => {
 
 // A request carrying exactly the fields one row supplies. Local to this file: no other suite
 // needs it, and `tests/setup.ts` owns only helpers more than one suite shares.
-function createHeaderRequest(headers: Readonly<Record<string, string>>): Request {
-	return new Request('http://localhost/mcp', { method: 'POST', headers })
-}
 
 describe('inferParameterRefusal', () => {
 	const PARAMETERS: readonly MCPHeaderParameter[] = [

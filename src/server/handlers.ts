@@ -1,4 +1,4 @@
-import type { MCPDispatcherInterface, MCPHeaderParameter } from '@src/core'
+import type { MCPDispatcherInterface } from '@src/core'
 import type { RouteContext } from '@orkestrel/router'
 import type { HTTPHandlerOptions } from './types.js'
 import {
@@ -6,23 +6,26 @@ import {
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_PARSE_ERROR,
 	MCP_HEADER_MISMATCH,
-	MCP_LOOKUP_PAGES,
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_UNSUPPORTED_VERSION,
 	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
-	buildHeaderParameters,
 	buildJSONRPCError,
-	extractToolSchema,
 	inferRequestEra,
 	isMCPLegacyVersion,
 	isMCPModernVersion,
 	parseRequestContext,
 	parseJSONRPCMessage,
 } from '@src/core'
-import { isObject, isRecord, isString, parseJSON } from '@orkestrel/contract'
+import { isObject, isString, parseJSON } from '@orkestrel/contract'
 import { createStream } from '@orkestrel/server'
 import { SSE_BUFFERING_DISABLED, SSE_BUFFERING_HEADER } from './constants.js'
-import { acceptsEventStream, allowsOrigin, sendEventStream } from './helpers.js'
+import {
+	acceptsEventStream,
+	allowsOrigin,
+	readRequestText,
+	resolveHeaderParameters,
+	sendEventStream,
+} from './helpers.js'
 import { inferHeaderIssue, inferParameterRefusal, inferStatus } from './inferers.js'
 import { HTTPDisconnect } from './HTTPDisconnect.js'
 
@@ -62,7 +65,7 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  * import { createToolManager } from '@orkestrel/tool'
  *
  * const mcp = createMCPServer({ identity: { name: 'docs', version: '1.0.0' }, tools: createToolManager() })
- * const handler = createMCPPostHandler(createMCPLegacy(mcp), { streaming: true }) // answers `initialize` too; pass `mcp` alone for modern-only
+ * const handler = createMCPPostHandler(createMCPLegacy(mcp), { stream: true }) // answers `initialize` too; pass `mcp` alone for modern-only
  * await handler(new Request('http://localhost/mcp', {
  * 	method: 'POST',
  * 	body: '{"jsonrpc":"2.0","method":"ping","id":1}',
@@ -73,14 +76,12 @@ export function createMCPPostHandler<TState = unknown>(
 	mcp: MCPDispatcherInterface,
 	options?: HTTPHandlerOptions<TState>,
 ): (request: Request, context?: RouteContext<string, TState>) => Promise<Response> {
-	const streaming = options?.streaming ?? true
+	const enabled = options?.stream ?? true
 	const origin = options?.origin
 	return async (request, context): Promise<Response> => {
 		if (!allowsOrigin(request, origin)) return new Response(null, { status: 403 })
-		let text: string
-		try {
-			text = await request.text()
-		} catch {
+		const text = await readRequestText(request)
+		if (text === undefined) {
 			return Response.json(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'), {
 				status: 400,
 			})
@@ -134,46 +135,7 @@ export function createMCPPostHandler<TState = unknown>(
 		// so a consumer that replaced `tools/list` with a stream refuses nothing.
 		const called = invocation.params?.['name']
 		if (era === 'modern' && invocation.method === 'tools/call' && isString(called)) {
-			let parameters: readonly MCPHeaderParameter[] = []
-			let cursor: string | undefined = undefined
-			// A replacement `tools/list` may page, so the named tool is not necessarily on the
-			// page a cursorless dispatch answers, and a lookup that read that page alone would
-			// forward a forged header for every tool further in. The walk follows `nextCursor`
-			// until the definition is found or the answer carries none, bounded by
-			// `MCP_LOOKUP_PAGES` because every page costs one in-memory dispatch on every
-			// `tools/call`. A cap hit reads as no definition — today's answer for an
-			// unrecognized name — rather than as a refusal, so a deep replacement listing
-			// degrades exactly as an unannotated tool does.
-			for (let page = 0; page < MCP_LOOKUP_PAGES; page += 1) {
-				const answer = await mcp.dispatch({
-					jsonrpc: '2.0',
-					// The id never leaves this handler: nothing correlates against it, and the answer
-					// is read here and discarded. It is RESERVED rather than arbitrary so an observer
-					// on the server's `request` event can tell this synthetic listing from a peer's.
-					id: 0,
-					method: 'tools/list',
-					params: {
-						_meta: invocation.params?.['_meta'],
-						...(cursor === undefined ? {} : { cursor }),
-					},
-				})
-				if (Symbol.asyncIterator in answer) {
-					answer.stop()
-					break
-				}
-				const schema = extractToolSchema(answer, called)
-				if (schema !== undefined) {
-					parameters = buildHeaderParameters(schema) ?? []
-					break
-				}
-				// Annotated `unknown` rather than inferred: the walk's next cursor is read out of
-				// `answer`, and `answer`'s own dispatch reads `cursor`, so an inferred local here
-				// makes the two circular and `tsc` reports `answer` as implicitly `any`.
-				const listing: unknown = answer.result
-				const next: unknown = isRecord(listing) ? listing['nextCursor'] : undefined
-				if (!isString(next)) break
-				cursor = next
-			}
+			const parameters = await resolveHeaderParameters(mcp, invocation, called)
 			const refusal = inferParameterRefusal(request, parameters, invocation.params?.['arguments'])
 			if (refusal !== undefined) {
 				return Response.json(buildJSONRPCError(id, MCP_HEADER_MISMATCH, refusal), {
@@ -218,7 +180,7 @@ export function createMCPPostHandler<TState = unknown>(
 		}
 		const status = inferStatus(response, era)
 		if (response === undefined) return new Response(null, { status })
-		if (status === 200 && streaming && acceptsEventStream(request)) {
+		if (status === 200 && enabled && acceptsEventStream(request)) {
 			const stream = createStream()
 			stream.response.headers.set(SSE_BUFFERING_HEADER, SSE_BUFFERING_DISABLED)
 			stream.write({ data: JSON.stringify(response) })

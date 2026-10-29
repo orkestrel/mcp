@@ -1,3 +1,4 @@
+import { buildProtectedPayload } from '../../setup.js'
 import {
 	DEFAULT_MCP_LIMITS,
 	isBoundedJSON,
@@ -25,27 +26,6 @@ import { buildNestedRecord } from '../../setup.js'
 // One complete protected payload, serialized the way a continuation port hands it back.
 // `overrides` names only what a row is changing; an `undefined` override REMOVES the member,
 // because `JSON.stringify` drops it — which is how a "missing binding" row is written.
-function protectedPayload(overrides: Readonly<Record<string, unknown>> = {}): string {
-	return JSON.stringify({
-		principal: 'operator-1',
-		expiry: 1_000,
-		id: 7,
-		version: '2026-07-28',
-		method: 'tools/call',
-		name: 'reply',
-		digest: 'abc',
-		requests: {
-			confirm: {
-				method: 'elicitation/create',
-				params: {
-					message: 'Approve?',
-					requestedSchema: { type: 'object', properties: { approved: { type: 'boolean' } } },
-				},
-			},
-		},
-		...overrides,
-	})
-}
 
 describe('parseJSONRPCMessage', () => {
 	it('returns an owned frozen request', () => {
@@ -432,7 +412,7 @@ describe('parseRequestContext', () => {
 
 describe('parseMCPInputState', () => {
 	it('parses every replay-binding field, the issued round, and optional consumer state', () => {
-		expect(parseMCPInputState(protectedPayload({ state: { operation: 'run-42' } }))).toEqual({
+		expect(parseMCPInputState(buildProtectedPayload({ state: { operation: 'run-42' } }))).toEqual({
 			principal: 'operator-1',
 			expiry: 1_000,
 			id: 7,
@@ -461,19 +441,19 @@ describe('parseMCPInputState', () => {
 		const invalid: readonly unknown[] = [
 			'not-json',
 			null,
-			protectedPayload({ principal: undefined }),
-			protectedPayload({ principal: '' }),
-			protectedPayload({ expiry: '1' }),
-			protectedPayload({ id: null }),
-			protectedPayload({ version: 2 }),
-			protectedPayload({ method: 2 }),
-			protectedPayload({ name: 2 }),
-			protectedPayload({ digest: 2 }),
-			protectedPayload({ requests: undefined }),
-			protectedPayload({ requests: 'confirm' }),
-			protectedPayload({ requests: {} }),
-			protectedPayload({ requests: { confirm: { method: 'tools/call' } } }),
-			protectedPayload({
+			buildProtectedPayload({ principal: undefined }),
+			buildProtectedPayload({ principal: '' }),
+			buildProtectedPayload({ expiry: '1' }),
+			buildProtectedPayload({ id: null }),
+			buildProtectedPayload({ version: 2 }),
+			buildProtectedPayload({ method: 2 }),
+			buildProtectedPayload({ name: 2 }),
+			buildProtectedPayload({ digest: 2 }),
+			buildProtectedPayload({ requests: undefined }),
+			buildProtectedPayload({ requests: 'confirm' }),
+			buildProtectedPayload({ requests: {} }),
+			buildProtectedPayload({ requests: { confirm: { method: 'tools/call' } } }),
+			buildProtectedPayload({
 				requests: {
 					confirm: {
 						method: 'elicitation/create',
@@ -489,7 +469,9 @@ describe('parseMCPInputState', () => {
 	// The positive control for the rows above: the same builder with nothing removed parses,
 	// so a row's `undefined` reports on the binding it mistyped rather than on the builder.
 	it('parses the complete payload the rejection rows are built from', () => {
-		expect(parseMCPInputState(protectedPayload())).toMatchObject({ requests: expect.any(Object) })
+		expect(parseMCPInputState(buildProtectedPayload())).toMatchObject({
+			requests: expect.any(Object),
+		})
 	})
 
 	// The recorded revision is the binding a retry is verified against, and a stamped request
@@ -498,15 +480,15 @@ describe('parseMCPInputState', () => {
 	// parser instead, so a parser answering with the current revision rather than the one the
 	// payload carries fails here while the complete-payload rows stay green.
 	it('carries the revision the payload recorded even when it is not the modern one', () => {
-		expect(parseMCPInputState(protectedPayload({ version: '2025-11-25' }))).toMatchObject({
+		expect(parseMCPInputState(buildProtectedPayload({ version: '2025-11-25' }))).toMatchObject({
 			version: '2025-11-25',
 		})
-		expect(parseMCPInputState(protectedPayload())).toMatchObject({ version: '2026-07-28' })
+		expect(parseMCPInputState(buildProtectedPayload())).toMatchObject({ version: '2026-07-28' })
 	})
 
 	it('rejects fractional and non-finite protected request ids', () => {
 		for (const id of [1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-			expect(parseMCPInputState(protectedPayload({ id }))).toBeUndefined()
+			expect(parseMCPInputState(buildProtectedPayload({ id }))).toBeUndefined()
 		}
 	})
 })

@@ -1,13 +1,4 @@
-import type {
-	JSONRPCId,
-	JSONRPCNotification,
-	MCPMethodOptions,
-	MCPServerInterface,
-	MCPStream,
-} from '@src/core'
-import type { HTTPTransportOptions } from '@src/server'
-import type { StartedServerInterface } from '../../setupServer.js'
-import { request as httpRequest } from 'node:http'
+import type { MCPMethodOptions } from '@src/core'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
 	buildJSONRPCResult,
@@ -25,60 +16,32 @@ import {
 	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
 } from '@src/core'
-import { createTool, createToolManager } from '@orkestrel/tool'
+import { createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import { createTeardown } from '@orkestrel/test'
 import { createMCPPostHandler as createPostHandler, createMCPRoutes } from '@src/server'
 import {
 	collectSSE,
+	MCPFixtureCell,
+	createSubscriptionEvents,
+	createDisconnectEvents,
+	createCallerEvents,
+	createPagedServer,
 	createCalculatorServer,
 	createJSONRPCNotification,
 	createJSONRPCRequest,
 	postJSON,
 	readSSEStream,
 } from '../../setup.js'
-import { startServer } from '../../setupServer.js'
-
-async function* subscriptionEvents(): AsyncGenerator<JSONRPCNotification> {
-	yield { jsonrpc: '2.0', method: 'notifications/prompts/list_changed' }
-}
-
-async function* disconnectEvents(
-	signal: AbortSignal,
-	observe: () => void,
-): AsyncGenerator<JSONRPCNotification> {
-	await new Promise<void>((resolve) => {
-		if (signal.aborted) resolve()
-		else signal.addEventListener('abort', () => resolve(), { once: true })
-	})
-	observe()
-	// This yield is reachable only after the disconnect signal was observed; the live stream
-	// remains idle and cannot use a producer write to trigger its own cancellation.
-	yield { jsonrpc: '2.0', method: 'notifications/prompts/list_changed' }
-	throw new Error('subscription client disconnected')
-}
-
-async function* callerEvents(
-	options: MCPMethodOptions,
-	id: JSONRPCId,
-	first: Promise<void>,
-	second: Promise<void>,
-): MCPStream {
-	await first
-	yield {
-		jsonrpc: '2.0',
-		method: 'notifications/caller',
-		params: { caller: options.caller, step: 1 },
-	}
-	await second
-	yield {
-		jsonrpc: '2.0',
-		method: 'notifications/caller',
-		params: { caller: options.caller, step: 2 },
-	}
-	return buildJSONRPCResult(id, { caller: options.caller })
-}
+import {
+	startServer,
+	startHTTP,
+	disconnectHTTP,
+	createLegacyPostHandler,
+	callAnnotated,
+	callTool,
+} from '../../setupServer.js'
 
 const teardown = createTeardown()
 afterEach(() => teardown.destroy())
@@ -87,7 +50,7 @@ describe('legacy initialization state', () => {
 	it.each([true, false])('records the response only with a session member: %s', async (session) => {
 		const state: Record<string, unknown> = session ? { session: undefined } : {}
 		const dispatcher = createDispatcher<Record<string, unknown>>()
-		dispatcher.add(createMCPRoutes(createMCPLegacy(createCalculatorServer()), { streaming: false }))
+		dispatcher.add(createMCPRoutes(createMCPLegacy(createCalculatorServer()), { stream: false }))
 		const handle = await startServer(createServer({ dispatcher, state: () => state }))
 		teardown.add(() => handle.stop())
 		const response = await postJSON(handle.base, createJSONRPCRequest())
@@ -99,51 +62,6 @@ describe('legacy initialization state', () => {
 	})
 })
 
-function createMCPPostHandler<TState = unknown>(
-	mcp: MCPServerInterface,
-	options?: HTTPTransportOptions<TState>,
-): ReturnType<typeof createPostHandler<TState>> {
-	return createPostHandler(createMCPLegacy(mcp), options)
-}
-
-async function startHTTP(
-	mcp: MCPServerInterface,
-	options?: HTTPTransportOptions,
-): Promise<StartedServerInterface<undefined>> {
-	const dispatcher = createDispatcher<undefined>()
-	dispatcher.add(createMCPRoutes<undefined>(createMCPLegacy(mcp), options))
-	const handle = await startServer(createServer({ dispatcher, state: () => undefined }))
-	teardown.add(() => handle.stop())
-	return handle
-}
-
-function disconnectHTTP(
-	url: string,
-	options: {
-		readonly method: string
-		readonly headers: Readonly<Record<string, string>>
-		readonly body: string
-	},
-): Promise<void> {
-	return new Promise<void>((resolve, reject) => {
-		const outgoing = httpRequest(url, {
-			method: options.method,
-			headers: options.headers,
-		})
-		outgoing.on('response', (response) => {
-			response.once('data', () => response.destroy())
-			response.once('close', () => setImmediate(resolve))
-			response.on('error', (error) => {
-				if (!response.destroyed) reject(error)
-			})
-		})
-		outgoing.on('error', (error) => {
-			if (!outgoing.destroyed) reject(error)
-		})
-		outgoing.end(options.body)
-	})
-}
-
 describe('createMCPPostHandler', () => {
 	it('extracts caller context for a registered method immediately before dispatch', async () => {
 		const mcp = createCalculatorServer()
@@ -153,8 +71,8 @@ describe('createMCPPostHandler', () => {
 			seen.push(options.caller)
 			return buildJSONRPCResult(request.id, { resultType: 'complete' })
 		})
-		const handler = createMCPPostHandler(mcp, {
-			streaming: false,
+		const handler = createLegacyPostHandler(mcp, {
+			stream: false,
 			caller: () => caller,
 		})
 		const response = await handler(
@@ -204,10 +122,10 @@ describe('createMCPPostHandler', () => {
 			[MCP_PROTOCOL_VERSION_HEADER]: '2026-07-28',
 			[MCP_METHOD_HEADER]: 'demo/options',
 		}
-		await createMCPPostHandler(mcp, { streaming: false })(
+		await createLegacyPostHandler(mcp, { stream: false })(
 			new Request('http://localhost/mcp', { method: 'POST', headers, body }),
 		)
-		await createMCPPostHandler(mcp, { streaming: false, caller: () => undefined })(
+		await createLegacyPostHandler(mcp, { stream: false, caller: () => undefined })(
 			new Request('http://localhost/mcp', { method: 'POST', headers, body }),
 		)
 
@@ -221,11 +139,11 @@ describe('createMCPPostHandler', () => {
 
 	it('never invokes the caller extractor for rejected origin or protocol headers', async () => {
 		const mcp = createCalculatorServer()
-		let calls = 0
-		const handler = createMCPPostHandler(mcp, {
-			streaming: false,
+		const calls = new MCPFixtureCell(0)
+		const handler = createLegacyPostHandler(mcp, {
+			stream: false,
 			caller: () => {
-				calls += 1
+				calls.value += 1
 				return 'unreachable'
 			},
 		})
@@ -259,12 +177,12 @@ describe('createMCPPostHandler', () => {
 
 		expect(denied.status).toBe(403)
 		expect(mismatched.status).toBe(400)
-		expect(calls).toBe(0)
+		expect(calls.value).toBe(0)
 	})
 
 	it('propagates a synchronous caller extractor throw', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), {
-			streaming: false,
+		const handler = createLegacyPostHandler(createCalculatorServer(), {
+			stream: false,
 			caller: () => {
 				throw new Error('caller extraction failed')
 			},
@@ -278,7 +196,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('returns a JSON response for an id-bearing request', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
+		const handler = createLegacyPostHandler(createCalculatorServer(), { stream: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -292,7 +210,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('accepts a supported protocol-version header', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
+		const handler = createLegacyPostHandler(createCalculatorServer(), { stream: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -307,11 +225,11 @@ describe('createMCPPostHandler', () => {
 
 	it('rejects an unsupported protocol-version header before dispatch', async () => {
 		const mcp = createCalculatorServer()
-		let requests = 0
+		const requests = new MCPFixtureCell(0)
 		mcp.emitter.on('request', () => {
-			requests += 1
+			requests.value += 1
 		})
-		const handler = createMCPPostHandler(mcp, { streaming: false })
+		const handler = createLegacyPostHandler(mcp, { stream: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -321,7 +239,7 @@ describe('createMCPPostHandler', () => {
 		)
 
 		expect(response.status).toBe(400)
-		expect(requests).toBe(0)
+		expect(requests.value).toBe(0)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
 			id: 1,
@@ -352,11 +270,11 @@ describe('createMCPPostHandler', () => {
 		},
 	])('answers -32602 for a modern protocol header over $branch', async (test) => {
 		const mcp = createCalculatorServer()
-		let requests = 0
+		const requests = new MCPFixtureCell(0)
 		mcp.emitter.on('request', () => {
-			requests += 1
+			requests.value += 1
 		})
-		const handler = createPostHandler(createMCPLegacy(mcp), { streaming: false })
+		const handler = createPostHandler(createMCPLegacy(mcp), { stream: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -375,7 +293,7 @@ describe('createMCPPostHandler', () => {
 		)
 
 		expect(response.status).toBe(400)
-		expect(requests).toBe(0)
+		expect(requests.value).toBe(0)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
 			id: 9,
@@ -388,7 +306,7 @@ describe('createMCPPostHandler', () => {
 
 	it('keeps -32022 for a protocol header naming a revision this server does not implement', async () => {
 		const handler = createPostHandler(createMCPLegacy(createCalculatorServer()), {
-			streaming: false,
+			stream: false,
 		})
 		const response = await handler(
 			new Request('http://localhost/mcp', {
@@ -414,7 +332,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('returns a parse error for malformed JSON', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
+		const handler = createLegacyPostHandler(createCalculatorServer(), { stream: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', { method: 'POST', body: '{ not json' }),
 		)
@@ -427,7 +345,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('returns an empty accepted response for a notification', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
+		const handler = createLegacyPostHandler(createCalculatorServer(), { stream: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -441,7 +359,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('frames a response as an event stream when negotiated', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), {
+		const handler = createLegacyPostHandler(createCalculatorServer(), {
 			keepalive: { interval: 1 },
 		})
 		const response = await handler(
@@ -467,10 +385,10 @@ describe('createMCPPostHandler', () => {
 			tools: createToolManager(),
 			subscription: {
 				notifications: { promptsListChanged: true },
-				producer: () => subscriptionEvents(),
+				producer: () => createSubscriptionEvents(),
 			},
 		})
-		const handler = createMCPPostHandler(mcp, { streaming: false })
+		const handler = createLegacyPostHandler(mcp, { stream: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -525,20 +443,20 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('retains captured caller context across two stream resumptions after returning', async () => {
-		let resumeFirst: (() => void) | undefined
-		let resumeSecond: (() => void) | undefined
+		const resumeFirst = new MCPFixtureCell<(() => void) | undefined>(undefined)
+		const resumeSecond = new MCPFixtureCell<(() => void) | undefined>(undefined)
 		const first = new Promise<void>((resolve) => {
-			resumeFirst = resolve
+			resumeFirst.value = resolve
 		})
 		const second = new Promise<void>((resolve) => {
-			resumeSecond = resolve
+			resumeSecond.value = resolve
 		})
 		const caller = Object.freeze({ subject: 'stream-user' })
 		const mcp = createCalculatorServer()
 		mcp.methods.add('demo/caller-stream', async (request, options) =>
-			callerEvents(options, request.id, first, second),
+			createCallerEvents(options, request.id, first, second),
 		)
-		const handler = createMCPPostHandler(mcp, { caller: () => caller })
+		const handler = createLegacyPostHandler(mcp, { caller: () => caller })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -562,13 +480,13 @@ describe('createMCPPostHandler', () => {
 		)
 		const events = readSSEStream(response)
 		const iterator = events[Symbol.asyncIterator]()
-		if (resumeFirst === undefined || resumeSecond === undefined) {
+		if (resumeFirst.value === undefined || resumeSecond.value === undefined) {
 			throw new Error('stream controls were not initialized')
 		}
 
-		resumeFirst()
+		resumeFirst.value()
 		const firstEvent = await iterator.next()
-		resumeSecond()
+		resumeSecond.value()
 		const secondEvent = await iterator.next()
 		const finalEvent = await iterator.next()
 		const closed = await iterator.next()
@@ -593,17 +511,17 @@ describe('createMCPPostHandler', () => {
 				notifications: { promptsListChanged: true },
 				producer: (_notifications, options) => {
 					if (options.signal === undefined) throw new Error('expected HTTP disconnect signal')
-					observed = options.signal
-					return disconnectEvents(options.signal, () => abortedResolve?.())
+					observed.value = options.signal
+					return createDisconnectEvents(options.signal, () => abortedResolve.value?.())
 				},
 			},
 		})
-		let observed: AbortSignal | undefined
-		let abortedResolve: (() => void) | undefined
+		const observed = new MCPFixtureCell<AbortSignal | undefined>(undefined)
+		const abortedResolve = new MCPFixtureCell<(() => void) | undefined>(undefined)
 		const aborted = new Promise<void>((resolve) => {
-			abortedResolve = resolve
+			abortedResolve.value = resolve
 		})
-		const handle = await startHTTP(mcp, { keepalive: { interval: 25 } })
+		const handle = await startHTTP(teardown, mcp, { keepalive: { interval: 25 } })
 		const body = JSON.stringify(
 			createJSONRPCRequest({
 				method: 'subscriptions/listen',
@@ -629,8 +547,8 @@ describe('createMCPPostHandler', () => {
 		})
 		await aborted
 
-		expect(observed).toBeDefined()
-		expect(observed?.aborted).toBe(true)
+		expect(observed.value).toBeDefined()
+		expect(observed.value?.aborted).toBe(true)
 	})
 
 	it('composes the incoming request signal into the handler signal', async () => {
@@ -638,14 +556,14 @@ describe('createMCPPostHandler', () => {
 			identity: { name: 'signal-server', version: '1.0.0' },
 			tools: createToolManager(),
 		})
-		let observed: AbortSignal | undefined
-		let startedResolve: (() => void) | undefined
+		const observed = new MCPFixtureCell<AbortSignal | undefined>(undefined)
+		const startedResolve = new MCPFixtureCell<(() => void) | undefined>(undefined)
 		const started = new Promise<void>((resolve) => {
-			startedResolve = resolve
+			startedResolve.value = resolve
 		})
 		mcp.methods.add('demo/slow', async (request, options) => {
-			observed = options.signal
-			startedResolve?.()
+			observed.value = options.signal
+			startedResolve.value?.()
 			await new Promise<void>((resolve) => {
 				options.signal.addEventListener('abort', () => resolve(), { once: true })
 			})
@@ -671,13 +589,13 @@ describe('createMCPPostHandler', () => {
 			),
 			signal: controller.signal,
 		})
-		const pending = createMCPPostHandler(mcp, { streaming: false })(request)
+		const pending = createLegacyPostHandler(mcp, { stream: false })(request)
 		await started
 		controller.abort()
 		const response = await pending
 
-		expect(observed).not.toBe(request.signal)
-		expect(observed?.aborted).toBe(true)
+		expect(observed.value).not.toBe(request.signal)
+		expect(observed.value?.aborted).toBe(true)
 		expect(response.status).toBe(200)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
@@ -687,7 +605,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('accepts a headerless legacy initialize request', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
+		const handler = createLegacyPostHandler(createCalculatorServer(), { stream: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -700,7 +618,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('names the missing protocol header on a headerless legacy request with no data member', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
+		const handler = createLegacyPostHandler(createCalculatorServer(), { stream: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -718,7 +636,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('requires protocol and method headers on modern discovery, but not Mcp-Name', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
+		const handler = createLegacyPostHandler(createCalculatorServer(), { stream: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -747,7 +665,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('requires Mcp-Name only on tools/call and matches it to params.name', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
+		const handler = createLegacyPostHandler(createCalculatorServer(), { stream: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -862,7 +780,7 @@ describe('createMCPPostHandler', () => {
 			supplied: 'client-supplied-name',
 		},
 	])('$branch with HTTP 400, -32020, and no data member', async (test) => {
-		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
+		const handler = createLegacyPostHandler(createCalculatorServer(), { stream: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -890,7 +808,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('returns -32602 when the modern metadata version is present but not a string', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
+		const handler = createLegacyPostHandler(createCalculatorServer(), { stream: false })
 		const response = await handler(
 			new Request('http://localhost/mcp', {
 				method: 'POST',
@@ -920,7 +838,7 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('maps a modern unknown method to HTTP 404 while legacy remains HTTP 200', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
+		const handler = createLegacyPostHandler(createCalculatorServer(), { stream: false })
 		const params = {
 			_meta: {
 				[MCP_META_VERSION]: MCP_MODERN_VERSION,
@@ -952,13 +870,13 @@ describe('createMCPPostHandler', () => {
 	})
 
 	it('allows no Origin and rejects every non-loopback origin outside the allowlist', async () => {
-		const handler = createMCPPostHandler(createCalculatorServer(), { streaming: false })
-		const allowed = createMCPPostHandler(createCalculatorServer(), {
-			streaming: false,
+		const handler = createLegacyPostHandler(createCalculatorServer(), { stream: false })
+		const allowed = createLegacyPostHandler(createCalculatorServer(), {
+			stream: false,
 			origin: { origins: ['https://client.example'] },
 		})
-		const delegated = createMCPPostHandler(createCalculatorServer(), {
-			streaming: false,
+		const delegated = createLegacyPostHandler(createCalculatorServer(), {
+			stream: false,
 			origin: { enabled: false },
 		})
 		const body = JSON.stringify(createJSONRPCRequest())
@@ -1003,89 +921,6 @@ describe('createMCPPostHandler', () => {
 // SEP-2243's `Mcp-Param-*` server half, proven AT THE WIRE through the shipped POST handler
 // over a real MCPServer and a real ToolManager. The annotated tool lives here rather than in
 // `tests/setup.ts` because no other suite drives an annotated definition.
-
-const ROUTE_SCHEMA = {
-	type: 'object',
-	properties: {
-		value: { type: 'string', 'x-mcp-header': 'value' },
-		count: { type: 'integer', 'x-mcp-header': 'Count' },
-		note: { type: 'string' },
-	},
-}
-
-function createAnnotatedServer(): MCPServerInterface {
-	const tools = createToolManager()
-	tools.add(
-		createTool({
-			name: 'route',
-			description: 'Echo the routed arguments back to the caller.',
-			parameters: ROUTE_SCHEMA,
-			execute: (values) => values,
-		}),
-	)
-	return createMCPServer({ identity: { name: 'router', version: '1.0.0' }, tools })
-}
-
-// A consumer that replaced `tools/list` with a handler paging ONE definition per page — the
-// documented `methods.add` seam. `route` sits on the page at `depth`, so the header lookup
-// reaches its annotations only by following `nextCursor` that far.
-function createPagedServer(depth: number): MCPServerInterface {
-	const server = createAnnotatedServer()
-	server.methods.add('tools/list', async (request) => {
-		const cursor = request.params?.['cursor']
-		const page = typeof cursor === 'string' ? Number(cursor) : 0
-		const listed =
-			page === depth
-				? { name: 'route', inputSchema: ROUTE_SCHEMA }
-				: { name: `filler_${page}`, inputSchema: { type: 'object', properties: {} } }
-		return buildJSONRPCResult(request.id, {
-			tools: [listed],
-			...(page === depth ? {} : { nextCursor: String(page + 1) }),
-		})
-	})
-	return server
-}
-
-async function callAnnotated(
-	name: string,
-	headers: Readonly<Record<string, string>>,
-	args: Readonly<Record<string, unknown>>,
-): Promise<Response> {
-	return await callTool(createAnnotatedServer(), name, headers, args)
-}
-
-async function callTool(
-	server: MCPServerInterface,
-	name: string,
-	headers: Readonly<Record<string, string>>,
-	args: Readonly<Record<string, unknown>>,
-): Promise<Response> {
-	const handler = createMCPPostHandler(server, { streaming: false })
-	return await handler(
-		new Request('http://localhost/mcp', {
-			method: 'POST',
-			headers: {
-				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
-				[MCP_METHOD_HEADER]: 'tools/call',
-				[MCP_NAME_HEADER]: name,
-				...headers,
-			},
-			body: JSON.stringify(
-				createJSONRPCRequest({
-					method: 'tools/call',
-					params: {
-						name,
-						arguments: args,
-						_meta: {
-							[MCP_META_VERSION]: MCP_MODERN_VERSION,
-							[MCP_META_CAPABILITIES]: {},
-						},
-					},
-				}),
-			),
-		}),
-	)
-}
 
 describe('createMCPPostHandler — Mcp-Param headers validated against the request body', () => {
 	it.each([

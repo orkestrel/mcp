@@ -1,4 +1,11 @@
-import type { JSONRPCNotification, JSONRPCResponse, MCPStream } from '@src/core'
+import {
+	createServerReplyStream,
+	createServerFaultStream,
+	createHeaderCarrier,
+	STREAM_NOTIFICATION,
+	STREAM_TERMINAL,
+} from '../../setupServer.js'
+
 import { Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import {
@@ -33,33 +40,11 @@ import { createRequestStub, createStreamStub } from '../../setupServer.js'
 
 // The held-open fixtures these pump tests replay: one notification then a terminal, and a
 // producer that fails before it ever reaches one.
-const STREAM_NOTIFICATION: JSONRPCNotification = Object.freeze({
-	jsonrpc: '2.0',
-	method: 'notifications/progress',
-})
-const STREAM_TERMINAL: JSONRPCResponse = Object.freeze({
-	jsonrpc: '2.0',
-	id: 1,
-	result: { done: true },
-})
-
-async function* replayStream(): MCPStream {
-	yield STREAM_NOTIFICATION
-	return STREAM_TERMINAL
-}
-
-async function* failingStream(): MCPStream {
-	yield STREAM_NOTIFICATION
-	throw new Error('producer boom')
-}
 
 // A fetch-standard Request carrying (or omitting) the given headers — the shape every
 // pure fetch-standard reader below (`acceptsEventStream` / `readSessionHeader` /
 // `readLastEventId`) takes directly, no stub crossing needed (`Request` IS the
 // boundary type now).
-function requestWithHeaders(headers?: Record<string, string>): Request {
-	return new Request('http://localhost/mcp', headers !== undefined ? { headers } : {})
-}
 
 describe('writeLine — one callback-confirmed writable write', () => {
 	it('rejects with the completion callback error', async () => {
@@ -126,32 +111,32 @@ describe('writeLine — one callback-confirmed writable write', () => {
 
 describe('acceptsEventStream — does the client opt into SSE?', () => {
 	it('is true when Accept contains text/event-stream', () => {
-		expect(acceptsEventStream(requestWithHeaders({ accept: 'text/event-stream' }))).toBe(true)
+		expect(acceptsEventStream(createHeaderCarrier({ accept: 'text/event-stream' }))).toBe(true)
 	})
 
 	it('is true when text/event-stream is one of several accepted types', () => {
 		expect(
 			acceptsEventStream(
-				requestWithHeaders({ accept: 'application/json, text/event-stream;q=0.9' }),
+				createHeaderCarrier({ accept: 'application/json, text/event-stream;q=0.9' }),
 			),
 		).toBe(true)
 	})
 
 	it('matches case-insensitively', () => {
-		expect(acceptsEventStream(requestWithHeaders({ accept: 'Text/Event-Stream' }))).toBe(true)
+		expect(acceptsEventStream(createHeaderCarrier({ accept: 'Text/Event-Stream' }))).toBe(true)
 	})
 
 	it('is false for a plain JSON Accept', () => {
-		expect(acceptsEventStream(requestWithHeaders({ accept: 'application/json' }))).toBe(false)
+		expect(acceptsEventStream(createHeaderCarrier({ accept: 'application/json' }))).toBe(false)
 	})
 
 	it('is false for a wildcard Accept (no explicit event-stream)', () => {
 		// A `*/*` does NOT opt in — the transport only streams when the client names the type.
-		expect(acceptsEventStream(requestWithHeaders({ accept: '*/*' }))).toBe(false)
+		expect(acceptsEventStream(createHeaderCarrier({ accept: '*/*' }))).toBe(false)
 	})
 
 	it('is false for an absent Accept header', () => {
-		expect(acceptsEventStream(requestWithHeaders())).toBe(false)
+		expect(acceptsEventStream(createHeaderCarrier())).toBe(false)
 	})
 })
 
@@ -229,10 +214,10 @@ describe('allowsOrigin — loopback default, explicit validation, and upstream d
 
 describe('inferHeaderIssue — the diagnosis a request body derives', () => {
 	it('is undefined for legacy initialize and a header-bearing legacy request', () => {
-		expect(inferHeaderIssue(requestWithHeaders(), createJSONRPCRequest())).toBeUndefined()
+		expect(inferHeaderIssue(createHeaderCarrier(), createJSONRPCRequest())).toBeUndefined()
 		expect(
 			inferHeaderIssue(
-				requestWithHeaders({ [MCP_PROTOCOL_VERSION_HEADER]: MCP_HANDSHAKE_VERSION }),
+				createHeaderCarrier({ [MCP_PROTOCOL_VERSION_HEADER]: MCP_HANDSHAKE_VERSION }),
 				createJSONRPCRequest({ method: 'tools/list' }),
 			),
 		).toBeUndefined()
@@ -240,7 +225,7 @@ describe('inferHeaderIssue — the diagnosis a request body derives', () => {
 
 	it('diagnoses a missing protocol header on a stateless legacy request', () => {
 		expect(
-			inferHeaderIssue(requestWithHeaders(), createJSONRPCRequest({ method: 'tools/list' })),
+			inferHeaderIssue(createHeaderCarrier(), createJSONRPCRequest({ method: 'tools/list' })),
 		).toEqual({
 			header: 'MCP-Protocol-Version',
 			reason: 'missing',
@@ -258,7 +243,7 @@ describe('inferHeaderIssue — the diagnosis a request body derives', () => {
 				},
 			},
 		})
-		const request = requestWithHeaders({
+		const request = createHeaderCarrier({
 			[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
 			[MCP_METHOD_HEADER]: 'tools/list',
 		})
@@ -278,7 +263,7 @@ describe('inferHeaderIssue — the diagnosis a request body derives', () => {
 		})
 
 		expect(
-			inferHeaderIssue(requestWithHeaders({ [MCP_METHOD_HEADER]: 'tools/list' }), message),
+			inferHeaderIssue(createHeaderCarrier({ [MCP_METHOD_HEADER]: 'tools/list' }), message),
 		).toEqual({
 			header: 'MCP-Protocol-Version',
 			reason: 'missing',
@@ -298,7 +283,7 @@ describe('inferHeaderIssue — the diagnosis a request body derives', () => {
 			},
 		})
 		const issue = inferHeaderIssue(
-			requestWithHeaders({
+			createHeaderCarrier({
 				[MCP_PROTOCOL_VERSION_HEADER]: 'client-supplied-version',
 				[MCP_METHOD_HEADER]: 'tools/list',
 			}),
@@ -326,7 +311,7 @@ describe('inferHeaderIssue — the diagnosis a request body derives', () => {
 
 		expect(
 			inferHeaderIssue(
-				requestWithHeaders({ [MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION }),
+				createHeaderCarrier({ [MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION }),
 				message,
 			),
 		).toEqual({
@@ -347,7 +332,7 @@ describe('inferHeaderIssue — the diagnosis a request body derives', () => {
 			},
 		})
 		const issue = inferHeaderIssue(
-			requestWithHeaders({
+			createHeaderCarrier({
 				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
 				[MCP_METHOD_HEADER]: 'client-supplied-method',
 			}),
@@ -376,7 +361,7 @@ describe('inferHeaderIssue — the diagnosis a request body derives', () => {
 
 		expect(
 			inferHeaderIssue(
-				requestWithHeaders({
+				createHeaderCarrier({
 					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
 					[MCP_METHOD_HEADER]: 'tools/call',
 				}),
@@ -401,7 +386,7 @@ describe('inferHeaderIssue — the diagnosis a request body derives', () => {
 			},
 		})
 		const issue = inferHeaderIssue(
-			requestWithHeaders({
+			createHeaderCarrier({
 				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
 				[MCP_METHOD_HEADER]: 'tools/call',
 				[MCP_NAME_HEADER]: 'client-supplied-name',
@@ -441,17 +426,17 @@ describe('inferHeaderIssue — the diagnosis a request body derives', () => {
 			[MCP_METHOD_HEADER]: row.method,
 		}
 
-		expect(inferHeaderIssue(requestWithHeaders(headers), message)).toEqual({
+		expect(inferHeaderIssue(createHeaderCarrier(headers), message)).toEqual({
 			header: 'Mcp-Name',
 			reason: 'missing',
 			message: `Required Mcp-Name header is missing; the request body target is '${row.target}'.`,
 		})
 		expect(
-			inferHeaderIssue(requestWithHeaders({ ...headers, [MCP_NAME_HEADER]: row.target }), message),
+			inferHeaderIssue(createHeaderCarrier({ ...headers, [MCP_NAME_HEADER]: row.target }), message),
 		).toBeUndefined()
 		expect(
 			inferHeaderIssue(
-				requestWithHeaders({ ...headers, [MCP_NAME_HEADER]: 'a-different-target' }),
+				createHeaderCarrier({ ...headers, [MCP_NAME_HEADER]: 'a-different-target' }),
 				message,
 			),
 		).toEqual({
@@ -472,7 +457,7 @@ describe('inferHeaderIssue — the diagnosis a request body derives', () => {
 
 		expect(
 			inferHeaderIssue(
-				requestWithHeaders({
+				createHeaderCarrier({
 					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
 					[MCP_METHOD_HEADER]: 'tools/call',
 					[MCP_NAME_HEADER]: encodeSentinel('café'),
@@ -493,7 +478,7 @@ describe('inferHeaderIssue — the diagnosis a request body derives', () => {
 
 		expect(
 			inferHeaderIssue(
-				requestWithHeaders({
+				createHeaderCarrier({
 					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
 					[MCP_METHOD_HEADER]: 'tools/call',
 					[MCP_NAME_HEADER]: '=?base64?SGVs!!!bG8=?=',
@@ -515,7 +500,7 @@ describe('inferHeaderIssue — the diagnosis a request body derives', () => {
 
 		expect(
 			inferHeaderIssue(
-				requestWithHeaders({
+				createHeaderCarrier({
 					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
 					[MCP_METHOD_HEADER]: 'server/discover',
 				}),
@@ -529,14 +514,14 @@ describe('inferSessionHeaderIssue — the diagnosis a live session pins', () => 
 	it('is undefined when the header names the session revision', () => {
 		expect(
 			inferSessionHeaderIssue(
-				requestWithHeaders({ [MCP_PROTOCOL_VERSION_HEADER]: MCP_HANDSHAKE_VERSION }),
+				createHeaderCarrier({ [MCP_PROTOCOL_VERSION_HEADER]: MCP_HANDSHAKE_VERSION }),
 				MCP_HANDSHAKE_VERSION,
 			),
 		).toBeUndefined()
 	})
 
 	it('reports a missing protocol header so the middleware can supply the pinned revision', () => {
-		expect(inferSessionHeaderIssue(requestWithHeaders(), MCP_HANDSHAKE_VERSION)).toEqual({
+		expect(inferSessionHeaderIssue(createHeaderCarrier(), MCP_HANDSHAKE_VERSION)).toEqual({
 			header: 'MCP-Protocol-Version',
 			reason: 'missing',
 			message:
@@ -547,7 +532,7 @@ describe('inferSessionHeaderIssue — the diagnosis a live session pins', () => 
 	it('diagnoses a mismatched legacy session protocol header', () => {
 		expect(
 			inferSessionHeaderIssue(
-				requestWithHeaders({ [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' }),
+				createHeaderCarrier({ [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' }),
 				MCP_HANDSHAKE_VERSION,
 			),
 		).toEqual({
@@ -566,12 +551,12 @@ describe('inferSessionHeaderIssue — the diagnosis a live session pins', () => 
 
 describe('readSessionHeader — the request mcp-session-id, or undefined', () => {
 	it('returns the session id when present', () => {
-		const request = requestWithHeaders({ [MCP_SESSION_HEADER]: 'sess-123' })
+		const request = createHeaderCarrier({ [MCP_SESSION_HEADER]: 'sess-123' })
 		expect(readSessionHeader(request)).toBe('sess-123')
 	})
 
 	it('is undefined when the header is absent', () => {
-		expect(readSessionHeader(requestWithHeaders())).toBeUndefined()
+		expect(readSessionHeader(createHeaderCarrier())).toBeUndefined()
 	})
 })
 
@@ -581,12 +566,12 @@ describe('readSessionHeader — the request mcp-session-id, or undefined', () =>
 
 describe('readLastEventId — the resume cursor, or undefined', () => {
 	it('returns the last-event-id when present', () => {
-		const request = requestWithHeaders({ 'last-event-id': '7' })
+		const request = createHeaderCarrier({ 'last-event-id': '7' })
 		expect(readLastEventId(request)).toBe('7')
 	})
 
 	it('is undefined when the header is absent', () => {
-		expect(readLastEventId(requestWithHeaders())).toBeUndefined()
+		expect(readLastEventId(createHeaderCarrier())).toBeUndefined()
 	})
 })
 
@@ -643,7 +628,7 @@ describe('sendEventStream — writes the exchange out and always ends it', () =>
 	it('writes every notification in order, the terminal last, and ends the SSE body', async () => {
 		const sse = createStreamStub()
 		const closure = new AbortController()
-		const stream = new MCPStreamController(replayStream(), closure.signal, closure)
+		const stream = new MCPStreamController(createServerReplyStream(), closure.signal, closure)
 
 		await sendEventStream(stream, sse)
 
@@ -682,7 +667,7 @@ describe('sendEventStream — writes the exchange out and always ends it', () =>
 	it('ends the SSE body even when the producer itself fails', async () => {
 		const sse = createStreamStub()
 		const closure = new AbortController()
-		const stream = new MCPStreamController(failingStream(), closure.signal, closure)
+		const stream = new MCPStreamController(createServerFaultStream(), closure.signal, closure)
 
 		await sendEventStream(stream, sse)
 

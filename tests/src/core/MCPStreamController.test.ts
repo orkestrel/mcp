@@ -1,12 +1,18 @@
-import type {
-	JSONRPCNotification,
-	JSONRPCResponse,
-	MCPStream,
-	MCPStreamControllerInterface,
-} from '@src/core'
-import { buildJSONRPCResult, MCPStreamController } from '@src/core'
-import { extractSourceLines } from '@orkestrel/guide'
-import { readFileSync } from 'node:fs'
+import type { JSONRPCNotification, MCPStream, MCPStreamControllerInterface } from '@src/core'
+import { LAST_RESORT_CONTROLLER, OWNERSHIP_SOURCES } from '../../setupServer.js'
+import {
+	createParkedStream,
+	createSuspendedStream,
+	createCooperativeStream,
+	createReplayStream,
+	createFaultedStream,
+	createControlledStream,
+	MCP_STREAM_PROGRESS,
+	MCP_STREAM_TERMINAL,
+	MCP_STREAM_FAILURE,
+} from '../../setup.js'
+import { readProjectSource } from '../../setupServer.js'
+import { buildJSONRPCResult } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { waitForDelay } from '@orkestrel/test'
 import { inspectOwnerOfLastResort, OWNER_OF_LAST_RESORT_SPELLINGS } from '../../setup.js'
@@ -18,100 +24,27 @@ import { inspectOwnerOfLastResort, OWNER_OF_LAST_RESORT_SPELLINGS } from '../../
 // waits forever for its own cancellation. Every test below therefore drives a source that
 // NEVER settles on its own — a source that completes would prove nothing about queueing.
 
-const PROGRESS: JSONRPCNotification = Object.freeze({
-	jsonrpc: '2.0',
-	method: 'notifications/progress',
-})
-const TERMINAL: JSONRPCResponse = Object.freeze({ jsonrpc: '2.0', id: 1, result: { done: true } })
-
 // A real async generator that parks before it can produce anything and never resumes: the
 // interleaving every queueing defect hides behind. Its own cleanup is deliberately
 // UNREACHABLE — JavaScript cannot force work a generator is suspended inside — so what these
 // tests prove is that the consumer settles regardless, never that an uncooperative producer
 // was made to finish.
-async function* parking(): MCPStream {
-	await new Promise<void>(() => undefined)
-	yield PROGRESS
-	return TERMINAL
-}
-
 // A source that parks only AFTER yielding, so a test can settle one read and then cancel
 // while the second is outstanding.
-async function* yielding(closed: string[]): MCPStream {
-	try {
-		yield PROGRESS
-		await new Promise<void>(() => undefined)
-		return TERMINAL
-	} finally {
-		closed.push('yielding')
-	}
-}
-
 // A source that observes the request signal for its own cleanup — the cooperating producer
 // the controller's abort-before-cleanup ordering exists to wake.
-async function* cooperating(signal: AbortSignal, woken: string[]): MCPStream {
-	try {
-		await new Promise<void>((resolve) =>
-			signal.addEventListener('abort', () => resolve(), { once: true }),
-		)
-		woken.push(signal.aborted ? 'aborted' : 'resumed')
-		if (!signal.aborted) yield PROGRESS
-		return TERMINAL
-	} finally {
-		woken.push('closed')
-	}
-}
-
-async function* replaying(messages: readonly JSONRPCNotification[]): MCPStream {
-	for (const message of messages) yield message
-	return TERMINAL
-}
-
-const FAILURE = new Error('source blew up')
-
 // Fails MID-stream, which is the failure a wrapper can actually get wrong: one message has
 // already reached the consumer when the producer gives up.
-async function* failing(): MCPStream {
-	yield PROGRESS
-	throw FAILURE
-}
-
-function controlled(source: MCPStream, closure = new AbortController()): MCPStreamController {
-	return new MCPStreamController(source, closure.signal, closure)
-}
-
 // The owner of last resort the standing ruling forbids, spelled the way somebody would
 // actually add one: a finalizer that ends an exchange nobody released, plus the timeout that
 // is the same mistake with a clock. This is the control the sweep below is certified against
 // — an inspector that never reports a violation cannot tell a clean file from a blind rule.
-const LAST_RESORT_CONTROLLER = [
-	"import type { MCPStream } from './types.js'",
-	'export class MCPStreamController {',
-	'\treadonly #graves = new FinalizationRegistry((stop: () => void) => stop())',
-	'\t#arm(source: MCPStream): void {',
-	'\t\tthis.#graves.register(source, () => this.stop())',
-	'\t\tsetTimeout(() => this.stop(), 60_000)',
-	'\t}',
-	'\tstop(): void {}',
-	'}',
-].join('\n')
-
-const OWNERSHIP_SOURCES: readonly string[] = Object.freeze([
-	'src/core/MCPStreamController.ts',
-	'src/core/MCPTextStreamController.ts',
-])
-
-function projectSource(path: string): string {
-	return extractSourceLines(readFileSync(path, 'utf8'))
-		.map((line) => line.code)
-		.join('\n')
-}
 
 describe('controlled exchange ownership', () => {
 	// Retained, and retained with evidence rather than by inspection.
 	it('gives the controllers no owner of last resort', () => {
 		for (const path of OWNERSHIP_SOURCES) {
-			expect([path, inspectOwnerOfLastResort(projectSource(path))]).toEqual([path, []])
+			expect([path, inspectOwnerOfLastResort(readProjectSource(path))]).toEqual([path, []])
 		}
 	})
 
@@ -126,17 +59,19 @@ describe('controlled exchange ownership', () => {
 
 describe('MCPStreamController — normal completion', () => {
 	it('passes each notification through and returns the source terminal once', async () => {
-		const stream = controlled(replaying([PROGRESS, PROGRESS]))
+		const stream = createControlledStream(
+			createReplayStream([MCP_STREAM_PROGRESS, MCP_STREAM_PROGRESS]),
+		)
 
-		expect(await stream.next()).toEqual({ done: false, value: PROGRESS })
-		expect(await stream.next()).toEqual({ done: false, value: PROGRESS })
-		expect(await stream.next()).toEqual({ done: true, value: TERMINAL })
-		expect(await stream.next()).toEqual({ done: true, value: TERMINAL })
+		expect(await stream.next()).toEqual({ done: false, value: MCP_STREAM_PROGRESS })
+		expect(await stream.next()).toEqual({ done: false, value: MCP_STREAM_PROGRESS })
+		expect(await stream.next()).toEqual({ done: true, value: MCP_STREAM_TERMINAL })
+		expect(await stream.next()).toEqual({ done: true, value: MCP_STREAM_TERMINAL })
 	})
 
 	it('aborts the request lifetime once the terminal has been delivered', async () => {
 		const closure = new AbortController()
-		const stream = controlled(replaying([]), closure)
+		const stream = createControlledStream(createReplayStream([]), closure)
 
 		expect(closure.signal.aborted).toBe(false)
 		await stream.next()
@@ -146,9 +81,10 @@ describe('MCPStreamController — normal completion', () => {
 
 	it('is iterable as the async generator it claims to be', async () => {
 		const seen: JSONRPCNotification[] = []
-		for await (const message of controlled(replaying([PROGRESS]))) seen.push(message)
+		for await (const message of createControlledStream(createReplayStream([MCP_STREAM_PROGRESS])))
+			seen.push(message)
 
-		expect(seen).toEqual([PROGRESS])
+		expect(seen).toEqual([MCP_STREAM_PROGRESS])
 	})
 
 	it('extends the stream with the closure the protocol has no member for', () => {
@@ -159,24 +95,27 @@ describe('MCPStreamController — normal completion', () => {
 
 describe('MCPStreamController — cancellation against a never-settling source', () => {
 	it('settles return() while a read is parked on the producer', async () => {
-		const stream = controlled(parking())
+		const stream = createControlledStream(createParkedStream())
 		const parked = stream.next()
 		await waitForDelay()
 
-		const returned = await stream.return(TERMINAL)
+		const returned = await stream.return(MCP_STREAM_TERMINAL)
 
-		expect(returned).toEqual({ done: true, value: TERMINAL })
-		expect(await parked).toEqual({ done: true, value: TERMINAL })
+		expect(returned).toEqual({ done: true, value: MCP_STREAM_TERMINAL })
+		expect(await parked).toEqual({ done: true, value: MCP_STREAM_TERMINAL })
 	})
 
 	it('settles return() when nothing is parked and no read ever happened', async () => {
-		const stream = controlled(parking())
+		const stream = createControlledStream(createParkedStream())
 
-		expect(await stream.return(TERMINAL)).toEqual({ done: true, value: TERMINAL })
+		expect(await stream.return(MCP_STREAM_TERMINAL)).toEqual({
+			done: true,
+			value: MCP_STREAM_TERMINAL,
+		})
 	})
 
 	it('settles stop() while a read is parked, with no terminal for the consumer', async () => {
-		const stream = controlled(parking())
+		const stream = createControlledStream(createParkedStream())
 		const parked = stream.next()
 		await waitForDelay()
 
@@ -189,7 +128,7 @@ describe('MCPStreamController — cancellation against a never-settling source',
 
 	it('settles throw() while a read is parked and reports the same reason to both', async () => {
 		const failure = new Error('consumer gave up')
-		const stream = controlled(parking())
+		const stream = createControlledStream(createParkedStream())
 		const parked = stream.next()
 		await waitForDelay()
 
@@ -199,7 +138,7 @@ describe('MCPStreamController — cancellation against a never-settling source',
 
 	it('settles a parked read on external abort, with the abort reason', async () => {
 		const closure = new AbortController()
-		const stream = controlled(parking(), closure)
+		const stream = createControlledStream(createParkedStream(), closure)
 		const parked = stream.next()
 		await waitForDelay()
 
@@ -212,13 +151,15 @@ describe('MCPStreamController — cancellation against a never-settling source',
 		const closure = new AbortController()
 		closure.abort(new Error('already gone'))
 
-		await expect(controlled(parking(), closure).next()).rejects.toThrow('already gone')
+		await expect(createControlledStream(createParkedStream(), closure).next()).rejects.toThrow(
+			'already gone',
+		)
 	})
 
 	it('aborts the request signal BEFORE it delegates cleanup, waking a parked producer', async () => {
 		const closure = new AbortController()
 		const woken: string[] = []
-		const stream = controlled(cooperating(closure.signal, woken), closure)
+		const stream = createControlledStream(createCooperativeStream(closure.signal, woken), closure)
 		const parked = stream.next().catch((error: unknown) => error)
 		await waitForDelay()
 
@@ -232,10 +173,10 @@ describe('MCPStreamController — cancellation against a never-settling source',
 
 	it('reaches the producer’s own cleanup after a consumer return', async () => {
 		const closed: string[] = []
-		const stream = controlled(yielding(closed))
-		expect(await stream.next()).toEqual({ done: false, value: PROGRESS })
+		const stream = createControlledStream(createSuspendedStream(closed))
+		expect(await stream.next()).toEqual({ done: false, value: MCP_STREAM_PROGRESS })
 
-		await stream.return(TERMINAL)
+		await stream.return(MCP_STREAM_TERMINAL)
 		await waitForDelay()
 
 		expect(closed).toEqual(['yielding'])
@@ -247,12 +188,15 @@ describe('MCPStreamController — idempotence and containment', () => {
 	// REOPENS the exchange: the terminal a read sees stays the one the exchange ended on.
 	it('keeps the exchange closed however many later closures arrive', async () => {
 		const later = buildJSONRPCResult(2, { resultType: 'complete' })
-		const stream = controlled(parking())
+		const stream = createControlledStream(createParkedStream())
 
-		expect(await stream.return(TERMINAL)).toEqual({ done: true, value: TERMINAL })
+		expect(await stream.return(MCP_STREAM_TERMINAL)).toEqual({
+			done: true,
+			value: MCP_STREAM_TERMINAL,
+		})
 		expect(await stream.return(later)).toEqual({ done: true, value: later })
 		stream.stop()
-		expect(await stream.next()).toEqual({ done: true, value: TERMINAL })
+		expect(await stream.next()).toEqual({ done: true, value: MCP_STREAM_TERMINAL })
 	})
 
 	// The producer settles LATE — after the consumer has gone — and the promises it settles
@@ -261,7 +205,7 @@ describe('MCPStreamController — idempotence and containment', () => {
 	it('contains a source promise that settles long after the consumer left', async () => {
 		const closure = new AbortController()
 		const woken: string[] = []
-		const stream = controlled(cooperating(closure.signal, woken), closure)
+		const stream = createControlledStream(createCooperativeStream(closure.signal, woken), closure)
 		const parked = stream.next().catch((error: unknown) => error)
 		await waitForDelay()
 
@@ -273,7 +217,7 @@ describe('MCPStreamController — idempotence and containment', () => {
 	})
 
 	it('refuses a second read while one is already pending', async () => {
-		const stream = controlled(parking())
+		const stream = createControlledStream(createParkedStream())
 		const parked = stream.next()
 
 		await expect(stream.next()).rejects.toThrow('already pending')
@@ -283,22 +227,22 @@ describe('MCPStreamController — idempotence and containment', () => {
 	})
 
 	it('ends the exchange when disposed and leaves a finished one alone', async () => {
-		const stream = controlled(parking())
+		const stream = createControlledStream(createParkedStream())
 		await stream[Symbol.asyncDispose]()
 
 		await expect(stream.next()).rejects.toBeInstanceOf(DOMException)
 
-		const finished = controlled(replaying([]))
-		expect(await finished.next()).toEqual({ done: true, value: TERMINAL })
+		const finished = createControlledStream(createReplayStream([]))
+		expect(await finished.next()).toEqual({ done: true, value: MCP_STREAM_TERMINAL })
 		await finished[Symbol.asyncDispose]()
-		expect(await finished.next()).toEqual({ done: true, value: TERMINAL })
+		expect(await finished.next()).toEqual({ done: true, value: MCP_STREAM_TERMINAL })
 	})
 
 	it('rejects the consumer with the source failure and answers the same way again', async () => {
-		const stream = controlled(failing())
+		const stream = createControlledStream(createFaultedStream())
 
-		expect(await stream.next()).toEqual({ done: false, value: PROGRESS })
-		await expect(stream.next()).rejects.toBe(FAILURE)
-		await expect(stream.next()).rejects.toBe(FAILURE)
+		expect(await stream.next()).toEqual({ done: false, value: MCP_STREAM_PROGRESS })
+		await expect(stream.next()).rejects.toBe(MCP_STREAM_FAILURE)
+		await expect(stream.next()).rejects.toBe(MCP_STREAM_FAILURE)
 	})
 })

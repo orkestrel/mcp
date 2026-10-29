@@ -474,12 +474,12 @@ export interface ModelContextPublishOptions {
  * @remarks
  * `origins` is this package's one-word name for WebMCP's `fromOrigins`, forwarded unchanged.
  * Omitting it reads this document's own registrations.
- * If `debugging` is `true`, tools carrying `annotations.debugging: true` are included;
+ * If `debug` is `true`, tools carrying `annotations.debugging: true` are included;
  * if `false` or omitted, they are excluded. Default: `false`.
  */
 export interface ModelContextAdoptOptions {
 	readonly origins?: readonly string[]
-	readonly debugging?: boolean
+	readonly debug?: boolean
 }
 
 /**
@@ -563,7 +563,7 @@ export interface ModelContextInterface {
 	 * Reads the document's registered tools as locally executable tools, excluding debugging tools unless requested.
 	 *
 	 * @remarks
-	 * Tools carrying `annotations.debugging: true` are excluded unless `options.debugging`
+	 * Tools carrying `annotations.debugging: true` are excluded unless `options.debug`
 	 * is `true`. Tools with a false or omitted hint are included either way.
 	 *
 	 * Each returned tool's `execute` runs the registry's `executeTool` and forwards its

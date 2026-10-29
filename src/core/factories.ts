@@ -163,7 +163,7 @@ export function createMCPLegacyClientTransport(
  *
  * @remarks
  * Hand the result to `createMCPClient({ transport })`, then pass the same
- * `transport` to {@link import('./helpers.js').bindClient} to complete the inbound
+ * `transport` to {@link import('./handlers.js').bindClient} to complete the inbound
  * wiring: `send` serializes each outbound {@link JSONRPCMessage} and writes it through
  * `transport.send`; `close` closes the underlying
  * `transport`; `start` is a no-op (the duplex channel is already open by the time

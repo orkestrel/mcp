@@ -98,16 +98,9 @@ export class MCPSession implements MCPSessionInterface {
 
 	replay(afterId: string): readonly MCPSessionEvent[] {
 		this.#evict(this.#clock())
-		const out: MCPSessionEvent[] = []
-		let found = false
-		for (const entry of this.#events.values()) {
-			// Collect every entry STRICTLY AFTER `afterId`, in append order.
-			if (found) out.push(entry)
-			else if (entry.id === afterId) found = true
-		}
-		// An unknown / evicted `afterId` was never matched → `found` stays false → replay nothing
-		// (the documented spec-sane choice; never re-deliver un-lost events).
-		return found ? out : []
+		const entries = Array.from(this.#events.values())
+		const index = entries.findIndex((entry) => entry.id === afterId)
+		return index === -1 ? [] : entries.slice(index + 1)
 	}
 
 	// Append a message to the bounded replay log under a fresh monotone id, evicting stale +

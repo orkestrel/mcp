@@ -1,6 +1,13 @@
-import type { JSONRPCMessage, MCPClientInterface, MCPServerInterface } from '@src/core'
-import type { MiddlewareHandler } from '@orkestrel/server'
-import type { StartedServerInterface } from '../../setupServer.js'
+import type { JSONRPCMessage } from '@src/core'
+import {
+	MCPFixtureCell,
+	MCP_SERVER_ANNOTATED_TOOLS,
+	MCP_HTTP_CALL_METADATA,
+	MCP_HTTP_GONE_LISTING,
+	MCP_HTTP_EMPTY_LISTING,
+	MCP_HTTP_FIRST_PAGE,
+	MCP_HTTP_SECOND_PAGE,
+} from '../../setup.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
 	buildJSONRPCResult,
@@ -13,21 +20,24 @@ import {
 	createMCPClient,
 	createMCPLegacy,
 	createMCPLegacyClientTransport,
-	createMCPServer,
 	HTTPClientTransport,
 	MCP_METHOD_HEADER,
 	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
 } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
-import { createTool, createToolManager } from '@orkestrel/tool'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import { createHTTPClientTransport, createMCPRoutes, inferHeaderIssue } from '@src/server'
-import { createServer as createHTTPServer } from 'node:http'
 import { createTeardown, waitForDelay } from '@orkestrel/test'
 import { createHeaderProjectionRequest, HEADER_PROJECTION_CONTEXTS } from '../../setup.js'
-import { startServer } from '../../setupServer.js'
+import {
+	connectClient,
+	createRemoteServer,
+	createBearerGuard,
+	startEndlessStream,
+	startServer,
+} from '../../setupServer.js'
 
 // The server environment composed end to end: the core HTTP CLIENT transport this face's
 // `createHTTPClientTransport` returns, driven against the SHIPPED server transport
@@ -35,8 +45,8 @@ import { startServer } from '../../setupServer.js'
 // + a REAL MCPServer over a REAL ToolManager (no mocks, no live model). An
 // `MCPClient` driving `createHTTPClientTransport` connects, discovers, and calls the
 // remote tools over `fetch`, exercising BOTH reply framings the server can choose: the
-// plain JSON body (`streaming: false`) and the Streamable-HTTP SSE `data:` event
-// (`streaming: true`, decoded through the core SSEParser inside the transport). Also: a
+// plain JSON body (`stream: false`) and the Streamable-HTTP SSE `data:` event
+// (`stream: true`, decoded through the core SSEParser inside the transport). Also: a
 // remote tool error → a local throw, and a token guard mounted IN FRONT (the transport's
 // `headers` carry the bearer). The in-process correlation / timeout / disconnect contract
 // is pinned in tests/src/core/MCPClient.test.ts.
@@ -46,78 +56,16 @@ afterEach(() => teardown.destroy())
 
 // A real MCPServer over a real ToolManager: an `add` tool (a fixed structured value),
 // a `greet` tool (a plain string), and a `boom` tool that throws (→ an `isError` result).
-function mcpServer(): MCPServerInterface {
-	const tools = createToolManager()
-	tools.add(
-		createTool({
-			name: 'add',
-			description: 'Add two numbers',
-			parameters: {
-				type: 'object',
-				properties: { a: { type: 'number' }, b: { type: 'number' } },
-			},
-			execute: (args) => Number(args['a']) + Number(args['b']),
-		}),
-	)
-	tools.add(createTool({ name: 'greet', execute: () => 'hi' }))
-	tools.add(
-		createTool({
-			name: 'boom',
-			execute: () => {
-				throw new Error('remote kaboom')
-			},
-		}),
-	)
-	return createMCPServer({ identity: { name: 'remote', version: '4.5.6' }, tools })
-}
-
 // Stand up the shipped MCP HTTP transport over a real server, then build an MCPClient
-// pointed at it through the HTTP client transport. `streaming` picks the server's reply
+// pointed at it through the HTTP client transport. `stream` picks the server's reply
 // framing (SSE vs JSON); `guardSecret` mounts a token guard in front (the client sends
 // the bearer through the transport's `headers`).
 // A minimal bearer-token check middleware, hand-rolled locally (no @orkestrel/middleware
 // dependency) — enough to prove the transport composes auth IN FRONT rather than
 // baking it in.
-function createBearerGuard(secret: string): MiddlewareHandler<unknown> {
-	return (request, _context, next) => {
-		if (request.headers.get('authorization') !== `Bearer ${secret}`) {
-			return Response.json({ error: 'unauthorized' }, { status: 401 })
-		}
-		return next()
-	}
-}
-
-async function connectClient(options?: {
-	readonly streaming?: boolean
-	readonly guardSecret?: string
-}): Promise<{ readonly client: MCPClientInterface; readonly handle: StartedServerInterface }> {
-	const dispatcher = createDispatcher<unknown>()
-	dispatcher.add(
-		createMCPRoutes(createMCPLegacy(mcpServer()), {
-			...(options?.streaming !== undefined ? { streaming: options.streaming } : {}),
-		}),
-	)
-	const server = createServer<unknown>({ dispatcher, state: () => undefined })
-	if (options?.guardSecret !== undefined) server.use(createBearerGuard(options.guardSecret))
-	const handle = await startServer(server)
-	teardown.add(() => handle.stop())
-	const headers =
-		options?.guardSecret !== undefined
-			? { authorization: `Bearer ${options.guardSecret}` }
-			: undefined
-	const client = createMCPClient({
-		transport: createHTTPClientTransport({
-			url: `${handle.base}/mcp`,
-			...(headers !== undefined ? { headers } : {}),
-		}),
-	})
-	await client.connect()
-	return { client, handle }
-}
-
 describe('HTTPClientTransport — JSON reply path (streaming: false)', () => {
 	it('connect → tools() → call() round-trips over a plain JSON body', async () => {
-		const { client } = await connectClient({ streaming: false })
+		const { client } = await connectClient(teardown, { stream: false })
 
 		expect(client.connected).toBe(true)
 		const tools = await client.tools()
@@ -134,7 +82,7 @@ describe('HTTPClientTransport — JSON reply path (streaming: false)', () => {
 	})
 
 	it('a remote tool failure throws locally', async () => {
-		const { client } = await connectClient({ streaming: false })
+		const { client } = await connectClient(teardown, { stream: false })
 		await expect(client.call('boom', {})).rejects.toThrow('remote kaboom')
 	})
 })
@@ -144,7 +92,7 @@ describe('HTTPClientTransport — SSE reply path (streaming: true)', () => {
 		// The server `Accept`s the transport's `text/event-stream` and frames each reply as a
 		// Streamable-HTTP SSE event; the transport decodes it through the core SSEParser. The
 		// JSON-RPC envelope — and thus the client's behavior — is identical to the JSON path.
-		const { client } = await connectClient({ streaming: true })
+		const { client } = await connectClient(teardown, { stream: true })
 
 		expect(client.connected).toBe(true)
 		const tools = await client.tools()
@@ -154,7 +102,7 @@ describe('HTTPClientTransport — SSE reply path (streaming: true)', () => {
 	})
 
 	it('a remote tool failure throws locally over the SSE path too', async () => {
-		const { client } = await connectClient({ streaming: true })
+		const { client } = await connectClient(teardown, { stream: true })
 		await expect(client.call('boom', {})).rejects.toThrow('remote kaboom')
 	})
 })
@@ -163,7 +111,7 @@ describe('HTTPClientTransport — policy composes in front', () => {
 	it('carries a bearer through headers to reach a guarded server', async () => {
 		// The transport's `headers` thread an Authorization bearer; the guard mounted IN FRONT
 		// of the MCP route passes it, so the whole handshake + call round-trips.
-		const { client } = await connectClient({ guardSecret: 'topsecret', streaming: false })
+		const { client } = await connectClient(teardown, { guardSecret: 'topsecret', stream: false })
 
 		expect(client.connected).toBe(true)
 		expect(await client.call('add', { a: 3, b: 4 })).toEqual({ resultType: 'complete', value: 7 })
@@ -171,7 +119,7 @@ describe('HTTPClientTransport — policy composes in front', () => {
 
 	it('rejects (no connect) when the bearer is missing against a guarded server', async () => {
 		const dispatcher = createDispatcher<unknown>()
-		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer())))
+		dispatcher.add(createMCPRoutes(createMCPLegacy(createRemoteServer())))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
 		server.use(createBearerGuard('topsecret'))
 		const handle = await startServer(server)
@@ -368,7 +316,7 @@ describe('HTTPClientTransport — lifecycle', () => {
 
 	it('captures the initialize result and sends its protocol on the subsequent request', async () => {
 		const dispatcher = createDispatcher<unknown>()
-		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer()), { streaming: false }))
+		dispatcher.add(createMCPRoutes(createMCPLegacy(createRemoteServer()), { stream: false }))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
 		const handle = await startServer(server)
 		teardown.add(() => handle.stop())
@@ -398,7 +346,7 @@ describe('HTTPClientTransport — lifecycle', () => {
 	})
 
 	it('exposes session undefined for the stateless v1 server and closes cleanly', async () => {
-		const { client } = await connectClient({ streaming: false })
+		const { client } = await connectClient(teardown, { stream: false })
 
 		// The stateless v1 server sends no `mcp-session-id`, so the transport's session stays
 		// undefined (reserved for the later sessions tier).
@@ -440,7 +388,7 @@ describe('HTTPClientTransport — lifecycle', () => {
 
 	it('close() clears the captured protocol — a new request carries no header', async () => {
 		const dispatcher = createDispatcher<unknown>()
-		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer()), { streaming: false }))
+		dispatcher.add(createMCPRoutes(createMCPLegacy(createRemoteServer()), { stream: false }))
 		const server = createServer<unknown>({ dispatcher, state: () => undefined })
 		const handle = await startServer(server)
 		teardown.add(() => handle.stop())
@@ -470,43 +418,6 @@ describe('HTTPClientTransport — lifecycle', () => {
 // called has to be handed back. For a `fetch` transport that is the request in flight and the
 // response body it is reading — an SSE reply the server never ends holds both open forever,
 // and nothing else in the client can reach them.
-interface EndlessStreamInterface {
-	readonly base: string
-	/** How many requests the server saw the client abandon. */
-	readonly abandoned: number
-	stop(): Promise<void>
-}
-
-// A real `node:http` peer that answers every POST with a `text/event-stream` it never ends:
-// it writes the SSE headers plus one comment line (so `fetch` resolves its Response) and then
-// holds the response open. `abandoned` counts the requests whose client went away, which is
-// what an aborted `fetch` looks like from the server's side.
-async function startEndlessStream(): Promise<EndlessStreamInterface> {
-	let abandoned = 0
-	const server = createHTTPServer((request, response) => {
-		request.on('close', () => {
-			if (!response.writableEnded) abandoned += 1
-		})
-		response.writeHead(200, { 'content-type': 'text/event-stream' })
-		response.write(': open\n\n')
-	})
-	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-	const address: unknown = server.address()
-	const port = isRecord(address) && typeof address.port === 'number' ? address.port : 0
-	return {
-		base: `http://127.0.0.1:${port}`,
-		get abandoned() {
-			return abandoned
-		},
-		stop(): Promise<void> {
-			return new Promise<void>((resolve) => {
-				server.closeAllConnections()
-				server.close(() => resolve())
-			})
-		},
-	}
-}
-
 describe('HTTPClientTransport — close releases the request it has in flight', () => {
 	it('close() aborts a pending send and the server sees the request abandoned', async () => {
 		const peer = await startEndlessStream()
@@ -530,7 +441,7 @@ describe('HTTPClientTransport — close releases the request it has in flight', 
 
 	it('a send issued after a start following close still reaches the server', async () => {
 		const dispatcher = createDispatcher<unknown>()
-		dispatcher.add(createMCPRoutes(createMCPLegacy(mcpServer()), { streaming: false }))
+		dispatcher.add(createMCPRoutes(createMCPLegacy(createRemoteServer()), { stream: false }))
 		const handle = await startServer(createServer<unknown>({ dispatcher, state: () => undefined }))
 		teardown.add(() => handle.stop())
 		const transport = new HTTPClientTransport({ url: `${handle.base}/mcp` })
@@ -548,14 +459,14 @@ describe('HTTPClientTransport — close releases the request it has in flight', 
 describe('HTTPClientTransport — close is idempotent', () => {
 	it('emits close once however many times it is called', async () => {
 		const transport = new HTTPClientTransport({ url: 'http://127.0.0.1:1/mcp' })
-		let closed = 0
-		transport.emitter.on('close', () => (closed += 1))
+		const closed = new MCPFixtureCell(0)
+		transport.emitter.on('close', () => (closed.value += 1))
 
 		await transport.close()
 		await transport.close()
 		await transport.close()
 
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 	})
 })
 
@@ -565,120 +476,13 @@ describe('HTTPClientTransport — close is idempotent', () => {
 // exact JSON a foreign 2026-07-28 server sends, and the transport under test is the real one.
 // The class's own rows live beside it in tests/src/core/transports/HTTPClientTransport.test.ts.
 
-const ANNOTATED_TOOLS = {
-	jsonrpc: '2.0',
-	id: 1,
-	result: {
-		resultType: 'complete',
-		ttlMs: 0,
-		cacheScope: 'private',
-		nextCursor: 'page-2',
-		tools: [
-			{
-				name: 'valid_tool',
-				inputSchema: {
-					type: 'object',
-					properties: {
-						region: { type: 'string', 'x-mcp-header': 'Region' },
-						priority: { type: 'integer', 'x-mcp-header': 'Priority' },
-						verbose: { type: 'boolean', 'x-mcp-header': 'Verbose' },
-						query: { type: 'string' },
-					},
-				},
-			},
-			{
-				name: 'invalid_space_in_name',
-				inputSchema: {
-					type: 'object',
-					properties: { value: { type: 'string', 'x-mcp-header': 'My Region' } },
-				},
-			},
-			{
-				name: 'plain_tool',
-				inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
-			},
-		],
-	},
-}
-
-const CALL_METADATA = { [MCP_META_VERSION]: '2026-07-28', [MCP_META_CAPABILITIES]: {} }
-
-// A listing that advertises one annotated tool, and the fresh listing that no longer carries
-// it. A `tools/list` sent with no `cursor` REPLACES what the caller was told, so the second
-// of these leaves the transport with nothing to project for `gone`.
-const GONE_LISTING = {
-	jsonrpc: '2.0',
-	id: 1,
-	result: {
-		resultType: 'complete',
-		ttlMs: 0,
-		cacheScope: 'private',
-		tools: [
-			{
-				name: 'gone',
-				inputSchema: {
-					type: 'object',
-					properties: { region: { type: 'string', 'x-mcp-header': 'Region' } },
-				},
-			},
-		],
-	},
-}
-
-const EMPTY_LISTING = {
-	jsonrpc: '2.0',
-	id: 2,
-	result: { resultType: 'complete', ttlMs: 0, cacheScope: 'private', tools: [] },
-}
-
-// The other half of the same seam: two pages of ONE listing, the second requested with the
-// cursor the first handed back. A continuation ACCUMULATES, so both tools stay projectable.
-const FIRST_PAGE = {
-	jsonrpc: '2.0',
-	id: 1,
-	result: {
-		resultType: 'complete',
-		ttlMs: 0,
-		cacheScope: 'private',
-		nextCursor: 'page-2',
-		tools: [
-			{
-				name: 'paged_one',
-				inputSchema: {
-					type: 'object',
-					properties: { region: { type: 'string', 'x-mcp-header': 'Region' } },
-				},
-			},
-		],
-	},
-}
-
-const SECOND_PAGE = {
-	jsonrpc: '2.0',
-	id: 2,
-	result: {
-		resultType: 'complete',
-		ttlMs: 0,
-		cacheScope: 'private',
-		tools: [
-			{
-				name: 'paged_two',
-				inputSchema: {
-					type: 'object',
-					properties: { priority: { type: 'integer', 'x-mcp-header': 'Priority' } },
-				},
-			},
-		],
-	},
-}
-
 describe('HTTPClientTransport — the x-mcp-header contract', () => {
 	it('excludes an invalidly annotated tool from the tools/list result it delivers', async () => {
 		const messages: JSONRPCMessage[] = []
 		const faults: unknown[] = []
 		const transport = createHTTPClientTransport({
 			url: 'http://localhost/mcp',
-			fetch: () => Promise.resolve(Response.json(ANNOTATED_TOOLS)),
+			fetch: () => Promise.resolve(Response.json(MCP_SERVER_ANNOTATED_TOOLS)),
 		})
 		transport.emitter.on('message', (message) => messages.push(message))
 		transport.emitter.on('error', (error) => faults.push(error))
@@ -687,7 +491,7 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
 
 		const delivered = messages[0]
@@ -716,7 +520,7 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			url: 'http://localhost/mcp',
 			fetch: (_input, init) => {
 				headers.push(new Headers(init?.headers))
-				return Promise.resolve(Response.json(ANNOTATED_TOOLS))
+				return Promise.resolve(Response.json(MCP_SERVER_ANNOTATED_TOOLS))
 			},
 		})
 
@@ -724,7 +528,7 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
 		await transport.send({
 			jsonrpc: '2.0',
@@ -733,7 +537,7 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			params: {
 				name: 'valid_tool',
 				arguments: { region: 'us west 1', priority: 42, verbose: false, query: 'SELECT 1' },
-				_meta: CALL_METADATA,
+				_meta: MCP_HTTP_CALL_METADATA,
 			},
 		})
 
@@ -757,7 +561,7 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			url: 'http://localhost/mcp',
 			fetch: (_input, init) => {
 				headers.push(new Headers(init?.headers))
-				return Promise.resolve(Response.json(ANNOTATED_TOOLS))
+				return Promise.resolve(Response.json(MCP_SERVER_ANNOTATED_TOOLS))
 			},
 		})
 
@@ -765,7 +569,7 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
 		await transport.send({
 			jsonrpc: '2.0',
@@ -774,7 +578,7 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			params: {
 				name: 'valid_tool',
 				arguments: { region: 'Hello, 世界', priority: 1, verbose: null },
-				_meta: CALL_METADATA,
+				_meta: MCP_HTTP_CALL_METADATA,
 			},
 		})
 
@@ -799,7 +603,11 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/call',
-			params: { name: 'valid_tool', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+			params: {
+				name: 'valid_tool',
+				arguments: { region: 'us-west1' },
+				_meta: MCP_HTTP_CALL_METADATA,
+			},
 		})
 
 		const called = headers[0]
@@ -810,14 +618,12 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 
 	it('projects nothing for a tool a later cursorless listing no longer carries', async () => {
 		const headers: Headers[] = []
-		let issued = 0
 		const transport = createHTTPClientTransport({
 			url: 'http://localhost/mcp',
 			fetch: (_input, init) => {
 				headers.push(new Headers(init?.headers))
-				issued += 1
-				if (issued === 1) return Promise.resolve(Response.json(GONE_LISTING))
-				if (issued === 2) return Promise.resolve(Response.json(EMPTY_LISTING))
+				if (headers.length === 1) return Promise.resolve(Response.json(MCP_HTTP_GONE_LISTING))
+				if (headers.length === 2) return Promise.resolve(Response.json(MCP_HTTP_EMPTY_LISTING))
 				return Promise.resolve(new Response(null, { status: 202 }))
 			},
 		})
@@ -826,19 +632,23 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 2,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 3,
 			method: 'tools/call',
-			params: { name: 'gone', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+			params: {
+				name: 'gone',
+				arguments: { region: 'us-west1' },
+				_meta: MCP_HTTP_CALL_METADATA,
+			},
 		})
 
 		const called = headers[2]
@@ -849,14 +659,12 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 
 	it('keeps the earlier page projectable when the next listing continues a cursor', async () => {
 		const headers: Headers[] = []
-		let issued = 0
 		const transport = createHTTPClientTransport({
 			url: 'http://localhost/mcp',
 			fetch: (_input, init) => {
 				headers.push(new Headers(init?.headers))
-				issued += 1
-				if (issued === 1) return Promise.resolve(Response.json(FIRST_PAGE))
-				if (issued === 2) return Promise.resolve(Response.json(SECOND_PAGE))
+				if (headers.length === 1) return Promise.resolve(Response.json(MCP_HTTP_FIRST_PAGE))
+				if (headers.length === 2) return Promise.resolve(Response.json(MCP_HTTP_SECOND_PAGE))
 				return Promise.resolve(new Response(null, { status: 202 }))
 			},
 		})
@@ -865,25 +673,29 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 2,
 			method: 'tools/list',
-			params: { cursor: 'page-2', _meta: CALL_METADATA },
+			params: { cursor: 'page-2', _meta: MCP_HTTP_CALL_METADATA },
 		})
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 3,
 			method: 'tools/call',
-			params: { name: 'paged_one', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+			params: {
+				name: 'paged_one',
+				arguments: { region: 'us-west1' },
+				_meta: MCP_HTTP_CALL_METADATA,
+			},
 		})
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 4,
 			method: 'tools/call',
-			params: { name: 'paged_two', arguments: { priority: 3 }, _meta: CALL_METADATA },
+			params: { name: 'paged_two', arguments: { priority: 3 }, _meta: MCP_HTTP_CALL_METADATA },
 		})
 
 		const first = headers[2]
@@ -901,19 +713,17 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 	// objects and reimplements nothing this package owns.
 	it('caches nothing from a listing a fresh one superseded before its answer arrived', async () => {
 		const headers: Headers[] = []
-		let issued = 0
-		let release: ((response: Response) => void) | undefined
+		const release = new MCPFixtureCell<((response: Response) => void) | undefined>(undefined)
 		const transport = createHTTPClientTransport({
 			url: 'http://localhost/mcp',
 			fetch: (_input, init) => {
 				headers.push(new Headers(init?.headers))
-				issued += 1
-				if (issued === 1) {
+				if (headers.length === 1) {
 					return new Promise<Response>((resolve) => {
-						release = resolve
+						release.value = resolve
 					})
 				}
-				if (issued === 2) return Promise.resolve(Response.json(EMPTY_LISTING))
+				if (headers.length === 2) return Promise.resolve(Response.json(MCP_HTTP_EMPTY_LISTING))
 				return Promise.resolve(new Response(null, { status: 202 }))
 			},
 		})
@@ -924,22 +734,22 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { cursor: 'page-2', _meta: CALL_METADATA },
+			params: { cursor: 'page-2', _meta: MCP_HTTP_CALL_METADATA },
 		})
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 2,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
-		if (release === undefined) throw new Error('the transport issued no continuation')
-		release(Response.json(SECOND_PAGE))
+		if (release.value === undefined) throw new Error('the transport issued no continuation')
+		release.value(Response.json(MCP_HTTP_SECOND_PAGE))
 		await superseded
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 3,
 			method: 'tools/call',
-			params: { name: 'paged_two', arguments: { priority: 3 }, _meta: CALL_METADATA },
+			params: { name: 'paged_two', arguments: { priority: 3 }, _meta: MCP_HTTP_CALL_METADATA },
 		})
 
 		const called = headers[2]
@@ -955,19 +765,17 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 		const headers: Headers[] = []
 		const messages: JSONRPCMessage[] = []
 		const faults: unknown[] = []
-		let issued = 0
-		let release: ((response: Response) => void) | undefined
+		const release = new MCPFixtureCell<((response: Response) => void) | undefined>(undefined)
 		const transport = createHTTPClientTransport({
 			url: 'http://localhost/mcp',
 			fetch: (_input, init) => {
 				headers.push(new Headers(init?.headers))
-				issued += 1
-				if (issued === 1) {
+				if (headers.length === 1) {
 					return new Promise<Response>((resolve) => {
-						release = resolve
+						release.value = resolve
 					})
 				}
-				if (issued === 2) return Promise.resolve(Response.json(EMPTY_LISTING))
+				if (headers.length === 2) return Promise.resolve(Response.json(MCP_HTTP_EMPTY_LISTING))
 				return Promise.resolve(new Response(null, { status: 202 }))
 			},
 		})
@@ -978,22 +786,26 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { cursor: 'page-2', _meta: CALL_METADATA },
+			params: { cursor: 'page-2', _meta: MCP_HTTP_CALL_METADATA },
 		})
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 2,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
-		if (release === undefined) throw new Error('the transport issued no continuation')
-		release(Response.json(ANNOTATED_TOOLS))
+		if (release.value === undefined) throw new Error('the transport issued no continuation')
+		release.value(Response.json(MCP_SERVER_ANNOTATED_TOOLS))
 		await superseded
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 3,
 			method: 'tools/call',
-			params: { name: 'valid_tool', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+			params: {
+				name: 'valid_tool',
+				arguments: { region: 'us-west1' },
+				_meta: MCP_HTTP_CALL_METADATA,
+			},
 		})
 
 		const delivered = messages[1]
@@ -1016,22 +828,20 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 
 	it('keeps both pages projectable when a fresh listing and its own continuation overlap', async () => {
 		const headers: Headers[] = []
-		let issued = 0
-		let listing: ((response: Response) => void) | undefined
-		let continuation: ((response: Response) => void) | undefined
+		const listing = new MCPFixtureCell<((response: Response) => void) | undefined>(undefined)
+		const continuation = new MCPFixtureCell<((response: Response) => void) | undefined>(undefined)
 		const transport = createHTTPClientTransport({
 			url: 'http://localhost/mcp',
 			fetch: (_input, init) => {
 				headers.push(new Headers(init?.headers))
-				issued += 1
-				if (issued === 1) {
+				if (headers.length === 1) {
 					return new Promise<Response>((resolve) => {
-						listing = resolve
+						listing.value = resolve
 					})
 				}
-				if (issued === 2) {
+				if (headers.length === 2) {
 					return new Promise<Response>((resolve) => {
-						continuation = resolve
+						continuation.value = resolve
 					})
 				}
 				return Promise.resolve(new Response(null, { status: 202 }))
@@ -1043,32 +853,36 @@ describe('HTTPClientTransport — the x-mcp-header contract', () => {
 			jsonrpc: '2.0',
 			id: 1,
 			method: 'tools/list',
-			params: { _meta: CALL_METADATA },
+			params: { _meta: MCP_HTTP_CALL_METADATA },
 		})
 		const paged = transport.send({
 			jsonrpc: '2.0',
 			id: 2,
 			method: 'tools/list',
-			params: { cursor: 'page-2', _meta: CALL_METADATA },
+			params: { cursor: 'page-2', _meta: MCP_HTTP_CALL_METADATA },
 		})
-		if (listing === undefined || continuation === undefined) {
+		if (listing.value === undefined || continuation.value === undefined) {
 			throw new Error('the transport issued no listing')
 		}
-		listing(Response.json(FIRST_PAGE))
+		listing.value(Response.json(MCP_HTTP_FIRST_PAGE))
 		await fresh
-		continuation(Response.json(SECOND_PAGE))
+		continuation.value(Response.json(MCP_HTTP_SECOND_PAGE))
 		await paged
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 3,
 			method: 'tools/call',
-			params: { name: 'paged_one', arguments: { region: 'us-west1' }, _meta: CALL_METADATA },
+			params: {
+				name: 'paged_one',
+				arguments: { region: 'us-west1' },
+				_meta: MCP_HTTP_CALL_METADATA,
+			},
 		})
 		await transport.send({
 			jsonrpc: '2.0',
 			id: 4,
 			method: 'tools/call',
-			params: { name: 'paged_two', arguments: { priority: 3 }, _meta: CALL_METADATA },
+			params: { name: 'paged_two', arguments: { priority: 3 }, _meta: MCP_HTTP_CALL_METADATA },
 		})
 
 		const first = headers[2]

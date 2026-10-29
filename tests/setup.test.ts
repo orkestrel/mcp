@@ -1,20 +1,7 @@
-// Proof of `tests/setup.ts` — the host-independent infrastructure every project loads.
-//
-// Each case asserts a contract a consuming suite relies on, and derives what it expects by a
-// route the module cannot share: an envelope goes through the shipped wire parser rather than
-// back through the factory that built it, the header table's own `parsed` column is checked
-// against the real `parseRequestContext`, a nesting depth is walked rather than recomputed, the
-// timer lead is measured against real host timers on `performance.now()`, and every instrument
-// is calibrated against the outcome its own documentation names.
-
+import type { BrowserFixtureInterface } from './setupServer.js'
+import type { JSONRPCMessage, MCPSubscriptionFilter } from '@src/core'
+import { METHOD_OPTIONS, TASK_CONTEXT } from './setup.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type { BrowserFixtureInterface } from './fixtures/browserServer.js'
-import type {
-	JSONRPCMessage,
-	MCPMethodOptions,
-	MCPSubscriptionFilter,
-	MCPTaskContext,
-} from '@src/core'
 import {
 	bindClient,
 	bindServer,
@@ -33,9 +20,11 @@ import {
 } from '@src/core'
 import { createToolManager } from '@orkestrel/tool'
 import { isRecord } from '@orkestrel/contract'
-import { collect, createRecorder, waitForDelay } from '@orkestrel/test'
+import { collect, createRecorder, requireValue, waitForDelay } from '@orkestrel/test'
 import {
 	buildNestedRecord,
+	inspectNestedFixture,
+	MCPFixtureCell,
 	collectSSE,
 	createCalculatorServer,
 	createHeaderProjectionRequest,
@@ -72,15 +61,16 @@ import {
 	waitForSettlement,
 } from './setup.js'
 import { alignLoopClock } from './setupServer.js'
-import { start } from './fixtures/browserServer.js'
+import { startBrowserFixture } from './setupServer.js'
 
-const METHOD_OPTIONS: MCPMethodOptions = { signal: new AbortController().signal }
-
-const TASK_CONTEXT: MCPTaskContext = {
-	request: modernRequest('tools/call', 1),
-	call: { id: 'call-1', name: 'render', arguments: {} },
-	tools: createToolManager(),
-}
+// Proof of `tests/setup.ts` — the host-independent infrastructure every project loads.
+//
+// Each case asserts a contract a consuming suite relies on, and derives what it expects by a
+// route the module cannot share: an envelope goes through the shipped wire parser rather than
+// back through the factory that built it, the header table's own `parsed` column is checked
+// against the real `parseRequestContext`, a nesting depth is walked rather than recomputed, the
+// timer lead is measured against real host timers on `performance.now()`, and every instrument
+// is calibrated against the outcome its own documentation names.
 
 describe('createProducerScript', () => {
 	it('yields the supplied frames in order and records the filter and signal', async () => {
@@ -299,12 +289,7 @@ describe('the adversarial batteries', () => {
 	})
 
 	it('nests a record exactly as deep as it was asked to', () => {
-		let level: unknown = buildNestedRecord(5)
-		let walked = 0
-		while (isRecord(level) && 'nested' in level) {
-			level = level['nested']
-			walked += 1
-		}
+		const { level, walked } = inspectNestedFixture(buildNestedRecord(5), 100)
 
 		expect(walked).toBe(5)
 		expect(level).toEqual({ leaf: true })
@@ -536,11 +521,11 @@ describe('probeDuplex and readMethods', () => {
 		const client = createMCPClient({ transport })
 		const unbindClient = bindClient(client, carrier)
 		await client.connect()
-		let read = carrier.sent.length
+		const read = new MCPFixtureCell(carrier.sent.length)
 
 		const frames = await probeDuplex(client, async () => {
-			const written = carrier.sent.slice(read)
-			read = carrier.sent.length
+			const written = carrier.sent.slice(read.value)
+			read.value = carrier.sent.length
 			return written.flatMap((text) => {
 				const message = parseJSONRPCMessage(JSON.parse(text))
 				return message === undefined ? [] : [message]
@@ -629,28 +614,28 @@ describe('createManualClock', () => {
 })
 
 describe('TIMER_LEAD', () => {
-	let spans: readonly number[] = []
+	const spans = new MCPFixtureCell<readonly number[]>([])
 
 	beforeAll(async () => {
-		spans = await sampleTimerSpans(alignLoopClock)
+		spans.value = await sampleTimerSpans(alignLoopClock)
 	})
 
 	it('sampleTimerSpans records every late-armed timer and the lead covers every span', () => {
-		expect(spans).toHaveLength(50)
-		for (const span of spans) expect(span).toBeGreaterThanOrEqual(10 - TIMER_LEAD)
+		expect(spans.value).toHaveLength(50)
+		for (const span of spans.value) expect(span).toBeGreaterThanOrEqual(10 - TIMER_LEAD)
 	})
 
 	it('rejects the full duration as a lower bound when the host exhibits a short timer', (context) => {
-		expect(spans).toHaveLength(50)
-		const minimum = Math.min(...spans)
+		expect(spans.value).toHaveLength(50)
+		const minimum = Math.min(...spans.value)
 		if (minimum >= 10) {
 			context.skip(
-				`No timer ended short in ${spans.length} late-armed 10 ms samples; minimum ${minimum} ms, maximum ${Math.max(...spans)} ms.`,
+				`No timer ended short in ${spans.value.length} late-armed 10 ms samples; minimum ${minimum} ms, maximum ${Math.max(...spans.value)} ms.`,
 			)
 		}
 		expect(minimum).toBeLessThan(10)
 		expect(() => {
-			for (const span of spans) expect(span).toBeGreaterThanOrEqual(10)
+			for (const span of spans.value) expect(span).toBeGreaterThanOrEqual(10)
 		}).toThrow(/greater than or equal to 10/)
 	})
 })
@@ -860,23 +845,27 @@ describe('createTaskServer', () => {
 })
 
 describe('postJSON', () => {
-	let fixture: BrowserFixtureInterface
+	const fixture = new MCPFixtureCell<BrowserFixtureInterface | undefined>(undefined)
 
 	beforeAll(async () => {
-		fixture = await start()
+		fixture.value = await startBrowserFixture()
 	})
 
 	afterAll(async () => {
-		await fixture.stop()
+		await requireValue(fixture.value).stop()
 	})
 
 	it('posts the serialized value to the default endpoint of a real server', async () => {
-		const answered = await postJSON(fixture.base, modernRequest('tools/list', 'post-1'), {
-			headers: {
-				[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
-				[MCP_METHOD_HEADER]: 'tools/list',
+		const answered = await postJSON(
+			requireValue(fixture.value).base,
+			modernRequest('tools/list', 'post-1'),
+			{
+				headers: {
+					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+					[MCP_METHOD_HEADER]: 'tools/list',
+				},
 			},
-		})
+		)
 
 		// No `path` was given, so the request reached `/mcp` — the MCP endpoint the fixture
 		// serves — and the server answered the id the body carried.
@@ -886,10 +875,14 @@ describe('postJSON', () => {
 	})
 
 	it('merges the caller headers over the JSON content type and takes the given path', async () => {
-		const answered = await postJSON(fixture.base, createJSONRPCRequest({ id: 'post-2' }), {
-			path: '/headers',
-			headers: { [MCP_METHOD_HEADER]: 'tools/list' },
-		})
+		const answered = await postJSON(
+			requireValue(fixture.value).base,
+			createJSONRPCRequest({ id: 'post-2' }),
+			{
+				path: '/headers',
+				headers: { [MCP_METHOD_HEADER]: 'tools/list' },
+			},
+		)
 
 		const decoded: unknown = await answered.json()
 		const result = isRecord(decoded) ? decoded['result'] : undefined

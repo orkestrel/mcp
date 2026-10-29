@@ -18,13 +18,7 @@ import type {
 } from './types.js'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
-import {
-	bindServer,
-	decodeEvent,
-	HTTPClientTransport,
-	isJSONRPCInvocation,
-	MCP_WEBSOCKET_SUBPROTOCOL,
-} from '@src/core'
+import { bindServer, HTTPClientTransport, MCP_WEBSOCKET_SUBPROTOCOL } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { signToken, verifyToken } from '@orkestrel/server'
 import { createNodeWebSocket, WEBSOCKET_VERSION } from '@orkestrel/websocket'
@@ -35,6 +29,7 @@ import { StdioClientTransport } from './transports/StdioClientTransport.js'
 import { StdioServerTransport } from './transports/StdioServerTransport.js'
 import { WebSocketClientTransport } from './transports/WebSocketClientTransport.js'
 import { WebSocketServerTransport } from './transports/WebSocketServerTransport.js'
+import { DuplexServerTransport } from './transports/DuplexServerTransport.js'
 
 /**
  * Adapts the installed server token primitives to the host-neutral MCP continuation port.
@@ -110,31 +105,7 @@ export function createMCPContinuation(secret: TokenSecret): MCPContinuationInter
 export function createDuplexServerTransport(
 	transport: MCPMessageTransportInterface,
 ): MCPTransportInterface {
-	let onMessage: ((message: string) => void) | undefined
-	let onClosed: (() => void) | undefined
-	transport.emitter.on('message', (message) => {
-		if (!isJSONRPCInvocation(message)) return
-		onMessage?.(JSON.stringify(message))
-	})
-	transport.emitter.on('close', () => {
-		onClosed?.()
-	})
-	return {
-		async send(message) {
-			const decoded = decodeEvent(message)
-			if (decoded === undefined) return
-			await transport.send(decoded)
-		},
-		listen(handler) {
-			onMessage = handler
-		},
-		closed(handler) {
-			onClosed = handler
-		},
-		async close() {
-			await transport.close()
-		},
-	}
+	return new DuplexServerTransport(transport)
 }
 
 /**
@@ -160,7 +131,7 @@ export function createDuplexServerTransport(
  * - A **notification** (an invocation with no `id`, which `dispatch` resolves to
  *   `undefined`) is a `202 Accepted` with no body.
  *
- * When `streaming` is enabled (the default) and the client `Accept`s `text/event-stream`,
+ * When `stream` is enabled (the default) and the client `Accept`s `text/event-stream`,
  * the `200` reply is framed as a Streamable-HTTP SSE response (one `data:` event carrying
  * the JSON-RPC envelope, then the stream ends) through `@orkestrel/server`'s generic
  * {@link import('@orkestrel/server').createStream} seam; otherwise it is a plain JSON body.
@@ -177,7 +148,7 @@ export function createDuplexServerTransport(
  *
  * @typeParam TState - The consumer's opaque per-request state type
  * @param mcp - The transport-agnostic {@link MCPDispatcherInterface} to expose over HTTP
- * @param options - Optional `path` (default {@link DEFAULT_MCP_PATH}) and `streaming`
+ * @param options - Optional `path` (default {@link DEFAULT_MCP_PATH}) and `stream`
  *   (default `true`), plus shared origin, keepalive, and synchronous caller-extraction options; see
  *   {@link HTTPTransportOptions}
  * @returns The {@link RouteInput}s to register with the router

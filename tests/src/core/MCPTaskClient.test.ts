@@ -1,5 +1,12 @@
-import type { MCPClientInterface, MCPTaskDetail } from '@src/core'
-import type { TestFrame, TestTransportInterface } from '../../setup.js'
+import {
+	connectTaskClient,
+	startTask,
+	scheduleTaskReads,
+	countFrames,
+	POLL_INTERVAL,
+	WATCH_WINDOW,
+} from '../../setup.js'
+
 import { describe, expect, it } from 'vitest'
 import {
 	createMCPClient,
@@ -34,63 +41,20 @@ import {
 
 // How long every timing scenario watches the wire, and the hint the peer publishes. The window
 // is many multiples of the interval, so a loop of ANY period at or below the hint leaves frames.
-const POLL_INTERVAL = 10
-const WATCH_WINDOW = 140
-// Longer than the watch window, so the task is genuinely still `working` while it is observed.
-const TASK_WORK = 200
 
-interface TaskScenario {
-	readonly client: MCPClientInterface
-	readonly transport: TestTransportInterface
-	readonly tasks: TestTaskManager
-}
+// Longer than the watch window, so the task is genuinely still `working` while it is observed.
 
 // A connected client whose peer defers every `tools/call` into a durable task. The capability
 // declaration is what entitles the client to the `tasks/*` methods at all: the server
 // checks it FIRST, before it reads a single parameter.
-async function connectTaskClient(options: { readonly poll?: number } = {}): Promise<TaskScenario> {
-	const tasks = new TestTaskManager({
-		work: TASK_WORK,
-		...(options.poll === undefined ? {} : { poll: options.poll }),
-	})
-	const transport = createRecordingTransport(createTaskServer(tasks))
-	const client = createMCPClient({ transport, capabilities: TASK_CAPABILITIES })
-	await client.connect()
-	return { client, transport, tasks }
-}
 
 // Start one durable task and answer its handle. The `resultType` narrowing is the assertion:
 // a peer that ran the call inline would fail here rather than further down.
-async function startTask(client: MCPClientInterface): Promise<string> {
-	const outcome = await client.call('render', { page: 3 })
-	if (outcome.resultType !== 'task') {
-		throw new Error(`expected a deferred call, got '${outcome.resultType}'`)
-	}
-	return outcome.taskId
-}
 
 // THE CONTROL INSTRUMENT: a scheduler this package does not provide and never will. It is the
 // consumer's half of `pollIntervalMs` — read, wait the hinted interval, read again — written
 // here in full precisely because writing it is the consumer's job. Its presence in this file is
 // what proves the recorder beside it can see a loop.
-async function scheduleTaskPolling(
-	client: MCPClientInterface,
-	id: string,
-	interval: number,
-	window: number,
-): Promise<readonly MCPTaskDetail[]> {
-	const seen: MCPTaskDetail[] = []
-	const until = performance.now() + window
-	while (performance.now() < until) {
-		seen.push(await client.tasks.task(id))
-		await waitForDelay(interval)
-	}
-	return seen
-}
-
-function countFrames(frames: readonly TestFrame[], method: string): number {
-	return frames.filter((frame) => frame.method === method).length
-}
 
 describe('MCPTaskClient — the shape', () => {
 	it('exposes exactly task / update / abort, and no plural accessor', async () => {
@@ -295,7 +259,7 @@ describe('MCPTaskClient — pollIntervalMs is a datum, not a loop', () => {
 		const mark = transport.frames.length
 
 		const started = performance.now()
-		const seen = await scheduleTaskPolling(client, id, POLL_INTERVAL, WATCH_WINDOW)
+		const seen = await scheduleTaskReads(client, id, POLL_INTERVAL, WATCH_WINDOW)
 		const elapsed = performance.now() - started
 
 		expect(elapsed).toBeGreaterThanOrEqual(WATCH_WINDOW - 5)

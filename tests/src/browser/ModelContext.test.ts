@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createModelContext, describeWebMCPTool, isWebMCPDocument } from '@src/browser'
 import { isMCPError } from '@src/core'
 import { createTool, createToolManager } from '@orkestrel/tool'
+import { MCPFixtureCell } from '../../setup.js'
 import {
 	createRecorder,
 	createRecorders,
@@ -21,8 +22,8 @@ import {
 	readOne,
 	recordRegistration,
 	traceRegistrations,
+	installModelContext,
 } from '../../setupBrowser.js'
-import { installModelContext } from '../../fixtures/modelContext.js'
 
 // src/browser/ModelContext.ts — the WebMCP bridge, driven in real Chromium against the
 // IDL-faithful registry double. Every scenario against the double proves the TRANSLATION; the
@@ -860,11 +861,11 @@ describe('adopt — reading the registry back as locally executable tools', () =
 			await fixture.registry.registerTool(recordRegistration('unmarked', 'unmarked').tool)
 
 			expect((await bridge.adopt()).map((tool) => tool.name)).toEqual(['ordinary', 'unmarked'])
-			expect((await bridge.adopt({ debugging: false })).map((tool) => tool.name)).toEqual([
+			expect((await bridge.adopt({ debug: false })).map((tool) => tool.name)).toEqual([
 				'ordinary',
 				'unmarked',
 			])
-			const included = await bridge.adopt({ debugging: true })
+			const included = await bridge.adopt({ debug: true })
 			expect(included.map((tool) => tool.name)).toEqual(['debugger', 'ordinary', 'unmarked'])
 			const debugging = requireValue(
 				included.find((tool) => tool.name === 'debugger'),
@@ -1102,12 +1103,12 @@ describe('the IDL surface the double publishes, read as the specification declar
 	it('rejects with the reason and dispatches nothing for an already-aborted caller', async () => {
 		const fixture = installModelContext(document.implementation.createHTMLDocument())
 		const events = createRecorder<readonly [Event]>()
-		let ran = false
+		const ran = new MCPFixtureCell(false)
 		await fixture.registry.registerTool({
 			name: 'never',
 			description: 'Never runs',
 			execute: async () => {
-				ran = true
+				ran.value = true
 				return 'ran'
 			},
 		})
@@ -1119,7 +1120,7 @@ describe('the IDL surface the double publishes, read as the specification declar
 			fixture.registry.executeTool(tool, {}, { signal: AbortSignal.abort(reason) }),
 		).rejects.toBe(reason)
 		expect(events.calls).toEqual([])
-		expect(ran).toBe(false)
+		expect(ran.value).toBe(false)
 	})
 
 	it('aborts the tool signal before it dispatches toolcancel', async () => {

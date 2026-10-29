@@ -1,15 +1,28 @@
 import type {
 	JSONRPCNotification,
-	JSONRPCResponse,
 	MCPMethodHandler,
 	MCPMethodOptions,
-	MCPServerInterface,
-	MCPStream,
 	MCPSubscriptionFilter,
-	MCPTransportInterface,
 } from '@src/core'
-import type { JSONRPCMessage, MCPHeaderParameter } from '@src/core'
-import type { MemoryTransportInterface } from '../../setup.js'
+import type { MCPHeaderParameter } from '@src/core'
+import {
+	MCPFixtureCell,
+	MCP_HELPER_PROGRESS,
+	MCP_HELPER_TERMINAL,
+	MCP_PUBLISHED_PREDICATES,
+	createReplyStream,
+	createHeldReply,
+	createParkedReply,
+	createTextController,
+	buildDataEvent,
+	createSSEResponse,
+	createRPCMessage,
+	createBinderServer,
+	createBoundedServer,
+	createBoundClient,
+	createMemoryTransportPair,
+	createSignalRecorder,
+} from '../../setup.js'
 import {
 	bindClient,
 	bindServer,
@@ -40,7 +53,6 @@ import {
 	createMCPClient,
 	createMCPLegacy,
 	createMCPLegacyClientTransport,
-	createMCPServer,
 	decodeBoundedMessage,
 	decodeSentinel,
 	DEFAULT_MCP_CACHE_TTL,
@@ -68,7 +80,6 @@ import {
 	modernResultToLegacy,
 	MCPStreamController,
 	MCPTextStreamController,
-	parseJSONRPCMessage,
 	readCancelledId,
 	readEventStream,
 	sendStream,
@@ -98,59 +109,15 @@ import {
 // mocks): `listen`/`closed` each hold THE SINGLE handler (replace semantics, per the
 // port's own contract), `send` records every outbound string (optionally rejecting
 // when `failSend` is set), `deliver` drives inbound data, and `close` drives closure.
-function createMemoryTransportPair(): readonly [
-	MemoryTransportInterface,
-	MemoryTransportInterface,
-] {
-	const server = createMemoryTransport()
-	const client = createMemoryTransport()
-	server.connect(client)
-	client.connect(server)
-	return [server, client]
-}
 
 // Held-open fixtures (an INERT data-driven stub, not a reimplementation
 // of anything the package owns): `replay` is a real MCPStream over supplied messages,
 // so each stream test names only the sequence its scenario needs.
-const PROGRESS: JSONRPCNotification = Object.freeze({
-	jsonrpc: '2.0',
-	method: 'notifications/progress',
-})
-const TERMINAL: JSONRPCResponse = Object.freeze({ jsonrpc: '2.0', id: 1, result: { done: true } })
-
-// Every published CAPABILITY predicate as a unary call. A `supports*` predicate reads a
-// declaration and narrows nothing, so it is no `Guard<T>` — but it takes the same `unknown`
-// from the same wire, so it owes the same totality.
-const PUBLISHED_PREDICATES: Readonly<Record<string, (value: unknown) => boolean>> = Object.freeze({
-	supportsFormElicitation,
-	supportsTask,
-})
-
-async function* replay(
-	messages: readonly JSONRPCNotification[],
-	response: JSONRPCResponse,
-): MCPStream {
-	for (const message of messages) yield message
-	return response
-}
-
 // The registered handler form of it — a held-open modern method for the seam tests.
-async function held(): Promise<MCPStream> {
-	return replay([PROGRESS, PROGRESS], TERMINAL)
-}
 
 // A held-open producer parked on an event that will never arrive — the exact shape the
 // standing ruling is about. It wakes only on its request signal, and records the method it
 // belonged to from its `finally`, so a test can see whether anybody ended the exchange.
-async function* parked(options: MCPMethodOptions, ended: string[]): MCPStream {
-	try {
-		yield PROGRESS
-		await waitForAbort(options.signal)
-		return TERMINAL
-	} finally {
-		ended.push('demo/parked')
-	}
-}
 
 describe('capability predicates', () => {
 	it('recognizes implicit and explicit form capabilities but not URL-only support', () => {
@@ -187,16 +154,16 @@ describe('capability predicates', () => {
 	it('covers every capability predicate the barrel publishes', () => {
 		const published = Object.keys(MCP).filter((name) => name.startsWith('supports'))
 
-		expect(published.filter((name) => !Object.hasOwn(PUBLISHED_PREDICATES, name))).toEqual([])
-		expect(Object.keys(PUBLISHED_PREDICATES).filter((name) => !published.includes(name))).toEqual(
-			[],
-		)
+		expect(published.filter((name) => !Object.hasOwn(MCP_PUBLISHED_PREDICATES, name))).toEqual([])
+		expect(
+			Object.keys(MCP_PUBLISHED_PREDICATES).filter((name) => !published.includes(name)),
+		).toEqual([])
 	})
 
 	it('answers false rather than throwing for every hostile value a capability predicate reads', () => {
 		const battery = [...createHostileCorpus(), ...createThrowingKeys(GUARD_KEY_NAMES)]
 		const escaped: string[] = []
-		for (const [name, predicate] of Object.entries(PUBLISHED_PREDICATES)) {
+		for (const [name, predicate] of Object.entries(MCP_PUBLISHED_PREDICATES)) {
 			for (const [index, value] of battery.entries()) {
 				try {
 					predicate(value)
@@ -450,17 +417,17 @@ describe('modern execution helpers', () => {
 	})
 
 	it('captures each data descriptor once and serializes that owned snapshot', () => {
-		let reads = 0
+		const reads = new MCPFixtureCell(0)
 		const value = new Proxy(
 			{ value: 'first' },
 			{
 				getOwnPropertyDescriptor(target, property) {
 					if (property !== 'value') return Reflect.getOwnPropertyDescriptor(target, property)
-					reads += 1
+					reads.value += 1
 					return {
 						configurable: true,
 						enumerable: true,
-						value: reads === 1 ? 'first' : 'changed',
+						value: reads.value === 1 ? 'first' : 'changed',
 						writable: true,
 					}
 				},
@@ -468,7 +435,7 @@ describe('modern execution helpers', () => {
 		)
 
 		expect(serializeJSON(value, { bytes: 64, keys: 1, depth: 1 })).toBe('{"value":"first"}')
-		expect(reads).toBe(1)
+		expect(reads.value).toBe(1)
 	})
 
 	it('rejects non-exact arrays and invalid serializer limits without throwing', () => {
@@ -491,51 +458,51 @@ describe('modern execution helpers', () => {
 	})
 
 	it('preflights array bounds and active cycles before repeated reflection', () => {
-		let keyReads = 0
+		const keyReads = new MCPFixtureCell(0)
 		const bounded = new Proxy([1], {
 			ownKeys(target) {
-				keyReads += 1
+				keyReads.value += 1
 				return Reflect.ownKeys(target)
 			},
 		})
 
 		expect(serializeJSON(bounded, { bytes: 64, keys: 0, depth: 1 })).toBeUndefined()
-		expect(keyReads).toBe(0)
+		expect(keyReads.value).toBe(0)
 
-		let cycleReads = 0
+		const cycleReads = new MCPFixtureCell(0)
 		const target: unknown[] = []
 		const cycle = new Proxy(target, {
 			ownKeys(value) {
-				cycleReads += 1
+				cycleReads.value += 1
 				return Reflect.ownKeys(value)
 			},
 		})
 		target.push(cycle)
 
 		expect(serializeJSON(cycle, { bytes: 128, keys: 2, depth: 2 })).toBeUndefined()
-		expect(cycleReads).toBe(1)
+		expect(cycleReads.value).toBe(1)
 	})
 
 	it('preflights a wide record after one key snapshot and before descriptors', () => {
-		let keyReads = 0
-		let descriptorReads = 0
+		const keyReads = new MCPFixtureCell(0)
+		const descriptorReads = new MCPFixtureCell(0)
 		const value = new Proxy(
 			{ alpha: 1, beta: 2 },
 			{
 				ownKeys(target) {
-					keyReads += 1
+					keyReads.value += 1
 					return Reflect.ownKeys(target)
 				},
 				getOwnPropertyDescriptor(target, property) {
-					descriptorReads += 1
+					descriptorReads.value += 1
 					return Reflect.getOwnPropertyDescriptor(target, property)
 				},
 			},
 		)
 
 		expect(serializeJSON(value, { bytes: 64, keys: 1, depth: 1 })).toBeUndefined()
-		expect(keyReads).toBe(1)
-		expect(descriptorReads).toBe(0)
+		expect(keyReads.value).toBe(1)
+		expect(descriptorReads.value).toBe(0)
 	})
 
 	it('builds the canonical Tool call and official progress notification', () => {
@@ -909,15 +876,9 @@ describe('buildInitializeResult', () => {
 // `server.emitter`'s `error` event (never unhandled), and the transport's own
 // `closed` signal deactivating the binder.
 describe('bindServer', () => {
-	function server() {
-		const tools = createToolManager()
-		tools.add(createTool({ name: 'add', execute: (a) => Number(a['x']) + Number(a['y']) }))
-		return createMCPServer({ identity: { name: 'demo', version: '1.0.0' }, tools })
-	}
-
 	it('serves a legacy initialize and tools/call through the decorator over a real duplex pair', async () => {
 		const [serverTransport, clientTransport] = createMemoryTransportPair()
-		const unbindServer = bindServer(createMCPLegacy(server()), serverTransport)
+		const unbindServer = bindServer(createMCPLegacy(createBinderServer()), serverTransport)
 		const carrier = createDuplexClientTransport(clientTransport)
 		const client = createMCPClient({
 			transport: createMCPLegacyClientTransport(carrier, { version: '2025-06-18' }),
@@ -935,7 +896,7 @@ describe('bindServer', () => {
 
 	it('CONTROL — a bare server answers modern-shaped initialize with -32601 over a real duplex pair', async () => {
 		const [serverTransport, clientTransport] = createMemoryTransportPair()
-		const unbindServer = bindServer(server(), serverTransport)
+		const unbindServer = bindServer(createBinderServer(), serverTransport)
 
 		const legacy = new Promise<string>((resolve) => clientTransport.listen(resolve))
 		await clientTransport.send(
@@ -967,7 +928,7 @@ describe('bindServer', () => {
 	})
 
 	it('dispatches an inbound request string and sends the reply string out', async () => {
-		const mcp = server()
+		const mcp = createBinderServer()
 		const transport = createMemoryTransport()
 		bindServer(mcp, transport)
 
@@ -991,7 +952,7 @@ describe('bindServer', () => {
 	})
 
 	it('sends nothing for a notification (no id → no reply)', async () => {
-		const mcp = server()
+		const mcp = createBinderServer()
 		const transport = createMemoryTransport()
 		bindServer(mcp, transport)
 
@@ -1002,7 +963,7 @@ describe('bindServer', () => {
 	})
 
 	it('unbind detaches inbound delivery WITHOUT closing the transport', async () => {
-		const mcp = server()
+		const mcp = createBinderServer()
 		const transport = createMemoryTransport()
 		const unbind = bindServer(mcp, transport)
 		unbind()
@@ -1015,7 +976,7 @@ describe('bindServer', () => {
 	})
 
 	it('a send throw surfaces on server.emitter error, never as an unhandled rejection', async () => {
-		const mcp = server()
+		const mcp = createBinderServer()
 		const transport = createMemoryTransport()
 		transport.fail(new Error('boom'))
 		const seen: unknown[] = []
@@ -1030,7 +991,7 @@ describe('bindServer', () => {
 	})
 
 	it('a throwing error listener is swallowed, not rethrown into the binder', async () => {
-		const mcp = server()
+		const mcp = createBinderServer()
 		const transport = createMemoryTransport()
 		transport.fail(new Error('boom'))
 		mcp.emitter.on('error', () => {
@@ -1047,7 +1008,7 @@ describe('bindServer', () => {
 	})
 
 	it('closing the transport deactivates the binder (further inbound is ignored)', async () => {
-		const mcp = server()
+		const mcp = createBinderServer()
 		const transport = createMemoryTransport()
 		bindServer(mcp, transport)
 		await transport.close()
@@ -1059,7 +1020,7 @@ describe('bindServer', () => {
 	})
 
 	it('rebind after unbind on the SAME transport replies exactly once per request (no double dispatch)', async () => {
-		const mcp = server()
+		const mcp = createBinderServer()
 		const transport = createMemoryTransport()
 		const unbind = bindServer(mcp, transport)
 		unbind()
@@ -1085,8 +1046,8 @@ describe('bindServer', () => {
 	})
 
 	it('pumps a held-open reply onto the transport, notifications first and the response last', async () => {
-		const mcp = server()
-		mcp.methods.add('demo/stream', held)
+		const mcp = createBinderServer()
+		mcp.methods.add('demo/stream', createHeldReply)
 		const transport = createMemoryTransport()
 		bindServer(mcp, transport)
 
@@ -1094,15 +1055,15 @@ describe('bindServer', () => {
 		await waitForDelay()
 
 		expect(transport.sent).toEqual([
-			JSON.stringify(PROGRESS),
-			JSON.stringify(PROGRESS),
-			JSON.stringify(TERMINAL),
+			JSON.stringify(MCP_HELPER_PROGRESS),
+			JSON.stringify(MCP_HELPER_PROGRESS),
+			JSON.stringify(MCP_HELPER_TERMINAL),
 		])
 	})
 
 	it('routes a mid-stream send failure to server.emitter error, never as an unhandled rejection', async () => {
-		const mcp = server()
-		mcp.methods.add('demo/stream', held)
+		const mcp = createBinderServer()
+		mcp.methods.add('demo/stream', createHeldReply)
 		const transport = createMemoryTransport()
 		transport.fail(new Error('stream send boom'))
 		const seen: unknown[] = []
@@ -1123,39 +1084,43 @@ describe('bindServer', () => {
 // it; these tests pin exactly that distinction. It takes a serialized CONTROLLED stream, so
 // each case wraps its source the way dispatch does — the translation entity's own lifecycle
 // proofs live in its mirrored test file.
-function controlled(source: MCPStream): MCPTextStreamController {
-	const closure = new AbortController()
-	return new MCPTextStreamController(new MCPStreamController(source, closure.signal, closure))
-}
 
 describe('sendStream', () => {
 	it('writes every message in order and the terminating response last', async () => {
 		const transport = createMemoryTransport()
 
-		await sendStream(controlled(replay([PROGRESS, PROGRESS], TERMINAL)), transport)
+		await sendStream(
+			createTextController(
+				createReplyStream([MCP_HELPER_PROGRESS, MCP_HELPER_PROGRESS], MCP_HELPER_TERMINAL),
+			),
+			transport,
+		)
 
 		expect(transport.sent).toEqual([
-			JSON.stringify(PROGRESS),
-			JSON.stringify(PROGRESS),
-			JSON.stringify(TERMINAL),
+			JSON.stringify(MCP_HELPER_PROGRESS),
+			JSON.stringify(MCP_HELPER_PROGRESS),
+			JSON.stringify(MCP_HELPER_TERMINAL),
 		])
 	})
 
 	it('writes only the terminating response for a stream that yields nothing', async () => {
 		const transport = createMemoryTransport()
 
-		await sendStream(controlled(replay([], TERMINAL)), transport)
+		await sendStream(createTextController(createReplyStream([], MCP_HELPER_TERMINAL)), transport)
 
-		expect(transport.sent).toEqual([JSON.stringify(TERMINAL)])
+		expect(transport.sent).toEqual([JSON.stringify(MCP_HELPER_TERMINAL)])
 	})
 
 	it('rejects with the transport failure rather than swallowing it', async () => {
 		const transport = createMemoryTransport()
 		transport.fail(new Error('send boom'))
 
-		await expect(sendStream(controlled(replay([PROGRESS], TERMINAL)), transport)).rejects.toBe(
-			transport.failSend,
-		)
+		await expect(
+			sendStream(
+				createTextController(createReplyStream([MCP_HELPER_PROGRESS], MCP_HELPER_TERMINAL)),
+				transport,
+			),
+		).rejects.toBe(transport.failSend)
 	})
 })
 
@@ -1210,7 +1175,7 @@ describe('sendStream — ends the exchange on every exit', () => {
 		transport.fail(new Error('send boom'))
 		const closure = new AbortController()
 		const stream = new MCPStreamController(
-			replay([PROGRESS, PROGRESS], TERMINAL),
+			createReplyStream([MCP_HELPER_PROGRESS, MCP_HELPER_PROGRESS], MCP_HELPER_TERMINAL),
 			closure.signal,
 			closure,
 		)
@@ -1225,11 +1190,18 @@ describe('sendStream — ends the exchange on every exit', () => {
 	it('ends the exchange on the normal exit too, after the terminating response', async () => {
 		const transport = createMemoryTransport()
 		const closure = new AbortController()
-		const stream = new MCPStreamController(replay([PROGRESS], TERMINAL), closure.signal, closure)
+		const stream = new MCPStreamController(
+			createReplyStream([MCP_HELPER_PROGRESS], MCP_HELPER_TERMINAL),
+			closure.signal,
+			closure,
+		)
 
 		await sendStream(new MCPTextStreamController(stream), transport)
 
-		expect(transport.sent).toEqual([JSON.stringify(PROGRESS), JSON.stringify(TERMINAL)])
+		expect(transport.sent).toEqual([
+			JSON.stringify(MCP_HELPER_PROGRESS),
+			JSON.stringify(MCP_HELPER_TERMINAL),
+		])
 		expect(closure.signal.aborted).toBe(true)
 	})
 })
@@ -1288,44 +1260,29 @@ describe('readCancelledId', () => {
 })
 
 describe('bindServer — exchange ownership and inbound cancellation', () => {
-	function server() {
-		const tools = createToolManager()
-		tools.add(createTool({ name: 'add', execute: (a) => Number(a['x']) + Number(a['y']) }))
-		return createMCPServer({ identity: { name: 'demo', version: '1.0.0' }, tools })
-	}
-
-	function boundedServer() {
-		const tools = createToolManager()
-		return createMCPServer({
-			identity: { name: 'bounded', version: '1.0.0' },
-			tools,
-			limit: { message: 240 },
-		})
-	}
-
 	it('ends an in-flight exchange when the transport closes mid-pump', async () => {
-		const mcp = server()
+		const mcp = createBinderServer()
 		const ended: string[] = []
-		mcp.methods.add('demo/parked', async (_request, options) => parked(options, ended))
+		mcp.methods.add('demo/parked', async (_request, options) => createParkedReply(options, ended))
 		const transport = createMemoryTransport()
 		bindServer(mcp, transport)
 
 		transport.deliver(JSON.stringify(modernRequest('demo/parked')))
 		await waitForDelay()
-		expect(transport.sent).toEqual([JSON.stringify(PROGRESS)])
+		expect(transport.sent).toEqual([JSON.stringify(MCP_HELPER_PROGRESS)])
 		expect(ended).toEqual([])
 
 		await transport.close()
 		await waitForDelay()
 
 		expect(ended).toEqual(['demo/parked'])
-		expect(transport.sent).toEqual([JSON.stringify(PROGRESS)])
+		expect(transport.sent).toEqual([JSON.stringify(MCP_HELPER_PROGRESS)])
 	})
 
 	it.each(['unbind→close', 'close→unbind'])('%s ends every in-flight exchange', async (order) => {
-		const mcp = server()
+		const mcp = createBinderServer()
 		const ended: string[] = []
-		mcp.methods.add('demo/parked', async (_request, options) => parked(options, ended))
+		mcp.methods.add('demo/parked', async (_request, options) => createParkedReply(options, ended))
 		const transport = createMemoryTransport()
 		const unbind = bindServer(mcp, transport)
 
@@ -1343,13 +1300,13 @@ describe('bindServer — exchange ownership and inbound cancellation', () => {
 		await waitForDelay()
 
 		expect(ended).toEqual(['demo/parked'])
-		expect(transport.sent).toEqual([JSON.stringify(PROGRESS)])
+		expect(transport.sent).toEqual([JSON.stringify(MCP_HELPER_PROGRESS)])
 	})
 
 	it('leaves no abandoned exchange when the pump fails and the catch reports it', async () => {
-		const mcp = server()
+		const mcp = createBinderServer()
 		const ended: string[] = []
-		mcp.methods.add('demo/parked', async (_request, options) => parked(options, ended))
+		mcp.methods.add('demo/parked', async (_request, options) => createParkedReply(options, ended))
 		const transport = createMemoryTransport()
 		transport.fail(new Error('stream send boom'))
 		const seen: unknown[] = []
@@ -1364,7 +1321,7 @@ describe('bindServer — exchange ownership and inbound cancellation', () => {
 	})
 
 	it('never decodes an inbound message above the server own bound, and handle still answers -32700', async () => {
-		const mcp = boundedServer()
+		const mcp = createBoundedServer()
 		const transport = createMemoryTransport()
 		bindServer(mcp, transport)
 		const oversized = JSON.stringify(
@@ -1384,9 +1341,9 @@ describe('bindServer — exchange ownership and inbound cancellation', () => {
 	// WELL-FORMED cancellation above the bound. The binder must not decode it, so the request
 	// it names keeps running — while the identical cancellation under the bound cancels.
 	it('refuses to decode a well-formed cancellation above the bound, and honours one below it', async () => {
-		const mcp = boundedServer()
+		const mcp = createBoundedServer()
 		const ended: string[] = []
-		mcp.methods.add('demo/parked', async (_request, options) => parked(options, ended))
+		mcp.methods.add('demo/parked', async (_request, options) => createParkedReply(options, ended))
 		const transport = createMemoryTransport()
 		bindServer(mcp, transport)
 		transport.deliver(JSON.stringify(modernRequest('demo/parked')))
@@ -1405,7 +1362,7 @@ describe('bindServer — exchange ownership and inbound cancellation', () => {
 	})
 
 	it('aborts the request an inbound cancellation names, and writes no response for it', async () => {
-		const mcp = server()
+		const mcp = createBinderServer()
 		const observed: string[] = []
 		mcp.methods.add('demo/slow', async (request, options) => {
 			await waitForAbort(options.signal)
@@ -1427,9 +1384,9 @@ describe('bindServer — exchange ownership and inbound cancellation', () => {
 	})
 
 	it('releases a held-open answer that was cancelled rather than pumping it', async () => {
-		const mcp = server()
+		const mcp = createBinderServer()
 		const ended: string[] = []
-		mcp.methods.add('demo/parked', async (_request, options) => parked(options, ended))
+		mcp.methods.add('demo/parked', async (_request, options) => createParkedReply(options, ended))
 		const transport = createMemoryTransport()
 		const seen: unknown[] = []
 		mcp.emitter.on('error', (error) => seen.push(error))
@@ -1441,13 +1398,13 @@ describe('bindServer — exchange ownership and inbound cancellation', () => {
 		await waitForDelay()
 
 		expect(ended).toEqual(['demo/parked'])
-		expect(transport.sent).toEqual([JSON.stringify(PROGRESS)])
+		expect(transport.sent).toEqual([JSON.stringify(MCP_HELPER_PROGRESS)])
 		// A cancellation is not a fault, so nothing reaches the operator's error feed.
 		expect(seen).toEqual([])
 	})
 
 	it('a cancellation naming a request that is not live is a silent no-op', async () => {
-		const mcp = server()
+		const mcp = createBinderServer()
 		const transport = createMemoryTransport()
 		bindServer(mcp, transport)
 
@@ -1462,31 +1419,13 @@ describe('bindServer — exchange ownership and inbound cancellation', () => {
 	// is not. Ten thousand completed requests, then one still in flight — the in-flight request
 	// is the control proving the instrument can see an abort at all.
 	it('retires each live-request entry on exit, so a closed carrier aborts only what is still running', async () => {
-		const real = server()
+		const real = createBinderServer()
 		const signals: AbortSignal[] = []
-		let release: (() => void) | undefined
-		const stub: MCPServerInterface = {
-			emitter: real.emitter,
-			identity: real.identity,
-			handshake: real.handshake,
-			methods: real.methods,
-			limit: real.limit,
-			dispatch: real.dispatch.bind(real),
-			async handle(_message, options) {
-				const signal = options?.signal
-				if (signal === undefined) throw new Error('the binder must supply a request signal')
-				signals.push(signal)
-				if (signals.length > 10_000) {
-					await new Promise<void>((resolve) => {
-						release = resolve
-					})
-				}
-				return undefined
-			},
-		}
+		const release = new MCPFixtureCell<(() => void) | undefined>(undefined)
+		const stub = createSignalRecorder(real, signals, release)
 		const transport = createMemoryTransport()
 		bindServer(stub, transport)
-		for (let index = 0; index < 10_000; index += 1) {
+		for (const [index] of Array.from({ length: 10_000 }).entries()) {
 			transport.deliver(JSON.stringify(createJSONRPCRequest({ method: 'ping', id: index })))
 		}
 		await waitForDelay()
@@ -1498,7 +1437,7 @@ describe('bindServer — exchange ownership and inbound cancellation', () => {
 
 		expect(signals.slice(0, 10_000).filter((signal) => signal.aborted)).toEqual([])
 		expect(signals[10_000]?.aborted).toBe(true)
-		release?.()
+		release.value?.()
 		await waitForDelay()
 	})
 })
@@ -1509,13 +1448,9 @@ describe('bindServer — exchange ownership and inbound cancellation', () => {
 // detaching without closing, and the transport's `closed` signal reaching
 // client.transport.emitter.
 describe('bindClient', () => {
-	function client(transport: MCPTransportInterface) {
-		return createMCPClient({ transport: createDuplexClientTransport(transport) })
-	}
-
 	it('completes a modern discovery round trip over the duplex transport', async () => {
 		const transport = createMemoryTransport()
-		const mcp = client(transport)
+		const mcp = createBoundClient(transport)
 		bindClient(mcp, transport)
 
 		const connecting = mcp.connect()
@@ -1544,7 +1479,7 @@ describe('bindClient', () => {
 
 	it('drops a malformed inbound message rather than throwing', () => {
 		const transport = createMemoryTransport()
-		const mcp = client(transport)
+		const mcp = createBoundClient(transport)
 		bindClient(mcp, transport)
 
 		expect(() => transport.deliver('not json')).not.toThrow()
@@ -1553,7 +1488,7 @@ describe('bindClient', () => {
 
 	it('unbind detaches inbound delivery WITHOUT closing the transport', async () => {
 		const transport = createMemoryTransport()
-		const mcp = client(transport)
+		const mcp = createBoundClient(transport)
 		const unbind = bindClient(mcp, transport)
 		unbind()
 
@@ -1567,21 +1502,21 @@ describe('bindClient', () => {
 
 	it('closing the transport reaches client.transport.emitter close', async () => {
 		const transport = createMemoryTransport()
-		const mcp = client(transport)
+		const mcp = createBoundClient(transport)
 		bindClient(mcp, transport)
-		let closed = 0
+		const closed = new MCPFixtureCell(0)
 		mcp.transport.emitter.on('close', () => {
-			closed += 1
+			closed.value += 1
 		})
 
 		await transport.close()
 
-		expect(closed).toBe(1)
+		expect(closed.value).toBe(1)
 	})
 
 	it('rebind after unbind on the SAME transport delivers exactly one message emit per reply', async () => {
 		const transport = createMemoryTransport()
-		const mcp = client(transport)
+		const mcp = createBoundClient(transport)
 		const unbind = bindClient(mcp, transport)
 		unbind()
 		bindClient(mcp, transport)
@@ -1596,16 +1531,16 @@ describe('bindClient', () => {
 
 	it('a client whose duplex transport was NOT bound stays pending rather than resolving or throwing', async () => {
 		const transport = createMemoryTransport()
-		const mcp = client(transport)
+		const mcp = createBoundClient(transport)
 		// No bindClient(mcp, transport) — the inbound half is never wired.
 
-		let settled = false
+		const settled = new MCPFixtureCell(false)
 		const connecting = mcp.connect().then(
 			() => {
-				settled = true
+				settled.value = true
 			},
 			() => {
-				settled = true
+				settled.value = true
 			},
 		)
 		// Wait beyond the former 50ms discovery-probe bound: without an inbound binding there
@@ -1613,7 +1548,7 @@ describe('bindClient', () => {
 		await waitForDelay(75)
 		await Promise.resolve()
 
-		expect(settled).toBe(false)
+		expect(settled.value).toBe(false)
 		expect(transport.sent).toHaveLength(1) // the outbound discovery request was still written
 
 		// Bind now so the pending connect can be settled and the test doesn't hang.
@@ -1633,7 +1568,7 @@ describe('bindClient', () => {
 			}),
 		)
 		await connecting
-		expect(settled).toBe(true)
+		expect(settled.value).toBe(true)
 	})
 })
 
@@ -2129,10 +2064,12 @@ describe('buildHeaderParameters — the x-mcp-header projections one inputSchema
 	})
 
 	it('refuses a properties chain deeper than the package JSON depth bound', () => {
-		let schema: Record<string, unknown> = { type: 'string', 'x-mcp-header': 'Deep' }
-		for (let level = 0; level <= DEFAULT_MCP_LIMITS.depth; level += 1) {
-			schema = { type: 'object', properties: { down: schema } }
-		}
+		const leaf: Record<string, unknown> = { type: 'string', 'x-mcp-header': 'Deep' }
+		const depth = DEFAULT_MCP_LIMITS.depth + 1
+		const schema = Array.from({ length: depth }).reduce<Record<string, unknown>>(
+			(nested) => ({ type: 'object', properties: { down: nested } }),
+			leaf,
+		)
 
 		expect(buildHeaderParameters(schema)).toBeUndefined()
 	})
@@ -2312,29 +2249,18 @@ describe('extractToolSchema — the named tool inputSchema inside a tools/list a
 // writes (`stream.write({ data: JSON.stringify(response) })`), so a body of these round-trips
 // back through `readEventStream`. A non-string `payload` (a raw token) frames an event whose
 // `data` is that literal, for the malformed-drop path.
-function dataEvent(payload: unknown): string {
-	return `data: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`
-}
 
 // A `fetch`-style Response over an SSE `text/event-stream` body — the reply shape
 // `readEventStream` decodes. Its `body` is a real `ReadableStream`, so the helper reads it
 // to completion exactly as it would a live server's response.
-function sseResponse(body: string): Response {
-	return new Response(body, { headers: { 'content-type': 'text/event-stream' } })
-}
 
 // The well-formed JSON-RPC envelope (a `parseJSONRPCMessage`-valid message) used as the
 // expected value in the round-trip assertions — narrowed through the real parser so the
 // expectation is itself proven a message, never an `as`.
-function rpcMessage(overrides?: Parameters<typeof createJSONRPCRequest>[0]): JSONRPCMessage {
-	const message = parseJSONRPCMessage(createJSONRPCRequest(overrides))
-	if (message === undefined) throw new Error('unreachable: createJSONRPCRequest is a message')
-	return message
-}
 
 describe('decodeEvent — one SSE data payload → its JSON-RPC message', () => {
 	it('decodes a well-formed JSON-RPC envelope to the parsed message', () => {
-		const message = rpcMessage({ method: 'ping', id: 7 })
+		const message = createRPCMessage({ method: 'ping', id: 7 })
 		expect(decodeEvent(JSON.stringify(message))).toEqual(message)
 	})
 
@@ -2386,35 +2312,38 @@ describe('buildResponseError — non-success HTTP reply without a JSON-RPC messa
 
 describe('readEventStream — decode a Response SSE body into JSON-RPC messages', () => {
 	it('decodes two data events into both messages, in order', async () => {
-		const first = rpcMessage({ method: 'a', id: 1 })
-		const second = rpcMessage({ method: 'b', id: 2 })
-		const body = dataEvent(first) + dataEvent(second)
-		expect(await readEventStream(sseResponse(body))).toEqual([first, second])
+		const first = createRPCMessage({ method: 'a', id: 1 })
+		const second = createRPCMessage({ method: 'b', id: 2 })
+		const body = buildDataEvent(first) + buildDataEvent(second)
+		expect(await readEventStream(createSSEResponse(body))).toEqual([first, second])
 	})
 
 	it('reassembles across the parser: a fully-terminated event emits, an unterminated trailing event does not', async () => {
 		// The first event ends at its blank line (dispatched); the second `data:` line has NO
 		// terminating blank line, so the SSEParser holds it buffered (never flushed on stream
 		// end) — proving the parser-backed line/event reassembly, not a naive split.
-		const delivered = rpcMessage({ method: 'delivered', id: 1 })
-		const pending = rpcMessage({ method: 'pending', id: 2 })
-		const body = dataEvent(delivered) + `data: ${JSON.stringify(pending)}`
-		expect(await readEventStream(sseResponse(body))).toEqual([delivered])
+		const delivered = createRPCMessage({ method: 'delivered', id: 1 })
+		const pending = createRPCMessage({ method: 'pending', id: 2 })
+		const body = buildDataEvent(delivered) + `data: ${JSON.stringify(pending)}`
+		expect(await readEventStream(createSSEResponse(body))).toEqual([delivered])
 	})
 
 	it('drops a data event whose payload is not a JSON-RPC message, keeping the valid ones', async () => {
 		// A malformed-JSON event and a valid-JSON-but-not-a-message event are both dropped
 		// (no throw); the surrounding well-formed messages still decode.
-		const first = rpcMessage({ method: 'a', id: 1 })
-		const second = rpcMessage({ method: 'b', id: 2 })
+		const first = createRPCMessage({ method: 'a', id: 1 })
+		const second = createRPCMessage({ method: 'b', id: 2 })
 		const body =
-			dataEvent(first) + dataEvent('{ broken') + dataEvent({ method: 'x' }) + dataEvent(second)
-		expect(await readEventStream(sseResponse(body))).toEqual([first, second])
+			buildDataEvent(first) +
+			buildDataEvent('{ broken') +
+			buildDataEvent({ method: 'x' }) +
+			buildDataEvent(second)
+		expect(await readEventStream(createSSEResponse(body))).toEqual([first, second])
 	})
 
 	it('is [] for an empty body', async () => {
 		// An empty string is a real (empty) stream — read to completion, no events dispatched.
-		expect(await readEventStream(sseResponse(''))).toEqual([])
+		expect(await readEventStream(createSSEResponse(''))).toEqual([])
 	})
 
 	it('is [] for a null-body Response (no stream)', async () => {
@@ -2425,7 +2354,7 @@ describe('readEventStream — decode a Response SSE body into JSON-RPC messages'
 	it('is [] for a non-event-stream JSON body (no data: events to dispatch)', async () => {
 		// The helper reads the body through the SSEParser regardless of content-type; a plain
 		// JSON body carries no `data:` lines, so nothing dispatches.
-		const response = new Response(JSON.stringify(rpcMessage()), {
+		const response = new Response(JSON.stringify(createRPCMessage()), {
 			headers: { 'content-type': 'application/json' },
 		})
 		expect(await readEventStream(response)).toEqual([])
