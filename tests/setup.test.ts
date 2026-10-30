@@ -53,14 +53,11 @@ import {
 	probeOwnership,
 	readMethods,
 	readSSEStream,
-	sampleTimerSpans,
 	TASK_CAPABILITIES,
 	TestTaskManager,
 	throwOnRead,
-	TIMER_LEAD,
 	waitForSettlement,
 } from './setup.js'
-import { alignLoopClock } from './setupServer.js'
 import { startBrowserFixture } from './setupServer.js'
 
 // Proof of `tests/setup.ts` — the host-independent infrastructure every project loads.
@@ -610,33 +607,6 @@ describe('createManualClock', () => {
 
 		expect(clock.now()).toBe(1_075)
 		expect(createManualClock().now()).toBe(0)
-	})
-})
-
-describe('TIMER_LEAD', () => {
-	const spans = new MCPFixtureCell<readonly number[]>([])
-
-	beforeAll(async () => {
-		spans.value = await sampleTimerSpans(alignLoopClock)
-	})
-
-	it('sampleTimerSpans records every late-armed timer and the lead covers every span', () => {
-		expect(spans.value).toHaveLength(50)
-		for (const span of spans.value) expect(span).toBeGreaterThanOrEqual(10 - TIMER_LEAD)
-	})
-
-	it('rejects the full duration as a lower bound when the host exhibits a short timer', (context) => {
-		expect(spans.value).toHaveLength(50)
-		const minimum = Math.min(...spans.value)
-		if (minimum >= 10) {
-			context.skip(
-				`No timer ended short in ${spans.value.length} late-armed 10 ms samples; minimum ${minimum} ms, maximum ${Math.max(...spans.value)} ms.`,
-			)
-		}
-		expect(minimum).toBeLessThan(10)
-		expect(() => {
-			for (const span of spans.value) expect(span).toBeGreaterThanOrEqual(10)
-		}).toThrow(/greater than or equal to 10/)
 	})
 })
 

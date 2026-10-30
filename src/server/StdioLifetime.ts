@@ -108,7 +108,7 @@ export class StdioLifetime {
 		const timer = setTimeout(expired.resolve, MCP_STDIO_GRACE)
 		try {
 			void child.end()
-			await Promise.race([child.ending, expired.promise])
+			await Promise.race([child.ended, expired.promise])
 		} finally {
 			clearTimeout(timer)
 		}

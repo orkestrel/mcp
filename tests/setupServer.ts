@@ -89,7 +89,7 @@ import { createJSONRPCRequest, createCalculatorServer, MCPFixtureCell } from './
 import { createServer as createHTTPServer, request as httpRequest } from 'node:http'
 import { connect } from 'node:net'
 import { Duplex, PassThrough } from 'node:stream'
-import { isNumber, isRecord, attempt, isFiniteNumber, isString, isArray } from '@orkestrel/contract'
+import { isRecord, attempt, isFiniteNumber, isString, isArray } from '@orkestrel/contract'
 import { extractSourceLines, extractFenceImports, findMissing } from '@orkestrel/guide'
 import { waitForDelay, waitForCondition, waitForEvent } from '@orkestrel/test'
 import {
@@ -1633,45 +1633,6 @@ export function duplexPair(): readonly [Duplex, Duplex] {
  */
 export function flushSocket(): Promise<void> {
 	return new Promise((resolve) => setImmediate(() => setImmediate(resolve)))
-}
-
-/**
- * Reads the loop clock Node stamps on a timer it arms, in whole milliseconds.
- *
- * @remarks
- * Node refreshes libuv's loop clock to arm a timer and records the truncated reading on the
- * `Timeout` as its undocumented `_idleStart` field. The reading counts from the loop's own timer
- * base, so compare two readings with each other, never with `performance.now()`. Thrown when the
- * armed `Timeout` carries no numeric `_idleStart` field.
- *
- * @returns The loop clock, in whole milliseconds since the loop's timer base.
- */
-export function readLoopClock(): number {
-	const timer = setTimeout(() => undefined, 1)
-	clearTimeout(timer)
-	const stamp: unknown = Reflect.get(timer, '_idleStart')
-	if (!isNumber(stamp)) throw new Error('the armed timer carries no numeric _idleStart stamp')
-	return stamp
-}
-
-/**
- * Spins synchronously until the loop clock ticks over a whole millisecond, then on for `offset`
- * milliseconds of `performance.now()`.
- *
- * @remarks
- * The spin holds the calling macrotask, because a yield would let libuv refresh the clock outside
- * the caller's control. A timer armed right after an `offset` near 1 is stamped late in its
- * millisecond, where truncation drops the most. A call with no `offset` right after arming leaves
- * the loop clock refreshed right after a tick, so libuv sizes its next poll to end at the timer's
- * stamped deadline rather than past it.
- *
- * @param offset - The milliseconds to spin past the tick. Default: `0`.
- */
-export function alignLoopClock(offset = 0): void {
-	const tick = readLoopClock()
-	while (readLoopClock() === tick) {}
-	const crossed = performance.now()
-	while (performance.now() - crossed < offset) {}
 }
 
 /**

@@ -2,13 +2,8 @@ import type { JSONRPCMessage } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { delimiter, join } from 'node:path'
 import { PROCESS_DRAIN, PROCESS_EVIDENCE } from '@orkestrel/process'
-import {
-	MCPFixtureCell,
-	createJSONRPCRequest,
-	TIMER_LEAD,
-	waitForSettlement,
-} from '../../../setup.js'
-import { requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
+import { MCPFixtureCell, createJSONRPCRequest, waitForSettlement } from '../../../setup.js'
+import { requireValue, TIMER_LEAD, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch, destroyScratch, isRunning } from '@orkestrel/test/server'
 import {
 	createMCPClient,
