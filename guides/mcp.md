@@ -588,1643 +588,6 @@ notification or another request's token end with `-32000`, because the dated rev
 result shape for them. See
 [Compose or remove the legacy protocol layer](#compose-or-remove-the-legacy-protocol-layer).
 
-### Project a host-owned resource, prompt, and completion registry
-
-Optional ports sit beside `tools`, and each obeys the rule the tool registry
-already obeys: **MCP owns no storage.** The host builds and owns the registry; this
-package projects it onto the wire, bounds and validates what comes back, and stamps
-the result.
-
-| Option       | Port                          | Methods it registers                                           | Capability advertised |
-| ------------ | ----------------------------- | -------------------------------------------------------------- | --------------------- |
-| `resources`  | `MCPResourceManagerInterface` | `resources/list`, `resources/read`, `resources/templates/list` | `resources`           |
-| `prompts`    | `MCPPromptManagerInterface`   | `prompts/list`, `prompts/get`                                  | `prompts`             |
-| `completion` | `MCPCompletionInterface`      | `completion/complete`                                          | `completions`         |
-
-**A capability registers only when its port is configured**, which is the `tasks/*`
-precedent applied to `resources`, `prompts`, and `completion` too. A server built without `resources` registers no
-`resources/*` method, advertises no `resources` capability, and answers `-32601`
-through the same unregistered-method path any unknown method takes — the honest reply
-from a server that does not implement an optional capability, and the reason an
-existing tools-only server's discovery answer is byte-for-byte what it was.
-
-**`completions` is a top-level capability, not a sub-flag of `resources` or `prompts`.** It is
-configured, advertised, and registered independently: a server may complete prompt
-arguments without publishing prompts, or publish prompts without offering completion.
-The gates read their own options and never each other.
-
-**One pagination shape covers every paginated method.** `MCPPaginationParams`
-(`{ cursor? }`) goes in and `MCPPaginationResult` (`{ nextCursor? }`) comes back, for
-`resources/list`, `resources/templates/list`, and `prompts/list` alike. `tools/list` is
-not among them — it reads no cursor and answers no `nextCursor`. The cursor is
-opaque and the manager mints it: this package neither interprets one nor invents one,
-and a page that omits `nextCursor` is the final page. There is no second cursor shape
-anywhere in the package, so a host that implements paging once implements it for all
-of them.
-
-**The port accessors are named for their domain, and the wire is not.** The resource port
-reads `resource(params)` / `resources(pagination)` / `templates(pagination)`, and the prompt
-port reads `prompt(params)` / `prompts(pagination)` — singular and plural nouns of the same
-domain, the shape `MCPTaskManagerInterface.task(id)` already set. **The wire method names are
-unchanged**: a client still sends `resources/read` and `prompts/get`, because those are the
-protocol's own spellings and this package never renames a wire name.
-
-**Not found is the manager's `undefined`, and it reaches the wire as `-32602`.** Both
-`resource` and `prompt` answer `undefined` for a URI or a name they do not resolve, which
-becomes `-32602` with the unresolved value named. That is the dated revision's
-spelling: `resources/subscribe` and `resources/unsubscribe` were removed at
-`2026-07-28` and so was the dedicated `-32002` resource-not-found code, which a client
-`SHOULD` still accept from an older peer. Resource subscription lives on
-[`subscriptions/listen`](#configure-modern-subscriptions)'s `resourceSubscriptions`
-filter instead.
-
-**A `resource` or a `prompt` call may answer `input_required`.** `resource` and `prompt` may
-return an `MCPInputResult` rather than contents or messages, so the multi-round mechanism is
-reachable from a resource or a prompt and not only from a `tools/call` — see
-[Ask the client for input during the call in hand](#ask-the-client-for-input-during-the-call-in-hand).
-A round the manager authored meets the server's capability gate before it is stamped and sent,
-exactly as a `tools/call` round does, so a kind the client did not declare is refused `-32021`
-here too. The `inputResponses` and `requestState` carriers arrive on the params for exactly
-that continuation, and their semantics belong to the manager: core owns the carrier's shape,
-bounds, and ownership, and refuses to decide what a consumer's own continuation means.
-
-**`resources/list` / `resources/templates/list` / `prompts/list` are cacheable and
-carry `ttlMs` + `cacheScope`; `prompts/get` is not and carries neither.** The stamps
-come from the same `cache` option `tools/list` already uses, so one setting governs
-every cacheable modern result.
-
-**MCP expands no URI templates.** This is the load-bearing sentence of the whole
-resource surface, so it is stated plainly rather than implied. `templates()` publishes
-`uriTemplate` strings as descriptors, and `resource` takes a **concrete URI** — the one the
-client actually sent. Matching a URI to a template and substituting its variables both
-happen inside the manager, behind the port. **There is no RFC 6570 implementation and
-no template parser anywhere in this package**, at any feature level, and none is
-planned: the question "which RFC 6570 level does this support?" has no answer here
-because the package never reaches the point of needing one. The conformance runner
-agrees this is the intended division — its `resources-templates-read` scenario sends
-the already-substituted `test://template/123/data` and asserts only that the returned
-content reflects it.
-
-The same ruling decides `completion/complete`'s harder arm. A `ref/resource`
-reference's `uri` may itself be a template, and completing its arguments implies
-knowing that template's variables — so the reference is forwarded **verbatim** to the
-completion port and the host answers it. The party that owns expansion owns knowing
-its own variables; parsing templates inside MCP to answer a completion would
-reintroduce the engine this ruling removes. `ref/prompt` is forwarded the same way.
-
-#### Provide resource, prompt, and completion ports
-
-Completion candidates are capped at the protocol's **100** values. A manager that
-returns more has its list projected down to the first 100 with `hasMore: true`
-stamped, whatever it reported itself — so 105 candidates leave as 100 plus the honest
-flag rather than as an over-long list a client must defend against.
-
-```ts
-import {
-	type MCPCompletionInterface,
-	type MCPPromptManagerInterface,
-	type MCPResourceManagerInterface,
-	createMCPServer,
-} from '@orkestrel/mcp'
-import { createToolManager } from '@orkestrel/tool'
-
-const documents = new Map([['docs://readme', 'The readme body.']])
-
-const resources: MCPResourceManagerInterface = {
-	// This registry fits in one page, so it never mints a cursor and never reads one —
-	// which is the ONLY correct answer for a final page. A `nextCursor` a following page
-	// cannot honour is worse than none, and MCP will forward whatever it is told.
-	resources: () => ({
-		resources: [{ uri: 'docs://readme', name: 'readme', mimeType: 'text/plain' }],
-	}),
-	// A concrete URI arrives here. Matching `docs://page/{slug}` against it, and reading
-	// `slug` back out, is this function's job — MCP substituted nothing on the way in.
-	resource: (params) => {
-		const text = documents.get(params.uri)
-		if (text !== undefined) return [{ uri: params.uri, mimeType: 'text/plain', text }]
-		const slug = params.uri.startsWith('docs://page/') ? params.uri.slice(12) : undefined
-		if (slug === undefined) return undefined // → -32602, naming the uri
-		return [{ uri: params.uri, mimeType: 'text/plain', text: `Page ${slug}` }]
-	},
-	// The template is published as a descriptor. Nothing in this package parses it.
-	templates: () => ({
-		resourceTemplates: [{ uriTemplate: 'docs://page/{slug}', name: 'page' }],
-	}),
-}
-
-const prompts: MCPPromptManagerInterface = {
-	prompts: () => ({
-		prompts: [
-			{
-				name: 'review',
-				description: 'Review one document.',
-				arguments: [{ name: 'topic', required: true }],
-			},
-		],
-	}),
-	prompt: (params) =>
-		params.name === 'review'
-			? {
-					resultType: 'complete',
-					messages: [
-						{
-							role: 'user',
-							content: { type: 'text', text: `Review ${params.arguments?.topic ?? 'it'}.` },
-						},
-					],
-				}
-			: undefined, // → -32602, naming the prompt
-}
-
-const completion: MCPCompletionInterface = {
-	// Both reference arms land here; `ref/resource` arrives verbatim, template and all.
-	complete: (params) =>
-		params.ref.type === 'ref/prompt'
-			? { values: ['performance', 'security'].filter((v) => v.startsWith(params.argument.value)) }
-			: { values: ['readme'], total: 1 },
-}
-
-const server = createMCPServer({
-	identity: { name: 'docs', version: '1.0.0' },
-	tools: createToolManager(),
-	resources,
-	prompts,
-	completion,
-})
-server.methods.method('resources/read') // registered, because `resources` was supplied
-server.methods.method('logging/setLevel') // undefined → -32601, like any unconfigured capability
-```
-
-#### Validate projected registry values
-
-The guards behind those projections are exported, so a host can validate its own
-registry with the same totals the server validates it with:
-
-```ts
-import {
-	isMCPCompletion,
-	isMCPCompletionParams,
-	isMCPCompletionReference,
-	isMCPCompletionResult,
-	isMCPPaginationParams,
-	isMCPPrompt,
-	isMCPPromptArgument,
-	isMCPPromptGetResult,
-	isMCPPromptMessage,
-	isMCPPromptPage,
-	isMCPResource,
-	isMCPResourceContents,
-	isMCPResourcePage,
-	isMCPResourceTemplate,
-	isMCPResourceTemplatePage,
-	isMCPStringArguments,
-} from '@orkestrel/mcp'
-
-isMCPPaginationParams({ cursor: 'page-2' })
-isMCPResource({ uri: 'docs://readme', name: 'readme' })
-isMCPResourceTemplate({ uriTemplate: 'docs://page/{slug}', name: 'page' })
-isMCPResourceContents({ uri: 'docs://readme', text: 'body' }) // one of `text` / `blob`, never both
-isMCPResourcePage({ resources: [{ uri: 'docs://readme', name: 'readme' }] })
-isMCPResourceTemplatePage({ resourceTemplates: [] })
-isMCPStringArguments({ topic: 'security' }) // every argument value is a string
-isMCPPromptArgument({ name: 'topic', required: true })
-isMCPPrompt({ name: 'review', arguments: [{ name: 'topic' }] })
-isMCPPromptMessage({ role: 'user', content: { type: 'text', text: 'Review it.' } })
-isMCPPromptPage({ prompts: [{ name: 'review' }], nextCursor: 'page-2' })
-isMCPPromptGetResult({ resultType: 'complete', messages: [] })
-isMCPCompletionReference({ type: 'ref/resource', uri: 'docs://page/{slug}' })
-isMCPCompletionParams({
-	ref: { type: 'ref/prompt', name: 'review' },
-	argument: { name: 'topic', value: 'sec' },
-})
-isMCPCompletion({ values: ['security'], total: 1, hasMore: false })
-isMCPCompletionResult({ resultType: 'complete', completion: { values: ['security'] } })
-```
-
-`isMCPResourceContents` is structurally discriminated: the wire has no tag field, so
-the presence of `text` XOR `blob` is the discriminator and a value carrying both or
-neither is refused. `isMCPCompletionResult` additionally enforces the 100-value cap,
-so it recognizes only a result this server would actually produce.
-
-### Adapt an existing registry behind a port
-
-The ports take an interface, not a package, so anything can sit behind them — and
-`@orkestrel/workspace` and `@orkestrel/template` are obvious candidates. **Neither
-is a dependency of this package and adopting one is entirely the host's decision**;
-what follows is what an adapter has to bridge, because in both cases the shapes do not
-line up and pretending otherwise would cost a reader an afternoon.
-
-**Workspace → `resources`: the seams, and the addressing seam is not small.**
-
-1. **A workspace addresses by path, and MCP addresses by URI.** That package says
-   outright that a workspace is not a filesystem, and with several workspaces
-   registered a bare path is ambiguous — two workspaces can both hold `readme.md`.
-   Neither package defines a URI scheme, so **the adapter must mint one** and own it in
-   both directions: path → URI on the way out, URI → workspace + path on the way back.
-   Everything else here is mapping; this is design.
-2. **The binary MIME set is closed** — `image/png`, `image/jpeg`, `image/gif`, and
-   `image/webp`, and nothing else. There is no PDF and no CSV. An adapter must decide
-   per file whether the content is text or a blob, and a file the workspace will not
-   classify as one of those is text or it is nothing.
-3. **A workspace has no pagination.** Its file listing returns everything, so the
-   adapter slices the list and mints its own cursor — which is why the cursor is opaque
-   in the first place. A first page and an unbounded workspace are the same call.
-4. **Templates stay the adapter's.** If the adapter publishes `docs://page/{slug}`, it
-   is the one that matches the concrete URI back to a workspace path, exactly as the
-   preceding ruling requires.
-
-**Template → `prompts`: a near-perfect match and a real mismatch.**
-`TemplatePlaceholder` (`{ name, description?, required?, path?, fallback? }`) maps onto
-`MCPPromptArgument` (`{ name, title?, description?, required? }`) almost field for
-field, so `prompts/list` is nearly free. The output is not:
-**`Template.fill()` returns a plain `string`, and `prompts/get` must return
-`MCPPromptMessage[]`.** The adapter wraps the filled string in a single user message —
-a real decision, not a formality, because a one-message array is the adapter's choice
-about what a filled template means, and a template that was written as a dialogue has
-its structure flattened by it. MCP argument values are strings by contract, so the
-`TemplateFillValues` handoff needs no coercion in that direction.
-
-```ts
-import { type MCPPromptManagerInterface, createMCPServer } from '@orkestrel/mcp'
-import { createTemplate, createTemplateManager } from '@orkestrel/template'
-import { createToolManager } from '@orkestrel/tool'
-
-const templates = createTemplateManager({
-	templates: [
-		createTemplate({
-			name: 'review',
-			content: 'Review {{topic}} in {{depth}} detail.',
-			description: 'Review one topic.',
-			placeholders: [
-				{ name: 'topic', description: 'What to review.', required: true },
-				{ name: 'depth', description: 'How deeply.', fallback: 'moderate' },
-			],
-		}),
-	],
-})
-
-const prompts: MCPPromptManagerInterface = {
-	// `templates()` returns EVERY template — the adapter owns the slice and the cursor.
-	prompts: (pagination) => {
-		const all = templates.templates()
-		const start = pagination.cursor === undefined ? 0 : Number(pagination.cursor)
-		const page = all.slice(start, start + 50)
-		return {
-			prompts: page.map((template) => ({
-				name: template.name,
-				description: template.description ?? template.summary ?? template.name,
-				arguments: template.placeholders.map((placeholder) => ({
-					name: placeholder.name,
-					...(placeholder.description === undefined
-						? {}
-						: { description: placeholder.description }),
-					...(placeholder.required === undefined ? {} : { required: placeholder.required }),
-				})),
-			})),
-			...(start + 50 < all.length ? { nextCursor: String(start + 50) } : {}),
-		}
-	},
-	// The mismatch, in one line: a string comes back and an array of messages goes out.
-	prompt: (params) => {
-		const found = templates.find({ name: params.name })[0]
-		if (found === undefined) return undefined // → -32602
-		return {
-			resultType: 'complete',
-			...(found.description === undefined ? {} : { description: found.description }),
-			messages: [
-				{ role: 'user', content: { type: 'text', text: found.fill(params.arguments ?? {}) } },
-			],
-		}
-	},
-}
-
-const server = createMCPServer({
-	identity: { name: 'docs', version: '1.0.0' },
-	tools: createToolManager(),
-	prompts,
-})
-```
-
-Another seam that fence does not hide: `fill` defaults to the `'error'` missing
-policy, so a required placeholder the client did not supply throws out of `prompt`. That
-becomes a contained `-32603` with the caught value reported on the server's `error`
-event, which is a defensible answer but not the informative one — an adapter that
-cares must call `validate` first and return an
-[`input_required` result](#ask-the-client-for-input-during-the-call-in-hand) asking for
-the missing argument, or seed `missing: 'empty'` and accept the gaps.
-
-**The control that proves these are ports rather than shaped holes** is that neither
-adapter is privileged. `tests/setupServer.ts` backs the same ports with plain
-in-memory objects — no workspace, no template engine, no `@orkestrel/*` registry at
-all — and the foreign conformance client cannot tell the difference, because there is
-nothing on the wire that could. The compiler now agrees with the wire: that fixture is
-TypeScript, annotated with the same exported manager interfaces this section documents,
-so a plain object is a checked implementation of the port rather than a duck-typed
-resemblance to one.
-
-### Configure modern subscriptions
-
-The server supplies `toolsListChanged` from the tool registry's `add`, `remove`, and `clear`
-events. It registers the listeners before acknowledging the stream and releases them when
-`options.signal` aborts. Registry destruction delivers its final `clear`; the stream then
-stays open until its signal aborts. An already-destroyed registry registers no listeners; the
-server acknowledges the subscription, produces no tools frames, and waits for its signal. A
-stream read between changes receives one frame per change; changes that arrive together, or
-while the previous frame is unread, coalesce into one.
-
-`subscription.notifications` declares the consumer's supported families through
-`MCPConsumerFilter`, whose optional `toolsListChanged` member accepts only `false`;
-`subscription.producer` opens the event-driven source for the intersected filter, beside the
-built-in tools producer. The consumer producer advances on the stream's demand. A producer
-failure terminates the stream after the notifications it already produced. A consumer filter
-that is malformed, and one claiming `toolsListChanged: true`, are both invalid: construction
-throws `MCPError` with `JSONRPC_INVALID_PARAMS` (`-32602`). Consumer-produced tools
-notifications are dropped, so the tools family has only the registry as its source. The
-built-in owns wire acknowledgement, filtering, id stamping, and graceful closure. A producer
-only yields project notifications and ends its iterable when the source closes; while idle it
-parks on its own events and may observe the supplied abort signal. Releasing the producer
-cancels its source with that signal's abort reason, so a `ReadableStream` source sees its
-pending writes reject with the reason the request was aborted with.
-
-**Every produced notification is owned before it is judged.** The built-in snapshots each one
-into bounded exact JSON before it matches the filter or stamps the id, so the values that
-admitted a notification are the values that reach the wire — a producer answering differently
-on a second read cannot have one URI pass the filter and another ride out. A notification
-that is not bounded exact JSON is dropped and the stream continues; a producer that throws
-ends the subscription after queued notifications with one detail-free `-32603` terminal, its
-caught value reported on the server's `error` event. Ending the consumer source normally
-closes with the complete result only when the honoured filter omits `toolsListChanged`. A
-stream honouring the tools family stays open until failure or signal abort. An abort closes
-with no terminal at all, because a cancelled request is not an answered one.
-
-#### Configure the subscription producer
-
-The filter keys — `toolsListChanged`, `promptsListChanged`,
-`resourcesListChanged`, `resourceSubscriptions`, `taskIds` — and the `params.notifications`
-object holding them are wire spellings carried verbatim from the dated schema.
-They are the one place the compound-key rule does not apply, because these
-strings are not this package's to choose. The type name is
-`MCPSubscriptionFilter`, which is the library's own. Where `taskIds` sits inside that object
-is this package's reading of an under-specified extension point rather than settled wire —
-[Declared conformance gaps](#declared-conformance-gaps) records the search that ended there.
-
-```ts
-import {
-	type JSONRPCNotification,
-	buildSubscriptionAcknowledgement,
-	buildSubscriptionFilter,
-	buildSubscriptionResult,
-	createMCPServer,
-	isMCPConsumerFilter,
-	isMCPSubscriptionFilter,
-	matchesSubscriptionNotification,
-	stampSubscriptionNotification,
-} from '@orkestrel/mcp'
-import { createToolManager } from '@orkestrel/tool'
-
-const identity = { name: 'docs', version: '1.0.0' }
-const supported = { promptsListChanged: true, resourceSubscriptions: ['resource://guide'] }
-isMCPConsumerFilter(supported) // true
-isMCPConsumerFilter({ toolsListChanged: true }) // false — the server owns this family
-const input: unknown = { promptsListChanged: true, resourcesListChanged: true }
-if (!isMCPSubscriptionFilter(input)) throw new Error('invalid filter')
-const honoured = buildSubscriptionFilter(input, supported)
-const event: JSONRPCNotification = { jsonrpc: '2.0', method: 'notifications/prompts/list_changed' }
-matchesSubscriptionNotification(event, honoured) // true
-stampSubscriptionNotification(event, 'listen-1') // every delivery carries the reserved id
-buildSubscriptionAcknowledgement(honoured, 'listen-1') // the first id-carrying message
-buildSubscriptionResult('listen-1', identity) // the final complete response
-
-async function* changes() {
-	yield event
-}
-
-const server = createMCPServer({
-	identity,
-	tools: createToolManager(),
-	subscription: {
-		notifications: supported,
-		producer: (_notifications, options) => {
-			options.signal.throwIfAborted()
-			return changes()
-		},
-	},
-})
-server.methods.method('subscriptions/listen') // registered on the same modern seam
-```
-
-**`taskIds` carries the stable Tasks extension's transitions down this same stream.** A
-`notifications/tasks` frame reaches the built-in through the ordinary `subscription.producer`
-every other family travels through, and the built-in admits it, filters it against
-the agreed identifiers, and stamps it with the subscription id. The server honours the member
-only when a consumer configured both `task` and `subscription`: the manager is what resolves
-an identifier and the producer is what a transition arrives through, so either one missing
-leaves nothing to deliver and the acknowledgement omits the member. That fact is derived from
-`task` and `subscription` at the moment the listen request is answered; no stored flag records
-it, so it cannot drift from them.
-
-**Each requested identifier is authorized before the acknowledgement agrees to it.** The
-server resolves every one through `MCPTaskManagerInterface.task(id, options)`, carrying the
-same per-request options the rest of the dispatch carries, and acknowledges the identifiers
-that resolved — in request order, duplicates intact, nothing normalized. An identifier the
-read does not resolve is omitted with no distinguishing signal: unknown, purged, and
-not-this-caller's produce byte-identical acknowledgements, because the port collapses each of
-them into one `undefined` and an acknowledgement that separated them would publish a
-difference the port refused to publish. When nothing resolves, the member is omitted entirely
-rather than acknowledged as an empty array. A `taskIds` that is not an array of strings never
-reaches the read at all — the filter guard refuses the request with `-32602` first.
-
-**The agreed set is fixed for the subscription's lifetime.** Those reads happen once, at
-acknowledgement, and delivery performs none: a per-frame read would put the consumer's durable
-store on the hot path of every transition and re-decide, at delivery time, what the
-acknowledgement already decided. Revoking access mid-stream is therefore the producer's to
-enforce, because the producer holds the caller context and the store. A frame naming an
-identifier outside the agreed set is dropped, and so is one whose params do not hold together
-as a task snapshot — `isMCPTaskNotification` gates the branch before the agreed set is read.
-
-**Delivery is claimed from the producer onward, and no replay is claimed.** The extension
-calls task notifications optional, so this package states what it delivers and what it does
-not: every frame the producer yields that passes the filter is stamped and written to this
-stream, in producer order. A transition emitted before this subscription existed is not
-resent, so a client that needs the state it missed reads it with `tasks/get`.
-
-#### Filter task notifications
-
-The helpers behind that path are `buildSubscriptionFilter` and
-`matchesSubscriptionNotification`, the ones the other families use, with `enabled` supplied:
-
-```ts
-import {
-	type JSONRPCNotification,
-	buildSubscriptionFilter,
-	isMCPTaskNotification,
-	matchesSubscriptionNotification,
-} from '@orkestrel/mcp'
-
-const asked = { taskIds: ['task-alpha', 'task-beta', 'task-alpha'] }
-// The `enabled` parameter is the derived support fact. `false` drops the member before the
-// acknowledgement can name it; `true` carries the request through unresolved.
-buildSubscriptionFilter(asked, {}, false) // {}
-const agreed = buildSubscriptionFilter(asked, {}, true)
-agreed.taskIds // ['task-alpha', 'task-beta', 'task-alpha'] — request order, duplicates intact
-
-const frame: JSONRPCNotification = {
-	jsonrpc: '2.0',
-	method: 'notifications/tasks',
-	params: {
-		taskId: 'task-alpha',
-		status: 'working',
-		createdAt: '2026-07-28T09:00:00Z',
-		lastUpdatedAt: '2026-07-28T09:00:01Z',
-		ttlMs: null,
-	},
-}
-isMCPTaskNotification(frame) // true
-matchesSubscriptionNotification(frame, agreed) // true
-
-const other = { ...frame, params: { ...frame.params, taskId: 'task-gamma' } }
-matchesSubscriptionNotification(other, agreed) // false — outside the agreed set
-const partial = { ...frame, params: { taskId: 'task-alpha' } }
-matchesSubscriptionNotification(partial, agreed) // false — not a whole snapshot
-```
-
-### Consume a subscription from a client
-
-`client.listen(notifications, options)` opens one `subscriptions/listen` stream and returns an
-`MCPSubscriptionStream` — an `AsyncGenerator` whose yields are notifications and whose return
-value is the graceful `MCPSubscriptionResult`. Pass `undefined` for the filter to ask for the
-server's whole honoured set; the client sends `params.notifications: {}`, which is the member the
-server requires and the empty object the filter guard accepts. The generator writes nothing until
-the first read, so a signal already aborted rejects that read without sending a request at all.
-
-**The acknowledgement is the first yield, and the terminal is the return value.** Every frame the
-server stamps with this subscription's id arrives as an owned snapshot, in wire order, starting
-with `notifications/subscriptions/acknowledged`. The graceful close is a correlated JSON-RPC
-result rather than a notification, so it reaches you as the generator's return value and never as
-a yield. A `for await` loop discards that value by construction — drive `next()` and read `done`
-where the closure result matters.
-
-**`options.signal` is required because the subscription is yours to end.** A subscription has no
-request timeout: the only closures are an abort, an iterator `return()`, the peer completing, and
-the connection failing. A consumer that drops the stream without either handle remains its owner —
-the registration stays live, and no timer reclaims it, because this package has no lifetime to
-hang one on. `disconnect()` and transport loss reject every active subscription, which is the
-other end of the same obligation.
-
-**`options.capacity` bounds what the client retains while nobody reads.** It defaults to
-`DEFAULT_MCP_SUBSCRIPTION_CAPACITY` (`64`), and a frame arriving at a full queue fails the
-subscription loudly with `MCPError` `-32603` rather than dropping the frame or growing without
-bound. That is a client-side bound, not transport backpressure — see
-[Declared conformance gaps](#declared-conformance-gaps) for what a duplex carrier delivers
-incrementally and what an HTTP one does not.
-
-A `capacity` that is not a positive integer is refused: the client throws `MCPError` `-32602`.
-The refusal lands on the first read, because the body is a generator and nothing in it runs
-until then, and it lands before the request is built or written — so the transport carries no
-`subscriptions/listen` frame for a subscription refused this way.
-
-**Ask for task transitions by naming them in `taskIds`.** The client sends the identifiers you
-pass, and the acknowledgement's `params.notifications` reports the set the server agreed to:
-the identifiers its store resolved, in the order you asked, with a duplicate kept and a refused
-identifier absent. Read that set rather than the one you sent — an identifier missing from it
-is one this stream will never deliver, and the acknowledgement says nothing about why.
-Every delivered frame carries the reserved subscription stamp under `_meta`, so a
-`notifications/tasks` frame the server stamped for this subscription arrives on this stream
-rather than on the client's `notification` event.
-
-The following example opens a subscription, drives it to its graceful terminal, and closes it:
-
-```ts
-import {
-	type MCPSubscriptionResult,
-	createMCPClient,
-	isMCPSubscriptionResult,
-} from '@orkestrel/mcp'
-
-const client = createMCPClient({ transport })
-await client.connect()
-
-const subscription = new AbortController()
-const stream = client.listen(
-	{ promptsListChanged: true, resourceSubscriptions: ['resource://guide'] },
-	{ signal: subscription.signal, capacity: 16 },
-)
-
-const opened = await stream.next()
-opened.done // false — the acknowledgement is a yield
-// The yield arm carries the notification; narrow on `done` before reading its member.
-if (opened.done === false) opened.value.method // 'notifications/subscriptions/acknowledged'
-
-let closure: MCPSubscriptionResult | undefined
-for (;;) {
-	const frame = await stream.next()
-	if (frame.done === true) {
-		closure = frame.value // the validated graceful terminal
-		break
-	}
-	frame.value.method // one owned notification, stamped with this subscription's id
-}
-closure?.resultType // 'complete'
-// The total guard the client proves the terminal with, re-applicable to any value you hold —
-// `stream.return(value)` takes one of these, so build it and prove it the same way.
-isMCPSubscriptionResult(closure) // true
-
-// Either handle closes the subscription and writes `notifications/cancelled` on a duplex
-// carrier. Abandoning the stream with neither leaves the registration live.
-subscription.abort()
-```
-
-### Execute rich results and request-scoped progress
-
-`MCPServerOptions.execution` is the explicit modern execution port over the live
-`ToolManagerInterface`. Its input contains the original `request`, canonical `call`,
-real `tools` manager, effective `signal`, optional `caller`, and an optional `progress` reporter.
-The default path calls `tools.execute(call, { signal, caller })`; caller identity is omitted
-when absent and never placed on the JSON call envelope. A delegating handler calls
-`tools.execute(context.call, { signal: context.signal, ...(context.caller === undefined ? {} : { caller: context.caller }) })`.
-A tool handler observes `context.signal` to stop work when its request is cancelled. Returning
-a `ToolResult` uses the normal text/structured normalization; returning a validated
-`MCPCallResult` preserves exact text, image, audio, resource-link, and embedded-resource
-content without guessing from an ordinary domain value.
-
-**A returned `MCPCallResult` reaches the wire unstamped, and that is a declared departure.**
-The normalization path builds its answer through `buildModernResult`, which stamps the
-`io.modelcontextprotocol/serverInfo` identity into `_meta`. A handler that returns a complete
-`MCPCallResult` instead is taken at its word: the server bounds it, re-proves its shape, and
-sends what the handler composed, so nothing adds the identity the other path adds. The dated
-revision says a server `SHOULD` carry its identity in a result's `_meta`, and this is the one
-result shape that does not. **What it costs:** a peer reading `serverInfo` off a `tools/call`
-result finds it on every normalized result and on no custom-execution one, so a consumer using
-`execution` for rich content stamps the key itself — through `buildModernResult`, which is
-exported for exactly this — wherever that peer matters. **Why it is not fixed here:** stamping
-the key onto a handler's own result would edit a result the handler declared complete, and the
-`_meta` it composed is the handler's. **Closer:** a consumer's own
-`buildModernResult(result, identity)` call inside the handler.
-
-Modern `tools/call` treats an omitted `arguments` field as the shared frozen
-`EMPTY_MCP_ARGUMENTS` record. A present value must be an object; `null`, arrays, primitives,
-and a direct-call own `undefined` receive `-32602` before input policy, continuation access,
-digesting, or execution. Whichever it is, one reference then reaches the argument digest,
-the input selector, the canonical `ToolCall`, and the executor — no step re-snapshots, so no
-step can be looking at a different value from another.
-
-That record is shared and frozen, which is worth knowing before it surprises you: a tool
-that writes to its own `arguments` now throws, and because the registry isolates a thrown tool
-into a `success: false` result, the client sees an ordinary `isError: true` tool result with
-no protocol change to point at. Refusing a mutation of server-owned input is a tool-domain
-failure rather than a protocol fault, so that is where it is reported. A tool that needs a
-mutable bag copies first: `const working = { ...args }`.
-
-The reporter exists only when `_meta.progressToken` is a string or integer.
-`report` requires a bounded payload with finite, strictly increasing values and awaits
-consumption by the original `tools/call` response stream. The source holds one item,
-stops on completion, abort, or generator return, rejects late reports, and never enters
-replay or durable state.
-A server without `execution` still calls `ToolManagerInterface.execute` exactly once and
-may answer unary even when a token was supplied.
-
-#### Stream rich results and progress
-
-**Completion, a consumer `return(value)`, and `stop()` or an abort all end the exchange, and
-only completion reaches the wire.** Running the source to completion
-produces exactly one terminal — the response the stream returns, and every later read
-resolves that same response. A consumer that calls `return(value)` is saying it already has
-the answer, so the exchange closes on the value it supplied: that read and every later one
-resolve `{ done: true, value }`, and nothing is sent, because the peer is not owed a terminal
-the server never produced. An owner that calls `stop()` and an external abort produce no
-terminal at all — those reads settle by raising the reason, because a cancelled request has
-no answer to correlate. Cancellation is prompt in every case — the consumer's read settles even while
-the producer is parked — and the request's signal goes down before cleanup is delegated,
-so an executor observing it stops, the reporter stops with it, and a late `report`
-rejects. A request whose caller has already gone never starts its producer at all: the
-first read is refused, so no execution runs for a peer that will not receive it.
-
-```ts
-import {
-	createMCPServer,
-	MCP_META_CAPABILITIES,
-	MCP_META_VERSION,
-	MCP_MODERN_VERSION,
-} from '@orkestrel/mcp'
-import { createToolManager } from '@orkestrel/tool'
-
-const server = createMCPServer({
-	identity: { name: 'media', version: '1.0.0' },
-	tools: createToolManager(),
-	execution: async ({ progress }) => {
-		await progress?.report({ progress: 1, total: 2, message: 'Rendering' })
-		return {
-			resultType: 'complete',
-			content: [
-				{ type: 'text', text: 'Preview' },
-				{ type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' },
-			],
-			structuredContent: ['preview', 1],
-		}
-	},
-})
-
-const response = await server.dispatch({
-	jsonrpc: '2.0',
-	id: 1,
-	method: 'tools/call',
-	params: {
-		name: 'render',
-		arguments: {},
-		_meta: {
-			[MCP_META_VERSION]: MCP_MODERN_VERSION,
-			[MCP_META_CAPABILITIES]: {},
-			progressToken: 'render-1',
-		},
-	},
-})
-
-if (response !== undefined && Symbol.asyncIterator in response) await response.next()
-```
-
-#### Validate rich result boundaries
-
-The exported boundary helpers validate the same wire model and derive stable argument
-bindings without a second JSON implementation:
-
-```ts
-import {
-	buildProgressNotification,
-	buildToolCall,
-	digestJSON,
-	isJSONObject,
-	isMCPAnnotations,
-	isMCPBlobResource,
-	isMCPCallResult,
-	isMCPClientCapabilities,
-	isMCPContent,
-	isMCPIcon,
-	isMCPIdentity,
-	isMCPLoggingLevel,
-	isMCPMetaKey,
-	isMCPMetaObject,
-	isMCPProgress,
-	isMCPResultMetaObject,
-	isMCPServerCapabilities,
-	isMCPTextResource,
-	isStandardBase64,
-	isAbsoluteURI,
-	isRFC3339Date,
-	isRFC3339DateTime,
-	serializeJSON,
-} from '@orkestrel/mcp'
-
-const limits = { bytes: 4096, keys: 64, depth: 16 }
-const parameters = { prompt: 'owl' }
-const call = buildToolCall({
-	jsonrpc: '2.0',
-	id: 1,
-	method: 'tools/call',
-	params: { name: 'render', arguments: parameters },
-})
-const canonical = serializeJSON(parameters, limits)
-const digest = await digestJSON(parameters, limits)
-const notification = buildProgressNotification('render-1', { progress: 1, total: 2 })
-
-isJSONObject({ prompt: 'owl', attempts: [1, 2] })
-isMCPMetaKey('vendor.example/trace')
-isMCPLoggingLevel('notice')
-isMCPAnnotations({ audience: ['assistant'], priority: 1 })
-isMCPIcon({ src: 'data:image/png;base64,aWNvbg==' })
-isMCPTextResource({ uri: 'resource://text', text: 'body' })
-isMCPBlobResource({ uri: 'resource://blob', blob: 'YmxvYg==' })
-isMCPContent({ type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' })
-isMCPCallResult({ resultType: 'complete', content: [{ type: 'text', text: 'done' }] })
-isMCPProgress({ progress: 1, total: 2, message: 'Rendering' })
-isMCPMetaObject({ 'vendor.example/trace': { id: 'trace-1' } })
-isMCPResultMetaObject({
-	'io.modelcontextprotocol/serverInfo': { name: 'worker', version: '1.0.0' },
-})
-isMCPIdentity({ name: 'worker', version: '1.0.0', websiteUrl: 'https://example.test' })
-isMCPClientCapabilities({ elicitation: {}, custom: { enabled: true } })
-isMCPServerCapabilities({ tools: { listChanged: true }, custom: { enabled: true } })
-isStandardBase64('aW1hZ2U=')
-isAbsoluteURI('urn:example:images:preview')
-isRFC3339Date('2024-02-29') // true — a leap day that exists
-isRFC3339DateTime('2026-02-30T00:00:00Z') // false — February never has 30 days
-```
-
-`isAbsoluteURI` implements host-neutral RFC 3986 syntax rather than delegating to WHATWG
-`URL`: non-hierarchical schemes, IPv6/IPvFuture literals, percent escapes, and permitted empty
-components validate without normalization or scheme policy. Relative references, raw whitespace
-or controls, malformed escapes, ports, authorities, and malformed bracketed IP literals do not.
-An unbracketed digit-and-dot host that is not an RFC IPv4 address remains a legal `reg-name`, and
-an authority may have an empty host.
-
-`isRFC3339Date` and `isRFC3339DateTime` are the `date` / `date-time` elicitation formats, and
-they check the calendar, not the shape alone: RFC 3339 §5.6 defines `date-mday` by the month and
-year, so `2026-02-30`, `2026-04-31`, and `2025-02-29` are refused even though every field is in
-range. Neither guard constructs a `Date` — `Date` is what rolls `2026-02-30` silently onto 2
-March, which is the acceptance they exist to prevent — so a non-RFC-3339 spelling of a real
-instant (`2026-01-31 10:00:00Z`, or an offset-less `2026-01-31T10:00:00`) stays refused too.
-
-Rich-content guards
-require exact finite JSON metadata, standard padded base64, nonnegative integer resource sizes,
-and accept an embedded resource that satisfies both the text and blob alternatives.
-
-`serializeJSON` is the exact JSON boundary: it snapshots enumerable data descriptors once,
-rejects accessors, symbols, hidden or extra properties, sparse arrays, cycles, and non-finite
-numbers, counts array indices as keys, and enforces actual UTF-8 wire bytes before producing the
-canonical string. Shared acyclic subgraphs remain valid. `isBoundedJSON` delegates to that same
-engine, so validation and serialization cannot disagree. `parseJSONRPCMessage` builds one frozen,
-bounded owned graph from that canonical text before routing, settlement, or notification delivery;
-`parseRequestContext` projects frozen capabilities and identity from the owned request.
-
-### Ask the client for input during the call in hand
-
-Configure `input` only when a `tools/call` may need something from the client before it can
-finish. The consumer composes each round — its own keys, and any mixture of the
-`elicitation/create`, `sampling/createMessage`, and `roots/list` kinds — and supplies the
-authenticated principal, the host-neutral continuation port, and the TTL. MCP owns the
-protective half: it refuses a round the client's declared capabilities exclude, seals the
-opaque `requestState`, and on retry opens and verifies that state and checks every answer
-against the question filed under its own key before handing the round's answers back to the
-hook. Returning `undefined` from the hook continues into the ordinary live tool registry.
-
-The keys are yours because they are how your own policy correlates each answer. A round asking
-nothing is refused, because it would seal state no retry could ever satisfy.
-
-`MCPInputOptions.clock` supplies epoch milliseconds for every continuation expiry read.
-It defaults to `Date.now`. Supply a clock beside `continuation` when the host owns the time
-source; tests can advance that clock during a provider call without replacing the host clock.
-
-**`createMCPContinuation` is what protects the `requestState` echo, and it is required.**
-`MCPInputOptions.continuation` has no default: the carrier travels through a client that may
-have rewritten it, so the integrity of every binding inside it — principal, expiry, original id,
-revision, method, tool name, argument digest, and the issued round — rests entirely on that
-port. `createMCPContinuation(secret)` is the shipped implementation, adapting `@orkestrel/server`'s
-`signToken` / `verifyToken` to the port: `seal` signs the canonical state string and `open`
-verifies it, returning `undefined` for anything it cannot verify, which is what turns a tampered
-carrier into `-32602`. Pass `[current, ...older]` to rotate a secret without invalidating state
-already in flight — a carrier sealed under a listed older secret still opens, while a new one
-seals under the current. Core supplies no signer of its own, and a consumer substituting its own
-port takes that integrity property with it: a port whose `open` returns whatever it was given
-makes every binding a client-supplied claim.
-
-#### Issue a server-side input round
-
-The order the server runs those steps in is itself a contract, because each step is a
-provider call somebody pays for. On a first round: the selector runs, its round is owned and
-frozen immediately, the round is measured against the client's declared capabilities, and only
-then is the principal resolved and the state sealed — so a client whose round this server may
-not send costs no principal lookup and no audit record. On a retry: every structural binding —
-changed id, expiry, version, method, tool name, argument digest, every issued key, and each
-answer against the request that asked for it — is verified before the principal resolver runs
-at all. The capability gate does not stand at the retry's ingress, because a retry answers a
-round this server already gated; what it measures there is the next round, so it runs after the
-selector answers and before that round is sealed.
-
-```ts
-import {
-	computeMissingCapabilities,
-	createMCPServer,
-	isElicitContent,
-	isMCPElicitFieldSchema,
-	isMCPElicitForm,
-	isMCPElicitRequest,
-	isMCPElicitResult,
-	isMCPElicitSchema,
-	isMCPElicitURL,
-	isMCPInputRequest,
-	isMCPInputRequestMap,
-	isMCPInputResponse,
-	isMCPInputResult,
-	isMCPRoot,
-	isMCPRootResult,
-	isMCPSampleContent,
-	isMCPSampleResult,
-	supportsFormElicitation,
-} from '@orkestrel/mcp'
-import { createMCPContinuation } from '@orkestrel/mcp/server'
-import { createTool, createToolManager } from '@orkestrel/tool'
-
-const tools = createToolManager()
-tools.add(createTool({ name: 'reply', execute: (input) => input }))
-
-const server = createMCPServer({
-	identity: { name: 'supervisor', version: '1.0.0' },
-	tools,
-	input: {
-		continuation: createMCPContinuation(['current-secret', 'older-secret']),
-		ttl: 60_000,
-		principal: () => 'authenticated-user-42',
-		selector: ({ responses }) =>
-			responses === undefined
-				? {
-						requests: {
-							approval: {
-								method: 'elicitation/create',
-								params: {
-									message: 'Approve this reply?',
-									requestedSchema: {
-										type: 'object',
-										properties: { approved: { type: 'boolean' } },
-										required: ['approved'],
-									},
-								},
-							},
-							workspace: { method: 'roots/list', params: {} },
-						},
-						state: { operation: 'run-42' },
-					}
-				: undefined,
-	},
-})
-
-supportsFormElicitation({ elicitation: {} }) // true: empty means form-only
-supportsFormElicitation({ elicitation: { url: {} } }) // false
-computeMissingCapabilities({ workspace: { method: 'roots/list' } }, {}) // { roots: {} }
-computeMissingCapabilities({ workspace: { method: 'roots/list' } }, { roots: {} }) // undefined
-computeMissingCapabilities(
-	{
-		login: {
-			method: 'elicitation/create',
-			params: { mode: 'url', message: 'Sign in', url: 'https://example.test' },
-		},
-	},
-	{ elicitation: {} },
-) // { elicitation: { url: {} } }: the arm the round needs, not the one already declared
-isMCPElicitFieldSchema({ type: 'string', format: 'email' }) // true: one field's schema
-isMCPElicitSchema({ type: 'object', properties: { approved: { type: 'boolean' } } }) // true
-isMCPElicitForm({
-	message: 'Approve?',
-	requestedSchema: { type: 'object', properties: {} },
-}) // true
-isMCPElicitURL({ mode: 'url', message: 'Authenticate', url: 'https://example.test' })
-isMCPElicitRequest({
-	method: 'elicitation/create',
-	params: { message: 'Approve?', requestedSchema: { type: 'object', properties: {} } },
-}) // true
-isMCPInputRequest({ method: 'roots/list' }) // true: a roots request composes into a round
-isMCPInputRequestMap({ confirm: { method: 'roots/list' } }) // true: a keyed map, not an array
-isMCPElicitResult({ action: 'accept', content: { approved: true } }) // true
-isMCPRoot({ uri: 'file:///workspace', name: 'workspace' }) // true
-isMCPRootResult({ roots: [{ uri: 'file:///workspace' }] }) // true
-isMCPSampleContent({ type: 'text', text: 'Paris' }) // true
-isMCPSampleContent({ type: 'tool_use', id: 'c1', name: 'lookup', input: {} }) // true
-isMCPSampleResult({
-	role: 'assistant',
-	content: { type: 'text', text: 'Paris' },
-	model: 'a-model',
-}) // true
-isMCPSampleResult({
-	role: 'assistant',
-	content: [{ type: 'text', text: 'Paris' }],
-	model: 'a-model',
-}) // true: the schema's `content` is one block OR an array of them
-isMCPInputResponse({ roots: [] }, { method: 'roots/list' }) // true
-isMCPInputResponse({ action: 'accept' }, { method: 'roots/list' }) // false: wrong kind
-isElicitContent(
-	{ approved: true },
-	{ type: 'object', properties: { approved: { type: 'boolean' } } },
-) // true
-isElicitContent(
-	{ approved: 'yes' },
-	{ type: 'object', properties: { approved: { type: 'boolean' } } },
-) // false
-isMCPInputResult({ resultType: 'input_required', requestState: 'opaque' }) // true
-
-server.methods.method('tools/call') // the MRTR-aware built-in remains on the one method seam
-```
-
-Numeric elicitation bounds and defaults are finite; a dated `integer` schema still permits a
-fractional numeric default because that is its declared TypeScript shape. Length and item-count
-bounds are nonnegative integers and inverted annotations are not rejected. String `enum`,
-`enumNames`, and `oneOf` selectors, and array `enum` / `anyOf` selectors, validate independently
-when present and may coexist with extension fields; selector ordering, membership, and parallel
-array lengths are not application policy at this protocol boundary. An accepted response may omit
-content by shape — `isMCPElicitResult` allows it — while the server additionally enforces the
-issued schema through `isElicitContent`, so an accepted response omitting a `required` field is
-refused on the retry even though its shape is legal. Decline and cancel responses must omit
-content and are never checked against the schema. Accepted response numbers may be fractional
-but never non-finite, and response arrays contain strings only. URL-mode requests use the same
-RFC 3986 URI guard.
-
-**URL-mode elicitation is a composable arm, and it needs its own declaration.** A round may
-carry `{ mode: 'url', message, url }` under one of its keys, beside a form request, a sampling
-request, or a roots request under the others. The client must declare `elicitation.url` as a
-record to receive one: this package reads the bare `elicitation: {}` spelling as form-only, so
-a URL round against that declaration is refused `-32021` with
-`{ elicitation: { url: {} } }` naming the arm to declare. `url` carries the schema's
-`format: uri` and must be absolute. The URL arm issues no schema, so an answer to it is
-checked for its response shape alone and never against a `requestedSchema` — which is the one
-place a URL request and a form request are enforced differently on the retry.
-
-The retry uses a new JSON-RPC id and preserves the original `name` /
-`arguments`; `inputResponses` and the `requestState` the server issued, returned unchanged,
-are top-level `params` siblings. Extra `inputResponses` keys are ignored — the server reads
-exactly the keys it issued — while omitting any issued key is still a refusal. A round asking
-for a kind the client did not declare receives `-32021` with a `requiredCapabilities` record
-naming each missing capability: `sampling` for `sampling/createMessage`, `roots` for
-`roots/list`, and `elicitation` for an elicitation the declaration does not authorize. That
-`elicitation` value names the arm the round needs, so the client can act on it: a missing URL
-arm answers `{ url: {} }`, a missing form arm answers the empty record this package reads as
-form-only, and a round needing both answers `{ form: {}, url: {} }`. A request whose modern
-`_meta` cannot be parsed at all is a different failure and receives `-32602` with
-`malformed modern request metadata` — the answer `MCPServer` gives it at the ingress, before
-any handler runs, and the same answer both MRTR doors give it. An empty capability
-declaration is not that case: it parses, it excludes every kind, and it is gated `-32021`. A
-malformed, mutated, expired, same-id, cross-principal, cross-version, cross-method,
-cross-tool, changed-argument, unanswered-key, or kind-violating state receives `-32602` before
-tool execution. A continuation or policy provider rejection is infrastructure failure and
-receives detail-free `-32603`, with the caught value on the server's `error` event — as does
-a port that opens successfully onto a payload this server never authored, or onto one
-outside the state bound, because the client wrote neither and cannot act on being told it
-was at fault. A carrier the port cannot recover, and an invalid resolved principal, round, or
-carrier, remain `-32602`. Recovered state is bounded before parsing.
-
-#### Answer an input round from the client
-
-Place the retry through the `input` group on `MCPCallOptions`. `responses` is required and
-`state` is optional: a peer may issue a round with no `requestState` to return, and SEP-2322
-requires the retry to answer that round while omitting the parameter, so the client sends
-`requestState` exactly when a caller supplies one. `MCPServer` itself seals a carrier on
-every round it issues, so a retry reaching this server without one is refused `-32602`. Pass
-the same tool name and byte-identical `arguments` that the first call used; changing the
-arguments invalidates the protected state. The following client-side exchange reuses the
-same `callArguments` value and answers every key the round published:
-
-```ts
-import type { MCPClientInterface } from '@orkestrel/mcp'
-
-declare const client: MCPClientInterface
-
-const callArguments = { value: 'unchanged' }
-const pending = await client.call('reply', callArguments)
-
-if (
-	pending.resultType !== 'input_required' ||
-	pending.requestState === undefined ||
-	pending.inputRequests === undefined
-) {
-	throw new Error('Expected input requests and protected state')
-}
-// The server publishes its own keys, so answer each one by the kind its request names.
-await client.call('reply', callArguments, {
-	input: {
-		state: pending.requestState,
-		responses: {
-			approval: { action: 'accept', content: { approved: true } },
-			workspace: { roots: [{ uri: 'file:///workspace', name: 'workspace' }] },
-		},
-	},
-})
-```
-
-`client.tasks.update` is a different route and does not reach this arm. It answers the input
-requests a durable task published — the `'task'` arm of `MCPCallOutcome`, reached through the
-`tasks/*` methods — while the retry here answers an inline `resultType: 'input_required'` and
-travels as another `tools/call`.
-
-**What the protected state binds, and for how long.** The carrier is opaque to the client:
-it carries an authenticated principal, an absolute expiry, the original first-round request
-id, the protocol revision, the method, the exact round that was issued, the tool name, a
-canonical SHA-256 argument digest, and any application state the selector attached. The
-round travels inside that payload, so its size is spent from `limit.state` (16384 bytes by
-default) along with every other binding: a large mixed round, or a large form schema, is
-refused at the seal with `-32602` rather than truncated, so size a round deliberately or
-raise `limit.state`. Expiry is a short absolute deadline set from the consumer's `ttl`, and
-it is rechecked around every
-provider await rather than admitted once: after the selector answers, and around the seal that
-a further round performs. The issued round is not merely carried — `isMCPInputResponse`
-enforces each answer against the request filed under its own key, and a form request's schema
-through `isElicitContent`, so a client answering a question other than the one it was asked is
-refused before the tool runs. Across rounds, `principal`, the original id, version, method,
-tool name, and digest stay bound while the round and its expiry are re-minted; the original id
-stays bound however many rounds follow, so a three-round exchange is still one correlated call.
-
-**What it deliberately does not do.** There is no consume-once rule, no session binding, no
-timer, and no replay store: the same protected state answers again under a fresh id, and it
-is exhausted by its expiry alone. Single use is application policy — a continuation port that
-must be redeemable once enforces that itself, which is exactly why the port is a consumer
-interface. Nothing about the mechanism is session-bound either: the carrier travels in
-`params` and works across connections, processes, and transports. JSON-RPC ids are
-correlation only, so an application operation that must not run twice still needs its own
-idempotency key; a retried call whose bindings all match runs the tool again.
-
-The continuation port may be a self-contained token adapter or a consumer-supplied durable
-server-side handle. The built-in modern `tools/call` is the only handler that produces
-`input_required` from this policy; `prompts/get` and `resources/read` forward one their own
-manager authored, and the legacy branch is unchanged. A forwarded round is this server's
-wire too, so it meets the same capability gate before it is stamped and sent: the rule binds
-every issuer, not one method. Core does not refuse
-a continuation carrier on another method: it owns the carrier's shape, bounds, and ownership
-for every invocation — a malformed one never reaches a handler — and the continuation
-semantics belong to whoever registered that method. Register `prompts/get` or
-`resources/read` on `server.methods` and the handler receives its owned frozen carrier and
-decides what it means; leave them unregistered, as this package ships them, and they still
-answer `-32601`.
-
-### Defer a call to a durable task
-
-The Tasks extension is the stable, immutable snapshot dated 2026-07-28, extension id
-`io.modelcontextprotocol/tasks`, generated schema id
-`https://modelcontextprotocol.io/ext-tasks/2026-07-28/schema.json`. That snapshot is fixed,
-so every type, wire field, and error code in this section is written against it, and a later
-revision arrives as its own dated snapshot rather than as a change to this one.
-
-A **task** is a durable operation that outlives the request that created it. The server
-answers a modern `tools/call` immediately with `resultType: 'task'` and a `taskId`, and the
-client comes back later for the outcome. Everything between the answer and the outcome belongs
-to the
-consumer: supply an `MCPTaskOptions` with a durable `tasks` store and a `deferral` policy, and
-this package supplies the protocol and nothing else. It holds **no task state, no timer, and
-no status logic**, because a durable operation outlives the process that answered the request
-and MCP has no durable place to keep one.
-
-**Deferral is the server's decision.** The extension gives a client no flag and no parameter
-to ask for a task — a client only declares, per request, that it can cope with one. So
-`deferral` is where the policy lives (long-running tool, queue depth, caller tier), it is
-consulted only for a client that declared the capability on the request in hand, and it
-returns the **stable operation key** the store deduplicates on, or `undefined` to run the
-call inline. The decision sits between the input mechanism and progress: **MRTR first**,
-because a call still asking its operator a question has not been decided yet and must not be
-durably stored with unsettled arguments; **task before progress**, because a deferred request
-ends the moment the handle is written and has no stream left to report progress on.
-
-`MCPTaskContext` carries **no cancellation signal**, and that absence is the sharpest hazard
-in this surface. The `signal` on the accompanying `MCPMethodOptions` is the
-request's lifetime, and a transport aborts it as soon as the response body is flushed. A
-manager that plumbs `options.signal` into the task's work therefore loses every task it
-creates, milliseconds after creating it, and the loss looks exactly like a client that
-disconnected. Spend `options.signal` on work that must finish before the answer is written,
-and give the task's own work a lifetime the manager owns.
-
-```ts
-import {
-	createMCPServer,
-	DEFAULT_MCP_LIMITS,
-	digestJSON,
-	isJSONRPCError,
-	isMCPTaskDetail,
-	isMCPTaskResult,
-	isMCPTaskStatus,
-	MCP_EXTENSION_TASKS,
-	supportsTask,
-} from '@orkestrel/mcp'
-import { createTool, createToolManager } from '@orkestrel/tool'
-
-const tools = createToolManager()
-tools.add(createTool({ name: 'render', execute: (input) => input }))
-
-const server = createMCPServer({
-	identity: { name: 'supervisor', version: '1.0.0' },
-	tools,
-	task: {
-		// The consumer's durable store: create/return, read, answer, ask to stop.
-		tasks: {
-			start: (key, context, options) => store.start(key, context, options),
-			task: (id, options) => store.task(id, options),
-			update: (id, responses, options) => store.update(id, responses, options),
-			abort: (id, options) => store.abort(id, options),
-		},
-		// The stable operation key, or `undefined` to run this call inline. Minted from the
-		// PRINCIPAL and the canonical arguments — never from `call.id`.
-		deferral: async ({ call }, { caller }) =>
-			call.name === 'render'
-				? `render:${String(caller)}:${String(await digestJSON(call.arguments, DEFAULT_MCP_LIMITS))}`
-				: undefined,
-	},
-})
-
-supportsTask({ extensions: { [MCP_EXTENSION_TASKS]: {} } }) // true: presence is the declaration
-isMCPTaskStatus('working') // true; 'done' is not a state the extension defines
-isMCPTaskResult({
-	resultType: 'task',
-	taskId: 'a',
-	status: 'working',
-	createdAt: '',
-	lastUpdatedAt: '',
-	ttlMs: null,
-}) // true: the CREATION answer
-isMCPTaskDetail({
-	taskId: 'a',
-	status: 'completed',
-	createdAt: '',
-	lastUpdatedAt: '',
-	ttlMs: null,
-	result: { resultType: 'complete' },
-}) // true: the SNAPSHOT, whose status selects what else it owes
-isJSONRPCError({ code: -32603, message: 'the deferred call could not run' }) // a failed task's error
-
-server.methods.method('tasks/get') // registered only because `task` was configured
-```
-
-**Never mint the key from `call.id`.** It is the client's own JSON-RPC request id, so it fails
-both key obligations at once: a client that retries one logical call sends a fresh id and mints
-a second durable task, which is dedup never firing; and two principals whose clients both start
-counting at `1` produce the same key, which is one principal handed a `taskId` over the other's
-work. Mint from the caller and the canonical arguments. `deferral` returning `undefined`
-is the only way to say "run this inline"; an empty string cannot identify an operation and is
-refused as `-32603` rather than quietly taking the inline path.
-
-**The lifecycle methods register only when `task` is configured.** An unconfigured
-server advertises nothing, defers nothing, and answers `tasks/get` / `tasks/update` /
-`tasks/cancel` with `-32601` through the same unregistered-method path any unknown method
-takes — the honest reply from a server that does not implement an optional extension.
-Configured, it advertises `capabilities.extensions['io.modelcontextprotocol/tasks']` on
-`server/discover` and answers each of them.
-
-| Method         | Params                       | Answers                                                                                                |
-| -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `tasks/get`    | `{ taskId }`                 | The flat `MCPTaskDetailResult` — the snapshot under `resultType: 'complete'`, plus the server identity |
-| `tasks/update` | `{ taskId, inputResponses }` | `resultType: 'complete'` and nothing else                                                              |
-| `tasks/cancel` | `{ taskId }`                 | `resultType: 'complete'` and nothing else                                                              |
-
-Only the creation answer carries `resultType: 'task'`. Reading, answering, and cancelling a
-task are ordinary completed method calls, and `tasks/get`'s payload merely happens to be a
-task — so a client narrows on `status`, never on a second discriminator.
-
-**The refusal taxonomy is short and deliberate.** A client that never declared the extension
-on the request in hand gets `-32021` with
-`{ requiredCapabilities: { extensions: { 'io.modelcontextprotocol/tasks': {} } } }` before its
-parameters are read at all, because the extension binds that refusal to the method. This is
-the **same generic missing-required-client-capability code** the elicitation path answers, and
-the tasks and elicitation refusals are told apart by `data.requiredCapabilities` alone — they
-are instances of the same condition rather than distinct conditions, and there is no separate
-numeral. (The extension's own prose examples show
-`-32003`; the dated core schema fixes `-32021`, and a peer implements
-the dated schema.) An absent, non-string, empty, or over-bound `taskId` gets `-32602`. A
-`taskId` the store does not resolve gets `-32602` too — **byte-identically for a task that
-never existed, one whose TTL purged it, and one this caller is not entitled to see**, because
-the port answers `undefined` for each of them and this package cannot tell them apart even in
-principle. That is what makes a `taskId` unprobeable; a second code, or a second message,
-would turn the store into an enumeration oracle.
-
-**`-32603` covers distinct failures, and only one of them reaches `error`.** A store that
-throws is contained as `-32603` with the caught value on the server's `error` event. A store
-that returns badly — a snapshot outside the content bound, or one off the published contract —
-is refused as `-32603` too, but **silently**: nothing was thrown, so there is no caught value
-to report and nothing reaches `error`. A consumer watching `error` to detect a faulty store
-therefore sees its exceptions and is **blind to its contract violations**; watch the `-32603`
-rate on the wire for the contract-violation class. A `deferral` that returns a key which is
-neither `undefined` nor a non-empty string is another `-32603`, and it is silent for the same
-reason.
-Do not generalize from the elicitation path, which discloses the opposite way: a continuation
-port that opens successfully onto an off-contract payload is reported on `error` there, because
-that seam synthesizes the fault it never caught. The tasks port does not.
-
-`tasks/update` and `tasks/cancel` both read the named task first, because both answer `void`
-and neither has a way to report an unknown task or to decide authorization — a read they accept
-is a write they authorized. That read is **proven with the same guard `tasks/get` proves its
-answer with**, not merely compared against `undefined`: `undefined` is one of several ways an
-implementation of this port can say "no such task" — `null` is the ordinary JavaScript spelling
-— and a value that is not a well-formed `MCPTaskDetail` earns the same byte-identical `-32602`
-an unknown `taskId` does, with neither `update` nor `abort` invoked. Expect one `task(...)`
-read before every update and every cancellation. **Cancellation is advisory**:
-this server asks, and the acknowledgement says the request was accepted, never that the task
-stopped — a store whose work cannot be interrupted may legally reach `completed` afterwards,
-and this package asserts nothing about which happened. **Input responses are forwarded
-verbatim**: a key the task never published, and one it has already answered, are the store's
-to ignore rather than this server's to refuse, because which keys a task recognizes is
-knowledge only the task holds. `ttlMs` and `pollIntervalMs` pass through exactly as the store
-produced them and are never invented; `ttlMs` is `null` — not absent — when a task does not
-expire.
-
-**`resultType: 'input_required'` and `MCPTaskStatus` `'input_required'` are different
-mechanisms.** Both are on the wire, so neither can be renamed, and a reader who conflates them will reach for the wrong
-recovery.
-
-|                       | MRTR `resultType: 'input_required'`                           | `MCPTaskStatus` `'input_required'`                  |
-| --------------------- | ------------------------------------------------------------- | --------------------------------------------------- |
-| Who owns it           | MCP, through `MCPServerOptions.input`                         | the consumer's store                                |
-| What is suspended     | one live request                                              | one durable task                                    |
-| Where the state lives | the sealed opaque `requestState` MCP mints                    | wherever the store keeps it                         |
-| How it resumes        | a new `tools/call` carrying `requestState` + `inputResponses` | `tasks/update` carrying `taskId` + `inputResponses` |
-| Guard                 | `isMCPInputResult`                                            | `isMCPTaskStatus` / `isMCPTaskDetail`               |
-
-**And `tasks/update` is the weaker mechanism.** It is a multi-round-trip exchange
-with **none** of the protections the elicitation path carries: no sealed `requestState`, no
-canonical argument digest, no absolute expiry, no principal binding, no schema enforcement on
-the answer. Consumers who have read the elicitation section will reasonably expect parity.
-**They cannot have it from this package**, because MCP neither issued the task's question nor
-owns the channel it is answered on — the store did both. Anything equivalent has to live in
-the store: bind each published key to the principal entitled to answer it, expire unanswered
-keys, and treat a response arriving after the task moved on as stale. Stating that is the only
-protection this package can offer, and a consumer who skips it is running an unauthenticated
-input channel beside an authenticated one.
-
-**The obligations this package cannot enforce, and what each costs.** Every one of them is
-reachable only through a store this package never sees, so each is stated here and on the
-port's own TSDoc rather than defended with coordination machinery — and each is proved by a
-fixture that violates it and demonstrates exactly this consequence.
-
-| Obligation                               | The consequence of violating it                                                                                                                                                                                                                                                         |
-| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Durability before return**             | `start` must resolve only once the task is retrievable by `task`. This package awaits `start` before it builds the answer, which is its whole half; a store that resolves first hands the client a `taskId` a prompt `tasks/get` answers `-32602` for, and the window is silent.        |
-| **`taskId` entropy**                     | It is a bearer handle over a durable operation. Mint it from a cryptographic source; a handle derived from the key, a counter, or anything else predictable is a handle a stranger can guess.                                                                                           |
-| **Key uniqueness and non-reuse**         | The same logical call must produce the same key and two different calls must not. This package forwards whatever `deferral` returned, unchanged, however many times it sees it.                                                                                                         |
-| **Dedup keys scoped to their principal** | Returning the existing task for a repeated key is what makes a retried call idempotent — but an unscoped key means two principals submitting the same key receive the same task, one reading the other's work. This package has no principal to scope by; the store or `deferral` must. |
-| **Terminal immutability**                | `completed`, `failed`, and `cancelled` never move again. This package holds no cache, so a store that mutates a terminal task has both snapshots reported faithfully and its clients see a task travel backwards.                                                                       |
-| **TTL purge**                            | A task with a finite `ttlMs` is the store's to expire; `ttlMs: null` means no expiry and must never be swept. After a purge the handle answers the same `-32602` an unknown one does, which is intended — and indistinguishable.                                                        |
-
-**A task transition reaches a subscribed client through `subscriptions/listen`.** The
-extension's `notifications/tasks` frame is produced by the same `subscription.producer`
-every other family travels through, and the built-in filters it against the `taskIds` the
-acknowledgement agreed to and stamps it with the subscription id — see
-[Configure modern subscriptions](#configure-modern-subscriptions) for the server half and
-[Consume a subscription from a client](#consume-a-subscription-from-a-client) for the client
-half. Where the `taskIds` member sits on the wire is this package's reading of an
-under-specified extension point, recorded under
-[Declared conformance gaps](#declared-conformance-gaps).
-
-### Bound hostile input and live resources
-
-Every server uses the frozen `DEFAULT_MCP_LIMITS`: one MiB for a raw message,
-16 KiB for `_meta`, 64 total object keys, 16 KiB for `requestState`, four MiB
-for produced tool content, 128 live built-in subscriptions, and depth 32 for
-bounded JSON. `keys` is the breadth bound for both bounded values, not a `_meta`
-leaf: `metadata` and `content` cap the bytes of their own value, while `keys` and
-`depth` cap the shape of each. A result whose breadth exceeds `keys` is refused
-the way oversized content is, an `_meta` value exceeding it the way invalid
-metadata is, and raising the key budget for extension-rich metadata raises it for
-tool output too. Those defaults are sized respectively for substantial ordinary
-JSON-RPC arguments, extension-rich request context, a signed state carrying a
-short deployment value, substantial JSON tool output, a busy
-long-lived host, and ordinary documents well beyond typical application nesting.
-
-A deployment changes only the policy values it needs through the single `limit`
-group. Every malformed numeric leaf (`NaN`, infinity, a negative, or a fraction)
-falls back to its secure default. Message overflow maps to `-32700`; invalid or
-oversized `_meta` and `requestState` map to `-32602`; oversized produced content
-and exhausted subscription capacity map to `-32603` — under both eras, because a legacy
-call runs on the modern engine and inherits its bounds. None uses MCP's reserved
-`-32020` / `-32021` / `-32022` range. `-32000` survives in `MCPLegacy` alone, and only
-for a modern result the dated revision has no shape for.
-
-```ts
-import { createMCPServer, DEFAULT_MCP_LIMITS, isBoundedJSON, isBoundedString } from '@orkestrel/mcp'
-import { createToolManager } from '@orkestrel/tool'
-
-const server = createMCPServer({
-	identity: { name: 'bounded', version: '1.0.0' },
-	tools: createToolManager(),
-	limit: {
-		message: 512 * 1024,
-		metadata: 8 * 1024,
-		keys: 32,
-		state: 8 * 1024,
-		content: 2 * 1024 * 1024,
-		subscriptions: 64,
-		depth: 24,
-	},
-})
-
-DEFAULT_MCP_LIMITS.message // 1_048_576
-isBoundedString('€', 2) // false
-isBoundedJSON({ ok: true }, { bytes: 16, keys: 1, depth: 1 }) // true
-await server.handle(
-	'{"jsonrpc":"2.0","method":"server/discover","id":1,"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}',
-)
-```
-
-`isBoundedJSON` walks iteratively and tracks active ancestors. Cycles, values
-deeper than the configured depth, accessors/hostile proxies, `Map`/`Set`, and
-non-finite values return `false`; no adversarial shape throws from the guard. Own
-`__proto__`, `constructor`, and `prototype` keys are ordinary exact-JSON data and are
-accepted within the same byte/key/depth bounds. There is no second, laxer JSON policy
-for legacy any more: the dedicated legacy normalizer is gone, and a legacy `tools/call`
-is bounded and serialized by the engine it now runs on.
-
-### Bind a server or a client to any duplex transport
-
-`bindServer` / `bindClient` pipe an `MCPServerInterface` / `MCPClientInterface`
-over an `MCPTransportInterface` — the environment-agnostic duplex message
-channel (`send` / `listen` / `closed` / `close`, all string messages; framing
-is entirely the transport's concern). Every environment face — Node stdio and
-WebSocket, the browser's `MessagePort` and worker scope — implements this one port
-instead of duplicating the dispatch/correlation pump per transport:
-
-```ts
-import {
-	bindClient,
-	bindServer,
-	createDuplexClientTransport,
-	createMCPClient,
-	createMCPServer,
-} from '@orkestrel/mcp'
-import { createTool, createToolManager } from '@orkestrel/tool'
-
-// An in-memory duplex channel — a real MCPTransportInterface, the same shape a
-// Node stdio pair or a browser MessagePort would implement.
-function createLoopback() {
-	let onMessage: ((message: string) => void) | undefined
-	let peer: ReturnType<typeof createLoopback> | undefined
-	const transport = {
-		async send(message: string) {
-			peer?.deliver(message)
-		},
-		listen(handler: (message: string) => void) {
-			onMessage = handler
-		},
-		closed() {},
-		async close() {},
-		deliver(message: string) {
-			onMessage?.(message)
-		},
-		connect(other: ReturnType<typeof createLoopback>) {
-			peer = other
-		},
-	}
-	return transport
-}
-const serverSide = createLoopback()
-const clientSide = createLoopback()
-serverSide.connect(clientSide)
-clientSide.connect(serverSide)
-
-const tools = createToolManager()
-tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
-const server = createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
-bindServer(server, serverSide)
-
-const client = createMCPClient({ transport: createDuplexClientTransport(clientSide) })
-const unbind = bindClient(client, clientSide)
-await client.connect()
-const outcome = await client.call('add', { x: 2, y: 5 })
-// outcome → { resultType: 'complete', value: 7 }
-unbind() // detaches without closing either side of the loopback
-```
-
-`bindServer`'s unbind stops routing inbound messages through `server.handle`
-(a `transport.closed()` signal does the same); `bindClient`'s unbind stops
-delivering onto `client.transport.emitter`. Neither closes the underlying
-transport — that stays the caller's call. A `send` throw or rejection from
-either binder is caught and surfaced (never an unhandled rejection): a
-server-side one on `server.emitter`'s `error` event, a client-side one on
-`client.transport.emitter`'s `error` event.
-
-### Compose or remove the legacy protocol layer
-
-The optional `MCPServerOptions.handshake` hook gates only the legacy `initialize` response.
-`MCPServerInterface.handshake` exposes it, and `createMCPLegacy` passes it into
-`MCPLegacyOptions.handshake`. The `MCPHandshakeHandler` receives `MCPMethodOptions`, including
-the request's abort signal and optional caller context. On the binder carriers (stdio,
-WebSocket, and `MessagePort`), `ping`, forwarded legacy methods, and modern `server/discover`
-remain available while the hook waits. Omitting the hook preserves the dispatcher's answer
-bytes from 0.0.35. For the session-header change on refused HTTP initialization, see
-[HTTP transport](#http-transport).
-
-Over HTTP, a separate legacy `ping` POST also completes while the hook waits, without a
-session id or negotiated protocol header. The session middleware passes that request through
-without publishing the pending initialization's candidate session.
-
-An `MCPError` rejection preserves its code, message, and context as JSON-RPC `error.data`
-under the initialization request id. If the context cannot be serialized, the answer retains
-the code and message and omits `data`. Any other rejection emits `error` on the shared server
-emitter and answers `-32603` with `Server error`. A rejection after request cancellation is
-re-thrown; the stdio binder writes nothing and emits no error. The hook must observe its
-signal to stop pending work.
-
-The [MCP 2025-11-25 lifecycle specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization)
-permits pings while initialization is pending and describes initialization error responses.
-The hook adds consumer readiness to that legacy exchange; it does not add a modern lifecycle gate.
-
-The dated revisions are not a branch inside the server. They are a **decorator over it**.
-`MCPLegacy` wraps one `MCPDispatcherInterface` — the minimal `emitter` / `limit` / `dispatch` /
-`handle` surface a transport actually needs, and the one `MCPServerInterface` extends — and translates the
-fixed legacy method set onto the modern engine underneath. A modern-shaped invocation passes
-through untouched. `initialize` and `ping` are answered by the decorator itself and
-`notifications/initialized` is swallowed there, because the handshake acts have no modern
-counterpart and the modern seam registers no `ping`. `tools/list` and `tools/call`
-acquire modern request metadata, run through the same dispatcher a modern request runs through,
-and have the answer projected back into the unstamped legacy shape. Every arm answers under the
-message bound the wrapped dispatcher advertises: an invocation outside it earns that
-dispatcher's own id-less `-32600`, locally answered and forwarded alike. Every other method is
-refused with `-32601` at the door.
-
-**That fixed set is the whole legacy era, so the modern-only surfaces do not exist for a legacy
-client.** `server/discover` and `subscriptions/listen` are 2026-07-28 methods with no legacy
-spelling, so a legacy-era client naming either gets `-32601` at the decorator's door — the same
-refusal every other unlisted method earns there. The multi-round input mechanism is refused one step further
-in — a legacy `tools/call` carrying `requestState` or `inputResponses` gets `-32602`, because
-those parameters belong to a round the dated protocol could not have produced — and a modern
-result the dated revision has no shape for is projected as `-32000`. So a legacy client
-discovers the server through `initialize`, lists and calls tools, and has no path to modern
-discovery, subscriptions, or an input round at all. The way to reach one is to speak modern:
-the decorator passes a modern-shaped invocation through untouched, so composing the layer costs
-a modern client nothing.
-
-**Composition is the consumer's, and it is one call:**
-
-```ts
-import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
-import { createMCPRoutes } from '@orkestrel/mcp/server'
-import { createToolManager } from '@orkestrel/tool'
-
-const mcp = createMCPServer({
-	identity: { name: 'docs', version: '1.0.0' },
-	tools: createToolManager(),
-})
-
-createMCPRoutes(createMCPLegacy(mcp)) // 2026-07-28 AND the two legacy revisions
-createMCPRoutes(mcp) // modern only — a legacy `initialize` falls off the modern seam as -32601
-```
-
-That pair is the removability proof a developer can feel: the layer is a value you pass or do
-not pass, so a server built without it has no legacy code path to reach at all. **It composes at
-every door**, not only over HTTP: `createMCPRoutes`, `createMCPPostHandler`,
-`createWebSocketServer`, `createStdioServer`, and `bindServer` all take the narrow
-`MCPDispatcherInterface`, so the decorator drops in front of any of them. A stdio deployment
-speaking the `initialize` handshake — the most common shape an MCP server ships in — wires as
-`createStdioServer(createMCPLegacy(mcp))`, and each door is proven end to end against a real
-transport: a real socket pair, a spawned child process, and a cross-wired duplex pair.
-
-`MCPDispatcherInterface` carries `emitter` for the same reason it carries `limit` and `handle`: a
-transport-facing dispatcher must be able to report a contained fault, and a binder that owns a
-pump has only an event to report it through. `MCPLegacy` **forwards** the dispatcher it wraps
-rather than minting its own, so one server has one error feed — subscribe to `mcp.emitter` and
-you see faults from both eras, including the ones that arrived through the legacy door.
-
-**What removing legacy server ingress costs, exactly.** The claim is bounded to ingress on
-purpose: what comes out is a server that no longer answers a dated revision, not a package that
-no longer speaks one. It reaches these **published modules**. `src/core/MCPLegacy.ts` and the
-HTTP session entity `src/server/MCPSession.ts` go as whole files. The rest survive and give up
-one declared row each: `createMCPLegacy` in `src/core/factories.ts`, its
-barrel row in `src/core/index.ts`, `MCPLegacyOptions` in `src/core/types.ts`, the session
-middleware in `src/server/middlewares.ts`, the `MCPSession*` contracts in
-`src/server/types.ts`, and the session barrel rows in `src/server/index.ts`.
-
-**`src/core/types.ts` is a declared row, never a file to delete.** It is the shared contract
-carrier the modern dispatcher imports, so deleting the file deletes the modern engine with it. A
-remover takes out the `MCPLegacyOptions` declaration and leaves everything else in that module
-standing. The same distinction governs every other row entry: the file stays, one
-declaration leaves.
-
-**The documentation goes with them, and this section is not all of it.** The rule is every guide
-row naming `MCPLegacy` or `createMCPLegacy` — this section, the `createMCPLegacy` Factories row,
-the `MCPLegacy` Classes row, the `MCPDispatcherInterface` and `MCPLegacyOptions` Surface rows,
-the `#### MCPDispatcherInterface` Methods block, and the cross-references that point here.
-Removing the code and keeping a row that names a deleted export fails this package's own parity
-gate. It checks every Surface row against the public barrels in both directions and checks every
-named import in a TypeScript fence against its published package face.
-
-`MCPServer` is not on that list: it imports no `MCPLegacy` module and carries no standalone
-`MCPLegacy` or `legacy` word, which is the property the parity gate checks. Its TSDoc names the
-`createMCPLegacy` factory inside a composition example, and its modern dispatcher still spells
-protocol methods shared with the decorator; neither a factory name inside an example nor method
-text is legacy ownership. The modern engine therefore still compiles once the layer is deleted.
-`isModernRequest` survives because the modern engine reads structural key presence. Each
-remaining survivor has its own consumer, and they are not the same one:
-
-| Survivor                | What consumes it after the layer is deleted                                                                                                                                                   |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inferEra`              | Nothing inside `src`. It is the published era helper, and it reads `isMCPModernVersion` then `isMCPLegacyVersion` rather than restating either set.                                           |
-| `inferRequestEra`       | `MCPServer`'s `request` event and the HTTP ingress in `src/server/handlers.ts` — both report or route on the era a request's own structure selects, and neither reads a revision set.         |
-| `isInitializeRequest`   | Legacy server ingress: `src/server/middlewares.ts` mints and validates a session from it, and `src/server/inferers.ts` exempts a headerless `initialize` from the header demand.              |
-| `isPingRequest`         | Legacy server ingress: admits an id-bearing, non-modern ping without a protocol or session header.                                                                                            |
-| `MCPLegacyResult`       | The unstamped result arm of `JSONRPCResponse` in `src/core/types.ts`, its guard `isMCPLegacyResult`, and the decorator's projection.                                                          |
-| `MCP_HANDSHAKE_VERSION` | Client-adapter egress in `src/core/MCPLegacyClientTransport.ts`, the legacy handshake anchor in `src/core/helpers.ts` and `src/server/inferers.ts`, and `SUPPORTED_LEGACY_PROTOCOL_VERSIONS`. |
-| `MCP_FALLBACK_VERSION`  | `SUPPORTED_LEGACY_PROTOCOL_VERSIONS` plus an explicit `MCPLegacyClientTransportOptions.version` pin.                                                                                          |
-
-The bare server imports no legacy revision set and no legacy guard.
-
-`MCPClient` remains outside the server-ingress removal list because it contains no legacy
-handshake. The bare client sends `server/discover` only and accepts only `MCPModernVersion` as an
-optional pin. Legacy egress belongs to the separate client transport decorator described next.
-
-That module list is a membership rule rather than a reassurance. The executed list lives in
-[the package guide suite](../tests/guides.test.ts), which computes the legacy-owning module set
-from the tree and requires it to equal its list in both directions. An added participant and a
-stale suite entry therefore fail the same way; update this guide's descriptive list and the
-suite's executed list together. The same suite requires `MCPServer.ts` to carry no `MCPLegacy`
-or `legacy` spelling. What these structural checks cannot reach is legacy participation that does
-not bind either entity name — a handler table, a computed concatenation, or a branch on a version
-value. [The dispatch tests](../tests/src/core/MCPLegacy.test.ts) guard that class.
-
-**What a legacy client sees differently than it did before this collapse**, because
-legacy now inherits the modern engine's validation instead of running beside it:
-
-| A legacy `tools/call` whose …      | Answered before                                     | Answers now                                            |
-| ---------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
-| tool result contains `NaN`         | `null`, from `JSON.stringify`'s non-finite coercion | `-32603` — the produced result is not valid JSON       |
-| `params.arguments` is `null`       | accepted, and the tool ran                          | `-32602` — arguments must be an object                 |
-| tool value exceeds `limit.content` | `-32000`                                            | `-32603`, the same code a modern call already received |
-
-The shared cause is worth stating once, plainly: **legacy inherits the modern engine's validation
-because it now runs on it.** `NaN` is not JSON, the modern path always refused it, and a server
-that refused one caller while silently nulling the other was answering the same question in
-contradictory ways. Uniform refusal is the coherent answer, and it is the intended consequence of the collapse
-rather than a side effect of it. `-32000` survives where it carries a meaning no modern code does:
-a `task`, an `input_required`, a capability refusal, or an unsupported stream the dated revision
-cannot represent. A legal `tools/call` progress stream is the narrow exception: matching progress
-notifications remain progress notifications, and its final complete or error response becomes the
-legacy answer.
-
-### Adapt a legacy peer at the client transport boundary
-
-The dated client handshake is not a branch inside `MCPClient`. It is a **decorator over its
-transport**. `MCPLegacyClientTransport` wraps one `MCPMessageTransportInterface`, performs
-`initialize` during `start`, sends `notifications/initialized`, and answers the bare client's
-`server/discover` locally from the accepted handshake. The consumer-visible client therefore
-stays on `2026-07-28` while the wrapped transport speaks `2025-11-25` or `2025-06-18` to the peer.
-
-The decorator translates at the message boundary. A modern invocation loses the reserved
-protocol-version, client-capability, and client-identity metadata before it reaches the legacy
-peer. A legacy result gains the modern `resultType`, server identity, and cache fields before it
-reaches `MCPClient`. The shared projections live in the core helpers and are the same projections
-the server decorator uses in the opposite direction.
-
-#### Convert between modern and legacy messages
-
-The projections are also public when another explicit boundary needs the same wire conversion:
-
-```ts
-import {
-	legacyInvocationToModern,
-	legacyResultToModern,
-	modernInvocationToLegacy,
-	modernResultToLegacy,
-} from '@orkestrel/mcp'
-
-const request = legacyInvocationToModern({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
-const legacyRequest = modernInvocationToLegacy(request)
-const result = legacyResultToModern({}, 'tools/list', { name: 'legacy', version: '1.0.0' })
-const legacyResult = modernResultToLegacy(result)
-```
-
-#### Wrap a legacy client transport
-
-Wrap the transport explicitly when the peer exposes only the legacy handshake:
-
-```ts
-import { createMCPClient, createMCPLegacyClientTransport } from '@orkestrel/mcp'
-import { createHTTPClientTransport } from '@orkestrel/mcp/server'
-
-const carrier = createHTTPClientTransport({ url: 'https://legacy.example/mcp' })
-const transport = createMCPLegacyClientTransport(carrier, { version: '2025-06-18' })
-const client = createMCPClient({ transport })
-
-await client.connect()
-client.version // '2026-07-28' — the adapter keeps the dated revision on the peer side
-```
-
-Omit `version` to offer `2025-11-25`; supply it to require one supported legacy revision exactly.
-The adapter rejects an absent, malformed, unsupported, or pin-mismatched handshake result before
-the client connects. Its request deadline bounds the handshake response, each handshake write, and
-each forwarded correlated request. The adapter reserves wire id `0` while that handshake window is
-open; do not send unrelated id-`0` traffic through the wrapped carrier until `start()` settles.
-Before an accepted handshake, local `server/discover` answers with a correlated `-32603`. A
-forwarded request also answers with a correlated `-32603` when its deadline expires or the peer
-returns a malformed result that cannot be translated. A peer-originated JSON-RPC error passes
-through with its code unchanged.
-
-The bare client never attempts this handshake. When `server/discover` returns `-32601`, `connect`
-rejects with an `MCPError` whose message names `createMCPLegacyClientTransport`. A legacy peer that
-refuses the method with any other code surfaces that code unchanged. Reference servers differ here:
-the TypeScript SDK v1.x server answers an unknown method with `-32601`, while the Python SDK v1.29.0
-server answers it with `-32602`, as read from their released sources on 2026-08-20 (see the
-[TypeScript SDK shared protocol](https://github.com/modelcontextprotocol/typescript-sdk/blob/v1.x/src/shared/protocol.ts)
-and the
-[Python SDK server session](https://github.com/modelcontextprotocol/python-sdk/blob/v1.29.0/src/mcp/server/session.py)).
-Passing a legacy revision to
-`createMCPClient` is rejected before the transport starts; production types do not admit that pin.
-
 ### Factories
 
 | Name                             | Kind     | Summary                                                                                                                                                                                                                                                                            |
@@ -4951,6 +3314,1643 @@ carry `undefined` text. Stopping the reporter rejects later reports and takes; i
 progress for replay. Cancelling `response.body` aborts `disconnect.signal` and cancels upstream — as do a
 failure while forwarding upstream bytes and a keepalive tick that finds the SSE stream already
 closed — while ordinary upstream completion closes the response without inventing an abort.
+
+### Project a host-owned resource, prompt, and completion registry
+
+Optional ports sit beside `tools`, and each obeys the rule the tool registry
+already obeys: **MCP owns no storage.** The host builds and owns the registry; this
+package projects it onto the wire, bounds and validates what comes back, and stamps
+the result.
+
+| Option       | Port                          | Methods it registers                                           | Capability advertised |
+| ------------ | ----------------------------- | -------------------------------------------------------------- | --------------------- |
+| `resources`  | `MCPResourceManagerInterface` | `resources/list`, `resources/read`, `resources/templates/list` | `resources`           |
+| `prompts`    | `MCPPromptManagerInterface`   | `prompts/list`, `prompts/get`                                  | `prompts`             |
+| `completion` | `MCPCompletionInterface`      | `completion/complete`                                          | `completions`         |
+
+**A capability registers only when its port is configured**, which is the `tasks/*`
+precedent applied to `resources`, `prompts`, and `completion` too. A server built without `resources` registers no
+`resources/*` method, advertises no `resources` capability, and answers `-32601`
+through the same unregistered-method path any unknown method takes — the honest reply
+from a server that does not implement an optional capability, and the reason an
+existing tools-only server's discovery answer is byte-for-byte what it was.
+
+**`completions` is a top-level capability, not a sub-flag of `resources` or `prompts`.** It is
+configured, advertised, and registered independently: a server may complete prompt
+arguments without publishing prompts, or publish prompts without offering completion.
+The gates read their own options and never each other.
+
+**One pagination shape covers every paginated method.** `MCPPaginationParams`
+(`{ cursor? }`) goes in and `MCPPaginationResult` (`{ nextCursor? }`) comes back, for
+`resources/list`, `resources/templates/list`, and `prompts/list` alike. `tools/list` is
+not among them — it reads no cursor and answers no `nextCursor`. The cursor is
+opaque and the manager mints it: this package neither interprets one nor invents one,
+and a page that omits `nextCursor` is the final page. There is no second cursor shape
+anywhere in the package, so a host that implements paging once implements it for all
+of them.
+
+**The port accessors are named for their domain, and the wire is not.** The resource port
+reads `resource(params)` / `resources(pagination)` / `templates(pagination)`, and the prompt
+port reads `prompt(params)` / `prompts(pagination)` — singular and plural nouns of the same
+domain, the shape `MCPTaskManagerInterface.task(id)` already set. **The wire method names are
+unchanged**: a client still sends `resources/read` and `prompts/get`, because those are the
+protocol's own spellings and this package never renames a wire name.
+
+**Not found is the manager's `undefined`, and it reaches the wire as `-32602`.** Both
+`resource` and `prompt` answer `undefined` for a URI or a name they do not resolve, which
+becomes `-32602` with the unresolved value named. That is the dated revision's
+spelling: `resources/subscribe` and `resources/unsubscribe` were removed at
+`2026-07-28` and so was the dedicated `-32002` resource-not-found code, which a client
+`SHOULD` still accept from an older peer. Resource subscription lives on
+[`subscriptions/listen`](#configure-modern-subscriptions)'s `resourceSubscriptions`
+filter instead.
+
+**A `resource` or a `prompt` call may answer `input_required`.** `resource` and `prompt` may
+return an `MCPInputResult` rather than contents or messages, so the multi-round mechanism is
+reachable from a resource or a prompt and not only from a `tools/call` — see
+[Ask the client for input during the call in hand](#ask-the-client-for-input-during-the-call-in-hand).
+A round the manager authored meets the server's capability gate before it is stamped and sent,
+exactly as a `tools/call` round does, so a kind the client did not declare is refused `-32021`
+here too. The `inputResponses` and `requestState` carriers arrive on the params for exactly
+that continuation, and their semantics belong to the manager: core owns the carrier's shape,
+bounds, and ownership, and refuses to decide what a consumer's own continuation means.
+
+**`resources/list` / `resources/templates/list` / `prompts/list` are cacheable and
+carry `ttlMs` + `cacheScope`; `prompts/get` is not and carries neither.** The stamps
+come from the same `cache` option `tools/list` already uses, so one setting governs
+every cacheable modern result.
+
+**MCP expands no URI templates.** This is the load-bearing sentence of the whole
+resource surface, so it is stated plainly rather than implied. `templates()` publishes
+`uriTemplate` strings as descriptors, and `resource` takes a **concrete URI** — the one the
+client actually sent. Matching a URI to a template and substituting its variables both
+happen inside the manager, behind the port. **There is no RFC 6570 implementation and
+no template parser anywhere in this package**, at any feature level, and none is
+planned: the question "which RFC 6570 level does this support?" has no answer here
+because the package never reaches the point of needing one. The conformance runner
+agrees this is the intended division — its `resources-templates-read` scenario sends
+the already-substituted `test://template/123/data` and asserts only that the returned
+content reflects it.
+
+The same ruling decides `completion/complete`'s harder arm. A `ref/resource`
+reference's `uri` may itself be a template, and completing its arguments implies
+knowing that template's variables — so the reference is forwarded **verbatim** to the
+completion port and the host answers it. The party that owns expansion owns knowing
+its own variables; parsing templates inside MCP to answer a completion would
+reintroduce the engine this ruling removes. `ref/prompt` is forwarded the same way.
+
+#### Provide resource, prompt, and completion ports
+
+Completion candidates are capped at the protocol's **100** values. A manager that
+returns more has its list projected down to the first 100 with `hasMore: true`
+stamped, whatever it reported itself — so 105 candidates leave as 100 plus the honest
+flag rather than as an over-long list a client must defend against.
+
+```ts
+import {
+	type MCPCompletionInterface,
+	type MCPPromptManagerInterface,
+	type MCPResourceManagerInterface,
+	createMCPServer,
+} from '@orkestrel/mcp'
+import { createToolManager } from '@orkestrel/tool'
+
+const documents = new Map([['docs://readme', 'The readme body.']])
+
+const resources: MCPResourceManagerInterface = {
+	// This registry fits in one page, so it never mints a cursor and never reads one —
+	// which is the ONLY correct answer for a final page. A `nextCursor` a following page
+	// cannot honour is worse than none, and MCP will forward whatever it is told.
+	resources: () => ({
+		resources: [{ uri: 'docs://readme', name: 'readme', mimeType: 'text/plain' }],
+	}),
+	// A concrete URI arrives here. Matching `docs://page/{slug}` against it, and reading
+	// `slug` back out, is this function's job — MCP substituted nothing on the way in.
+	resource: (params) => {
+		const text = documents.get(params.uri)
+		if (text !== undefined) return [{ uri: params.uri, mimeType: 'text/plain', text }]
+		const slug = params.uri.startsWith('docs://page/') ? params.uri.slice(12) : undefined
+		if (slug === undefined) return undefined // → -32602, naming the uri
+		return [{ uri: params.uri, mimeType: 'text/plain', text: `Page ${slug}` }]
+	},
+	// The template is published as a descriptor. Nothing in this package parses it.
+	templates: () => ({
+		resourceTemplates: [{ uriTemplate: 'docs://page/{slug}', name: 'page' }],
+	}),
+}
+
+const prompts: MCPPromptManagerInterface = {
+	prompts: () => ({
+		prompts: [
+			{
+				name: 'review',
+				description: 'Review one document.',
+				arguments: [{ name: 'topic', required: true }],
+			},
+		],
+	}),
+	prompt: (params) =>
+		params.name === 'review'
+			? {
+					resultType: 'complete',
+					messages: [
+						{
+							role: 'user',
+							content: { type: 'text', text: `Review ${params.arguments?.topic ?? 'it'}.` },
+						},
+					],
+				}
+			: undefined, // → -32602, naming the prompt
+}
+
+const completion: MCPCompletionInterface = {
+	// Both reference arms land here; `ref/resource` arrives verbatim, template and all.
+	complete: (params) =>
+		params.ref.type === 'ref/prompt'
+			? { values: ['performance', 'security'].filter((v) => v.startsWith(params.argument.value)) }
+			: { values: ['readme'], total: 1 },
+}
+
+const server = createMCPServer({
+	identity: { name: 'docs', version: '1.0.0' },
+	tools: createToolManager(),
+	resources,
+	prompts,
+	completion,
+})
+server.methods.method('resources/read') // registered, because `resources` was supplied
+server.methods.method('logging/setLevel') // undefined → -32601, like any unconfigured capability
+```
+
+#### Validate projected registry values
+
+The guards behind those projections are exported, so a host can validate its own
+registry with the same totals the server validates it with:
+
+```ts
+import {
+	isMCPCompletion,
+	isMCPCompletionParams,
+	isMCPCompletionReference,
+	isMCPCompletionResult,
+	isMCPPaginationParams,
+	isMCPPrompt,
+	isMCPPromptArgument,
+	isMCPPromptGetResult,
+	isMCPPromptMessage,
+	isMCPPromptPage,
+	isMCPResource,
+	isMCPResourceContents,
+	isMCPResourcePage,
+	isMCPResourceTemplate,
+	isMCPResourceTemplatePage,
+	isMCPStringArguments,
+} from '@orkestrel/mcp'
+
+isMCPPaginationParams({ cursor: 'page-2' })
+isMCPResource({ uri: 'docs://readme', name: 'readme' })
+isMCPResourceTemplate({ uriTemplate: 'docs://page/{slug}', name: 'page' })
+isMCPResourceContents({ uri: 'docs://readme', text: 'body' }) // one of `text` / `blob`, never both
+isMCPResourcePage({ resources: [{ uri: 'docs://readme', name: 'readme' }] })
+isMCPResourceTemplatePage({ resourceTemplates: [] })
+isMCPStringArguments({ topic: 'security' }) // every argument value is a string
+isMCPPromptArgument({ name: 'topic', required: true })
+isMCPPrompt({ name: 'review', arguments: [{ name: 'topic' }] })
+isMCPPromptMessage({ role: 'user', content: { type: 'text', text: 'Review it.' } })
+isMCPPromptPage({ prompts: [{ name: 'review' }], nextCursor: 'page-2' })
+isMCPPromptGetResult({ resultType: 'complete', messages: [] })
+isMCPCompletionReference({ type: 'ref/resource', uri: 'docs://page/{slug}' })
+isMCPCompletionParams({
+	ref: { type: 'ref/prompt', name: 'review' },
+	argument: { name: 'topic', value: 'sec' },
+})
+isMCPCompletion({ values: ['security'], total: 1, hasMore: false })
+isMCPCompletionResult({ resultType: 'complete', completion: { values: ['security'] } })
+```
+
+`isMCPResourceContents` is structurally discriminated: the wire has no tag field, so
+the presence of `text` XOR `blob` is the discriminator and a value carrying both or
+neither is refused. `isMCPCompletionResult` additionally enforces the 100-value cap,
+so it recognizes only a result this server would actually produce.
+
+### Adapt an existing registry behind a port
+
+The ports take an interface, not a package, so anything can sit behind them — and
+`@orkestrel/workspace` and `@orkestrel/template` are obvious candidates. **Neither
+is a dependency of this package and adopting one is entirely the host's decision**;
+what follows is what an adapter has to bridge, because in both cases the shapes do not
+line up and pretending otherwise would cost a reader an afternoon.
+
+**Workspace → `resources`: the seams, and the addressing seam is not small.**
+
+1. **A workspace addresses by path, and MCP addresses by URI.** That package says
+   outright that a workspace is not a filesystem, and with several workspaces
+   registered a bare path is ambiguous — two workspaces can both hold `readme.md`.
+   Neither package defines a URI scheme, so **the adapter must mint one** and own it in
+   both directions: path → URI on the way out, URI → workspace + path on the way back.
+   Everything else here is mapping; this is design.
+2. **The binary MIME set is closed** — `image/png`, `image/jpeg`, `image/gif`, and
+   `image/webp`, and nothing else. There is no PDF and no CSV. An adapter must decide
+   per file whether the content is text or a blob, and a file the workspace will not
+   classify as one of those is text or it is nothing.
+3. **A workspace has no pagination.** Its file listing returns everything, so the
+   adapter slices the list and mints its own cursor — which is why the cursor is opaque
+   in the first place. A first page and an unbounded workspace are the same call.
+4. **Templates stay the adapter's.** If the adapter publishes `docs://page/{slug}`, it
+   is the one that matches the concrete URI back to a workspace path, exactly as the
+   preceding ruling requires.
+
+**Template → `prompts`: a near-perfect match and a real mismatch.**
+`TemplatePlaceholder` (`{ name, description?, required?, path?, fallback? }`) maps onto
+`MCPPromptArgument` (`{ name, title?, description?, required? }`) almost field for
+field, so `prompts/list` is nearly free. The output is not:
+**`Template.fill()` returns a plain `string`, and `prompts/get` must return
+`MCPPromptMessage[]`.** The adapter wraps the filled string in a single user message —
+a real decision, not a formality, because a one-message array is the adapter's choice
+about what a filled template means, and a template that was written as a dialogue has
+its structure flattened by it. MCP argument values are strings by contract, so the
+`TemplateFillValues` handoff needs no coercion in that direction.
+
+```ts
+import { type MCPPromptManagerInterface, createMCPServer } from '@orkestrel/mcp'
+import { createTemplate, createTemplateManager } from '@orkestrel/template'
+import { createToolManager } from '@orkestrel/tool'
+
+const templates = createTemplateManager({
+	templates: [
+		createTemplate({
+			name: 'review',
+			content: 'Review {{topic}} in {{depth}} detail.',
+			description: 'Review one topic.',
+			placeholders: [
+				{ name: 'topic', description: 'What to review.', required: true },
+				{ name: 'depth', description: 'How deeply.', fallback: 'moderate' },
+			],
+		}),
+	],
+})
+
+const prompts: MCPPromptManagerInterface = {
+	// `templates()` returns EVERY template — the adapter owns the slice and the cursor.
+	prompts: (pagination) => {
+		const all = templates.templates()
+		const start = pagination.cursor === undefined ? 0 : Number(pagination.cursor)
+		const page = all.slice(start, start + 50)
+		return {
+			prompts: page.map((template) => ({
+				name: template.name,
+				description: template.description ?? template.summary ?? template.name,
+				arguments: template.placeholders.map((placeholder) => ({
+					name: placeholder.name,
+					...(placeholder.description === undefined
+						? {}
+						: { description: placeholder.description }),
+					...(placeholder.required === undefined ? {} : { required: placeholder.required }),
+				})),
+			})),
+			...(start + 50 < all.length ? { nextCursor: String(start + 50) } : {}),
+		}
+	},
+	// The mismatch, in one line: a string comes back and an array of messages goes out.
+	prompt: (params) => {
+		const found = templates.find({ name: params.name })[0]
+		if (found === undefined) return undefined // → -32602
+		return {
+			resultType: 'complete',
+			...(found.description === undefined ? {} : { description: found.description }),
+			messages: [
+				{ role: 'user', content: { type: 'text', text: found.fill(params.arguments ?? {}) } },
+			],
+		}
+	},
+}
+
+const server = createMCPServer({
+	identity: { name: 'docs', version: '1.0.0' },
+	tools: createToolManager(),
+	prompts,
+})
+```
+
+Another seam that fence does not hide: `fill` defaults to the `'error'` missing
+policy, so a required placeholder the client did not supply throws out of `prompt`. That
+becomes a contained `-32603` with the caught value reported on the server's `error`
+event, which is a defensible answer but not the informative one — an adapter that
+cares must call `validate` first and return an
+[`input_required` result](#ask-the-client-for-input-during-the-call-in-hand) asking for
+the missing argument, or seed `missing: 'empty'` and accept the gaps.
+
+**The control that proves these are ports rather than shaped holes** is that neither
+adapter is privileged. `tests/setupServer.ts` backs the same ports with plain
+in-memory objects — no workspace, no template engine, no `@orkestrel/*` registry at
+all — and the foreign conformance client cannot tell the difference, because there is
+nothing on the wire that could. The compiler now agrees with the wire: that fixture is
+TypeScript, annotated with the same exported manager interfaces this section documents,
+so a plain object is a checked implementation of the port rather than a duck-typed
+resemblance to one.
+
+### Configure modern subscriptions
+
+The server supplies `toolsListChanged` from the tool registry's `add`, `remove`, and `clear`
+events. It registers the listeners before acknowledging the stream and releases them when
+`options.signal` aborts. Registry destruction delivers its final `clear`; the stream then
+stays open until its signal aborts. An already-destroyed registry registers no listeners; the
+server acknowledges the subscription, produces no tools frames, and waits for its signal. A
+stream read between changes receives one frame per change; changes that arrive together, or
+while the previous frame is unread, coalesce into one.
+
+`subscription.notifications` declares the consumer's supported families through
+`MCPConsumerFilter`, whose optional `toolsListChanged` member accepts only `false`;
+`subscription.producer` opens the event-driven source for the intersected filter, beside the
+built-in tools producer. The consumer producer advances on the stream's demand. A producer
+failure terminates the stream after the notifications it already produced. A consumer filter
+that is malformed, and one claiming `toolsListChanged: true`, are both invalid: construction
+throws `MCPError` with `JSONRPC_INVALID_PARAMS` (`-32602`). Consumer-produced tools
+notifications are dropped, so the tools family has only the registry as its source. The
+built-in owns wire acknowledgement, filtering, id stamping, and graceful closure. A producer
+only yields project notifications and ends its iterable when the source closes; while idle it
+parks on its own events and may observe the supplied abort signal. Releasing the producer
+cancels its source with that signal's abort reason, so a `ReadableStream` source sees its
+pending writes reject with the reason the request was aborted with.
+
+**Every produced notification is owned before it is judged.** The built-in snapshots each one
+into bounded exact JSON before it matches the filter or stamps the id, so the values that
+admitted a notification are the values that reach the wire — a producer answering differently
+on a second read cannot have one URI pass the filter and another ride out. A notification
+that is not bounded exact JSON is dropped and the stream continues; a producer that throws
+ends the subscription after queued notifications with one detail-free `-32603` terminal, its
+caught value reported on the server's `error` event. Ending the consumer source normally
+closes with the complete result only when the honoured filter omits `toolsListChanged`. A
+stream honouring the tools family stays open until failure or signal abort. An abort closes
+with no terminal at all, because a cancelled request is not an answered one.
+
+#### Configure the subscription producer
+
+The filter keys — `toolsListChanged`, `promptsListChanged`,
+`resourcesListChanged`, `resourceSubscriptions`, `taskIds` — and the `params.notifications`
+object holding them are wire spellings carried verbatim from the dated schema.
+They are the one place the compound-key rule does not apply, because these
+strings are not this package's to choose. The type name is
+`MCPSubscriptionFilter`, which is the library's own. Where `taskIds` sits inside that object
+is this package's reading of an under-specified extension point rather than settled wire —
+[Declared conformance gaps](#declared-conformance-gaps) records the search that ended there.
+
+```ts
+import {
+	type JSONRPCNotification,
+	buildSubscriptionAcknowledgement,
+	buildSubscriptionFilter,
+	buildSubscriptionResult,
+	createMCPServer,
+	isMCPConsumerFilter,
+	isMCPSubscriptionFilter,
+	matchesSubscriptionNotification,
+	stampSubscriptionNotification,
+} from '@orkestrel/mcp'
+import { createToolManager } from '@orkestrel/tool'
+
+const identity = { name: 'docs', version: '1.0.0' }
+const supported = { promptsListChanged: true, resourceSubscriptions: ['resource://guide'] }
+isMCPConsumerFilter(supported) // true
+isMCPConsumerFilter({ toolsListChanged: true }) // false — the server owns this family
+const input: unknown = { promptsListChanged: true, resourcesListChanged: true }
+if (!isMCPSubscriptionFilter(input)) throw new Error('invalid filter')
+const honoured = buildSubscriptionFilter(input, supported)
+const event: JSONRPCNotification = { jsonrpc: '2.0', method: 'notifications/prompts/list_changed' }
+matchesSubscriptionNotification(event, honoured) // true
+stampSubscriptionNotification(event, 'listen-1') // every delivery carries the reserved id
+buildSubscriptionAcknowledgement(honoured, 'listen-1') // the first id-carrying message
+buildSubscriptionResult('listen-1', identity) // the final complete response
+
+async function* changes() {
+	yield event
+}
+
+const server = createMCPServer({
+	identity,
+	tools: createToolManager(),
+	subscription: {
+		notifications: supported,
+		producer: (_notifications, options) => {
+			options.signal.throwIfAborted()
+			return changes()
+		},
+	},
+})
+server.methods.method('subscriptions/listen') // registered on the same modern seam
+```
+
+**`taskIds` carries the stable Tasks extension's transitions down this same stream.** A
+`notifications/tasks` frame reaches the built-in through the ordinary `subscription.producer`
+every other family travels through, and the built-in admits it, filters it against
+the agreed identifiers, and stamps it with the subscription id. The server honours the member
+only when a consumer configured both `task` and `subscription`: the manager is what resolves
+an identifier and the producer is what a transition arrives through, so either one missing
+leaves nothing to deliver and the acknowledgement omits the member. That fact is derived from
+`task` and `subscription` at the moment the listen request is answered; no stored flag records
+it, so it cannot drift from them.
+
+**Each requested identifier is authorized before the acknowledgement agrees to it.** The
+server resolves every one through `MCPTaskManagerInterface.task(id, options)`, carrying the
+same per-request options the rest of the dispatch carries, and acknowledges the identifiers
+that resolved — in request order, duplicates intact, nothing normalized. An identifier the
+read does not resolve is omitted with no distinguishing signal: unknown, purged, and
+not-this-caller's produce byte-identical acknowledgements, because the port collapses each of
+them into one `undefined` and an acknowledgement that separated them would publish a
+difference the port refused to publish. When nothing resolves, the member is omitted entirely
+rather than acknowledged as an empty array. A `taskIds` that is not an array of strings never
+reaches the read at all — the filter guard refuses the request with `-32602` first.
+
+**The agreed set is fixed for the subscription's lifetime.** Those reads happen once, at
+acknowledgement, and delivery performs none: a per-frame read would put the consumer's durable
+store on the hot path of every transition and re-decide, at delivery time, what the
+acknowledgement already decided. Revoking access mid-stream is therefore the producer's to
+enforce, because the producer holds the caller context and the store. A frame naming an
+identifier outside the agreed set is dropped, and so is one whose params do not hold together
+as a task snapshot — `isMCPTaskNotification` gates the branch before the agreed set is read.
+
+**Delivery is claimed from the producer onward, and no replay is claimed.** The extension
+calls task notifications optional, so this package states what it delivers and what it does
+not: every frame the producer yields that passes the filter is stamped and written to this
+stream, in producer order. A transition emitted before this subscription existed is not
+resent, so a client that needs the state it missed reads it with `tasks/get`.
+
+#### Filter task notifications
+
+The helpers behind that path are `buildSubscriptionFilter` and
+`matchesSubscriptionNotification`, the ones the other families use, with `enabled` supplied:
+
+```ts
+import {
+	type JSONRPCNotification,
+	buildSubscriptionFilter,
+	isMCPTaskNotification,
+	matchesSubscriptionNotification,
+} from '@orkestrel/mcp'
+
+const asked = { taskIds: ['task-alpha', 'task-beta', 'task-alpha'] }
+// The `enabled` parameter is the derived support fact. `false` drops the member before the
+// acknowledgement can name it; `true` carries the request through unresolved.
+buildSubscriptionFilter(asked, {}, false) // {}
+const agreed = buildSubscriptionFilter(asked, {}, true)
+agreed.taskIds // ['task-alpha', 'task-beta', 'task-alpha'] — request order, duplicates intact
+
+const frame: JSONRPCNotification = {
+	jsonrpc: '2.0',
+	method: 'notifications/tasks',
+	params: {
+		taskId: 'task-alpha',
+		status: 'working',
+		createdAt: '2026-07-28T09:00:00Z',
+		lastUpdatedAt: '2026-07-28T09:00:01Z',
+		ttlMs: null,
+	},
+}
+isMCPTaskNotification(frame) // true
+matchesSubscriptionNotification(frame, agreed) // true
+
+const other = { ...frame, params: { ...frame.params, taskId: 'task-gamma' } }
+matchesSubscriptionNotification(other, agreed) // false — outside the agreed set
+const partial = { ...frame, params: { taskId: 'task-alpha' } }
+matchesSubscriptionNotification(partial, agreed) // false — not a whole snapshot
+```
+
+### Consume a subscription from a client
+
+`client.listen(notifications, options)` opens one `subscriptions/listen` stream and returns an
+`MCPSubscriptionStream` — an `AsyncGenerator` whose yields are notifications and whose return
+value is the graceful `MCPSubscriptionResult`. Pass `undefined` for the filter to ask for the
+server's whole honoured set; the client sends `params.notifications: {}`, which is the member the
+server requires and the empty object the filter guard accepts. The generator writes nothing until
+the first read, so a signal already aborted rejects that read without sending a request at all.
+
+**The acknowledgement is the first yield, and the terminal is the return value.** Every frame the
+server stamps with this subscription's id arrives as an owned snapshot, in wire order, starting
+with `notifications/subscriptions/acknowledged`. The graceful close is a correlated JSON-RPC
+result rather than a notification, so it reaches you as the generator's return value and never as
+a yield. A `for await` loop discards that value by construction — drive `next()` and read `done`
+where the closure result matters.
+
+**`options.signal` is required because the subscription is yours to end.** A subscription has no
+request timeout: the only closures are an abort, an iterator `return()`, the peer completing, and
+the connection failing. A consumer that drops the stream without either handle remains its owner —
+the registration stays live, and no timer reclaims it, because this package has no lifetime to
+hang one on. `disconnect()` and transport loss reject every active subscription, which is the
+other end of the same obligation.
+
+**`options.capacity` bounds what the client retains while nobody reads.** It defaults to
+`DEFAULT_MCP_SUBSCRIPTION_CAPACITY` (`64`), and a frame arriving at a full queue fails the
+subscription loudly with `MCPError` `-32603` rather than dropping the frame or growing without
+bound. That is a client-side bound, not transport backpressure — see
+[Declared conformance gaps](#declared-conformance-gaps) for what a duplex carrier delivers
+incrementally and what an HTTP one does not.
+
+A `capacity` that is not a positive integer is refused: the client throws `MCPError` `-32602`.
+The refusal lands on the first read, because the body is a generator and nothing in it runs
+until then, and it lands before the request is built or written — so the transport carries no
+`subscriptions/listen` frame for a subscription refused this way.
+
+**Ask for task transitions by naming them in `taskIds`.** The client sends the identifiers you
+pass, and the acknowledgement's `params.notifications` reports the set the server agreed to:
+the identifiers its store resolved, in the order you asked, with a duplicate kept and a refused
+identifier absent. Read that set rather than the one you sent — an identifier missing from it
+is one this stream will never deliver, and the acknowledgement says nothing about why.
+Every delivered frame carries the reserved subscription stamp under `_meta`, so a
+`notifications/tasks` frame the server stamped for this subscription arrives on this stream
+rather than on the client's `notification` event.
+
+The following example opens a subscription, drives it to its graceful terminal, and closes it:
+
+```ts
+import {
+	type MCPSubscriptionResult,
+	createMCPClient,
+	isMCPSubscriptionResult,
+} from '@orkestrel/mcp'
+
+const client = createMCPClient({ transport })
+await client.connect()
+
+const subscription = new AbortController()
+const stream = client.listen(
+	{ promptsListChanged: true, resourceSubscriptions: ['resource://guide'] },
+	{ signal: subscription.signal, capacity: 16 },
+)
+
+const opened = await stream.next()
+opened.done // false — the acknowledgement is a yield
+// The yield arm carries the notification; narrow on `done` before reading its member.
+if (opened.done === false) opened.value.method // 'notifications/subscriptions/acknowledged'
+
+let closure: MCPSubscriptionResult | undefined
+for (;;) {
+	const frame = await stream.next()
+	if (frame.done === true) {
+		closure = frame.value // the validated graceful terminal
+		break
+	}
+	frame.value.method // one owned notification, stamped with this subscription's id
+}
+closure?.resultType // 'complete'
+// The total guard the client proves the terminal with, re-applicable to any value you hold —
+// `stream.return(value)` takes one of these, so build it and prove it the same way.
+isMCPSubscriptionResult(closure) // true
+
+// Either handle closes the subscription and writes `notifications/cancelled` on a duplex
+// carrier. Abandoning the stream with neither leaves the registration live.
+subscription.abort()
+```
+
+### Execute rich results and request-scoped progress
+
+`MCPServerOptions.execution` is the explicit modern execution port over the live
+`ToolManagerInterface`. Its input contains the original `request`, canonical `call`,
+real `tools` manager, effective `signal`, optional `caller`, and an optional `progress` reporter.
+The default path calls `tools.execute(call, { signal, caller })`; caller identity is omitted
+when absent and never placed on the JSON call envelope. A delegating handler calls
+`tools.execute(context.call, { signal: context.signal, ...(context.caller === undefined ? {} : { caller: context.caller }) })`.
+A tool handler observes `context.signal` to stop work when its request is cancelled. Returning
+a `ToolResult` uses the normal text/structured normalization; returning a validated
+`MCPCallResult` preserves exact text, image, audio, resource-link, and embedded-resource
+content without guessing from an ordinary domain value.
+
+**A returned `MCPCallResult` reaches the wire unstamped, and that is a declared departure.**
+The normalization path builds its answer through `buildModernResult`, which stamps the
+`io.modelcontextprotocol/serverInfo` identity into `_meta`. A handler that returns a complete
+`MCPCallResult` instead is taken at its word: the server bounds it, re-proves its shape, and
+sends what the handler composed, so nothing adds the identity the other path adds. The dated
+revision says a server `SHOULD` carry its identity in a result's `_meta`, and this is the one
+result shape that does not. **What it costs:** a peer reading `serverInfo` off a `tools/call`
+result finds it on every normalized result and on no custom-execution one, so a consumer using
+`execution` for rich content stamps the key itself — through `buildModernResult`, which is
+exported for exactly this — wherever that peer matters. **Why it is not fixed here:** stamping
+the key onto a handler's own result would edit a result the handler declared complete, and the
+`_meta` it composed is the handler's. **Closer:** a consumer's own
+`buildModernResult(result, identity)` call inside the handler.
+
+Modern `tools/call` treats an omitted `arguments` field as the shared frozen
+`EMPTY_MCP_ARGUMENTS` record. A present value must be an object; `null`, arrays, primitives,
+and a direct-call own `undefined` receive `-32602` before input policy, continuation access,
+digesting, or execution. Whichever it is, one reference then reaches the argument digest,
+the input selector, the canonical `ToolCall`, and the executor — no step re-snapshots, so no
+step can be looking at a different value from another.
+
+That record is shared and frozen, which is worth knowing before it surprises you: a tool
+that writes to its own `arguments` now throws, and because the registry isolates a thrown tool
+into a `success: false` result, the client sees an ordinary `isError: true` tool result with
+no protocol change to point at. Refusing a mutation of server-owned input is a tool-domain
+failure rather than a protocol fault, so that is where it is reported. A tool that needs a
+mutable bag copies first: `const working = { ...args }`.
+
+The reporter exists only when `_meta.progressToken` is a string or integer.
+`report` requires a bounded payload with finite, strictly increasing values and awaits
+consumption by the original `tools/call` response stream. The source holds one item,
+stops on completion, abort, or generator return, rejects late reports, and never enters
+replay or durable state.
+A server without `execution` still calls `ToolManagerInterface.execute` exactly once and
+may answer unary even when a token was supplied.
+
+#### Stream rich results and progress
+
+**Completion, a consumer `return(value)`, and `stop()` or an abort all end the exchange, and
+only completion reaches the wire.** Running the source to completion
+produces exactly one terminal — the response the stream returns, and every later read
+resolves that same response. A consumer that calls `return(value)` is saying it already has
+the answer, so the exchange closes on the value it supplied: that read and every later one
+resolve `{ done: true, value }`, and nothing is sent, because the peer is not owed a terminal
+the server never produced. An owner that calls `stop()` and an external abort produce no
+terminal at all — those reads settle by raising the reason, because a cancelled request has
+no answer to correlate. Cancellation is prompt in every case — the consumer's read settles even while
+the producer is parked — and the request's signal goes down before cleanup is delegated,
+so an executor observing it stops, the reporter stops with it, and a late `report`
+rejects. A request whose caller has already gone never starts its producer at all: the
+first read is refused, so no execution runs for a peer that will not receive it.
+
+```ts
+import {
+	createMCPServer,
+	MCP_META_CAPABILITIES,
+	MCP_META_VERSION,
+	MCP_MODERN_VERSION,
+} from '@orkestrel/mcp'
+import { createToolManager } from '@orkestrel/tool'
+
+const server = createMCPServer({
+	identity: { name: 'media', version: '1.0.0' },
+	tools: createToolManager(),
+	execution: async ({ progress }) => {
+		await progress?.report({ progress: 1, total: 2, message: 'Rendering' })
+		return {
+			resultType: 'complete',
+			content: [
+				{ type: 'text', text: 'Preview' },
+				{ type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' },
+			],
+			structuredContent: ['preview', 1],
+		}
+	},
+})
+
+const response = await server.dispatch({
+	jsonrpc: '2.0',
+	id: 1,
+	method: 'tools/call',
+	params: {
+		name: 'render',
+		arguments: {},
+		_meta: {
+			[MCP_META_VERSION]: MCP_MODERN_VERSION,
+			[MCP_META_CAPABILITIES]: {},
+			progressToken: 'render-1',
+		},
+	},
+})
+
+if (response !== undefined && Symbol.asyncIterator in response) await response.next()
+```
+
+#### Validate rich result boundaries
+
+The exported boundary helpers validate the same wire model and derive stable argument
+bindings without a second JSON implementation:
+
+```ts
+import {
+	buildProgressNotification,
+	buildToolCall,
+	digestJSON,
+	isJSONObject,
+	isMCPAnnotations,
+	isMCPBlobResource,
+	isMCPCallResult,
+	isMCPClientCapabilities,
+	isMCPContent,
+	isMCPIcon,
+	isMCPIdentity,
+	isMCPLoggingLevel,
+	isMCPMetaKey,
+	isMCPMetaObject,
+	isMCPProgress,
+	isMCPResultMetaObject,
+	isMCPServerCapabilities,
+	isMCPTextResource,
+	isStandardBase64,
+	isAbsoluteURI,
+	isRFC3339Date,
+	isRFC3339DateTime,
+	serializeJSON,
+} from '@orkestrel/mcp'
+
+const limits = { bytes: 4096, keys: 64, depth: 16 }
+const parameters = { prompt: 'owl' }
+const call = buildToolCall({
+	jsonrpc: '2.0',
+	id: 1,
+	method: 'tools/call',
+	params: { name: 'render', arguments: parameters },
+})
+const canonical = serializeJSON(parameters, limits)
+const digest = await digestJSON(parameters, limits)
+const notification = buildProgressNotification('render-1', { progress: 1, total: 2 })
+
+isJSONObject({ prompt: 'owl', attempts: [1, 2] })
+isMCPMetaKey('vendor.example/trace')
+isMCPLoggingLevel('notice')
+isMCPAnnotations({ audience: ['assistant'], priority: 1 })
+isMCPIcon({ src: 'data:image/png;base64,aWNvbg==' })
+isMCPTextResource({ uri: 'resource://text', text: 'body' })
+isMCPBlobResource({ uri: 'resource://blob', blob: 'YmxvYg==' })
+isMCPContent({ type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' })
+isMCPCallResult({ resultType: 'complete', content: [{ type: 'text', text: 'done' }] })
+isMCPProgress({ progress: 1, total: 2, message: 'Rendering' })
+isMCPMetaObject({ 'vendor.example/trace': { id: 'trace-1' } })
+isMCPResultMetaObject({
+	'io.modelcontextprotocol/serverInfo': { name: 'worker', version: '1.0.0' },
+})
+isMCPIdentity({ name: 'worker', version: '1.0.0', websiteUrl: 'https://example.test' })
+isMCPClientCapabilities({ elicitation: {}, custom: { enabled: true } })
+isMCPServerCapabilities({ tools: { listChanged: true }, custom: { enabled: true } })
+isStandardBase64('aW1hZ2U=')
+isAbsoluteURI('urn:example:images:preview')
+isRFC3339Date('2024-02-29') // true — a leap day that exists
+isRFC3339DateTime('2026-02-30T00:00:00Z') // false — February never has 30 days
+```
+
+`isAbsoluteURI` implements host-neutral RFC 3986 syntax rather than delegating to WHATWG
+`URL`: non-hierarchical schemes, IPv6/IPvFuture literals, percent escapes, and permitted empty
+components validate without normalization or scheme policy. Relative references, raw whitespace
+or controls, malformed escapes, ports, authorities, and malformed bracketed IP literals do not.
+An unbracketed digit-and-dot host that is not an RFC IPv4 address remains a legal `reg-name`, and
+an authority may have an empty host.
+
+`isRFC3339Date` and `isRFC3339DateTime` are the `date` / `date-time` elicitation formats, and
+they check the calendar, not the shape alone: RFC 3339 §5.6 defines `date-mday` by the month and
+year, so `2026-02-30`, `2026-04-31`, and `2025-02-29` are refused even though every field is in
+range. Neither guard constructs a `Date` — `Date` is what rolls `2026-02-30` silently onto 2
+March, which is the acceptance they exist to prevent — so a non-RFC-3339 spelling of a real
+instant (`2026-01-31 10:00:00Z`, or an offset-less `2026-01-31T10:00:00`) stays refused too.
+
+Rich-content guards
+require exact finite JSON metadata, standard padded base64, nonnegative integer resource sizes,
+and accept an embedded resource that satisfies both the text and blob alternatives.
+
+`serializeJSON` is the exact JSON boundary: it snapshots enumerable data descriptors once,
+rejects accessors, symbols, hidden or extra properties, sparse arrays, cycles, and non-finite
+numbers, counts array indices as keys, and enforces actual UTF-8 wire bytes before producing the
+canonical string. Shared acyclic subgraphs remain valid. `isBoundedJSON` delegates to that same
+engine, so validation and serialization cannot disagree. `parseJSONRPCMessage` builds one frozen,
+bounded owned graph from that canonical text before routing, settlement, or notification delivery;
+`parseRequestContext` projects frozen capabilities and identity from the owned request.
+
+### Ask the client for input during the call in hand
+
+Configure `input` only when a `tools/call` may need something from the client before it can
+finish. The consumer composes each round — its own keys, and any mixture of the
+`elicitation/create`, `sampling/createMessage`, and `roots/list` kinds — and supplies the
+authenticated principal, the host-neutral continuation port, and the TTL. MCP owns the
+protective half: it refuses a round the client's declared capabilities exclude, seals the
+opaque `requestState`, and on retry opens and verifies that state and checks every answer
+against the question filed under its own key before handing the round's answers back to the
+hook. Returning `undefined` from the hook continues into the ordinary live tool registry.
+
+The keys are yours because they are how your own policy correlates each answer. A round asking
+nothing is refused, because it would seal state no retry could ever satisfy.
+
+`MCPInputOptions.clock` supplies epoch milliseconds for every continuation expiry read.
+It defaults to `Date.now`. Supply a clock beside `continuation` when the host owns the time
+source; tests can advance that clock during a provider call without replacing the host clock.
+
+**`createMCPContinuation` is what protects the `requestState` echo, and it is required.**
+`MCPInputOptions.continuation` has no default: the carrier travels through a client that may
+have rewritten it, so the integrity of every binding inside it — principal, expiry, original id,
+revision, method, tool name, argument digest, and the issued round — rests entirely on that
+port. `createMCPContinuation(secret)` is the shipped implementation, adapting `@orkestrel/server`'s
+`signToken` / `verifyToken` to the port: `seal` signs the canonical state string and `open`
+verifies it, returning `undefined` for anything it cannot verify, which is what turns a tampered
+carrier into `-32602`. Pass `[current, ...older]` to rotate a secret without invalidating state
+already in flight — a carrier sealed under a listed older secret still opens, while a new one
+seals under the current. Core supplies no signer of its own, and a consumer substituting its own
+port takes that integrity property with it: a port whose `open` returns whatever it was given
+makes every binding a client-supplied claim.
+
+#### Issue a server-side input round
+
+The order the server runs those steps in is itself a contract, because each step is a
+provider call somebody pays for. On a first round: the selector runs, its round is owned and
+frozen immediately, the round is measured against the client's declared capabilities, and only
+then is the principal resolved and the state sealed — so a client whose round this server may
+not send costs no principal lookup and no audit record. On a retry: every structural binding —
+changed id, expiry, version, method, tool name, argument digest, every issued key, and each
+answer against the request that asked for it — is verified before the principal resolver runs
+at all. The capability gate does not stand at the retry's ingress, because a retry answers a
+round this server already gated; what it measures there is the next round, so it runs after the
+selector answers and before that round is sealed.
+
+```ts
+import {
+	computeMissingCapabilities,
+	createMCPServer,
+	isElicitContent,
+	isMCPElicitFieldSchema,
+	isMCPElicitForm,
+	isMCPElicitRequest,
+	isMCPElicitResult,
+	isMCPElicitSchema,
+	isMCPElicitURL,
+	isMCPInputRequest,
+	isMCPInputRequestMap,
+	isMCPInputResponse,
+	isMCPInputResult,
+	isMCPRoot,
+	isMCPRootResult,
+	isMCPSampleContent,
+	isMCPSampleResult,
+	supportsFormElicitation,
+} from '@orkestrel/mcp'
+import { createMCPContinuation } from '@orkestrel/mcp/server'
+import { createTool, createToolManager } from '@orkestrel/tool'
+
+const tools = createToolManager()
+tools.add(createTool({ name: 'reply', execute: (input) => input }))
+
+const server = createMCPServer({
+	identity: { name: 'supervisor', version: '1.0.0' },
+	tools,
+	input: {
+		continuation: createMCPContinuation(['current-secret', 'older-secret']),
+		ttl: 60_000,
+		principal: () => 'authenticated-user-42',
+		selector: ({ responses }) =>
+			responses === undefined
+				? {
+						requests: {
+							approval: {
+								method: 'elicitation/create',
+								params: {
+									message: 'Approve this reply?',
+									requestedSchema: {
+										type: 'object',
+										properties: { approved: { type: 'boolean' } },
+										required: ['approved'],
+									},
+								},
+							},
+							workspace: { method: 'roots/list', params: {} },
+						},
+						state: { operation: 'run-42' },
+					}
+				: undefined,
+	},
+})
+
+supportsFormElicitation({ elicitation: {} }) // true: empty means form-only
+supportsFormElicitation({ elicitation: { url: {} } }) // false
+computeMissingCapabilities({ workspace: { method: 'roots/list' } }, {}) // { roots: {} }
+computeMissingCapabilities({ workspace: { method: 'roots/list' } }, { roots: {} }) // undefined
+computeMissingCapabilities(
+	{
+		login: {
+			method: 'elicitation/create',
+			params: { mode: 'url', message: 'Sign in', url: 'https://example.test' },
+		},
+	},
+	{ elicitation: {} },
+) // { elicitation: { url: {} } }: the arm the round needs, not the one already declared
+isMCPElicitFieldSchema({ type: 'string', format: 'email' }) // true: one field's schema
+isMCPElicitSchema({ type: 'object', properties: { approved: { type: 'boolean' } } }) // true
+isMCPElicitForm({
+	message: 'Approve?',
+	requestedSchema: { type: 'object', properties: {} },
+}) // true
+isMCPElicitURL({ mode: 'url', message: 'Authenticate', url: 'https://example.test' })
+isMCPElicitRequest({
+	method: 'elicitation/create',
+	params: { message: 'Approve?', requestedSchema: { type: 'object', properties: {} } },
+}) // true
+isMCPInputRequest({ method: 'roots/list' }) // true: a roots request composes into a round
+isMCPInputRequestMap({ confirm: { method: 'roots/list' } }) // true: a keyed map, not an array
+isMCPElicitResult({ action: 'accept', content: { approved: true } }) // true
+isMCPRoot({ uri: 'file:///workspace', name: 'workspace' }) // true
+isMCPRootResult({ roots: [{ uri: 'file:///workspace' }] }) // true
+isMCPSampleContent({ type: 'text', text: 'Paris' }) // true
+isMCPSampleContent({ type: 'tool_use', id: 'c1', name: 'lookup', input: {} }) // true
+isMCPSampleResult({
+	role: 'assistant',
+	content: { type: 'text', text: 'Paris' },
+	model: 'a-model',
+}) // true
+isMCPSampleResult({
+	role: 'assistant',
+	content: [{ type: 'text', text: 'Paris' }],
+	model: 'a-model',
+}) // true: the schema's `content` is one block OR an array of them
+isMCPInputResponse({ roots: [] }, { method: 'roots/list' }) // true
+isMCPInputResponse({ action: 'accept' }, { method: 'roots/list' }) // false: wrong kind
+isElicitContent(
+	{ approved: true },
+	{ type: 'object', properties: { approved: { type: 'boolean' } } },
+) // true
+isElicitContent(
+	{ approved: 'yes' },
+	{ type: 'object', properties: { approved: { type: 'boolean' } } },
+) // false
+isMCPInputResult({ resultType: 'input_required', requestState: 'opaque' }) // true
+
+server.methods.method('tools/call') // the MRTR-aware built-in remains on the one method seam
+```
+
+Numeric elicitation bounds and defaults are finite; a dated `integer` schema still permits a
+fractional numeric default because that is its declared TypeScript shape. Length and item-count
+bounds are nonnegative integers and inverted annotations are not rejected. String `enum`,
+`enumNames`, and `oneOf` selectors, and array `enum` / `anyOf` selectors, validate independently
+when present and may coexist with extension fields; selector ordering, membership, and parallel
+array lengths are not application policy at this protocol boundary. An accepted response may omit
+content by shape — `isMCPElicitResult` allows it — while the server additionally enforces the
+issued schema through `isElicitContent`, so an accepted response omitting a `required` field is
+refused on the retry even though its shape is legal. Decline and cancel responses must omit
+content and are never checked against the schema. Accepted response numbers may be fractional
+but never non-finite, and response arrays contain strings only. URL-mode requests use the same
+RFC 3986 URI guard.
+
+**URL-mode elicitation is a composable arm, and it needs its own declaration.** A round may
+carry `{ mode: 'url', message, url }` under one of its keys, beside a form request, a sampling
+request, or a roots request under the others. The client must declare `elicitation.url` as a
+record to receive one: this package reads the bare `elicitation: {}` spelling as form-only, so
+a URL round against that declaration is refused `-32021` with
+`{ elicitation: { url: {} } }` naming the arm to declare. `url` carries the schema's
+`format: uri` and must be absolute. The URL arm issues no schema, so an answer to it is
+checked for its response shape alone and never against a `requestedSchema` — which is the one
+place a URL request and a form request are enforced differently on the retry.
+
+The retry uses a new JSON-RPC id and preserves the original `name` /
+`arguments`; `inputResponses` and the `requestState` the server issued, returned unchanged,
+are top-level `params` siblings. Extra `inputResponses` keys are ignored — the server reads
+exactly the keys it issued — while omitting any issued key is still a refusal. A round asking
+for a kind the client did not declare receives `-32021` with a `requiredCapabilities` record
+naming each missing capability: `sampling` for `sampling/createMessage`, `roots` for
+`roots/list`, and `elicitation` for an elicitation the declaration does not authorize. That
+`elicitation` value names the arm the round needs, so the client can act on it: a missing URL
+arm answers `{ url: {} }`, a missing form arm answers the empty record this package reads as
+form-only, and a round needing both answers `{ form: {}, url: {} }`. A request whose modern
+`_meta` cannot be parsed at all is a different failure and receives `-32602` with
+`malformed modern request metadata` — the answer `MCPServer` gives it at the ingress, before
+any handler runs, and the same answer both MRTR doors give it. An empty capability
+declaration is not that case: it parses, it excludes every kind, and it is gated `-32021`. A
+malformed, mutated, expired, same-id, cross-principal, cross-version, cross-method,
+cross-tool, changed-argument, unanswered-key, or kind-violating state receives `-32602` before
+tool execution. A continuation or policy provider rejection is infrastructure failure and
+receives detail-free `-32603`, with the caught value on the server's `error` event — as does
+a port that opens successfully onto a payload this server never authored, or onto one
+outside the state bound, because the client wrote neither and cannot act on being told it
+was at fault. A carrier the port cannot recover, and an invalid resolved principal, round, or
+carrier, remain `-32602`. Recovered state is bounded before parsing.
+
+#### Answer an input round from the client
+
+Place the retry through the `input` group on `MCPCallOptions`. `responses` is required and
+`state` is optional: a peer may issue a round with no `requestState` to return, and SEP-2322
+requires the retry to answer that round while omitting the parameter, so the client sends
+`requestState` exactly when a caller supplies one. `MCPServer` itself seals a carrier on
+every round it issues, so a retry reaching this server without one is refused `-32602`. Pass
+the same tool name and byte-identical `arguments` that the first call used; changing the
+arguments invalidates the protected state. The following client-side exchange reuses the
+same `callArguments` value and answers every key the round published:
+
+```ts
+import type { MCPClientInterface } from '@orkestrel/mcp'
+
+declare const client: MCPClientInterface
+
+const callArguments = { value: 'unchanged' }
+const pending = await client.call('reply', callArguments)
+
+if (
+	pending.resultType !== 'input_required' ||
+	pending.requestState === undefined ||
+	pending.inputRequests === undefined
+) {
+	throw new Error('Expected input requests and protected state')
+}
+// The server publishes its own keys, so answer each one by the kind its request names.
+await client.call('reply', callArguments, {
+	input: {
+		state: pending.requestState,
+		responses: {
+			approval: { action: 'accept', content: { approved: true } },
+			workspace: { roots: [{ uri: 'file:///workspace', name: 'workspace' }] },
+		},
+	},
+})
+```
+
+`client.tasks.update` is a different route and does not reach this arm. It answers the input
+requests a durable task published — the `'task'` arm of `MCPCallOutcome`, reached through the
+`tasks/*` methods — while the retry here answers an inline `resultType: 'input_required'` and
+travels as another `tools/call`.
+
+**What the protected state binds, and for how long.** The carrier is opaque to the client:
+it carries an authenticated principal, an absolute expiry, the original first-round request
+id, the protocol revision, the method, the exact round that was issued, the tool name, a
+canonical SHA-256 argument digest, and any application state the selector attached. The
+round travels inside that payload, so its size is spent from `limit.state` (16384 bytes by
+default) along with every other binding: a large mixed round, or a large form schema, is
+refused at the seal with `-32602` rather than truncated, so size a round deliberately or
+raise `limit.state`. Expiry is a short absolute deadline set from the consumer's `ttl`, and
+it is rechecked around every
+provider await rather than admitted once: after the selector answers, and around the seal that
+a further round performs. The issued round is not merely carried — `isMCPInputResponse`
+enforces each answer against the request filed under its own key, and a form request's schema
+through `isElicitContent`, so a client answering a question other than the one it was asked is
+refused before the tool runs. Across rounds, `principal`, the original id, version, method,
+tool name, and digest stay bound while the round and its expiry are re-minted; the original id
+stays bound however many rounds follow, so a three-round exchange is still one correlated call.
+
+**What it deliberately does not do.** There is no consume-once rule, no session binding, no
+timer, and no replay store: the same protected state answers again under a fresh id, and it
+is exhausted by its expiry alone. Single use is application policy — a continuation port that
+must be redeemable once enforces that itself, which is exactly why the port is a consumer
+interface. Nothing about the mechanism is session-bound either: the carrier travels in
+`params` and works across connections, processes, and transports. JSON-RPC ids are
+correlation only, so an application operation that must not run twice still needs its own
+idempotency key; a retried call whose bindings all match runs the tool again.
+
+The continuation port may be a self-contained token adapter or a consumer-supplied durable
+server-side handle. The built-in modern `tools/call` is the only handler that produces
+`input_required` from this policy; `prompts/get` and `resources/read` forward one their own
+manager authored, and the legacy branch is unchanged. A forwarded round is this server's
+wire too, so it meets the same capability gate before it is stamped and sent: the rule binds
+every issuer, not one method. Core does not refuse
+a continuation carrier on another method: it owns the carrier's shape, bounds, and ownership
+for every invocation — a malformed one never reaches a handler — and the continuation
+semantics belong to whoever registered that method. Register `prompts/get` or
+`resources/read` on `server.methods` and the handler receives its owned frozen carrier and
+decides what it means; leave them unregistered, as this package ships them, and they still
+answer `-32601`.
+
+### Defer a call to a durable task
+
+The Tasks extension is the stable, immutable snapshot dated 2026-07-28, extension id
+`io.modelcontextprotocol/tasks`, generated schema id
+`https://modelcontextprotocol.io/ext-tasks/2026-07-28/schema.json`. That snapshot is fixed,
+so every type, wire field, and error code in this section is written against it, and a later
+revision arrives as its own dated snapshot rather than as a change to this one.
+
+A **task** is a durable operation that outlives the request that created it. The server
+answers a modern `tools/call` immediately with `resultType: 'task'` and a `taskId`, and the
+client comes back later for the outcome. Everything between the answer and the outcome belongs
+to the
+consumer: supply an `MCPTaskOptions` with a durable `tasks` store and a `deferral` policy, and
+this package supplies the protocol and nothing else. It holds **no task state, no timer, and
+no status logic**, because a durable operation outlives the process that answered the request
+and MCP has no durable place to keep one.
+
+**Deferral is the server's decision.** The extension gives a client no flag and no parameter
+to ask for a task — a client only declares, per request, that it can cope with one. So
+`deferral` is where the policy lives (long-running tool, queue depth, caller tier), it is
+consulted only for a client that declared the capability on the request in hand, and it
+returns the **stable operation key** the store deduplicates on, or `undefined` to run the
+call inline. The decision sits between the input mechanism and progress: **MRTR first**,
+because a call still asking its operator a question has not been decided yet and must not be
+durably stored with unsettled arguments; **task before progress**, because a deferred request
+ends the moment the handle is written and has no stream left to report progress on.
+
+`MCPTaskContext` carries **no cancellation signal**, and that absence is the sharpest hazard
+in this surface. The `signal` on the accompanying `MCPMethodOptions` is the
+request's lifetime, and a transport aborts it as soon as the response body is flushed. A
+manager that plumbs `options.signal` into the task's work therefore loses every task it
+creates, milliseconds after creating it, and the loss looks exactly like a client that
+disconnected. Spend `options.signal` on work that must finish before the answer is written,
+and give the task's own work a lifetime the manager owns.
+
+```ts
+import {
+	createMCPServer,
+	DEFAULT_MCP_LIMITS,
+	digestJSON,
+	isJSONRPCError,
+	isMCPTaskDetail,
+	isMCPTaskResult,
+	isMCPTaskStatus,
+	MCP_EXTENSION_TASKS,
+	supportsTask,
+} from '@orkestrel/mcp'
+import { createTool, createToolManager } from '@orkestrel/tool'
+
+const tools = createToolManager()
+tools.add(createTool({ name: 'render', execute: (input) => input }))
+
+const server = createMCPServer({
+	identity: { name: 'supervisor', version: '1.0.0' },
+	tools,
+	task: {
+		// The consumer's durable store: create/return, read, answer, ask to stop.
+		tasks: {
+			start: (key, context, options) => store.start(key, context, options),
+			task: (id, options) => store.task(id, options),
+			update: (id, responses, options) => store.update(id, responses, options),
+			abort: (id, options) => store.abort(id, options),
+		},
+		// The stable operation key, or `undefined` to run this call inline. Minted from the
+		// PRINCIPAL and the canonical arguments — never from `call.id`.
+		deferral: async ({ call }, { caller }) =>
+			call.name === 'render'
+				? `render:${String(caller)}:${String(await digestJSON(call.arguments, DEFAULT_MCP_LIMITS))}`
+				: undefined,
+	},
+})
+
+supportsTask({ extensions: { [MCP_EXTENSION_TASKS]: {} } }) // true: presence is the declaration
+isMCPTaskStatus('working') // true; 'done' is not a state the extension defines
+isMCPTaskResult({
+	resultType: 'task',
+	taskId: 'a',
+	status: 'working',
+	createdAt: '',
+	lastUpdatedAt: '',
+	ttlMs: null,
+}) // true: the CREATION answer
+isMCPTaskDetail({
+	taskId: 'a',
+	status: 'completed',
+	createdAt: '',
+	lastUpdatedAt: '',
+	ttlMs: null,
+	result: { resultType: 'complete' },
+}) // true: the SNAPSHOT, whose status selects what else it owes
+isJSONRPCError({ code: -32603, message: 'the deferred call could not run' }) // a failed task's error
+
+server.methods.method('tasks/get') // registered only because `task` was configured
+```
+
+**Never mint the key from `call.id`.** It is the client's own JSON-RPC request id, so it fails
+both key obligations at once: a client that retries one logical call sends a fresh id and mints
+a second durable task, which is dedup never firing; and two principals whose clients both start
+counting at `1` produce the same key, which is one principal handed a `taskId` over the other's
+work. Mint from the caller and the canonical arguments. `deferral` returning `undefined`
+is the only way to say "run this inline"; an empty string cannot identify an operation and is
+refused as `-32603` rather than quietly taking the inline path.
+
+**The lifecycle methods register only when `task` is configured.** An unconfigured
+server advertises nothing, defers nothing, and answers `tasks/get` / `tasks/update` /
+`tasks/cancel` with `-32601` through the same unregistered-method path any unknown method
+takes — the honest reply from a server that does not implement an optional extension.
+Configured, it advertises `capabilities.extensions['io.modelcontextprotocol/tasks']` on
+`server/discover` and answers each of them.
+
+| Method         | Params                       | Answers                                                                                                |
+| -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `tasks/get`    | `{ taskId }`                 | The flat `MCPTaskDetailResult` — the snapshot under `resultType: 'complete'`, plus the server identity |
+| `tasks/update` | `{ taskId, inputResponses }` | `resultType: 'complete'` and nothing else                                                              |
+| `tasks/cancel` | `{ taskId }`                 | `resultType: 'complete'` and nothing else                                                              |
+
+Only the creation answer carries `resultType: 'task'`. Reading, answering, and cancelling a
+task are ordinary completed method calls, and `tasks/get`'s payload merely happens to be a
+task — so a client narrows on `status`, never on a second discriminator.
+
+**The refusal taxonomy is short and deliberate.** A client that never declared the extension
+on the request in hand gets `-32021` with
+`{ requiredCapabilities: { extensions: { 'io.modelcontextprotocol/tasks': {} } } }` before its
+parameters are read at all, because the extension binds that refusal to the method. This is
+the **same generic missing-required-client-capability code** the elicitation path answers, and
+the tasks and elicitation refusals are told apart by `data.requiredCapabilities` alone — they
+are instances of the same condition rather than distinct conditions, and there is no separate
+numeral. (The extension's own prose examples show
+`-32003`; the dated core schema fixes `-32021`, and a peer implements
+the dated schema.) An absent, non-string, empty, or over-bound `taskId` gets `-32602`. A
+`taskId` the store does not resolve gets `-32602` too — **byte-identically for a task that
+never existed, one whose TTL purged it, and one this caller is not entitled to see**, because
+the port answers `undefined` for each of them and this package cannot tell them apart even in
+principle. That is what makes a `taskId` unprobeable; a second code, or a second message,
+would turn the store into an enumeration oracle.
+
+**`-32603` covers distinct failures, and only one of them reaches `error`.** A store that
+throws is contained as `-32603` with the caught value on the server's `error` event. A store
+that returns badly — a snapshot outside the content bound, or one off the published contract —
+is refused as `-32603` too, but **silently**: nothing was thrown, so there is no caught value
+to report and nothing reaches `error`. A consumer watching `error` to detect a faulty store
+therefore sees its exceptions and is **blind to its contract violations**; watch the `-32603`
+rate on the wire for the contract-violation class. A `deferral` that returns a key which is
+neither `undefined` nor a non-empty string is another `-32603`, and it is silent for the same
+reason.
+Do not generalize from the elicitation path, which discloses the opposite way: a continuation
+port that opens successfully onto an off-contract payload is reported on `error` there, because
+that seam synthesizes the fault it never caught. The tasks port does not.
+
+`tasks/update` and `tasks/cancel` both read the named task first, because both answer `void`
+and neither has a way to report an unknown task or to decide authorization — a read they accept
+is a write they authorized. That read is **proven with the same guard `tasks/get` proves its
+answer with**, not merely compared against `undefined`: `undefined` is one of several ways an
+implementation of this port can say "no such task" — `null` is the ordinary JavaScript spelling
+— and a value that is not a well-formed `MCPTaskDetail` earns the same byte-identical `-32602`
+an unknown `taskId` does, with neither `update` nor `abort` invoked. Expect one `task(...)`
+read before every update and every cancellation. **Cancellation is advisory**:
+this server asks, and the acknowledgement says the request was accepted, never that the task
+stopped — a store whose work cannot be interrupted may legally reach `completed` afterwards,
+and this package asserts nothing about which happened. **Input responses are forwarded
+verbatim**: a key the task never published, and one it has already answered, are the store's
+to ignore rather than this server's to refuse, because which keys a task recognizes is
+knowledge only the task holds. `ttlMs` and `pollIntervalMs` pass through exactly as the store
+produced them and are never invented; `ttlMs` is `null` — not absent — when a task does not
+expire.
+
+**`resultType: 'input_required'` and `MCPTaskStatus` `'input_required'` are different
+mechanisms.** Both are on the wire, so neither can be renamed, and a reader who conflates them will reach for the wrong
+recovery.
+
+|                       | MRTR `resultType: 'input_required'`                           | `MCPTaskStatus` `'input_required'`                  |
+| --------------------- | ------------------------------------------------------------- | --------------------------------------------------- |
+| Who owns it           | MCP, through `MCPServerOptions.input`                         | the consumer's store                                |
+| What is suspended     | one live request                                              | one durable task                                    |
+| Where the state lives | the sealed opaque `requestState` MCP mints                    | wherever the store keeps it                         |
+| How it resumes        | a new `tools/call` carrying `requestState` + `inputResponses` | `tasks/update` carrying `taskId` + `inputResponses` |
+| Guard                 | `isMCPInputResult`                                            | `isMCPTaskStatus` / `isMCPTaskDetail`               |
+
+**And `tasks/update` is the weaker mechanism.** It is a multi-round-trip exchange
+with **none** of the protections the elicitation path carries: no sealed `requestState`, no
+canonical argument digest, no absolute expiry, no principal binding, no schema enforcement on
+the answer. Consumers who have read the elicitation section will reasonably expect parity.
+**They cannot have it from this package**, because MCP neither issued the task's question nor
+owns the channel it is answered on — the store did both. Anything equivalent has to live in
+the store: bind each published key to the principal entitled to answer it, expire unanswered
+keys, and treat a response arriving after the task moved on as stale. Stating that is the only
+protection this package can offer, and a consumer who skips it is running an unauthenticated
+input channel beside an authenticated one.
+
+**The obligations this package cannot enforce, and what each costs.** Every one of them is
+reachable only through a store this package never sees, so each is stated here and on the
+port's own TSDoc rather than defended with coordination machinery — and each is proved by a
+fixture that violates it and demonstrates exactly this consequence.
+
+| Obligation                               | The consequence of violating it                                                                                                                                                                                                                                                         |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Durability before return**             | `start` must resolve only once the task is retrievable by `task`. This package awaits `start` before it builds the answer, which is its whole half; a store that resolves first hands the client a `taskId` a prompt `tasks/get` answers `-32602` for, and the window is silent.        |
+| **`taskId` entropy**                     | It is a bearer handle over a durable operation. Mint it from a cryptographic source; a handle derived from the key, a counter, or anything else predictable is a handle a stranger can guess.                                                                                           |
+| **Key uniqueness and non-reuse**         | The same logical call must produce the same key and two different calls must not. This package forwards whatever `deferral` returned, unchanged, however many times it sees it.                                                                                                         |
+| **Dedup keys scoped to their principal** | Returning the existing task for a repeated key is what makes a retried call idempotent — but an unscoped key means two principals submitting the same key receive the same task, one reading the other's work. This package has no principal to scope by; the store or `deferral` must. |
+| **Terminal immutability**                | `completed`, `failed`, and `cancelled` never move again. This package holds no cache, so a store that mutates a terminal task has both snapshots reported faithfully and its clients see a task travel backwards.                                                                       |
+| **TTL purge**                            | A task with a finite `ttlMs` is the store's to expire; `ttlMs: null` means no expiry and must never be swept. After a purge the handle answers the same `-32602` an unknown one does, which is intended — and indistinguishable.                                                        |
+
+**A task transition reaches a subscribed client through `subscriptions/listen`.** The
+extension's `notifications/tasks` frame is produced by the same `subscription.producer`
+every other family travels through, and the built-in filters it against the `taskIds` the
+acknowledgement agreed to and stamps it with the subscription id — see
+[Configure modern subscriptions](#configure-modern-subscriptions) for the server half and
+[Consume a subscription from a client](#consume-a-subscription-from-a-client) for the client
+half. Where the `taskIds` member sits on the wire is this package's reading of an
+under-specified extension point, recorded under
+[Declared conformance gaps](#declared-conformance-gaps).
+
+### Bound hostile input and live resources
+
+Every server uses the frozen `DEFAULT_MCP_LIMITS`: one MiB for a raw message,
+16 KiB for `_meta`, 64 total object keys, 16 KiB for `requestState`, four MiB
+for produced tool content, 128 live built-in subscriptions, and depth 32 for
+bounded JSON. `keys` is the breadth bound for both bounded values, not a `_meta`
+leaf: `metadata` and `content` cap the bytes of their own value, while `keys` and
+`depth` cap the shape of each. A result whose breadth exceeds `keys` is refused
+the way oversized content is, an `_meta` value exceeding it the way invalid
+metadata is, and raising the key budget for extension-rich metadata raises it for
+tool output too. Those defaults are sized respectively for substantial ordinary
+JSON-RPC arguments, extension-rich request context, a signed state carrying a
+short deployment value, substantial JSON tool output, a busy
+long-lived host, and ordinary documents well beyond typical application nesting.
+
+A deployment changes only the policy values it needs through the single `limit`
+group. Every malformed numeric leaf (`NaN`, infinity, a negative, or a fraction)
+falls back to its secure default. Message overflow maps to `-32700`; invalid or
+oversized `_meta` and `requestState` map to `-32602`; oversized produced content
+and exhausted subscription capacity map to `-32603` — under both eras, because a legacy
+call runs on the modern engine and inherits its bounds. None uses MCP's reserved
+`-32020` / `-32021` / `-32022` range. `-32000` survives in `MCPLegacy` alone, and only
+for a modern result the dated revision has no shape for.
+
+```ts
+import { createMCPServer, DEFAULT_MCP_LIMITS, isBoundedJSON, isBoundedString } from '@orkestrel/mcp'
+import { createToolManager } from '@orkestrel/tool'
+
+const server = createMCPServer({
+	identity: { name: 'bounded', version: '1.0.0' },
+	tools: createToolManager(),
+	limit: {
+		message: 512 * 1024,
+		metadata: 8 * 1024,
+		keys: 32,
+		state: 8 * 1024,
+		content: 2 * 1024 * 1024,
+		subscriptions: 64,
+		depth: 24,
+	},
+})
+
+DEFAULT_MCP_LIMITS.message // 1_048_576
+isBoundedString('€', 2) // false
+isBoundedJSON({ ok: true }, { bytes: 16, keys: 1, depth: 1 }) // true
+await server.handle(
+	'{"jsonrpc":"2.0","method":"server/discover","id":1,"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}',
+)
+```
+
+`isBoundedJSON` walks iteratively and tracks active ancestors. Cycles, values
+deeper than the configured depth, accessors/hostile proxies, `Map`/`Set`, and
+non-finite values return `false`; no adversarial shape throws from the guard. Own
+`__proto__`, `constructor`, and `prototype` keys are ordinary exact-JSON data and are
+accepted within the same byte/key/depth bounds. There is no second, laxer JSON policy
+for legacy any more: the dedicated legacy normalizer is gone, and a legacy `tools/call`
+is bounded and serialized by the engine it now runs on.
+
+### Bind a server or a client to any duplex transport
+
+`bindServer` / `bindClient` pipe an `MCPServerInterface` / `MCPClientInterface`
+over an `MCPTransportInterface` — the environment-agnostic duplex message
+channel (`send` / `listen` / `closed` / `close`, all string messages; framing
+is entirely the transport's concern). Every environment face — Node stdio and
+WebSocket, the browser's `MessagePort` and worker scope — implements this one port
+instead of duplicating the dispatch/correlation pump per transport:
+
+```ts
+import {
+	bindClient,
+	bindServer,
+	createDuplexClientTransport,
+	createMCPClient,
+	createMCPServer,
+} from '@orkestrel/mcp'
+import { createTool, createToolManager } from '@orkestrel/tool'
+
+// An in-memory duplex channel — a real MCPTransportInterface, the same shape a
+// Node stdio pair or a browser MessagePort would implement.
+function createLoopback() {
+	let onMessage: ((message: string) => void) | undefined
+	let peer: ReturnType<typeof createLoopback> | undefined
+	const transport = {
+		async send(message: string) {
+			peer?.deliver(message)
+		},
+		listen(handler: (message: string) => void) {
+			onMessage = handler
+		},
+		closed() {},
+		async close() {},
+		deliver(message: string) {
+			onMessage?.(message)
+		},
+		connect(other: ReturnType<typeof createLoopback>) {
+			peer = other
+		},
+	}
+	return transport
+}
+const serverSide = createLoopback()
+const clientSide = createLoopback()
+serverSide.connect(clientSide)
+clientSide.connect(serverSide)
+
+const tools = createToolManager()
+tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
+const server = createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
+bindServer(server, serverSide)
+
+const client = createMCPClient({ transport: createDuplexClientTransport(clientSide) })
+const unbind = bindClient(client, clientSide)
+await client.connect()
+const outcome = await client.call('add', { x: 2, y: 5 })
+// outcome → { resultType: 'complete', value: 7 }
+unbind() // detaches without closing either side of the loopback
+```
+
+`bindServer`'s unbind stops routing inbound messages through `server.handle`
+(a `transport.closed()` signal does the same); `bindClient`'s unbind stops
+delivering onto `client.transport.emitter`. Neither closes the underlying
+transport — that stays the caller's call. A `send` throw or rejection from
+either binder is caught and surfaced (never an unhandled rejection): a
+server-side one on `server.emitter`'s `error` event, a client-side one on
+`client.transport.emitter`'s `error` event.
+
+### Compose or remove the legacy protocol layer
+
+The optional `MCPServerOptions.handshake` hook gates only the legacy `initialize` response.
+`MCPServerInterface.handshake` exposes it, and `createMCPLegacy` passes it into
+`MCPLegacyOptions.handshake`. The `MCPHandshakeHandler` receives `MCPMethodOptions`, including
+the request's abort signal and optional caller context. On the binder carriers (stdio,
+WebSocket, and `MessagePort`), `ping`, forwarded legacy methods, and modern `server/discover`
+remain available while the hook waits. Omitting the hook preserves the dispatcher's answer
+bytes from 0.0.35. For the session-header change on refused HTTP initialization, see
+[HTTP transport](#http-transport).
+
+Over HTTP, a separate legacy `ping` POST also completes while the hook waits, without a
+session id or negotiated protocol header. The session middleware passes that request through
+without publishing the pending initialization's candidate session.
+
+An `MCPError` rejection preserves its code, message, and context as JSON-RPC `error.data`
+under the initialization request id. If the context cannot be serialized, the answer retains
+the code and message and omits `data`. Any other rejection emits `error` on the shared server
+emitter and answers `-32603` with `Server error`. A rejection after request cancellation is
+re-thrown; the stdio binder writes nothing and emits no error. The hook must observe its
+signal to stop pending work.
+
+The [MCP 2025-11-25 lifecycle specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle#initialization)
+permits pings while initialization is pending and describes initialization error responses.
+The hook adds consumer readiness to that legacy exchange; it does not add a modern lifecycle gate.
+
+The dated revisions are not a branch inside the server. They are a **decorator over it**.
+`MCPLegacy` wraps one `MCPDispatcherInterface` — the minimal `emitter` / `limit` / `dispatch` /
+`handle` surface a transport actually needs, and the one `MCPServerInterface` extends — and translates the
+fixed legacy method set onto the modern engine underneath. A modern-shaped invocation passes
+through untouched. `initialize` and `ping` are answered by the decorator itself and
+`notifications/initialized` is swallowed there, because the handshake acts have no modern
+counterpart and the modern seam registers no `ping`. `tools/list` and `tools/call`
+acquire modern request metadata, run through the same dispatcher a modern request runs through,
+and have the answer projected back into the unstamped legacy shape. Every arm answers under the
+message bound the wrapped dispatcher advertises: an invocation outside it earns that
+dispatcher's own id-less `-32600`, locally answered and forwarded alike. Every other method is
+refused with `-32601` at the door.
+
+**That fixed set is the whole legacy era, so the modern-only surfaces do not exist for a legacy
+client.** `server/discover` and `subscriptions/listen` are 2026-07-28 methods with no legacy
+spelling, so a legacy-era client naming either gets `-32601` at the decorator's door — the same
+refusal every other unlisted method earns there. The multi-round input mechanism is refused one step further
+in — a legacy `tools/call` carrying `requestState` or `inputResponses` gets `-32602`, because
+those parameters belong to a round the dated protocol could not have produced — and a modern
+result the dated revision has no shape for is projected as `-32000`. So a legacy client
+discovers the server through `initialize`, lists and calls tools, and has no path to modern
+discovery, subscriptions, or an input round at all. The way to reach one is to speak modern:
+the decorator passes a modern-shaped invocation through untouched, so composing the layer costs
+a modern client nothing.
+
+**Composition is the consumer's, and it is one call:**
+
+```ts
+import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
+import { createMCPRoutes } from '@orkestrel/mcp/server'
+import { createToolManager } from '@orkestrel/tool'
+
+const mcp = createMCPServer({
+	identity: { name: 'docs', version: '1.0.0' },
+	tools: createToolManager(),
+})
+
+createMCPRoutes(createMCPLegacy(mcp)) // 2026-07-28 AND the two legacy revisions
+createMCPRoutes(mcp) // modern only — a legacy `initialize` falls off the modern seam as -32601
+```
+
+That pair is the removability proof a developer can feel: the layer is a value you pass or do
+not pass, so a server built without it has no legacy code path to reach at all. **It composes at
+every door**, not only over HTTP: `createMCPRoutes`, `createMCPPostHandler`,
+`createWebSocketServer`, `createStdioServer`, and `bindServer` all take the narrow
+`MCPDispatcherInterface`, so the decorator drops in front of any of them. A stdio deployment
+speaking the `initialize` handshake — the most common shape an MCP server ships in — wires as
+`createStdioServer(createMCPLegacy(mcp))`, and each door is proven end to end against a real
+transport: a real socket pair, a spawned child process, and a cross-wired duplex pair.
+
+`MCPDispatcherInterface` carries `emitter` for the same reason it carries `limit` and `handle`: a
+transport-facing dispatcher must be able to report a contained fault, and a binder that owns a
+pump has only an event to report it through. `MCPLegacy` **forwards** the dispatcher it wraps
+rather than minting its own, so one server has one error feed — subscribe to `mcp.emitter` and
+you see faults from both eras, including the ones that arrived through the legacy door.
+
+**What removing legacy server ingress costs, exactly.** The claim is bounded to ingress on
+purpose: what comes out is a server that no longer answers a dated revision, not a package that
+no longer speaks one. It reaches these **published modules**. `src/core/MCPLegacy.ts` and the
+HTTP session entity `src/server/MCPSession.ts` go as whole files. The rest survive and give up
+one declared row each: `createMCPLegacy` in `src/core/factories.ts`, its
+barrel row in `src/core/index.ts`, `MCPLegacyOptions` in `src/core/types.ts`, the session
+middleware in `src/server/middlewares.ts`, the `MCPSession*` contracts in
+`src/server/types.ts`, and the session barrel rows in `src/server/index.ts`.
+
+**`src/core/types.ts` is a declared row, never a file to delete.** It is the shared contract
+carrier the modern dispatcher imports, so deleting the file deletes the modern engine with it. A
+remover takes out the `MCPLegacyOptions` declaration and leaves everything else in that module
+standing. The same distinction governs every other row entry: the file stays, one
+declaration leaves.
+
+**The documentation goes with them, and this section is not all of it.** The rule is every guide
+row naming `MCPLegacy` or `createMCPLegacy` — this section, the `createMCPLegacy` Factories row,
+the `MCPLegacy` Classes row, the `MCPDispatcherInterface` and `MCPLegacyOptions` Surface rows,
+the `#### MCPDispatcherInterface` Methods block, and the cross-references that point here.
+Removing the code and keeping a row that names a deleted export fails this package's own parity
+gate. It checks every Surface row against the public barrels in both directions and checks every
+named import in a TypeScript fence against its published package face.
+
+`MCPServer` is not on that list: it imports no `MCPLegacy` module and carries no standalone
+`MCPLegacy` or `legacy` word, which is the property the parity gate checks. Its TSDoc names the
+`createMCPLegacy` factory inside a composition example, and its modern dispatcher still spells
+protocol methods shared with the decorator; neither a factory name inside an example nor method
+text is legacy ownership. The modern engine therefore still compiles once the layer is deleted.
+`isModernRequest` survives because the modern engine reads structural key presence. Each
+remaining survivor has its own consumer, and they are not the same one:
+
+| Survivor                | What consumes it after the layer is deleted                                                                                                                                                   |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inferEra`              | Nothing inside `src`. It is the published era helper, and it reads `isMCPModernVersion` then `isMCPLegacyVersion` rather than restating either set.                                           |
+| `inferRequestEra`       | `MCPServer`'s `request` event and the HTTP ingress in `src/server/handlers.ts` — both report or route on the era a request's own structure selects, and neither reads a revision set.         |
+| `isInitializeRequest`   | Legacy server ingress: `src/server/middlewares.ts` mints and validates a session from it, and `src/server/inferers.ts` exempts a headerless `initialize` from the header demand.              |
+| `isPingRequest`         | Legacy server ingress: admits an id-bearing, non-modern ping without a protocol or session header.                                                                                            |
+| `MCPLegacyResult`       | The unstamped result arm of `JSONRPCResponse` in `src/core/types.ts`, its guard `isMCPLegacyResult`, and the decorator's projection.                                                          |
+| `MCP_HANDSHAKE_VERSION` | Client-adapter egress in `src/core/MCPLegacyClientTransport.ts`, the legacy handshake anchor in `src/core/helpers.ts` and `src/server/inferers.ts`, and `SUPPORTED_LEGACY_PROTOCOL_VERSIONS`. |
+| `MCP_FALLBACK_VERSION`  | `SUPPORTED_LEGACY_PROTOCOL_VERSIONS` plus an explicit `MCPLegacyClientTransportOptions.version` pin.                                                                                          |
+
+The bare server imports no legacy revision set and no legacy guard.
+
+`MCPClient` remains outside the server-ingress removal list because it contains no legacy
+handshake. The bare client sends `server/discover` only and accepts only `MCPModernVersion` as an
+optional pin. Legacy egress belongs to the separate client transport decorator described next.
+
+That module list is a membership rule rather than a reassurance. The executed list lives in
+[the package guide suite](../tests/guides.test.ts), which computes the legacy-owning module set
+from the tree and requires it to equal its list in both directions. An added participant and a
+stale suite entry therefore fail the same way; update this guide's descriptive list and the
+suite's executed list together. The same suite requires `MCPServer.ts` to carry no `MCPLegacy`
+or `legacy` spelling. What these structural checks cannot reach is legacy participation that does
+not bind either entity name — a handler table, a computed concatenation, or a branch on a version
+value. [The dispatch tests](../tests/src/core/MCPLegacy.test.ts) guard that class.
+
+**What a legacy client sees differently than it did before this collapse**, because
+legacy now inherits the modern engine's validation instead of running beside it:
+
+| A legacy `tools/call` whose …      | Answered before                                     | Answers now                                            |
+| ---------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
+| tool result contains `NaN`         | `null`, from `JSON.stringify`'s non-finite coercion | `-32603` — the produced result is not valid JSON       |
+| `params.arguments` is `null`       | accepted, and the tool ran                          | `-32602` — arguments must be an object                 |
+| tool value exceeds `limit.content` | `-32000`                                            | `-32603`, the same code a modern call already received |
+
+The shared cause is worth stating once, plainly: **legacy inherits the modern engine's validation
+because it now runs on it.** `NaN` is not JSON, the modern path always refused it, and a server
+that refused one caller while silently nulling the other was answering the same question in
+contradictory ways. Uniform refusal is the coherent answer, and it is the intended consequence of the collapse
+rather than a side effect of it. `-32000` survives where it carries a meaning no modern code does:
+a `task`, an `input_required`, a capability refusal, or an unsupported stream the dated revision
+cannot represent. A legal `tools/call` progress stream is the narrow exception: matching progress
+notifications remain progress notifications, and its final complete or error response becomes the
+legacy answer.
+
+### Adapt a legacy peer at the client transport boundary
+
+The dated client handshake is not a branch inside `MCPClient`. It is a **decorator over its
+transport**. `MCPLegacyClientTransport` wraps one `MCPMessageTransportInterface`, performs
+`initialize` during `start`, sends `notifications/initialized`, and answers the bare client's
+`server/discover` locally from the accepted handshake. The consumer-visible client therefore
+stays on `2026-07-28` while the wrapped transport speaks `2025-11-25` or `2025-06-18` to the peer.
+
+The decorator translates at the message boundary. A modern invocation loses the reserved
+protocol-version, client-capability, and client-identity metadata before it reaches the legacy
+peer. A legacy result gains the modern `resultType`, server identity, and cache fields before it
+reaches `MCPClient`. The shared projections live in the core helpers and are the same projections
+the server decorator uses in the opposite direction.
+
+#### Convert between modern and legacy messages
+
+The projections are also public when another explicit boundary needs the same wire conversion:
+
+```ts
+import {
+	legacyInvocationToModern,
+	legacyResultToModern,
+	modernInvocationToLegacy,
+	modernResultToLegacy,
+} from '@orkestrel/mcp'
+
+const request = legacyInvocationToModern({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+const legacyRequest = modernInvocationToLegacy(request)
+const result = legacyResultToModern({}, 'tools/list', { name: 'legacy', version: '1.0.0' })
+const legacyResult = modernResultToLegacy(result)
+```
+
+#### Wrap a legacy client transport
+
+Wrap the transport explicitly when the peer exposes only the legacy handshake:
+
+```ts
+import { createMCPClient, createMCPLegacyClientTransport } from '@orkestrel/mcp'
+import { createHTTPClientTransport } from '@orkestrel/mcp/server'
+
+const carrier = createHTTPClientTransport({ url: 'https://legacy.example/mcp' })
+const transport = createMCPLegacyClientTransport(carrier, { version: '2025-06-18' })
+const client = createMCPClient({ transport })
+
+await client.connect()
+client.version // '2026-07-28' — the adapter keeps the dated revision on the peer side
+```
+
+Omit `version` to offer `2025-11-25`; supply it to require one supported legacy revision exactly.
+The adapter rejects an absent, malformed, unsupported, or pin-mismatched handshake result before
+the client connects. Its request deadline bounds the handshake response, each handshake write, and
+each forwarded correlated request. The adapter reserves wire id `0` while that handshake window is
+open; do not send unrelated id-`0` traffic through the wrapped carrier until `start()` settles.
+Before an accepted handshake, local `server/discover` answers with a correlated `-32603`. A
+forwarded request also answers with a correlated `-32603` when its deadline expires or the peer
+returns a malformed result that cannot be translated. A peer-originated JSON-RPC error passes
+through with its code unchanged.
+
+The bare client never attempts this handshake. When `server/discover` returns `-32601`, `connect`
+rejects with an `MCPError` whose message names `createMCPLegacyClientTransport`. A legacy peer that
+refuses the method with any other code surfaces that code unchanged. Reference servers differ here:
+the TypeScript SDK v1.x server answers an unknown method with `-32601`, while the Python SDK v1.29.0
+server answers it with `-32602`, as read from their released sources on 2026-08-20 (see the
+[TypeScript SDK shared protocol](https://github.com/modelcontextprotocol/typescript-sdk/blob/v1.x/src/shared/protocol.ts)
+and the
+[Python SDK server session](https://github.com/modelcontextprotocol/python-sdk/blob/v1.29.0/src/mcp/server/session.py)).
+Passing a legacy revision to
+`createMCPClient` is rejected before the transport starts; production types do not admit that pin.
 
 ## Tests
 
