@@ -1,8 +1,12 @@
+import type { JSONRPCId, JSONRPCMessage, JSONRPCResponse } from '@orkestrel/jsonrpc'
+import {
+	JSONRPC_INTERNAL_ERROR,
+	JSONRPC_INVALID_PARAMS,
+	buildJSONRPCError,
+	isJSONRPCResponse,
+} from '@orkestrel/jsonrpc'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type {
-	JSONRPCId,
-	JSONRPCMessage,
-	JSONRPCResponse,
 	MCPClientCapabilities,
 	MCPMessageTransportEventMap,
 	MCPMessageTransportInterface,
@@ -16,8 +20,6 @@ import {
 	DEFAULT_MCP_CLIENT_NAME,
 	DEFAULT_MCP_CLIENT_VERSION,
 	DEFAULT_MCP_REQUEST_TIMEOUT,
-	JSONRPC_INTERNAL_ERROR,
-	JSONRPC_INVALID_PARAMS,
 	MCP_MODERN_VERSION,
 	MCP_HANDSHAKE_VERSION,
 	MCP_UNSUPPORTED_VERSION,
@@ -25,15 +27,9 @@ import {
 } from './constants.js'
 import { MCPError } from './errors.js'
 import { MCPLegacySession } from './MCPLegacySession.js'
-import {
-	buildJSONRPCError,
-	buildModernResult,
-	legacyResultToModern,
-	modernInvocationToLegacy,
-} from './helpers.js'
+import { buildModernResult, legacyResultToModern, modernInvocationToLegacy } from './helpers.js'
 import { parseJSONRPCMessage } from './parsers.js'
 import {
-	isJSONRPCResponse,
 	isMCPLegacyResult,
 	isMCPLegacyVersion,
 	isMCPIdentity,
@@ -312,7 +308,7 @@ export class MCPLegacyClientTransport implements MCPMessageTransportInterface {
 		if (isJSONRPCResponse(owned) && owned.id === 0 && session?.claim(owned)) {
 			return
 		}
-		if (!isJSONRPCResponse(owned) || owned.id === undefined) {
+		if (!isJSONRPCResponse(owned) || owned.id === null) {
 			this.#emitter.emit('message', owned)
 			return
 		}

@@ -1,11 +1,12 @@
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
+import { buildJSONRPCResult } from '@orkestrel/jsonrpc'
 import type { BrowserFixtureInterface } from './setupServer.js'
-import type { JSONRPCMessage, MCPSubscriptionFilter } from '@src/core'
+import type { MCPSubscriptionFilter } from '@src/core'
 import { METHOD_OPTIONS, TASK_CONTEXT } from './setup.js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
 	bindClient,
 	bindServer,
-	buildJSONRPCResult,
 	createDuplexClientTransport,
 	createMCPClient,
 	createMCPServer,

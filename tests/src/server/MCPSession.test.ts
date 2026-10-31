@@ -18,7 +18,7 @@ import { createManualClock } from '../../setup.js'
 
 // A distinct JSON-RPC message per ordinal, so a replayed sequence is identifiable by content.
 
-// A REAL recording StreamInterface (single-use to this file, so local): its
+// A REAL recording SSEStreamInterface (single-use to this file, so local): its
 // `write` records each SSEMessage into an unbounded sink, so it reports available capacity;
 // behaviour — a genuine sink standing in for an open GET-SSE stream so `push`'s fan-out is
 // `drain` resolves immediately, `end` closes the sink, and callers read the live `writes` getter.

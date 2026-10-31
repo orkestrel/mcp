@@ -1,4 +1,4 @@
-import type { JSONRPCMessage } from '@src/core'
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
 import { describe, expect, inject, it } from 'vitest'
 import { createMCPClient } from '@src/core'
 import { BrowserWebSocketClientTransport } from '@src/browser'

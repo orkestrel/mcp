@@ -1,7 +1,8 @@
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
+import { isJSONRPCResponse } from '@orkestrel/jsonrpc'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type {
 	HTTPClientTransportOptions,
-	JSONRPCMessage,
 	MCPHeaderParameter,
 	MCPMessageTransportEventMap,
 	MCPMessageTransportInterface,
@@ -24,7 +25,7 @@ import {
 import { inferRequestVersion } from '../inferers.js'
 import { HTTPLifetime } from '../HTTPLifetime.js'
 import { parseJSONRPCMessage } from '../parsers.js'
-import { isJSONRPCResponse, isMCPVersion, isModernRequest } from '../validators.js'
+import { isMCPVersion, isModernRequest } from '../validators.js'
 
 /**
  * Drives a remote Streamable-HTTP MCP server over `fetch` — a client

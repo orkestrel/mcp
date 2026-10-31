@@ -1,9 +1,5 @@
-import type {
-	JSONRPCId,
-	MCPBindingInterface,
-	MCPDispatcherInterface,
-	MCPTransportInterface,
-} from './types.js'
+import type { JSONRPCId } from '@orkestrel/jsonrpc'
+import type { MCPBindingInterface, MCPDispatcherInterface, MCPTransportInterface } from './types.js'
 import { isString } from '@orkestrel/contract'
 import { decodeBoundedMessage, readCancelledId, sendStream } from './helpers.js'
 

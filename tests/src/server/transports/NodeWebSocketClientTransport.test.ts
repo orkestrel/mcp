@@ -1,4 +1,4 @@
-import type { JSONRPCMessage } from '@src/core'
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
 	createMCPClient,

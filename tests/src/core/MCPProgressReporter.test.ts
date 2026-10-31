@@ -1,4 +1,5 @@
-import type { JSONRPCNotification, MCPExecutionContext } from '@src/core'
+import type { JSONRPCNotification } from '@orkestrel/jsonrpc'
+import type { MCPExecutionContext } from '@src/core'
 import { MCPProgressReporter } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {

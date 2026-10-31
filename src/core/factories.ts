@@ -1,7 +1,7 @@
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
 import type {
 	MCPMessageTransportEventMap,
 	MCPMessageTransportInterface,
-	JSONRPCMessage,
 	HTTPClientTransportOptions,
 	MCPClientInterface,
 	MCPClientOptions,

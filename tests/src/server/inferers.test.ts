@@ -1,14 +1,12 @@
-import type { MCPHeaderParameter } from '@src/core'
-import { createHeaderRequest } from '../../setupServer.js'
 import {
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_METHOD_NOT_FOUND,
-	MCP_HEADER_MISMATCH,
-	MCP_MISSING_CAPABILITY,
-	MCP_UNSUPPORTED_VERSION,
 	buildJSONRPCError,
 	buildJSONRPCResult,
-} from '@src/core'
+} from '@orkestrel/jsonrpc'
+import type { MCPHeaderParameter } from '@src/core'
+import { createHeaderRequest } from '../../setupServer.js'
+import { MCP_HEADER_MISMATCH, MCP_MISSING_CAPABILITY, MCP_UNSUPPORTED_VERSION } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
 	inferHeaderTarget,

@@ -5,6 +5,17 @@ import type {
 	JSONRPCNotification,
 	JSONRPCRequest,
 	JSONRPCResponse,
+} from '@orkestrel/jsonrpc'
+import {
+	JSONRPC_INTERNAL_ERROR,
+	JSONRPC_INVALID_PARAMS,
+	JSONRPC_INVALID_REQUEST,
+	JSONRPC_METHOD_NOT_FOUND,
+	buildJSONRPCError,
+	buildJSONRPCResult,
+	isJSONRPCInvocation,
+} from '@orkestrel/jsonrpc'
+import type {
 	MCPDispatchOptions,
 	MCPDispatcherInterface,
 	MCPLegacyOptions,
@@ -15,10 +26,6 @@ import type {
 } from './types.js'
 import { attempt, isInteger, isRecord, isString, parseJSON } from '@orkestrel/contract'
 import {
-	JSONRPC_INVALID_PARAMS,
-	JSONRPC_INTERNAL_ERROR,
-	JSONRPC_INVALID_REQUEST,
-	JSONRPC_METHOD_NOT_FOUND,
 	JSONRPC_SERVER_ERROR,
 	MCP_EXTENSION_TASKS,
 	MCP_MISSING_CAPABILITY,
@@ -26,8 +33,6 @@ import {
 } from './constants.js'
 import {
 	buildInitializeResult,
-	buildJSONRPCError,
-	buildJSONRPCResult,
 	buildMethodOptions,
 	legacyInvocationToModern,
 	modernResultToLegacy,
@@ -37,12 +42,7 @@ import { MCPStreamController } from './MCPStreamController.js'
 import { isMCPError } from './errors.js'
 import { MCPTextStreamController } from './MCPTextStreamController.js'
 import { parseJSONRPCMessage } from './parsers.js'
-import {
-	isBoundedString,
-	isJSONRPCInvocation,
-	isMCPProgress,
-	isModernRequest,
-} from './validators.js'
+import { isBoundedString, isMCPProgress, isMCPResult, isModernRequest } from './validators.js'
 
 /**
  * Translates the fixed legacy method set onto one modern dispatcher.
@@ -50,7 +50,7 @@ import {
  * @remarks
  * This decorator answers `initialize` and `ping` itself, under the limits the configured
  * dispatcher advertises through {@link MCPLegacy.limit}: an invocation outside the message
- * bound earns the same id-less `-32600` refusal the dispatcher produces, whether this
+ * bound earns the same `-32600` refusal with `id: null` the dispatcher produces, whether this
  * decorator would have answered it or forwarded it. It owns no result normalizer. Modern
  * invocations pass through untouched. Legacy tool methods acquire modern request metadata,
  * run through the configured dispatcher, and lose only fields their dated result shape
@@ -106,9 +106,7 @@ export class MCPLegacy implements MCPDispatcherInterface {
 		// message is refused rather than decoded, and it is refused the way the dispatcher
 		// refuses one.
 		if (!isBoundedString(message, this.limit.message)) {
-			return JSON.stringify(
-				buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Invalid Request'),
-			)
+			return JSON.stringify(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request'))
 		}
 		// `parseJSON` is the declared JSON boundary: unparsable text answers `undefined`, which
 		// the invocation check below forwards along with every other shape this layer does not
@@ -136,7 +134,7 @@ export class MCPLegacy implements MCPDispatcherInterface {
 			parseJSONRPCMessage(invocation, { bytes: this.limit.message, depth: this.limit.depth }) ===
 			undefined
 		) {
-			return buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Invalid Request')
+			return buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request')
 		}
 		switch (invocation.method) {
 			case 'initialize': {
@@ -268,10 +266,9 @@ export class MCPLegacy implements MCPDispatcherInterface {
 				? this.#unsupported(id, this.#capability(answer))
 				: answer
 		}
+		if (!isMCPResult(answer.result)) return this.#unsupported(id, 'unstamped')
 		const projected = modernResultToLegacy(answer.result)
-		if (projected === undefined) {
-			return this.#unsupported(id, answer.result.resultType ?? 'unstamped')
-		}
+		if (projected === undefined) return this.#unsupported(id, answer.result.resultType)
 		return buildJSONRPCResult(id, projected)
 	}
 

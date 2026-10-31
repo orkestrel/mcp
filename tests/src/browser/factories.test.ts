@@ -1,5 +1,5 @@
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
 import type {
-	JSONRPCMessage,
 	MCPClientOptions,
 	MCPMessageTransportInterface,
 	WebSocketClientTransportOptions,
@@ -945,8 +945,11 @@ describe('createScopeServer — hostile inbound', () => {
 		port2.postMessage('not valid json{{{')
 
 		await vi.waitFor(() => expect(replies).toHaveLength(1))
-		const reply: { error: { code: number } } = JSON.parse(String(replies[0]))
-		expect(reply.error.code).toBe(-32700)
+		expect(JSON.parse(String(replies[0]))).toEqual({
+			jsonrpc: '2.0',
+			id: null,
+			error: { code: -32700, message: 'Parse error' },
+		})
 
 		worker.stop()
 	})

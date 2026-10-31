@@ -4,6 +4,17 @@ import type {
 	JSONRPCNotification,
 	JSONRPCRequest,
 	JSONRPCResponse,
+} from '@orkestrel/jsonrpc'
+import {
+	JSONRPC_INTERNAL_ERROR,
+	JSONRPC_INVALID_PARAMS,
+	JSONRPC_INVALID_REQUEST,
+	JSONRPC_METHOD_NOT_FOUND,
+	JSONRPC_PARSE_ERROR,
+	buildJSONRPCResult,
+	isJSONRPCErrorResponse,
+} from '@orkestrel/jsonrpc'
+import type {
 	MCPCallResult,
 	MCPMethodOptions,
 	MCPElicitSchema,
@@ -84,19 +95,12 @@ import {
 	bindServer,
 	createDuplexClientTransport,
 	createMCPClient,
-	buildJSONRPCResult,
 	createMCPLegacy,
 	createMCPServer,
 	DEFAULT_MCP_CACHE_TTL,
 	DEFAULT_MCP_LIMITS,
 	EMPTY_MCP_ARGUMENTS,
-	JSONRPC_INVALID_PARAMS,
-	JSONRPC_INVALID_REQUEST,
-	JSONRPC_METHOD_NOT_FOUND,
-	JSONRPC_PARSE_ERROR,
-	JSONRPC_INTERNAL_ERROR,
 	JSONRPC_SERVER_ERROR,
-	isJSONRPCErrorResponse,
 	isMCPCompletionResult,
 	isMCPInputResult,
 	isMCPError,
@@ -3332,29 +3336,45 @@ describe('MCPServer — handle (string boundary)', () => {
 		)
 	})
 
-	// An unreadable id is OMITTED from the envelope, never sent as `null`.
-	it('returns a -32700 parse-error response that omits the id it could not read', async () => {
+	// An unreadable id is sent as `null`, as JSON-RPC 2.0 § 5 requires of every response.
+	it('returns a -32700 parse-error response that carries a null id for the id it could not read', async () => {
 		const reply = await createTestServer().handle('{ not json )')
 
 		expect(reply).toBe(
 			JSON.stringify({
 				jsonrpc: '2.0',
+				id: null,
 				error: { code: JSONRPC_PARSE_ERROR, message: 'Parse error' },
 			}),
 		)
-		expect(reply).not.toContain('"id"')
+		expect(reply).toContain('"id":null')
 	})
 
-	it('returns a -32600 invalid-request response that omits the id it could not read', async () => {
+	it('returns a -32600 invalid-request response that carries a null id for the id it could not read', async () => {
 		const reply = await createTestServer().handle('{"jsonrpc":"2.0","id":1,"result":{}}')
 
 		expect(reply).toBe(
 			JSON.stringify({
 				jsonrpc: '2.0',
+				id: null,
 				error: { code: JSONRPC_INVALID_REQUEST, message: 'Invalid Request' },
 			}),
 		)
-		expect(reply).not.toContain('"id"')
+		expect(reply).toContain('"id":null')
+	})
+
+	it('refuses a message carrying both a method and a result as an invalid request', async () => {
+		const reply = await createTestServer().handle(
+			'{"jsonrpc":"2.0","id":1,"method":"ping","result":null}',
+		)
+
+		expect(reply).toBe(
+			JSON.stringify({
+				jsonrpc: '2.0',
+				id: null,
+				error: { code: JSONRPC_INVALID_REQUEST, message: 'Invalid Request' },
+			}),
+		)
 	})
 
 	it('returns a -32600 invalid-request response for a parsed value that is not a message', async () => {
@@ -7179,9 +7199,10 @@ describe('MCP completion/complete', () => {
 		const response = readUnaryAnswer(answer)
 		if (response === undefined) throw new Error('expected a completion response')
 
-		expect(response.result?.['completion']).toMatchObject({ hasMore: true })
-		expect(response.result?.['completion']).toHaveProperty('values.length', 100)
 		expect(isMCPCompletionResult(response.result)).toBe(true)
+		if (!isMCPCompletionResult(response.result)) throw new Error('expected a completion result')
+		expect(response.result.completion).toMatchObject({ hasMore: true })
+		expect(response.result.completion).toHaveProperty('values.length', 100)
 	})
 })
 

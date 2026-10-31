@@ -1,9 +1,17 @@
+import type {
+	JSONRPCId,
+	JSONRPCInvocation,
+	JSONRPCMessage,
+	JSONRPCNotification,
+	JSONRPCResponse,
+} from '@orkestrel/jsonrpc'
+import { buildJSONRPCResult, isJSONRPCId } from '@orkestrel/jsonrpc'
 import type { MiddlewareContext, NextFunction, UpgradeHandler } from '@orkestrel/server'
 import type { RecorderInterface } from '@orkestrel/test'
 import type { MCPLegacyVersion } from '@src/core'
-import type { JSONRPCResponse, MCPStream } from '@src/core'
+import type { MCPStream } from '@src/core'
 import type { SSEMessage } from '@orkestrel/server'
-import type { JSONRPCNotification, MCPSubscriptionResult } from '@src/core'
+import type { MCPSubscriptionResult } from '@src/core'
 import type { ChildProcess } from 'node:child_process'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import type { HTTPTransportOptions } from '@src/server'
@@ -15,9 +23,6 @@ import type {
 	MCPClientInterface,
 	MCPServerInterface,
 	MCPDispatcherInterface,
-	JSONRPCInvocation,
-	JSONRPCMessage,
-	JSONRPCId,
 	MCPMessageTransportInterface,
 	MCPCompletion,
 	MCPContent,
@@ -38,12 +43,12 @@ import type {
 	MCPInputResponse,
 } from '@src/core'
 import type { SourceInterface } from '@orkestrel/guide'
-import type { MiddlewareHandler, ServerInterface, StreamInterface } from '@orkestrel/server'
+import type { MiddlewareHandler, ServerInterface, SSEStreamInterface } from '@orkestrel/server'
 import type { WebSocketFrame } from '@orkestrel/websocket'
 import type { ManualClockInterface } from './setup.js'
 import type { ToolManagerInterface, ToolInterface } from '@orkestrel/tool'
 import { createSource } from '@orkestrel/guide'
-import { buildJSONRPCResult, isJSONRPCId, MCP_WEBSOCKET_SUBPROTOCOL } from '@src/core'
+import { MCP_WEBSOCKET_SUBPROTOCOL } from '@src/core'
 import { mergeVary, resolveOrigin } from '@orkestrel/server'
 import { createNodeWebSocket } from '@orkestrel/websocket'
 import {
@@ -928,7 +933,7 @@ export async function collectEvidence(
 	return [...readings]
 }
 
-export function createDeferredStream(completion: PromiseWithResolvers<void>): StreamInterface {
+export function createDeferredStream(completion: PromiseWithResolvers<void>): SSEStreamInterface {
 	const ended = new MCPFixtureCell(false)
 	return {
 		response: new Response(
@@ -1024,6 +1029,7 @@ export async function startErrorPeer(): Promise<ErrorPeerInterface> {
 			if (message.method === 'server/discover') {
 				sendHTTPResponse(response, 400, {
 					jsonrpc: '2.0',
+					id: null,
 					error: { code: -32000, message: 'Bad Request: Server not initialized' },
 				})
 				return
@@ -1045,6 +1051,7 @@ export async function startErrorPeer(): Promise<ErrorPeerInterface> {
 		if (path === '/idless') {
 			sendHTTPResponse(response, 400, {
 				jsonrpc: '2.0',
+				id: null,
 				error: { code: -32000, message: 'Bad Request: Server not initialized' },
 			})
 			return
@@ -1465,7 +1472,7 @@ export function createRequestStub(fields?: {
 	return stub
 }
 
-// ── Fault-injectable SSE stream (a REAL StreamInterface, not a mock) ─────────
+// ── Fault-injectable SSE stream (a REAL SSEStreamInterface, not a mock) ─────────
 //
 // `createStream` is the real seam and is used wherever the happy path is the claim. The
 // terminals it cannot be driven into from outside are exactly the ones the ownership and
@@ -1490,8 +1497,8 @@ export interface TestStreamOptions {
 	readonly pending?: boolean
 }
 
-/** Reports what was written to a real {@link StreamInterface} and whether it ended. */
-export interface TestStreamInterface extends StreamInterface {
+/** Reports what was written to a real {@link SSEStreamInterface} and whether it ended. */
+export interface TestStreamInterface extends SSEStreamInterface {
 	/** Each event's `data`, in write order. */
 	readonly events: readonly string[]
 	/** Each comment's text, in write order (the keepalive record). */
@@ -1501,7 +1508,7 @@ export interface TestStreamInterface extends StreamInterface {
 }
 
 /**
- * Builds a real SSE {@link StreamInterface} whose write or body fault is supplied as data.
+ * Builds a real SSE {@link SSEStreamInterface} whose write or body fault is supplied as data.
  *
  * @param options - The fault to raise or the `pending` body; omit for an inert recording stream
  * @returns The stream, plus the events and comments it accepted and whether it ended
@@ -4912,7 +4919,7 @@ export function buildSessionMessage(n: number): JSONRPCMessage {
 	return createJSONRPCRequest({ method: 'notifications/message', id: n })
 }
 
-export class SessionStreamRecorder implements StreamInterface {
+export class SessionStreamRecorder implements SSEStreamInterface {
 	readonly response = new Response(null)
 	readonly #recorder = createRecorder<readonly [SSEMessage]>()
 	#closed = false

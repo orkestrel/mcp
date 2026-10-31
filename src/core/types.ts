@@ -1,3 +1,12 @@
+import type {
+	JSONRPCError,
+	JSONRPCId,
+	JSONRPCInvocation,
+	JSONRPCMessage,
+	JSONRPCNotification,
+	JSONRPCRequest,
+	JSONRPCResponse,
+} from '@orkestrel/jsonrpc'
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 import type { JSONValue } from '@orkestrel/contract'
 import type { ToolCall, ToolInterface, ToolManagerInterface, ToolResult } from '@orkestrel/tool'
@@ -5,143 +14,6 @@ import type { ToolCall, ToolInterface, ToolManagerInterface, ToolResult } from '
 // Wire-modelling types carry protocol field names verbatim. Everywhere the library
 // speaks for itself, the repository naming laws bind fully (`identity`, `instructions`,
 // `cache.ttl`, `version`, `discover()`, and `era`).
-
-// JSON-RPC 2.0 wire types (https://www.jsonrpc.org/specification) — the envelope
-// the Model Context Protocol speaks. An INVOCATION is either a request (a `method`
-// call carrying an `id` that correlates it with its response) or a notification (the
-// same call with no `id`, answered by nothing). A response is either a result arm or
-// an error arm, never both.
-//
-// Several members below are declared `?: never`. That is not an optional value: it is
-// the protocol's own prohibition expressed in the type system, so the shape a
-// carrier must not have cannot be built or assigned. `id?: never` is why a stream
-// cannot yield a request, and `result?: never` / `error?: never` are why a response
-// cannot carry both arms. Each also makes its member a DISCRIMINANT, so
-// `invocation.id === undefined` and `response.error === undefined` narrow the union
-// at the one place a caller asks.
-
-/**
- * Represents a JSON-RPC 2.0 correlation id — the value a request and its response share.
- *
- * @remarks
- * `null` is not an id. A response that could not read one omits the member entirely, which is
- * what {@link JSONRPCErrorResponse} declares.
- */
-export type JSONRPCId = string | number
-
-/**
- * Represents a JSON-RPC 2.0 request — a `method` call with optional `params`, correlated to
- * its response by the `id` it requires.
- *
- * @remarks
- * `jsonrpc` is the literal `'2.0'`. A call with no `id` is not a request at all: it
- * is a {@link JSONRPCNotification}, a distinct type. `params` is an open record
- * forwarded to the method handler (the handler narrows the fields it reads).
- */
-export interface JSONRPCRequest {
-	readonly jsonrpc: '2.0'
-	readonly method: string
-	/** Correlates the request with its response. */
-	readonly id: JSONRPCId
-	/** Holds the method's open argument record (narrowed by the handler). */
-	readonly params?: Readonly<Record<string, unknown>>
-}
-
-/**
- * Represents a JSON-RPC 2.0 notification — a fire-and-forget `method` call that is answered
- * by nothing (for example, `notifications/initialized`).
- *
- * @remarks
- * A notification MUST NOT carry an `id`, so `id` is declared `never`: a
- * {@link JSONRPCRequest} is not assignable here, which is what keeps a
- * request off a notification stream.
- */
-export interface JSONRPCNotification {
-	readonly jsonrpc: '2.0'
-	readonly method: string
-	/** Forbids this member; an id is what makes a call a {@link JSONRPCRequest} instead. */
-	readonly id?: never
-	/** Holds the method's open argument record (narrowed by the handler). */
-	readonly params?: Readonly<Record<string, unknown>>
-}
-
-/**
- * Represents one inbound JSON-RPC call — the common dispatch input.
- *
- * @remarks
- * Narrow the arms apart on the id: `invocation.id === undefined` is the notification
- * arm, and anything else is a {@link JSONRPCRequest}.
- */
-export type JSONRPCInvocation = JSONRPCRequest | JSONRPCNotification
-
-/**
- * Represents a JSON-RPC 2.0 error object — the `error` member of a
- * {@link JSONRPCErrorResponse}.
- *
- * @remarks
- * `code` is one of the reserved JSON-RPC codes (see `./constants.js`); `message`
- * is a short human description; `data` is an optional machine-readable payload
- * carrying extra detail.
- */
-export interface JSONRPCError {
-	readonly code: number
-	readonly message: string
-	readonly data?: unknown
-}
-
-/**
- * Represents the success arm of a JSON-RPC 2.0 response — the request's `id` echoed with
- * the method's `result`.
- *
- * @remarks
- * A result answers a request, and a request always has a readable `id`, so `id` is
- * required here. `result` is an {@link MCPResult} on the modern wire and an
- * {@link MCPLegacyResult} on the legacy one; `error` is forbidden.
- */
-export interface JSONRPCResultResponse {
-	readonly jsonrpc: '2.0'
-	readonly id: JSONRPCId
-	readonly result: MCPResult | MCPLegacyResult
-	/** Forbids this member; an answer carries a result or an error, never both. */
-	readonly error?: never
-}
-
-/**
- * Represents the failure arm of a JSON-RPC 2.0 response — the request's `id` echoed with
- * the {@link JSONRPCError} that ended it.
- *
- * @remarks
- * `id` is omitted, never `null`, when the request could not be parsed or its id
- * read: MCP overrides the base specification here, so a modern peer receives an
- * envelope with no `id` member at all. `result` is forbidden.
- */
-export interface JSONRPCErrorResponse {
-	readonly jsonrpc: '2.0'
-	/** Holds the failed request's id; absent when no id could be read. */
-	readonly id?: JSONRPCId
-	readonly error: JSONRPCError
-	/** Forbids this member; an answer carries a result or an error, never both. */
-	readonly result?: never
-}
-
-/**
- * Represents a JSON-RPC 2.0 response — the answer to one {@link JSONRPCRequest}.
- *
- * @remarks
- * The arms are mutually exclusive in the type and in their guards. Narrow them
- * apart with `response.error === undefined`.
- */
-export type JSONRPCResponse = JSONRPCResultResponse | JSONRPCErrorResponse
-
-/**
- * Represents a JSON-RPC 2.0 message on the wire — a {@link JSONRPCInvocation} or a
- * {@link JSONRPCResponse}.
- *
- * @remarks
- * `'method' in message` narrows to the invocation half; the response half carries
- * no `method`.
- */
-export type JSONRPCMessage = JSONRPCInvocation | JSONRPCResponse
 
 // MCP protocol shapes — the result payloads the dispatch methods return, mapped
 // onto the JSON-RPC `result` member.
@@ -183,8 +55,8 @@ export interface MCPResult {
  * carries no `resultType`. That absence is the whole distinction, which is why it is
  * declared `never` rather than optional: an {@link MCPResult} is not assignable
  * here, this type is not assignable to {@link MCPResult}, and
- * `result.resultType === undefined` narrows a {@link JSONRPCResultResponse}'s
- * `result` to the legacy arm.
+ * `result.resultType === undefined` narrows an `MCPResult | MCPLegacyResult` union to the
+ * legacy arm.
  *
  * This arm exists only for the optional legacy server decorator and client transport adapter.
  */
@@ -2336,7 +2208,7 @@ export interface MCPDispatcherInterface {
  *   to an invocation, dispatches, and serializes the answer back to a string (or an
  *   {@link MCPTextStream}, the same sequence already serialized) — turning a parse failure
  *   into a `-32700` response and a non-invocation into a `-32600` response, and returning
- *   `undefined` for a notification. Both error envelopes omit the `id` they could not read.
+ *   `undefined` for a notification. Both error envelopes carry `id: null`.
  * - **One method seam.** Every modern method — the built-in `server/discover` /
  *   `tools/list` / `tools/call` / `subscriptions/listen` and configured resource methods
  *   included — is registered on `methods` and dispatched
@@ -2416,7 +2288,7 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 	 * @remarks
 	 * A `JSON.parse` failure resolves a serialized `-32700` (Parse error) response;
 	 * a parsed value that is not a valid invocation resolves a serialized `-32600`
-	 * (Invalid Request) response — each with its unreadable `id` omitted, never `null`;
+	 * (Invalid Request) response — each with `id: null`, because its id could not be read;
 	 * a notification resolves `undefined` (no response). A
 	 * held-open method resolves an {@link MCPTextStreamControllerInterface} — the controlled
 	 * typed stream's mirror, already serialized — so a transport writes each message with no

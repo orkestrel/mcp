@@ -1,4 +1,5 @@
-import type { MCPMessageTransportEventMap, JSONRPCMessage } from '@src/core'
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
+import type { MCPMessageTransportEventMap } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { StdioClientTransportInterface, StdioClientTransportOptions } from '../types.js'
 import { Emitter } from '@orkestrel/emitter'

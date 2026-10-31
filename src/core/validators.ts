@@ -1,14 +1,13 @@
+import type { JSONRPCInvocation, JSONRPCRequest } from '@orkestrel/jsonrpc'
+import {
+	isJSONRPCError,
+	isJSONRPCId,
+	isJSONRPCInvocation,
+	isJSONRPCNotification,
+	isJSONRPCRequest,
+} from '@orkestrel/jsonrpc'
 import type { JSONValue } from '@orkestrel/contract'
 import type {
-	JSONRPCError,
-	JSONRPCErrorResponse,
-	JSONRPCId,
-	JSONRPCInvocation,
-	JSONRPCMessage,
-	JSONRPCNotification,
-	JSONRPCRequest,
-	JSONRPCResponse,
-	JSONRPCResultResponse,
 	MCPAnnotations,
 	MCPBlobResource,
 	MCPCallResult,
@@ -136,7 +135,7 @@ export function isMCPResultMetaObject(value: unknown): value is MCPResultMetaObj
  * @remarks
  * The reserved key is optional, so a frame delivered outside a `subscriptions/listen`
  * stream passes with no stamp at all. When the key is present its value must be a valid
- * {@link JSONRPCId}, because a stamp naming nothing addressable is worse than no stamp.
+ * JSON-RPC id, because a stamp naming nothing addressable is worse than no stamp.
  *
  * @param value - The unknown value to inspect
  * @returns True if the value is exact metadata whose subscription stamp, if present, is valid; false otherwise
@@ -1355,33 +1354,6 @@ export function isBoundedJSON<T>(value: T, limits: MCPJSONLimitOptions): value i
 }
 
 /**
- * Determines whether a value is a valid JSON-RPC correlation id — a string or a
- * finite integer.
- *
- * @remarks
- * An id is present or it is not there at all: `undefined` is not an id (that
- * absence is what makes a call a notification) and `null` is not one either (MCP
- * omits an unreadable id rather than nulling it). A runtime numeric id must be a
- * finite integer; an empty string is a legal id, because the dated schema imposes
- * no minimum length. Total: any other input returns `false`.
- *
- * @param value - The already-parsed value to test
- * @returns True if `value` is a string or a finite integer; false otherwise
- *
- * @example
- * ```ts
- * isJSONRPCId(1)         // true
- * isJSONRPCId('')        // true — an empty string is a legal id
- * isJSONRPCId(undefined) // false — absence is not an id
- * isJSONRPCId(null)      // false — MCP omits an unreadable id
- * isJSONRPCId(1.5)       // false — a numeric id is an integer
- * ```
- */
-export function isJSONRPCId(value: unknown): value is JSONRPCId {
-	return isString(value) || isInteger(value)
-}
-
-/**
  * Determines whether a value is a supported {@link MCPVersion}.
  *
  * @param value - The unknown value to inspect
@@ -2130,199 +2102,6 @@ export function isMCPInputResult(value: unknown): value is MCPInputResult {
 	} catch {
 		return false
 	}
-}
-
-/**
- * Determines whether a parsed value is a {@link JSONRPCRequest}.
- *
- * @remarks
- * A request is a record with `jsonrpc === '2.0'`, a string `method`, and an `id`
- * that {@link isJSONRPCId} accepts. An id-less call is not a request — it is a
- * {@link JSONRPCNotification}, which {@link isJSONRPCNotification} answers for. The
- * guards are mutually exclusive on every input: this one requires a valid `id`
- * value, that one requires no own `id` member at all. `params`, when present, must
- * be a record. Total: any other input returns `false`.
- *
- * @param value - The already-parsed value to test
- * @returns True if `value` is a valid JSON-RPC request; false otherwise
- *
- * @example
- * ```ts
- * isJSONRPCRequest({ jsonrpc: '2.0', method: 'ping', id: 1 }) // true
- * isJSONRPCRequest({ jsonrpc: '2.0', method: 'notifications/initialized' }) // false — a notification
- * isJSONRPCRequest({ jsonrpc: '1.0', method: 'ping', id: 1 }) // false
- * ```
- */
-export function isJSONRPCRequest(value: unknown): value is JSONRPCRequest {
-	const owned = attempt(() => cloneJSONRecord(value))
-	if (!owned.success) return false
-	const request = owned.value
-	if (request['jsonrpc'] !== '2.0' || !isString(request['method'])) return false
-	if (!isJSONRPCId(request['id'])) return false
-	const params = request['params']
-	return isUndefined(params) || isRecord(params)
-}
-
-/**
- * Determines whether a parsed value is a {@link JSONRPCNotification}.
- *
- * @remarks
- * A notification is a request-shaped call carrying no `id` member — the protocol
- * forbids one, because nothing answers a notification. `params`, when present, must
- * be a record. Total: any other input returns `false`.
- *
- * @param value - The already-parsed value to test
- * @returns True if `value` is a valid JSON-RPC notification; false otherwise
- *
- * @example
- * ```ts
- * isJSONRPCNotification({ jsonrpc: '2.0', method: 'notifications/initialized' }) // true
- * isJSONRPCNotification({ jsonrpc: '2.0', method: 'ping', id: 1 }) // false — a request
- * ```
- */
-export function isJSONRPCNotification(value: unknown): value is JSONRPCNotification {
-	const owned = attempt(() => cloneJSONRecord(value))
-	if (!owned.success) return false
-	const notification = owned.value
-	if (notification['jsonrpc'] !== '2.0' || !isString(notification['method'])) return false
-	if (Object.hasOwn(notification, 'id')) return false
-	const params = notification['params']
-	return isUndefined(params) || isRecord(params)
-}
-
-/**
- * Determines whether a parsed value is a {@link JSONRPCInvocation} — a request or a
- * notification.
- *
- * @remarks
- * The union of {@link isJSONRPCRequest} and {@link isJSONRPCNotification}, which are
- * mutually exclusive, so a positive answer names exactly one arm. Total.
- *
- * @param value - The already-parsed value to test
- * @returns True if `value` is a valid JSON-RPC request or notification; false otherwise
- */
-export function isJSONRPCInvocation(value: unknown): value is JSONRPCInvocation {
-	return isJSONRPCRequest(value) || isJSONRPCNotification(value)
-}
-
-/**
- * Determines whether a parsed value is a {@link JSONRPCResultResponse} — the success
- * arm of a response.
- *
- * @remarks
- * A result answers a request, so `id` is required and must be a valid
- * {@link isJSONRPCId}. The envelope must own a `result` and must not own an `error`,
- * which is what makes this guard and {@link isJSONRPCErrorResponse} mutually
- * exclusive on every input. `result` itself must be an object: either a modern
- * {@link isMCPResult} or a legacy {@link isMCPLegacyResult}, never a bare primitive.
- * Total.
- *
- * @param value - The already-parsed value to test
- * @returns True if `value` is a valid JSON-RPC result response; false otherwise
- *
- * @example
- * ```ts
- * isJSONRPCResultResponse({ jsonrpc: '2.0', id: 1, result: { resultType: 'complete' } }) // true
- * isJSONRPCResultResponse({ jsonrpc: '2.0', id: 1, result: 5 }) // false — a result is an object
- * ```
- */
-export function isJSONRPCResultResponse(value: unknown): value is JSONRPCResultResponse {
-	const owned = attempt(() => cloneJSONRecord(value))
-	if (!owned.success) return false
-	const response = owned.value
-	if (response['jsonrpc'] !== '2.0' || !isJSONRPCId(response['id'])) return false
-	if (Object.hasOwn(response, 'error') || !Object.hasOwn(response, 'result')) return false
-	const result = response['result']
-	return isMCPResult(result) || isMCPLegacyResult(result)
-}
-
-/**
- * Determines whether a value is one JSON-RPC `error` member.
- *
- * @remarks
- * The failure object, not the envelope carrying it — the shape a failed response owns
- * under `error`, and the shape a `failed` {@link MCPTaskDetail} owns under the same name,
- * which is why it is one guard rather than the same checks written twice.
- *
- * It is deliberately structural rather than exact-JSON: `data` is declared `unknown`, so
- * requiring the whole object to survive a JSON clone would refuse a legal error that
- * carried a non-JSON payload. Both callers here hand it an already-owned value.
- *
- * That choice is why the key reads are guarded. Every sibling guard clones first, and a
- * clone reads each key once behind a boundary that already owns totality; this one is the
- * family's only direct reader, so it meets `code` and `message` exactly as the value defines
- * them — including as accessors that throw. Reading a named key off an unowned value is
- * itself the hostile step, and it is bounded here rather than allowed to escape. Total.
- *
- * @param value - The already-parsed value to test
- * @returns True if `value` carries an integer `code` and a string `message`; false otherwise
- *
- * @example
- * ```ts
- * isJSONRPCError({ code: -32602, message: 'Invalid params' }) // true
- * isJSONRPCError({ code: -32602.5, message: 'x' }) // false — a code is an integer
- * ```
- */
-export function isJSONRPCError(value: unknown): value is JSONRPCError {
-	if (!isRecord(value)) return false
-	const read = attempt(() => isInteger(value['code']) && isString(value['message']))
-	return read.success && read.value
-}
-
-/**
- * Determines whether a parsed value is a {@link JSONRPCErrorResponse} — the failure
- * arm of a response.
- *
- * @remarks
- * `id` is optional here and only here: a peer that could not read the failed
- * request's id omits the member rather than sending `null`, so an absent `id` is
- * valid and a `null` one is not. The envelope must own an `error` and must not own a
- * `result`. `error` carries an integer `code` and a string `message`. Total.
- *
- * @param value - The already-parsed value to test
- * @returns True if `value` is a valid JSON-RPC error response; false otherwise
- *
- * @example
- * ```ts
- * isJSONRPCErrorResponse({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' } }) // true
- * isJSONRPCErrorResponse({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'x' } }) // false
- * ```
- */
-export function isJSONRPCErrorResponse(value: unknown): value is JSONRPCErrorResponse {
-	const owned = attempt(() => cloneJSONRecord(value))
-	if (!owned.success) return false
-	const response = owned.value
-	if (response['jsonrpc'] !== '2.0') return false
-	if (Object.hasOwn(response, 'id') && !isJSONRPCId(response['id'])) return false
-	if (Object.hasOwn(response, 'result') || !Object.hasOwn(response, 'error')) return false
-	return isJSONRPCError(response['error'])
-}
-
-/**
- * Determines whether a parsed value is a {@link JSONRPCResponse}.
- *
- * @remarks
- * The union of the mutually exclusive arms. Total.
- *
- * @param value - The already-parsed value to test
- * @returns True if `value` is a valid JSON-RPC response; false otherwise
- */
-export function isJSONRPCResponse(value: unknown): value is JSONRPCResponse {
-	return isJSONRPCResultResponse(value) || isJSONRPCErrorResponse(value)
-}
-
-/**
- * Determines whether a parsed value is a {@link JSONRPCMessage} — an invocation or a
- * response.
- *
- * @remarks
- * The union of {@link isJSONRPCInvocation} and {@link isJSONRPCResponse}. Total.
- *
- * @param value - The already-parsed value to test
- * @returns True if `value` is a valid JSON-RPC message; false otherwise
- */
-export function isJSONRPCMessage(value: unknown): value is JSONRPCMessage {
-	return isJSONRPCInvocation(value) || isJSONRPCResponse(value)
 }
 
 /**

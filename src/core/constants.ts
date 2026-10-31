@@ -270,36 +270,12 @@ export const EMPTY_MCP_ARGUMENTS: Readonly<Record<string, unknown>> = Object.fre
 	Object.create(null),
 )
 
-/** Names the JSON-RPC 2.0 reserved error for invalid JSON received (the message did not parse). */
-export const JSONRPC_PARSE_ERROR = -32700
-
-/** Names the JSON-RPC 2.0 reserved error for a payload that was not a valid Request object. */
-export const JSONRPC_INVALID_REQUEST = -32600
-
-/** Names the JSON-RPC 2.0 reserved error for a requested method that does not exist. */
-export const JSONRPC_METHOD_NOT_FOUND = -32601
-
-/** Names the JSON-RPC 2.0 reserved error for a method's invalid parameters. */
-export const JSONRPC_INVALID_PARAMS = -32602
-
-/**
- * Names the JSON-RPC 2.0 reserved error for a server that failed while handling an otherwise
- * valid request.
- *
- * @remarks
- * The code every modern internal fault answers with — a provider, handler, continuation,
- * capacity, stream-source, normalization, or serialization failure the server contained.
- * It is detail-free on the wire: the caught value reaches the application through the
- * server's `error` event and never through the response.
- */
-export const JSONRPC_INTERNAL_ERROR = -32603
-
 /**
  * Names the JSON-RPC 2.0 implementation-defined server error (the `-32000` to `-32099` range).
  *
  * @remarks
- * Retained for the legacy branch alone. A modern fault answers
- * {@link JSONRPC_INTERNAL_ERROR}; this code survives only where an old-wire peer was
+ * Retained for the legacy branch alone. A modern fault answers the `JSONRPC_INTERNAL_ERROR` code
+ * from `@orkestrel/jsonrpc`; this code survives only where an old-wire peer was
  * already characterized against it.
  * A `handshake` hook that rejects with an `MCPError` answers the legacy `initialize`
  * with that error's own code and data.

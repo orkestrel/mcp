@@ -1,4 +1,4 @@
-import type { JSONRPCMessage, JSONRPCNotification, JSONRPCResponse } from '@src/core'
+import type { JSONRPCMessage, JSONRPCNotification, JSONRPCResponse } from '@orkestrel/jsonrpc'
 import { PassThrough, Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { MCPStreamController, MCPTextStreamController, sendStream } from '@src/core'

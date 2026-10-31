@@ -1,4 +1,5 @@
-import type { JSONRPCMessage } from '@src/core'
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
+import { buildJSONRPCResult, isJSONRPCId } from '@orkestrel/jsonrpc'
 import {
 	MCPFixtureCell,
 	MCP_SERVER_ANNOTATED_TOOLS,
@@ -10,9 +11,7 @@ import {
 } from '../../setup.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-	buildJSONRPCResult,
 	inferRequestVersion,
-	isJSONRPCId,
 	MCP_FALLBACK_VERSION,
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,

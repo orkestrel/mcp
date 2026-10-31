@@ -1,4 +1,6 @@
-import type { MCPMessageTransportEventMap, JSONRPCMessage, JSONRPCNotification } from '@src/core'
+import type { JSONRPCMessage, JSONRPCNotification } from '@orkestrel/jsonrpc'
+import { JSONRPC_INVALID_PARAMS, JSONRPC_METHOD_NOT_FOUND } from '@orkestrel/jsonrpc'
+import type { MCPMessageTransportEventMap } from '@src/core'
 import { startErrorPeer } from '../../setupServer.js'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
@@ -9,8 +11,6 @@ import {
 	createMCPServer,
 	isMCPError,
 	isMCPToolError,
-	JSONRPC_INVALID_PARAMS,
-	JSONRPC_METHOD_NOT_FOUND,
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
 	MCP_META_SUBSCRIPTION,
@@ -1008,7 +1008,7 @@ describe('MCPClient — id correlation', () => {
 		expect(caught.value.context).toEqual({ retry: false })
 	})
 
-	it('settles id-less errors over real HTTP without weakening correlated isolation', async () => {
+	it('settles null-id errors over real HTTP without weakening correlated isolation', async () => {
 		const peer = await startErrorPeer()
 		const connectingClient = createMCPClient({
 			transport: createHTTPClientTransport({ url: `${peer.base}/connect` }),
@@ -1076,6 +1076,46 @@ describe('MCPClient — id correlation', () => {
 			await connecting
 			await peer.stop()
 		}
+	})
+
+	it('reports a result that is not an MCP result object as malformed and settles nothing', async () => {
+		const peer = createCallPeer((request) =>
+			request.id === undefined ? undefined : { jsonrpc: '2.0', id: request.id, result: 5 },
+		)
+		const client = createMCPClient({ transport: peer, timeout: 30 })
+		await client.connect()
+		const errors: unknown[] = []
+		client.emitter.on('error', (error) => errors.push(error))
+
+		await expect(client.tools()).rejects.toThrow("MCP request 'tools/list' timed out after 30ms")
+		expect(errors).toEqual([
+			expect.objectContaining({
+				message: 'MCP transport delivered a malformed message',
+				code: JSONRPC_INVALID_PARAMS,
+			}),
+		])
+	})
+
+	it('reports an error that omits its id as malformed and settles nothing', async () => {
+		const peer = createFixturePeer({
+			reply: (request) =>
+				request.method === 'server/discover'
+					? JSON.parse('{"jsonrpc":"2.0","error":{"code":-32000,"message":"Bad Request"}}')
+					: undefined,
+		})
+		const client = createMCPClient({ transport: peer, timeout: 30 })
+		const errors: unknown[] = []
+		client.emitter.on('error', (error) => errors.push(error))
+
+		await expect(client.discover()).rejects.toThrow(
+			"MCP request 'server/discover' timed out after 30ms",
+		)
+		expect(errors).toEqual([
+			expect.objectContaining({
+				message: 'MCP transport delivered a malformed message',
+				code: JSONRPC_INVALID_PARAMS,
+			}),
+		])
 	})
 })
 

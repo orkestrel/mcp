@@ -1,7 +1,7 @@
+import { buildJSONRPCResult } from '@orkestrel/jsonrpc'
 import type { MCPMethodOptions } from '@src/core'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-	buildJSONRPCResult,
 	createMCPLegacy,
 	createMCPServer,
 	MCP_FALLBACK_VERSION,
@@ -304,6 +304,32 @@ describe('createMCPPostHandler', () => {
 		})
 	})
 
+	it('answers -32602 with a null id for a modern-header notification without _meta', async () => {
+		const handler = createPostHandler(createMCPLegacy(createCalculatorServer()), {
+			stream: false,
+		})
+		const response = await handler(
+			new Request('http://localhost/mcp', {
+				method: 'POST',
+				headers: {
+					[MCP_PROTOCOL_VERSION_HEADER]: MCP_MODERN_VERSION,
+					[MCP_METHOD_HEADER]: 'notifications/initialized',
+				},
+				body: JSON.stringify(createJSONRPCNotification('notifications/initialized')),
+			}),
+		)
+
+		expect(response.status).toBe(400)
+		expect(await response.json()).toEqual({
+			jsonrpc: '2.0',
+			id: null,
+			error: {
+				code: -32602,
+				message: 'Invalid params: malformed modern request metadata',
+			},
+		})
+	})
+
 	it('keeps -32022 for a protocol header naming a revision this server does not implement', async () => {
 		const handler = createPostHandler(createMCPLegacy(createCalculatorServer()), {
 			stream: false,
@@ -340,6 +366,7 @@ describe('createMCPPostHandler', () => {
 		expect(response.status).toBe(400)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
+			id: null,
 			error: { code: -32700, message: 'Parse error' },
 		})
 	})

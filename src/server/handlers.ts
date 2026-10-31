@@ -1,15 +1,17 @@
+import {
+	JSONRPC_INVALID_PARAMS,
+	JSONRPC_INVALID_REQUEST,
+	JSONRPC_PARSE_ERROR,
+	buildJSONRPCError,
+} from '@orkestrel/jsonrpc'
 import type { MCPDispatcherInterface } from '@src/core'
 import type { RouteContext } from '@orkestrel/router'
 import type { HTTPHandlerOptions } from './types.js'
 import {
-	JSONRPC_INVALID_REQUEST,
-	JSONRPC_INVALID_PARAMS,
-	JSONRPC_PARSE_ERROR,
 	MCP_HEADER_MISMATCH,
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_UNSUPPORTED_VERSION,
 	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
-	buildJSONRPCError,
 	inferRequestEra,
 	isMCPLegacyVersion,
 	isMCPModernVersion,
@@ -82,25 +84,24 @@ export function createMCPPostHandler<TState = unknown>(
 		if (!allowsOrigin(request, origin)) return new Response(null, { status: 403 })
 		const text = await readRequestText(request)
 		if (text === undefined) {
-			return Response.json(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'), {
+			return Response.json(buildJSONRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'), {
 				status: 400,
 			})
 		}
 		const parsed = parseJSON(text)
 		if (parsed === undefined) {
-			return Response.json(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'), {
+			return Response.json(buildJSONRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'), {
 				status: 400,
 			})
 		}
 		const invocation = parseJSONRPCMessage(parsed)
 		if (invocation === undefined || !('method' in invocation)) {
-			return Response.json(
-				buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Invalid Request'),
-				{ status: 400 },
-			)
+			return Response.json(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request'), {
+				status: 400,
+			})
 		}
 		const era = inferRequestEra(invocation)
-		const id = invocation.id
+		const id = invocation.id ?? null
 		const protocol = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
 		// A protocol header naming a MODERN revision is the client declaring the revision this
 		// server implements, so the request is held to that revision's own rule whatever shape

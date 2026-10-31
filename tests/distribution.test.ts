@@ -128,6 +128,7 @@ const CONSUMER_MANIFEST = `${JSON.stringify(
 			'@orkestrel/contract': '^0.0.19',
 			'@orkestrel/database': '^0.0.18',
 			'@orkestrel/emitter': '^0.0.12',
+			'@orkestrel/jsonrpc': '^0.0.1',
 			'@orkestrel/process': '^0.0.15',
 			'@orkestrel/queue': '^0.0.17',
 			'@orkestrel/router': '^0.0.17',

@@ -1,4 +1,4 @@
-import type { JSONRPCMessage } from '@src/core'
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
 import {
 	createEndlessFetch,
 	MCPFixtureCell,
@@ -123,6 +123,22 @@ describe('HTTPClientTransport — a non-success reply carrying no message reject
 		const transport = new HTTPClientTransport({
 			url: 'http://127.0.0.1:1/mcp',
 			fetch: () => Promise.resolve(Response.json(answer, { status: 404 })),
+		})
+		const delivered: JSONRPCMessage[] = []
+		transport.emitter.on('message', (message) => delivered.push(message))
+
+		await transport.send({ jsonrpc: '2.0', id: 1, method: 'tools/list' })
+
+		expect(delivered).toEqual([answer])
+	})
+})
+
+describe('HTTPClientTransport — a JSON-RPC result is any value', () => {
+	it('delivers an application/json result response whose result is a primitive', async () => {
+		const answer = { jsonrpc: '2.0', id: 1, result: 5 }
+		const transport = new HTTPClientTransport({
+			url: 'http://127.0.0.1:1/mcp',
+			fetch: () => Promise.resolve(Response.json(answer)),
 		})
 		const delivered: JSONRPCMessage[] = []
 		transport.emitter.on('message', (message) => delivered.push(message))

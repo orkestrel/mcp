@@ -14,8 +14,8 @@
 // That suite proves what they carry for a real page; this one proves what they promise as
 // instruments — what enters a drain, what a drain clears, and what a decode drops.
 
+import { buildJSONRPCResult } from '@orkestrel/jsonrpc'
 import { describe, expect, inject, it } from 'vitest'
-import { buildJSONRPCResult } from '@src/core'
 import { createMessagePortTransport } from '@src/browser'
 import { createRecorder } from '@orkestrel/test'
 import { createScopeCarrier, drainRecorded, recordPort } from './setupBrowser.js'

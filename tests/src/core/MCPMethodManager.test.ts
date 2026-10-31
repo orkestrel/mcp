@@ -1,10 +1,5 @@
-import type {
-	JSONRPCNotification,
-	JSONRPCRequest,
-	JSONRPCResponse,
-	MCPMethodHandler,
-	MCPStream,
-} from '@src/core'
+import type { JSONRPCNotification, JSONRPCRequest, JSONRPCResponse } from '@orkestrel/jsonrpc'
+import type { MCPMethodHandler, MCPStream } from '@src/core'
 import { MCPMethodManager } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { respondFixtureMethod, respondAlternateMethod } from '../../setup.js'

@@ -1,4 +1,6 @@
-import type { JSONRPCNotification, MCPStream, MCPStreamControllerInterface } from '@src/core'
+import type { JSONRPCNotification } from '@orkestrel/jsonrpc'
+import { buildJSONRPCResult } from '@orkestrel/jsonrpc'
+import type { MCPStream, MCPStreamControllerInterface } from '@src/core'
 import { LAST_RESORT_CONTROLLER, OWNERSHIP_SOURCES } from '../../setupServer.js'
 import {
 	createParkedStream,
@@ -12,7 +14,6 @@ import {
 	MCP_STREAM_FAILURE,
 } from '../../setup.js'
 import { readProjectSource } from '../../setupServer.js'
-import { buildJSONRPCResult } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { waitForDelay } from '@orkestrel/test'
 import { inspectOwnerOfLastResort, OWNER_OF_LAST_RESORT_SPELLINGS } from '../../setup.js'

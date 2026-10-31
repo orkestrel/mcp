@@ -1,4 +1,4 @@
-import type { JSONRPCMessage } from '@src/core'
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
 import { createLegacyPeer, buildLegacyHandshakeResponse, MCPFixtureCell } from '../../setup'
 import { describe, expect, it } from 'vitest'
 import {
@@ -264,6 +264,48 @@ describe('MCPLegacyClientTransport', () => {
 				error: { code: -32603, message: 'Legacy MCP peer returned a malformed result' },
 			},
 			{ jsonrpc: '2.0', id: 7, result: { tools: [] } },
+		])
+	})
+
+	it('answers a primitive correlated result as a malformed result', async () => {
+		const peer = createLegacyPeer({ drop: (method) => method === 'tools/list' })
+		const transport = createMCPLegacyClientTransport(peer)
+		const messages: JSONRPCMessage[] = []
+		const errors: unknown[] = []
+		transport.emitter.on('message', (message) => messages.push(message))
+		transport.emitter.on('error', (error) => errors.push(error))
+		await transport.start()
+		await transport.send({ jsonrpc: '2.0', id: 7, method: 'tools/list' })
+
+		peer.deliver({ jsonrpc: '2.0', id: 7, result: 5 })
+
+		expect(errors).toHaveLength(1)
+		expect(messages).toEqual([
+			{
+				jsonrpc: '2.0',
+				id: 7,
+				error: { code: -32603, message: 'Legacy MCP peer returned a malformed result' },
+			},
+		])
+	})
+
+	it('forwards a null-id error and refuses one that omits its id', async () => {
+		const peer = createLegacyPeer()
+		const transport = createMCPLegacyClientTransport(peer)
+		const messages: JSONRPCMessage[] = []
+		const errors: unknown[] = []
+		transport.emitter.on('message', (message) => messages.push(message))
+		transport.emitter.on('error', (error) => errors.push(error))
+		await transport.start()
+
+		peer.deliver({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } })
+		peer.deliver(JSON.parse('{"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error"}}'))
+
+		expect(messages).toEqual([
+			{ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } },
+		])
+		expect(errors).toEqual([
+			expect.objectContaining({ message: 'Legacy MCP peer returned a malformed message' }),
 		])
 	})
 

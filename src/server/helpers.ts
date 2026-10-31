@@ -1,18 +1,17 @@
+import type { JSONRPCInvocation } from '@orkestrel/jsonrpc'
+import { JSONRPC_INVALID_REQUEST, buildJSONRPCError } from '@orkestrel/jsonrpc'
 import type {
-	JSONRPCInvocation,
 	MCPDispatcherInterface,
 	MCPHeaderParameter,
 	MCPMessageTransportEventMap,
 	MCPStreamControllerInterface,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { StreamInterface } from '@orkestrel/server'
+import type { SSEStreamInterface } from '@orkestrel/server'
 import type { IncomingMessage } from 'node:http'
 import type { LineExtraction, MCPOriginOptions } from './types.js'
 import {
 	deliverMessage,
-	JSONRPC_INVALID_REQUEST,
-	buildJSONRPCError,
 	MCP_SESSION_HEADER,
 	MCP_LOOKUP_PAGES,
 	buildHeaderParameters,
@@ -93,7 +92,7 @@ export async function resolveHeaderParameters(
  */
 export async function sendEventStream(
 	stream: MCPStreamControllerInterface,
-	sse: StreamInterface,
+	sse: SSEStreamInterface,
 ): Promise<void> {
 	try {
 		// The inner `finally` is what makes the totality claim above true of the RELEASE too:
@@ -221,9 +220,9 @@ export function readLastEventId(request: Request): string | undefined {
  * JSON-RPC error body.
  *
  * @remarks
- * Returns `Response.json(buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Session not
+ * Returns `Response.json(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not
  * found'), { status: 404 })`, mirroring `createMCPRoutes`'s `400` transport-failure shape (a
- * JSON-RPC error body with no id) but at the session-not-found status. Shared by
+ * JSON-RPC error body with `id: null`) but at the session-not-found status. Shared by
  * every {@link import('./middlewares.js').createMCPSession} validation site — the
  * non-`initialize` `POST` path, the resumable `GET {path}` open, and the `DELETE {path}`
  * session-end (each a missing / unknown / TTL-evicted id) — so the single `404` envelope
@@ -232,7 +231,7 @@ export function readLastEventId(request: Request): string | undefined {
  * @returns The `404` JSON-RPC error `Response`
  */
 export function rejectUnknownSession(): Response {
-	return Response.json(buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Session not found'), {
+	return Response.json(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not found'), {
 		status: 404,
 	})
 }

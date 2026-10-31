@@ -121,7 +121,7 @@ export function createDuplexServerTransport(
  *
  * - A **transport** failure — a malformed JSON body, or a parsed value that is not a
  *   JSON-RPC invocation — is an HTTP `400` carrying a JSON-RPC error body (`-32700` Parse
- *   error / `-32600` Invalid Request), with the `id` it could not read omitted.
+ *   error / `-32600` Invalid Request) with `id: null`, because its id could not be read.
  * - Modern protocol/method/name headers are validated against the body; a mismatch is
  *   HTTP `400` + `-32020`. Headerless initialize is accepted, a live legacy session supplies
  *   its pinned revision, and every other headerless request is rejected.

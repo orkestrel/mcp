@@ -1,5 +1,6 @@
+import type { JSONRPCNotification } from '@orkestrel/jsonrpc'
+import { isJSONRPCNotification } from '@orkestrel/jsonrpc'
 import type {
-	JSONRPCNotification,
 	MCPLimitOptions,
 	MCPMethodOptions,
 	MCPServerOptions,
@@ -8,7 +9,6 @@ import type {
 } from './types.js'
 import { matchesSubscriptionNotification } from './helpers.js'
 import { parseJSONRPCMessage } from './parsers.js'
-import { isJSONRPCNotification } from './validators.js'
 
 /** Owns one subscription producer, its registry listeners, and its unread registry frame. */
 export class MCPSubscriptionSource {

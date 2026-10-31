@@ -1,14 +1,21 @@
-import type { EmitterInterface } from '@orkestrel/emitter'
-import type { SSEParserInterface } from '@orkestrel/sse'
-import type { ToolAnnotations, ToolCall, ToolManagerInterface } from '@orkestrel/tool'
 import type {
-	JSONRPCErrorResponse,
 	JSONRPCId,
 	JSONRPCInvocation,
 	JSONRPCMessage,
 	JSONRPCNotification,
 	JSONRPCRequest,
 	JSONRPCResultResponse,
+} from '@orkestrel/jsonrpc'
+import {
+	JSONRPC_INVALID_PARAMS,
+	buildJSONRPCResult,
+	isJSONRPCId,
+	isJSONRPCNotification,
+} from '@orkestrel/jsonrpc'
+import type { EmitterInterface } from '@orkestrel/emitter'
+import type { SSEParserInterface } from '@orkestrel/sse'
+import type { ToolAnnotations, ToolCall, ToolManagerInterface } from '@orkestrel/tool'
+import type {
 	MCPCallOutcome,
 	MCPClientCapabilities,
 	MCPMessageTransportEventMap,
@@ -55,7 +62,6 @@ import {
 import {
 	DEFAULT_MCP_CACHE_TTL,
 	DEFAULT_MCP_LIMITS,
-	JSONRPC_INVALID_PARAMS,
 	MCP_EXTENSION_TASKS,
 	MCP_HEADER_ANNOTATION,
 	MCP_PARAM_PREFIX,
@@ -75,8 +81,6 @@ import { parseJSONRPCMessage } from './parsers.js'
 import {
 	isBoundedString,
 	isFieldToken,
-	isJSONRPCId,
-	isJSONRPCNotification,
 	isMCPHeaderPrimitive,
 	isMCPInputResult,
 	isMCPLegacyVersion,
@@ -650,53 +654,6 @@ export function buildToolCall(
 // Pure dispatch builders (the dispatch branches stay exported helpers,
 // not hidden privates). Each turns a piece of MCP state into the JSON-RPC `result`
 // payload (or a response envelope) the server returns — independently testable.
-
-/**
- * Builds a JSON-RPC success {@link JSONRPCResultResponse} — the `id` echoed, the
- * method's value as `result`.
- *
- * @remarks
- * A result answers a request, and a request always carries a readable id, so `id` is
- * required here. The failure arm is the only one that can lack one.
- *
- * @param id - The request's id
- * @param result - The method's return value
- * @returns The success response envelope
- */
-export function buildJSONRPCResult(
-	id: JSONRPCId,
-	result: MCPResult | MCPLegacyResult,
-): JSONRPCResultResponse {
-	return { jsonrpc: '2.0', id, result }
-}
-
-/**
- * Builds a JSON-RPC error {@link JSONRPCErrorResponse} — the `id` echoed, the failure
- * as an `error` object.
- *
- * @remarks
- * An `undefined` `id` is omitted from the envelope rather than serialized as `null`:
- * MCP overrides the base specification here, so a peer that could not have its id
- * read receives a response with no `id` member at all.
- *
- * @param id - The failed request's id, or `undefined` when none could be read
- * @param code - One of the reserved JSON-RPC codes (see `./constants.js`)
- * @param message - A short human description of the failure
- * @param data - An optional machine-readable payload (omitted from the envelope when absent)
- * @returns The error response envelope
- */
-export function buildJSONRPCError(
-	id: JSONRPCId | undefined,
-	code: number,
-	message: string,
-	data?: unknown,
-): JSONRPCErrorResponse {
-	return {
-		jsonrpc: '2.0',
-		...(id === undefined ? {} : { id }),
-		error: data === undefined ? { code, message } : { code, message, data },
-	}
-}
 
 /**
  * Resolves the caller-facing dispatch options into the options a dispatched method

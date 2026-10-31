@@ -1,4 +1,5 @@
-import type { JSONRPCInvocation, JSONRPCMessage, MCPEra, MCPModernVersion } from './types.js'
+import type { JSONRPCInvocation, JSONRPCMessage } from '@orkestrel/jsonrpc'
+import type { MCPEra, MCPModernVersion } from './types.js'
 import { isMCPLegacyVersion, isMCPModernVersion, isModernRequest } from './validators.js'
 import { isRecord, isString } from '@orkestrel/contract'
 import { MCP_META_VERSION, SUPPORTED_MODERN_PROTOCOL_VERSIONS } from './constants.js'

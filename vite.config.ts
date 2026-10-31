@@ -23,6 +23,7 @@ const optimizeDeps = {
 		'@orkestrel/codec',
 		'@orkestrel/contract',
 		'@orkestrel/emitter',
+		'@orkestrel/jsonrpc',
 		'@orkestrel/process',
 		'@orkestrel/sse',
 		'@orkestrel/tool',

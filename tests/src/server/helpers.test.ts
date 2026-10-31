@@ -1,3 +1,4 @@
+import { JSONRPC_INVALID_REQUEST, buildJSONRPCError } from '@orkestrel/jsonrpc'
 import {
 	createServerReplyStream,
 	createServerFaultStream,
@@ -9,9 +10,7 @@ import {
 import { Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import {
-	buildJSONRPCError,
 	encodeSentinel,
-	JSONRPC_INVALID_REQUEST,
 	MCP_HANDSHAKE_VERSION,
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,
@@ -585,7 +584,7 @@ describe('rejectUnknownSession — the 404 + JSON-RPC "Session not found" body',
 		const response = rejectUnknownSession()
 		expect(response.status).toBe(404)
 		expect(await response.json()).toEqual(
-			buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Session not found'),
+			buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Session not found'),
 		)
 	})
 })

@@ -1,8 +1,5 @@
-import type {
-	JSONRPCMessage,
-	MCPMessageTransportInterface,
-	WebSocketClientTransportOptions,
-} from '@src/core'
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
+import type { MCPMessageTransportInterface, WebSocketClientTransportOptions } from '@src/core'
 import type { NodeWebSocketClientTransportOptions } from '@src/server'
 import { createServer as createHTTPServer } from 'node:http'
 import { PassThrough } from 'node:stream'
@@ -491,6 +488,7 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 		const body = await response.json()
 		expect(body).toEqual({
 			jsonrpc: '2.0',
+			id: null,
 			error: { code: -32700, message: 'Parse error' },
 		})
 	})
@@ -502,6 +500,7 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 		expect(response.status).toBe(400)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
+			id: null,
 			error: { code: -32600, message: 'Invalid Request' },
 		})
 	})

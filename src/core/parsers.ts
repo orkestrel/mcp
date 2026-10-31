@@ -1,9 +1,6 @@
-import type {
-	JSONRPCMessage,
-	MCPInputState,
-	MCPJSONLimitOptions,
-	MCPRequestContext,
-} from './types.js'
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
+import { isJSONRPCId, isJSONRPCMessage } from '@orkestrel/jsonrpc'
+import type { MCPInputState, MCPJSONLimitOptions, MCPRequestContext } from './types.js'
 import {
 	isFiniteNumber,
 	isInteger,
@@ -21,8 +18,6 @@ import {
 	MCP_META_VERSION,
 } from './constants.js'
 import {
-	isJSONRPCId,
-	isJSONRPCMessage,
 	isMCPClientCapabilities,
 	isMCPIdentity,
 	isMCPInputRequestMap,
@@ -59,11 +54,13 @@ import {
  *   `isBoundedJSON` is this parser's own admission test — the same canonical
  *   serializer under the same `limits` — so they cannot disagree about the bound.
  *
- * {@link isJSONRPCMessage} Alone is not that partner. It is clone-backed and so already
- * exact about shape, but it carries no size or depth bound — so guard-valid values
- * exist that this parser rejects: a message nested deeper than `limits.depth`, and one
- * whose canonical text exceeds `limits.bytes`. Those are named causes, not a complete
- * boundary. Among values `isJSONRPCMessage` already admits, the admitted set is exactly
+ * {@link isJSONRPCMessage} Alone is not that partner. `snapshotJSON` owns the exact,
+ * bounded snapshot, and the `@orkestrel/jsonrpc` guard reads its result: the guard reads
+ * members structurally and carries no size or depth bound, so guard-valid values exist
+ * that this parser rejects: an accessor, non-enumerable, or own-`undefined` member, a
+ * message nested deeper than `limits.depth`, and one whose canonical text exceeds
+ * `limits.bytes`. Those are named causes, not a complete boundary. Among values
+ * `isJSONRPCMessage` admits, the admitted set is exactly
  * what canonical serialization accepts under `limits`, so a caller who needs that line
  * tests it with `isBoundedJSON` rather than inferring it from this list.
  *

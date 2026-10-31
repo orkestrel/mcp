@@ -1,9 +1,5 @@
-import type {
-	JSONRPCNotification,
-	JSONRPCResponse,
-	MCPStream,
-	MCPStreamControllerInterface,
-} from './types.js'
+import type { JSONRPCNotification, JSONRPCResponse } from '@orkestrel/jsonrpc'
+import type { MCPStream, MCPStreamControllerInterface } from './types.js'
 
 /**
  * Provides the one cancellation engine every modern held-open result leaves `MCPServer`

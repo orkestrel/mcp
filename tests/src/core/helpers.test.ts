@@ -1,9 +1,6 @@
-import type {
-	JSONRPCNotification,
-	MCPMethodHandler,
-	MCPMethodOptions,
-	MCPSubscriptionFilter,
-} from '@src/core'
+import type { JSONRPCNotification } from '@orkestrel/jsonrpc'
+import { JSONRPC_PARSE_ERROR, buildJSONRPCError, buildJSONRPCResult } from '@orkestrel/jsonrpc'
+import type { MCPMethodHandler, MCPMethodOptions, MCPSubscriptionFilter } from '@src/core'
 import type { MCPHeaderParameter } from '@src/core'
 import {
 	MCPFixtureCell,
@@ -37,8 +34,6 @@ import {
 	buildInitializeResult,
 	buildCallOutcome,
 	buildCancelledNotification,
-	buildJSONRPCError,
-	buildJSONRPCResult,
 	buildMethodOptions,
 	buildModernResult,
 	buildProgressNotification,
@@ -58,7 +53,6 @@ import {
 	DEFAULT_MCP_CACHE_TTL,
 	digestJSON,
 	encodeSentinel,
-	JSONRPC_PARSE_ERROR,
 	extractContentText,
 	MCP_EXTENSION_TASKS,
 	MCP_META_CAPABILITIES,
@@ -178,77 +172,6 @@ describe('capability predicates', () => {
 })
 
 // A modern request — the reserved metadata key is what selects the modern era.
-// The pure dispatch builders (exported, independently testable). Each
-// turns a piece of MCP state into the JSON-RPC result payload (or envelope) the
-// server returns.
-
-describe('buildJSONRPCResult', () => {
-	it('builds a success envelope echoing the id', () => {
-		expect(buildJSONRPCResult(1, { ok: true })).toEqual({
-			jsonrpc: '2.0',
-			id: 1,
-			result: { ok: true },
-		})
-	})
-
-	it('carries the legacy result arm, which has no resultType', () => {
-		expect(buildJSONRPCResult(1, { tools: [] })).toEqual({
-			jsonrpc: '2.0',
-			id: 1,
-			result: { tools: [] },
-		})
-	})
-})
-
-describe('buildJSONRPCError', () => {
-	it('builds an error envelope without data when none is given', () => {
-		expect(buildJSONRPCError(1, -32601, 'Method not found')).toEqual({
-			jsonrpc: '2.0',
-			id: 1,
-			error: { code: -32601, message: 'Method not found' },
-		})
-	})
-
-	it('includes data when supplied', () => {
-		expect(buildJSONRPCError(1, -32000, 'Server error', { detail: 'x' })).toEqual({
-			jsonrpc: '2.0',
-			id: 1,
-			error: { code: -32000, message: 'Server error', data: { detail: 'x' } },
-		})
-	})
-
-	// The id member is ABSENT when none could be read, not present-and-null, so a
-	// modern peer never receives the `id: null` the base specification would have sent.
-	it('omits the id member entirely when none could be read', () => {
-		const envelope = buildJSONRPCError(undefined, -32700, 'Parse error')
-
-		expect(envelope).toEqual({
-			jsonrpc: '2.0',
-			error: { code: -32700, message: 'Parse error' },
-		})
-		expect(Object.hasOwn(envelope, 'id')).toBe(false)
-		expect(JSON.stringify(envelope)).not.toContain('id')
-	})
-
-	it('keeps an empty-string id, which is a legal id rather than an absent one', () => {
-		const envelope = buildJSONRPCError('', -32600, 'Invalid Request')
-
-		expect(Object.hasOwn(envelope, 'id')).toBe(true)
-		expect(envelope.id).toBe('')
-	})
-
-	it('omits an unreadable id from the built envelope entirely', () => {
-		const anonymous = buildJSONRPCError(undefined, -32_700, 'Parse error')
-		const correlated = buildJSONRPCError('abc', -32_600, 'Invalid Request')
-
-		expect(Object.hasOwn(anonymous, 'id')).toBe(false)
-		expect(JSON.stringify(anonymous)).toBe(
-			'{"jsonrpc":"2.0","error":{"code":-32700,"message":"Parse error"}}',
-		)
-		expect(correlated.id).toBe('abc')
-	})
-})
-
 // The resolution site. A caller may have no signal to offer; a dispatched method
 // always has one to observe, so absence is resolved ONCE here rather than cased on by
 // every handler, elicitation, principal, and subscription producer downstream.
@@ -1333,7 +1256,7 @@ describe('bindServer — exchange ownership and inbound cancellation', () => {
 		await waitForDelay()
 
 		expect(transport.sent).toEqual([
-			JSON.stringify(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error')),
+			JSON.stringify(buildJSONRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error')),
 		])
 	})
 

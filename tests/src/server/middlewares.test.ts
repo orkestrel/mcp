@@ -1,9 +1,9 @@
+import { buildJSONRPCResult } from '@orkestrel/jsonrpc'
 import type { MCPSessionState } from '@src/server'
 import type { AppState } from '../../setupServer.js'
 import { request } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
-	buildJSONRPCResult,
 	createMCPClient,
 	createMCPLegacy,
 	createMCPLegacyClientTransport,
@@ -25,6 +25,7 @@ import { createMCPRoutes, createMCPSession } from '@src/server'
 import { createTeardown, waitForDelay } from '@orkestrel/test'
 import {
 	createCalculatorServer,
+	createJSONRPCNotification,
 	createJSONRPCRequest,
 	createManualClock,
 	postJSON,
@@ -294,6 +295,32 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		})
 	})
 
+	it('a live session rejects a mismatched notification with a null id', async () => {
+		const handle = await startSession(teardown)
+		const init = await postJSON(
+			handle.base,
+			createJSONRPCRequest({ params: { protocolVersion: '2025-11-25' } }),
+		)
+		const id = init.headers.get(MCP_SESSION_HEADER)
+		const response = await postSession(
+			handle.base,
+			id ?? undefined,
+			createJSONRPCNotification('notifications/initialized'),
+			{ [MCP_PROTOCOL_VERSION_HEADER]: '2025-06-18' },
+		)
+
+		expect(response.status).toBe(400)
+		expect(await response.json()).toEqual({
+			jsonrpc: '2.0',
+			id: null,
+			error: {
+				code: -32020,
+				message:
+					"MCP-Protocol-Version header does not match the active session version '2025-11-25'.",
+			},
+		})
+	})
+
 	it('a post-initialize request with an unsupported protocol-version header is rejected', async () => {
 		const handle = await startSession(teardown)
 		const init = await postJSON(handle.base, createJSONRPCRequest())
@@ -338,6 +365,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		expect(response.status).toBe(404)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
+			id: null,
 			error: { code: -32600, message: 'Session not found' },
 		})
 	})
@@ -449,6 +477,7 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		expect(response.status).toBe(400)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
+			id: null,
 			error: { code: -32700, message: 'Parse error' },
 		})
 	})
@@ -713,6 +742,7 @@ describe('createMCPSession — resumable GET-SSE push channel', () => {
 		expect(response.status).toBe(404)
 		expect(await response.json()).toEqual({
 			jsonrpc: '2.0',
+			id: null,
 			error: { code: -32600, message: 'Session not found' },
 		})
 	})

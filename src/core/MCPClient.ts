@@ -1,12 +1,24 @@
-import type { EmitterInterface } from '@orkestrel/emitter'
-import type { ToolContext, ToolInterface } from '@orkestrel/tool'
 import type {
-	MCPMessageTransportInterface,
 	JSONRPCId,
 	JSONRPCInvocation,
 	JSONRPCMessage,
 	JSONRPCNotification,
 	JSONRPCRequest,
+} from '@orkestrel/jsonrpc'
+import {
+	JSONRPC_INTERNAL_ERROR,
+	JSONRPC_INVALID_PARAMS,
+	JSONRPC_INVALID_REQUEST,
+	JSONRPC_METHOD_NOT_FOUND,
+	isJSONRPCId,
+	isJSONRPCNotification,
+	isJSONRPCResponse,
+	isJSONRPCResultResponse,
+} from '@orkestrel/jsonrpc'
+import type { EmitterInterface } from '@orkestrel/emitter'
+import type { ToolContext, ToolInterface } from '@orkestrel/tool'
+import type {
+	MCPMessageTransportInterface,
 	MCPCallOptions,
 	MCPCallOutcome,
 	MCPClientEventMap,
@@ -41,10 +53,6 @@ import {
 	DEFAULT_MCP_CLIENT_VERSION,
 	DEFAULT_MCP_REQUEST_TIMEOUT,
 	DEFAULT_MCP_SUBSCRIPTION_CAPACITY,
-	JSONRPC_INTERNAL_ERROR,
-	JSONRPC_INVALID_PARAMS,
-	JSONRPC_INVALID_REQUEST,
-	JSONRPC_METHOD_NOT_FOUND,
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
 	MCP_META_SUBSCRIPTION,
@@ -63,11 +71,10 @@ import {
 import { inferVersion } from './inferers.js'
 import { parseJSONRPCMessage } from './parsers.js'
 import {
-	isJSONRPCId,
-	isJSONRPCNotification,
-	isJSONRPCResponse,
+	isMCPLegacyResult,
 	isMCPModernVersion,
 	isMCPProgress,
+	isMCPResult,
 	isMCPResultMetaObject,
 	isMCPServerCapabilities,
 	isMCPSubscriptionResult,
@@ -607,8 +614,8 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	// Handle one inbound transport message: a correlated response settles its pending request by
-	// id (an error response rejects, a result resolves), while an id-less error rejects every
-	// pending request because the peer could not identify which one failed. A `notifications/progress` frame
+	// id (an error response rejects, a result resolves), while an error whose id is `null` rejects
+	// every pending request because the peer could not identify which one failed. A `notifications/progress` frame
 	// naming an in-flight request goes to that request's progress handler; anything else
 	// server-initiated is re-surfaced on the `notification` event.
 	//
@@ -618,7 +625,15 @@ export class MCPClient implements MCPClientInterface {
 	// request is to be ignored, not treated as a fault. Publishing it as a `notification`
 	// would announce a response as a server-initiated message, which it is not.
 	#receive(message: JSONRPCMessage): void {
-		const owned = parseJSONRPCMessage(message)
+		const parsed = parseJSONRPCMessage(message)
+		// A JSON-RPC result is any value, and an MCP result is an object of one era's shape.
+		const owned =
+			parsed !== undefined &&
+			isJSONRPCResultResponse(parsed) &&
+			!isMCPResult(parsed.result) &&
+			!isMCPLegacyResult(parsed.result)
+				? undefined
+				: parsed
 		if (owned === undefined) {
 			const correlated = attempt(() => {
 				if (!isRecord(message)) return undefined
@@ -652,7 +667,7 @@ export class MCPClient implements MCPClientInterface {
 			)
 			return
 		}
-		if (isJSONRPCResponse(owned) && owned.id === undefined && owned.error !== undefined) {
+		if (isJSONRPCResponse(owned) && owned.id === null && owned.error !== undefined) {
 			for (const id of this.#pending.keys()) {
 				this.#settle(
 					id,
@@ -666,7 +681,7 @@ export class MCPClient implements MCPClientInterface {
 			}
 			return
 		}
-		if (isJSONRPCResponse(owned) && owned.id !== undefined) {
+		if (isJSONRPCResponse(owned) && owned.id !== null) {
 			const correlation = owned.id
 			const pending = this.#pending.get(correlation)
 			if (pending !== undefined) {

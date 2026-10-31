@@ -1,10 +1,10 @@
+import { JSONRPC_INVALID_PARAMS } from '@orkestrel/jsonrpc'
 import type {
 	MCPRequestFunction,
 	MCPTaskClientInterface,
 	MCPTaskClientOptions,
 	MCPTaskDetail,
 } from './types.js'
-import { JSONRPC_INVALID_PARAMS } from './constants.js'
 import { MCPError } from './errors.js'
 import { isMCPTaskDetailResult } from './validators.js'
 

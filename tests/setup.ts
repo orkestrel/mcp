@@ -1,4 +1,13 @@
 import type {
+	JSONRPCId,
+	JSONRPCInvocation,
+	JSONRPCMessage,
+	JSONRPCNotification,
+	JSONRPCRequest,
+	JSONRPCResponse,
+} from '@orkestrel/jsonrpc'
+import { buildJSONRPCResult, isJSONRPCErrorResponse } from '@orkestrel/jsonrpc'
+import type {
 	MCPCallResult,
 	MCPCompletion,
 	MCPCompletionInterface,
@@ -27,12 +36,6 @@ import type {
 	MCPMessageTransportEventMap,
 	MCPDispatcherInterface,
 	MCPMessageTransportInterface,
-	JSONRPCId,
-	JSONRPCInvocation,
-	JSONRPCMessage,
-	JSONRPCNotification,
-	JSONRPCRequest,
-	JSONRPCResponse,
 	MCPClientCapabilities,
 	MCPClientInterface,
 	MCPConsumerFilter,
@@ -59,12 +62,11 @@ import type {
 	MCPTaskDetail,
 	MCPTaskManagerInterface,
 } from '@src/core'
-import { isJSONRPCErrorResponse, isMCPInputResult, parseMCPInputState } from '@src/core'
+import { isMCPInputResult, parseMCPInputState } from '@src/core'
 import * as core from '@src/core'
 import {
 	bindClient,
 	bindServer,
-	buildJSONRPCResult,
 	createDuplexClientTransport,
 	createMCPClient,
 	createMCPLegacy,
@@ -2673,17 +2675,17 @@ export const MCP_LEGACY_CASES: ReadonlyArray<
 	[
 		'malformed-null-id',
 		{ jsonrpc: '2.0', id: JSON.parse('null'), method: 'ping' },
-		{ jsonrpc: '2.0', error: { code: -32600, message: 'Invalid Request' } },
+		{ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } },
 	],
 	[
 		'malformed-fractional-id',
 		{ jsonrpc: '2.0', id: 2.5, method: 'ping' },
-		{ jsonrpc: '2.0', error: { code: -32600, message: 'Invalid Request' } },
+		{ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } },
 	],
 	[
 		'oversized-message',
 		{ jsonrpc: '2.0', id: 24, method: 'ping', params: { text: 'x'.repeat(2048) } },
-		{ jsonrpc: '2.0', error: { code: -32600, message: 'Invalid Request' } },
+		{ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid Request' } },
 	],
 	['initialized-notification', { jsonrpc: '2.0', method: 'notifications/initialized' }, undefined],
 ]
@@ -2722,15 +2724,6 @@ export const PUBLISHED_GUARDS: Readonly<Record<string, FixtureGuard>> = Object.f
 	isInitializeRequest: core.isInitializeRequest,
 	isPingRequest: core.isPingRequest,
 	isJSONObject: core.isJSONObject,
-	isJSONRPCError: core.isJSONRPCError,
-	isJSONRPCErrorResponse: core.isJSONRPCErrorResponse,
-	isJSONRPCId: core.isJSONRPCId,
-	isJSONRPCInvocation: core.isJSONRPCInvocation,
-	isJSONRPCMessage: core.isJSONRPCMessage,
-	isJSONRPCNotification: core.isJSONRPCNotification,
-	isJSONRPCRequest: core.isJSONRPCRequest,
-	isJSONRPCResponse: core.isJSONRPCResponse,
-	isJSONRPCResultResponse: core.isJSONRPCResultResponse,
 	isMCPAnnotations: core.isMCPAnnotations,
 	isMCPBlobResource: core.isMCPBlobResource,
 	isMCPCallResult: core.isMCPCallResult,

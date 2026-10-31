@@ -1,4 +1,4 @@
-import type { JSONRPCMessage } from '@src/core'
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
 import { describe, expect, it } from 'vitest'
 import { delimiter, join } from 'node:path'
 import { PROCESS_DRAIN, PROCESS_EVIDENCE } from '@orkestrel/process'

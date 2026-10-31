@@ -1,8 +1,8 @@
+import { isJSONRPCMessage } from '@orkestrel/jsonrpc'
 import { buildProtectedPayload } from '../../setup.js'
 import {
 	DEFAULT_MCP_LIMITS,
 	isBoundedJSON,
-	isJSONRPCMessage,
 	isModernRequest,
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
@@ -54,6 +54,33 @@ describe('parseJSONRPCMessage', () => {
 		for (const value of [null, undefined, 42, 'x', [1, 2], true]) {
 			expect(parseJSONRPCMessage(value)).toBeUndefined()
 		}
+	})
+
+	it('rejects accessor, hidden, and own-undefined request populations the guard admits', () => {
+		const accessor = Object.defineProperty({ jsonrpc: '2.0', id: 1 }, 'method', {
+			enumerable: true,
+			get: () => 'ping',
+		})
+		const hidden = Object.defineProperty({ jsonrpc: '2.0', id: 1 }, 'method', {
+			enumerable: false,
+			value: 'ping',
+		})
+		const vacant = { jsonrpc: '2.0', method: 'ping', id: 1, params: { cursor: undefined } }
+
+		for (const request of [accessor, hidden, vacant]) {
+			expect(isJSONRPCMessage(request)).toBe(true)
+			expect(parseJSONRPCMessage(request)).toBeUndefined()
+		}
+	})
+
+	it('rejects an accessor response population the guard admits', () => {
+		const accessor = Object.defineProperty({ jsonrpc: '2.0', id: 1 }, 'result', {
+			enumerable: true,
+			get: () => ({ ok: true }),
+		})
+
+		expect(isJSONRPCMessage(accessor)).toBe(true)
+		expect(parseJSONRPCMessage(accessor)).toBeUndefined()
 	})
 
 	it('rejects a guard-valid message nested deeper than the default depth bound', () => {
@@ -114,7 +141,8 @@ describe('parseJSONRPCMessage', () => {
 		// message whose `params` is buildNestedRecord(N) it is N + 2 — the builder's own threshold
 		// is N + 1, and the enclosing message level supplies the other — so 41 still rejects and 42
 		// admits. The guard assertion
-		// reads neither bound — validators.ts never imports DEFAULT_MCP_LIMITS — so it stays green
+		// reads neither bound — snapshotJSON owns the bounded snapshot and the @orkestrel/jsonrpc
+		// guard reads only the shape — so it stays green
 		// under every bound mutation, which is what makes this value guard-valid and out of bounds
 		// at once. A non-finite depth makes serializeJSON fail closed, leaving every assertion in
 		// this block green.

@@ -1,7 +1,7 @@
+import { JSONRPC_METHOD_NOT_FOUND } from '@orkestrel/jsonrpc'
 import {
 	createMCPLegacy,
 	createMCPClient,
-	JSONRPC_METHOD_NOT_FOUND,
 	MCP_FALLBACK_VERSION,
 	MCP_META_CAPABILITIES,
 	MCP_META_VERSION,

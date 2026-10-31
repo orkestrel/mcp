@@ -1,4 +1,4 @@
-import type { StreamInterface } from '@orkestrel/server'
+import type { SSEStreamInterface } from '@orkestrel/server'
 import type { MCPKeepaliveOptions } from './types.js'
 import { sanitizeBudget } from '@orkestrel/contract'
 import { DEFAULT_MCP_KEEPALIVE_INTERVAL, SSE_KEEPALIVE_COMMENT } from './constants.js'
@@ -96,7 +96,7 @@ export class HTTPDisconnect {
 	 * @throws When this disconnect has already bridged a stream, or the supplied SSE response
 	 *   has no body
 	 */
-	bridge(stream: StreamInterface): Response {
+	bridge(stream: SSEStreamInterface): Response {
 		// One disconnect composes ONE request with ONE response, and the guard is what makes that
 		// enforced rather than merely documented. A second call used to overwrite `#timer`, which
 		// left the first interval running with no handle able to clear it, and its own abort

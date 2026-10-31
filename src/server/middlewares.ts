@@ -1,10 +1,10 @@
+import { buildJSONRPCError } from '@orkestrel/jsonrpc'
 import type { MiddlewareHandler } from '@orkestrel/server'
 import type { MCPSessionMiddlewareOptions, MCPSessionState } from './types.js'
 import {
 	MCP_HEADER_MISMATCH,
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
-	buildJSONRPCError,
 	isInitializeRequest,
 	isPingRequest,
 	isModernRequest,
@@ -202,7 +202,7 @@ export function createMCPSession<TState extends MCPSessionState>(
 			if (issue?.reason === 'missing') {
 				headers.set(MCP_PROTOCOL_VERSION_HEADER, entry.version)
 			} else if (issue !== undefined) {
-				const requestId = parsed !== undefined && 'method' in parsed ? parsed.id : undefined
+				const requestId = parsed !== undefined && 'method' in parsed ? (parsed.id ?? null) : null
 				return Response.json(buildJSONRPCError(requestId, MCP_HEADER_MISMATCH, issue.message), {
 					status: 400,
 				})

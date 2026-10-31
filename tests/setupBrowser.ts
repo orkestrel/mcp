@@ -1,7 +1,7 @@
 // Browser-only test infrastructure — real page globals and the in-page carrier peers the
 // duplex proof observes. Loaded by the `src:browser` project only.
 
-import type { JSONRPCMessage, JSONRPCResponse } from '@src/core'
+import type { JSONRPCMessage, JSONRPCResponse } from '@orkestrel/jsonrpc'
 import type {
 	ModelContextInterface,
 	ScopeTransportInterface,

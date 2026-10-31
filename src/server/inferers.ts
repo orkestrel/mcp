@@ -1,15 +1,8 @@
-import type {
-	JSONRPCInvocation,
-	JSONRPCResponse,
-	MCPEra,
-	MCPHeaderParameter,
-	MCPLegacyVersion,
-	MCPVersion,
-} from '@src/core'
+import type { JSONRPCInvocation, JSONRPCResponse } from '@orkestrel/jsonrpc'
+import { JSONRPC_INVALID_PARAMS, JSONRPC_METHOD_NOT_FOUND } from '@orkestrel/jsonrpc'
+import type { MCPEra, MCPHeaderParameter, MCPLegacyVersion, MCPVersion } from '@src/core'
 import type { MCPHeaderIssue } from './types.js'
 import {
-	JSONRPC_INVALID_PARAMS,
-	JSONRPC_METHOD_NOT_FOUND,
 	MCP_HEADER_MISMATCH,
 	MCP_META_VERSION,
 	MCP_MISSING_CAPABILITY,

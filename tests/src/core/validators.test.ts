@@ -1,11 +1,5 @@
+import { buildJSONRPCResult, isJSONRPCError, isJSONRPCRequest } from '@orkestrel/jsonrpc'
 import type {
-	JSONRPCId,
-	JSONRPCErrorResponse,
-	JSONRPCInvocation,
-	JSONRPCNotification,
-	JSONRPCRequest,
-	JSONRPCResponse,
-	JSONRPCResultResponse,
 	MCPCallResult,
 	MCPConsumerFilter,
 	MCPDiscoverResult,
@@ -27,7 +21,6 @@ import type {
 } from '@src/core'
 import * as core from '@src/core'
 import {
-	buildJSONRPCResult,
 	computeMissingCapabilities,
 	isMCPError,
 	isAbsoluteURI,
@@ -48,14 +41,6 @@ import {
 	isMCPInputResponse,
 	isMCPInputResult,
 	isJSONObject,
-	isJSONRPCErrorResponse,
-	isJSONRPCId,
-	isJSONRPCInvocation,
-	isJSONRPCMessage,
-	isJSONRPCNotification,
-	isJSONRPCRequest,
-	isJSONRPCResponse,
-	isJSONRPCResultResponse,
 	isMCPAnnotations,
 	isMCPBlobResource,
 	isMCPCallResult,
@@ -89,7 +74,6 @@ import {
 	isMCPSampleContent,
 	isMCPSampleResult,
 	isMCPServerCapabilities,
-	isJSONRPCError,
 	isMCPNotificationMetaObject,
 	isMCPTaskDetail,
 	isMCPTaskDetailResult,
@@ -122,8 +106,6 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import { createHostileValues } from '@orkestrel/test'
 import {
 	createHostileCorpus,
-	createJSONRPCNotification,
-	createJSONRPCRequest,
 	createThrowingKeys,
 	GUARD_KEY_NAMES,
 	PUBLISHED_GUARDS,
@@ -133,11 +115,6 @@ import {
 	MCPValueFixture,
 	declineFixtureTask,
 } from '../../setup.js'
-
-// The JSON-RPC 2.0 wire guards (total functions over an already-parsed
-// `unknown`; adversarial input returns `false`, never throws). A request REQUIRES an
-// `id` and a notification forbids one; a response carries EXACTLY ONE of result / error,
-// and only the error arm may omit its `id`.
 
 describe('bounded hostile values', () => {
 	it('counts UTF-8 string bytes at the exact boundary', () => {
@@ -603,56 +580,6 @@ describe('dated metadata, identity, and capability guards', () => {
 		revoke()
 		expect(isMCPClientCapabilities(proxy)).toBe(false)
 		expect(isMCPServerCapabilities(proxy)).toBe(false)
-	})
-})
-
-describe('isJSONRPCId', () => {
-	it('accepts a string id', () => {
-		expect(isJSONRPCId('abc')).toBe(true)
-	})
-
-	it('accepts an empty string, which the dated schema does not forbid', () => {
-		expect(isJSONRPCId('')).toBe(true)
-	})
-
-	it('accepts a finite integer id, including zero and a negative one', () => {
-		expect(isJSONRPCId(1)).toBe(true)
-		expect(isJSONRPCId(0)).toBe(true)
-		expect(isJSONRPCId(-0)).toBe(true)
-		expect(isJSONRPCId(-7)).toBe(true)
-	})
-
-	it('rejects an absent id, because absence is not an id', () => {
-		expect(isJSONRPCId(undefined)).toBe(false)
-	})
-
-	it('rejects a null id, which MCP omits rather than sends', () => {
-		expect(isJSONRPCId(null)).toBe(false)
-	})
-
-	it('rejects an object, an array, a boolean, and a non-integer number', () => {
-		for (const value of [
-			{},
-			{ id: 1 },
-			[],
-			[1],
-			true,
-			false,
-			1.5,
-			Number.NaN,
-			Number.POSITIVE_INFINITY,
-		]) {
-			expect(isJSONRPCId(value)).toBe(false)
-		}
-	})
-
-	// Totality is "answers, never throws". The corpus deliberately contains legal ids
-	// (`''`, `0`, `-0`) alongside hostile shapes, so the assertion here is that every one
-	// gets a boolean answer — the membership assertions above are what pin which answer.
-	it('answers every value in the shared adversarial corpus without throwing', () => {
-		for (const value of createHostileCorpus()) {
-			expect(typeof isJSONRPCId(value)).toBe('boolean')
-		}
 	})
 })
 
@@ -1426,170 +1353,6 @@ describe('isRFC3339DateTime', () => {
 	})
 })
 
-describe('isJSONRPCRequest', () => {
-	it('accepts a request with a numeric id', () => {
-		expect(isJSONRPCRequest({ jsonrpc: '2.0', method: 'ping', id: 1 })).toBe(true)
-	})
-
-	it('accepts a request with a string id', () => {
-		expect(isJSONRPCRequest({ jsonrpc: '2.0', method: 'ping', id: 'abc' })).toBe(true)
-	})
-
-	it('rejects a notification, which is a distinct arm rather than an id-less request', () => {
-		expect(isJSONRPCRequest({ jsonrpc: '2.0', method: 'notifications/initialized' })).toBe(false)
-	})
-
-	it('accepts a request with a params record', () => {
-		expect(
-			isJSONRPCRequest({ jsonrpc: '2.0', method: 'tools/call', id: 1, params: { a: 1 } }),
-		).toBe(true)
-	})
-
-	it('rejects a wrong jsonrpc version', () => {
-		expect(isJSONRPCRequest({ jsonrpc: '1.0', method: 'ping', id: 1 })).toBe(false)
-	})
-
-	it('rejects a missing method', () => {
-		expect(isJSONRPCRequest({ jsonrpc: '2.0', id: 1 })).toBe(false)
-	})
-
-	it('rejects a non-string method', () => {
-		expect(isJSONRPCRequest({ jsonrpc: '2.0', method: 42, id: 1 })).toBe(false)
-	})
-
-	it('rejects a null id (valid only on a response)', () => {
-		expect(isJSONRPCRequest({ jsonrpc: '2.0', method: 'ping', id: null })).toBe(false)
-	})
-
-	it('rejects a non-record params', () => {
-		expect(isJSONRPCRequest({ jsonrpc: '2.0', method: 'ping', id: 1, params: [1, 2] })).toBe(false)
-	})
-
-	it('is total on adversarial input (null, primitives, arrays)', () => {
-		for (const value of [null, undefined, 42, 'x', [], [1], true]) {
-			expect(isJSONRPCRequest(value)).toBe(false)
-		}
-		const accessor = Object.defineProperty({}, 'jsonrpc', {
-			enumerable: true,
-			get() {
-				throw new Error('must not escape')
-			},
-		})
-		const { proxy, revoke } = Proxy.revocable({}, {})
-		revoke()
-		expect(isJSONRPCRequest(accessor)).toBe(false)
-		expect(isJSONRPCRequest(proxy)).toBe(false)
-	})
-
-	it('rejects accessor, hidden, and own-undefined request populations', () => {
-		const accessor = Object.defineProperty({ jsonrpc: '2.0', id: 1 }, 'method', {
-			enumerable: true,
-			get: () => 'ping',
-		})
-		const hidden = Object.defineProperty({ jsonrpc: '2.0', id: 1 }, 'method', {
-			enumerable: false,
-			value: 'ping',
-		})
-
-		expect(isJSONRPCRequest(accessor)).toBe(false)
-		expect(isJSONRPCRequest(hidden)).toBe(false)
-		expect(isJSONRPCRequest({ jsonrpc: '2.0', method: 'ping', params: undefined })).toBe(false)
-		expect(
-			isJSONRPCRequest({
-				jsonrpc: '2.0',
-				method: 'ping',
-				params: Object.defineProperty({}, 'hidden', { enumerable: false, value: true }),
-			}),
-		).toBe(false)
-	})
-
-	it('rejects fractional and non-finite numeric ids', () => {
-		for (const id of [1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-			expect(isJSONRPCRequest({ jsonrpc: '2.0', method: 'ping', id })).toBe(false)
-		}
-	})
-})
-
-describe('isJSONRPCNotification', () => {
-	it('accepts an id-less call, with and without params', () => {
-		expect(isJSONRPCNotification({ jsonrpc: '2.0', method: 'notifications/initialized' })).toBe(
-			true,
-		)
-		expect(
-			isJSONRPCNotification({ jsonrpc: '2.0', method: 'notifications/progress', params: { a: 1 } }),
-		).toBe(true)
-	})
-
-	it('rejects a request, whatever the id is', () => {
-		for (const id of ['abc', '', 0, -7, 1]) {
-			expect(isJSONRPCNotification({ jsonrpc: '2.0', method: 'ping', id })).toBe(false)
-		}
-	})
-
-	it('rejects an own id member even when its value is not a legal id', () => {
-		expect(isJSONRPCNotification({ jsonrpc: '2.0', method: 'ping', id: null })).toBe(false)
-	})
-
-	it('rejects a wrong version, a non-string method, and a non-record params', () => {
-		expect(isJSONRPCNotification({ jsonrpc: '1.0', method: 'ping' })).toBe(false)
-		expect(isJSONRPCNotification({ jsonrpc: '2.0', method: 42 })).toBe(false)
-		expect(isJSONRPCNotification({ jsonrpc: '2.0', method: 'ping', params: [1] })).toBe(false)
-	})
-
-	it('is total over the shared adversarial corpus', () => {
-		for (const value of createHostileCorpus()) {
-			expect(isJSONRPCNotification(value)).toBe(false)
-		}
-	})
-})
-
-// The membership rule of the invocation arms: `isJSONRPCRequest` needs an own `id` whose
-// value `isJSONRPCId` accepts; `isJSONRPCNotification` needs NO own `id` member. Those
-// rules cannot both hold, and the corpus below is drawn from OUTSIDE the record population
-// they are stated over as well as from inside it, so the check is exercised where the
-// guards are meant to answer and where they are meant to be silent.
-describe('isJSONRPCRequest / isJSONRPCNotification — mutual exclusivity', () => {
-	it('never answers true for both arms on any input', () => {
-		const corpus: readonly unknown[] = [
-			...createHostileCorpus(),
-			{ jsonrpc: '2.0', method: 'ping', id: 1 },
-			{ jsonrpc: '2.0', method: 'ping', id: '' },
-			{ jsonrpc: '2.0', method: 'ping' },
-			{ jsonrpc: '2.0', method: 'ping', id: null },
-			{ jsonrpc: '2.0', method: 'ping', id: 1.5 },
-			{ jsonrpc: '2.0', method: 'ping', params: { a: 1 } },
-			{ jsonrpc: '2.0', id: 1 },
-		]
-		const overlaps = corpus.filter(
-			(value) => isJSONRPCRequest(value) && isJSONRPCNotification(value),
-		).length
-
-		expect(overlaps).toBe(0)
-		// The negative control that proves the counter can register an overlap at all: two
-		// predicates that DO both hold, over the same corpus and the same loop.
-		const control = corpus.filter((value) => !(isJSONRPCId(value) || value === undefined)).length
-		expect(control).toBeGreaterThan(0)
-	})
-
-	it('classifies every valid invocation as exactly one arm', () => {
-		const request = { jsonrpc: '2.0', method: 'ping', id: 1 }
-		const notification = { jsonrpc: '2.0', method: 'notifications/initialized' }
-
-		expect(isJSONRPCInvocation(request)).toBe(true)
-		expect(isJSONRPCInvocation(notification)).toBe(true)
-		expect(isJSONRPCRequest(request)).toBe(true)
-		expect(isJSONRPCNotification(request)).toBe(false)
-		expect(isJSONRPCNotification(notification)).toBe(true)
-		expect(isJSONRPCRequest(notification)).toBe(false)
-	})
-
-	it('is total over the shared adversarial corpus', () => {
-		for (const value of createHostileCorpus()) {
-			expect(isJSONRPCInvocation(value)).toBe(false)
-		}
-	})
-})
-
 // The open modern result and the legacy arm are distinguished by ONE
 // fact — whether `resultType` is there — and that is what keeps a concrete result's
 // literal discriminant meaningful while the response arm stays open.
@@ -1646,200 +1409,6 @@ describe('isMCPResult / isMCPLegacyResult', () => {
 			expect(isMCPResult(value)).toBe(false)
 			expect(typeof isMCPLegacyResult(value)).toBe('boolean')
 		}
-	})
-})
-
-// The membership rule of the response arms: the result arm needs an own `result` and NO
-// own `error`; the error arm needs an own `error` and NO own `result`. Neither can hold
-// with the other, and a both-arms envelope belongs to neither.
-// A `expectTypeOf` assertion is erased at runtime, so what enforces it is `npm run check`;
-// a runtime assertion beside it pins the same fact on real values.
-describe('isJSONRPCResultResponse / isJSONRPCErrorResponse — mutual exclusivity', () => {
-	it('requires an id on the result arm and permits its omission only on the error arm', () => {
-		expectTypeOf<JSONRPCResultResponse['id']>().toEqualTypeOf<JSONRPCId>()
-		expectTypeOf<JSONRPCErrorResponse['id']>().toEqualTypeOf<JSONRPCId | undefined>()
-		expectTypeOf<JSONRPCResponse>().toEqualTypeOf<JSONRPCResultResponse | JSONRPCErrorResponse>()
-	})
-
-	it('forbids the opposite member on each arm', () => {
-		expectTypeOf<JSONRPCResultResponse['error']>().toEqualTypeOf<undefined>()
-		expectTypeOf<JSONRPCErrorResponse['result']>().toEqualTypeOf<undefined>()
-		expectTypeOf<JSONRPCResultResponse>().not.toExtend<JSONRPCErrorResponse>()
-		expectTypeOf<JSONRPCErrorResponse>().not.toExtend<JSONRPCResultResponse>()
-	})
-
-	it('never answers true for both arms on any input', () => {
-		const corpus: readonly unknown[] = [
-			...createHostileCorpus(),
-			{ jsonrpc: '2.0', id: 1, result: { resultType: 'complete' } },
-			{ jsonrpc: '2.0', id: 1, result: {} },
-			{ jsonrpc: '2.0', id: 1, error: { code: -1, message: 'x' } },
-			{ jsonrpc: '2.0', error: { code: -1, message: 'x' } },
-			{ jsonrpc: '2.0', id: 1, result: {}, error: { code: -1, message: 'x' } },
-			{ jsonrpc: '2.0', id: 1 },
-			{ jsonrpc: '2.0', id: null, error: { code: -1, message: 'x' } },
-		]
-		const overlaps = corpus.filter(
-			(value) => isJSONRPCResultResponse(value) && isJSONRPCErrorResponse(value),
-		).length
-
-		expect(overlaps).toBe(0)
-	})
-
-	it('requires an id on the result arm and permits its absence only on the error arm', () => {
-		expect(isJSONRPCResultResponse({ jsonrpc: '2.0', result: {} })).toBe(false)
-		expect(isJSONRPCErrorResponse({ jsonrpc: '2.0', error: { code: -1, message: 'x' } })).toBe(true)
-		expect(
-			isJSONRPCErrorResponse({ jsonrpc: '2.0', id: null, error: { code: -1, message: 'x' } }),
-		).toBe(false)
-	})
-
-	it('rejects an invocation as either arm, and is total over the adversarial corpus', () => {
-		expect(isJSONRPCResultResponse({ jsonrpc: '2.0', method: 'ping', id: 1 })).toBe(false)
-		expect(isJSONRPCErrorResponse({ jsonrpc: '2.0', method: 'ping', id: 1 })).toBe(false)
-		for (const value of createHostileCorpus()) {
-			expect(isJSONRPCResultResponse(value)).toBe(false)
-			expect(isJSONRPCErrorResponse(value)).toBe(false)
-		}
-	})
-})
-
-describe('isJSONRPCResponse', () => {
-	it('accepts a success response with a result', () => {
-		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: 1, result: { ok: true } })).toBe(true)
-	})
-
-	it('rejects a null id and a non-object result, neither of which the arms permit', () => {
-		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: null, result: null })).toBe(false)
-		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: 1, result: null })).toBe(false)
-		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: 1, result: 5 })).toBe(false)
-		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: null, error: { code: -1, message: 'x' } })).toBe(
-			false,
-		)
-	})
-
-	it('accepts an error response whose unreadable id is omitted', () => {
-		expect(isJSONRPCResponse({ jsonrpc: '2.0', error: { code: -32_700, message: 'Parse' } })).toBe(
-			true,
-		)
-	})
-
-	it('accepts an error response', () => {
-		expect(
-			isJSONRPCResponse({ jsonrpc: '2.0', id: 1, error: { code: -32600, message: 'Invalid' } }),
-		).toBe(true)
-	})
-
-	it('rejects a response carrying BOTH result and error', () => {
-		expect(
-			isJSONRPCResponse({
-				jsonrpc: '2.0',
-				id: 1,
-				result: {},
-				error: { code: -1, message: 'x' },
-			}),
-		).toBe(false)
-	})
-
-	it('rejects a response carrying NEITHER result nor error', () => {
-		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: 1 })).toBe(false)
-	})
-
-	it('rejects an error object missing a numeric code', () => {
-		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: 1, error: { message: 'x' } })).toBe(false)
-	})
-
-	it('rejects a request (no id member, has method) as a response', () => {
-		expect(isJSONRPCResponse({ jsonrpc: '2.0', method: 'ping' })).toBe(false)
-	})
-
-	it('is total on adversarial input', () => {
-		for (const value of [null, undefined, 0, 'x', [], true]) {
-			expect(isJSONRPCResponse(value)).toBe(false)
-		}
-		const accessor = Object.defineProperty({}, 'jsonrpc', {
-			enumerable: true,
-			get() {
-				throw new Error('must not escape')
-			},
-		})
-		const { proxy, revoke } = Proxy.revocable({}, {})
-		revoke()
-		expect(isJSONRPCResponse(accessor)).toBe(false)
-		expect(isJSONRPCResponse(proxy)).toBe(false)
-	})
-
-	it('rejects accessor and hidden response populations', () => {
-		const accessor = Object.defineProperty({ jsonrpc: '2.0', id: 1 }, 'result', {
-			enumerable: true,
-			get: () => ({ ok: true }),
-		})
-		const hidden = Object.defineProperty({ jsonrpc: '2.0', id: 1 }, 'result', {
-			enumerable: false,
-			value: { ok: true },
-		})
-
-		expect(isJSONRPCResponse(accessor)).toBe(false)
-		expect(isJSONRPCResponse(hidden)).toBe(false)
-		expect(
-			isJSONRPCResponse({
-				jsonrpc: '2.0',
-				id: 1,
-				result: Object.defineProperty({}, 'hidden', { enumerable: false, value: true }),
-			}),
-		).toBe(false)
-		expect(
-			isJSONRPCResponse({
-				jsonrpc: '2.0',
-				id: 1,
-				error: {
-					code: -32_600,
-					message: 'bad',
-					data: Object.defineProperty({}, 'value', { enumerable: true, get: () => true }),
-				},
-			}),
-		).toBe(false)
-	})
-
-	it('rejects fractional/non-finite ids and malformed error populations', () => {
-		for (const id of [1.5, Number.NaN, Number.NEGATIVE_INFINITY]) {
-			expect(isJSONRPCResponse({ jsonrpc: '2.0', id, result: {} })).toBe(false)
-		}
-		for (const code of [1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-			expect(
-				isJSONRPCResponse({ jsonrpc: '2.0', id: 1, error: { code, message: 'invalid' } }),
-			).toBe(false)
-		}
-		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: 1, error: undefined })).toBe(false)
-		expect(
-			isJSONRPCResponse({
-				jsonrpc: '2.0',
-				id: 1,
-				error: { code: -32_600, message: 'bad', data: undefined },
-			}),
-		).toBe(false)
-		expect(isJSONRPCResponse({ jsonrpc: '2.0', id: 1, result: {}, error: undefined })).toBe(false)
-		expect(
-			isJSONRPCResponse({
-				jsonrpc: '2.0',
-				id: 1,
-				error: { code: -32_600, message: 'bad', data: Number.NaN },
-			}),
-		).toBe(false)
-	})
-})
-
-describe('isJSONRPCMessage', () => {
-	it('accepts a request', () => {
-		expect(isJSONRPCMessage({ jsonrpc: '2.0', method: 'ping', id: 1 })).toBe(true)
-	})
-
-	it('accepts a response', () => {
-		expect(isJSONRPCMessage({ jsonrpc: '2.0', id: 1, result: {} })).toBe(true)
-	})
-
-	it('rejects a non-message record', () => {
-		expect(isJSONRPCMessage({ hello: 'world' })).toBe(false)
 	})
 })
 
@@ -2168,36 +1737,6 @@ describe('stable Tasks extension validators', () => {
 	})
 })
 
-// The `error` OBJECT, extracted because a failed response and a `failed` task snapshot owe the
-// same checks and had been writing them twice.
-describe('isJSONRPCError', () => {
-	it('accepts an integer code with a string message and any data payload', () => {
-		expect(isJSONRPCError({ code: -32602, message: 'Invalid params' })).toBe(true)
-		expect(isJSONRPCError({ code: 0, message: '', data: { any: ['shape'] } })).toBe(true)
-		// `data` is declared `unknown`, so a non-JSON payload is legal here where an exact-JSON
-		// guard would have refused it.
-		expect(isJSONRPCError({ code: 1, message: 'x', data: () => undefined })).toBe(true)
-	})
-
-	it('refuses a non-integer code, a non-string message, and every hostile value', () => {
-		expect(isJSONRPCError({ code: -32602.5, message: 'x' })).toBe(false)
-		expect(isJSONRPCError({ code: Number.NaN, message: 'x' })).toBe(false)
-		expect(isJSONRPCError({ code: '-32602', message: 'x' })).toBe(false)
-		expect(isJSONRPCError({ code: -32602 })).toBe(false)
-		expect(isJSONRPCError({ message: 'x' })).toBe(false)
-		for (const value of createHostileCorpus()) expect(isJSONRPCError(value)).toBe(false)
-	})
-
-	it('agrees with the envelope guard that routes through it', () => {
-		const error = { code: -32700, message: 'Parse error' }
-
-		expect(isJSONRPCErrorResponse({ jsonrpc: '2.0', error })).toBe(isJSONRPCError(error))
-		expect(isJSONRPCErrorResponse({ jsonrpc: '2.0', error: { code: 1.5, message: 'x' } })).toBe(
-			false,
-		)
-	})
-})
-
 // A repaired claim is a NEW claim. `isJSONRPCError` was found non-total at the one door the
 // corpus could reach, and re-verifying the fix where it was found would only prove the fix.
 // So the claim is re-asked at EVERY published door, against the corpus AND against a throwing
@@ -2296,28 +1835,6 @@ describe('isMCPError', () => {
 	})
 })
 
-describe('the invocation arms', () => {
-	it('requires an id on a request and forbids one on a notification', () => {
-		expectTypeOf<JSONRPCRequest['id']>().toEqualTypeOf<JSONRPCId>()
-		expectTypeOf<JSONRPCNotification['id']>().toEqualTypeOf<undefined>()
-		expectTypeOf<JSONRPCInvocation>().toEqualTypeOf<JSONRPCRequest | JSONRPCNotification>()
-	})
-
-	it('keeps a request and a notification mutually unassignable', () => {
-		expectTypeOf<JSONRPCRequest>().not.toExtend<JSONRPCNotification>()
-		expectTypeOf<JSONRPCNotification>().not.toExtend<JSONRPCRequest>()
-	})
-
-	it('narrows the union on the id at runtime as well as in the type', () => {
-		const invocation: JSONRPCInvocation = createJSONRPCRequest({ method: 'ping', id: 7 })
-		const notification: JSONRPCInvocation = createJSONRPCNotification('notifications/initialized')
-
-		expect(invocation.id).toBe(7)
-		expect(notification.id).toBeUndefined()
-		expect(Object.hasOwn(notification, 'id')).toBe(false)
-	})
-})
-
 describe('the open MCPResult contract', () => {
 	it('accepts an unknown protocol discriminator', () => {
 		expectTypeOf<MCPResult['resultType']>().toEqualTypeOf<string>()
@@ -2364,10 +1881,6 @@ describe('the legacy result arm', () => {
 		expect(isMCPResult(ping.result)).toBe(false)
 		expect(isMCPLegacyResult(list.result)).toBe(true)
 		expect(isMCPResult(list.result)).toBe(false)
-	})
-
-	it('is what the result arm accepts alongside the modern contract', () => {
-		expectTypeOf<JSONRPCResultResponse['result']>().toEqualTypeOf<MCPResult | MCPLegacyResult>()
 	})
 })
 

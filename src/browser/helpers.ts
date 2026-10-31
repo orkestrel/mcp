@@ -1,3 +1,4 @@
+import { JSONRPC_INVALID_PARAMS } from '@orkestrel/jsonrpc'
 import type { ToolAnnotations, ToolDefinition, ToolManagerInterface } from '@orkestrel/tool'
 import type {
 	WebMCPAnnotations,
@@ -5,7 +6,7 @@ import type {
 	WebMCPProjection,
 	WebMCPRegisteredTool,
 } from './types.js'
-import { JSONRPC_INVALID_PARAMS, MCPError } from '@src/core'
+import { MCPError } from '@src/core'
 import { attempt, canonicalStringify } from '@orkestrel/contract'
 import { toolToDefinition } from '@orkestrel/tool'
 

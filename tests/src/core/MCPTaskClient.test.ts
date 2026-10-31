@@ -1,3 +1,4 @@
+import { JSONRPC_INVALID_PARAMS, JSONRPC_METHOD_NOT_FOUND } from '@orkestrel/jsonrpc'
 import {
 	connectTaskClient,
 	startTask,
@@ -8,13 +9,7 @@ import {
 } from '../../setup.js'
 
 import { describe, expect, it } from 'vitest'
-import {
-	createMCPClient,
-	isMCPError,
-	JSONRPC_INVALID_PARAMS,
-	JSONRPC_METHOD_NOT_FOUND,
-	MCPTaskClient,
-} from '@src/core'
+import { createMCPClient, isMCPError, MCPTaskClient } from '@src/core'
 import { waitForDelay } from '@orkestrel/test'
 import {
 	createCalculatorServer,

@@ -1,9 +1,5 @@
-import type {
-	JSONRPCNotification,
-	MCPJSONLimitOptions,
-	MCPProgress,
-	MCPProgressOwnerInterface,
-} from './types.js'
+import type { JSONRPCNotification } from '@orkestrel/jsonrpc'
+import type { MCPJSONLimitOptions, MCPProgress, MCPProgressOwnerInterface } from './types.js'
 import { snapshotJSON } from './cloners.js'
 import { buildProgressNotification } from './helpers.js'
 import { isMCPProgress } from './validators.js'

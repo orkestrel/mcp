@@ -1,4 +1,5 @@
-import type { JSONRPCId, JSONRPCResponse, MCPIdentity, MCPServerCapabilities } from './types.js'
+import type { JSONRPCId, JSONRPCResponse } from '@orkestrel/jsonrpc'
+import type { MCPIdentity, MCPServerCapabilities } from './types.js'
 
 /** Owns one legacy handshake and its outstanding request correlations. */
 export class MCPLegacySession {

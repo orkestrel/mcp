@@ -1,7 +1,3 @@
-import { MCPSubscriptionSource } from './MCPSubscriptionSource.js'
-import type { EmitterInterface } from '@orkestrel/emitter'
-import type { ToolCall } from '@orkestrel/tool'
-import type { JSONValue, Result } from '@orkestrel/contract'
 import type {
 	JSONRPCErrorResponse,
 	JSONRPCId,
@@ -9,6 +5,21 @@ import type {
 	JSONRPCNotification,
 	JSONRPCRequest,
 	JSONRPCResponse,
+} from '@orkestrel/jsonrpc'
+import {
+	JSONRPC_INTERNAL_ERROR,
+	JSONRPC_INVALID_PARAMS,
+	JSONRPC_INVALID_REQUEST,
+	JSONRPC_METHOD_NOT_FOUND,
+	JSONRPC_PARSE_ERROR,
+	buildJSONRPCError,
+	buildJSONRPCResult,
+} from '@orkestrel/jsonrpc'
+import { MCPSubscriptionSource } from './MCPSubscriptionSource.js'
+import type { EmitterInterface } from '@orkestrel/emitter'
+import type { ToolCall } from '@orkestrel/tool'
+import type { JSONValue, Result } from '@orkestrel/contract'
+import type {
 	MCPCallResult,
 	MCPCompletion,
 	MCPCompletionInterface,
@@ -64,11 +75,6 @@ import {
 	DEFAULT_MCP_CACHE_TTL,
 	DEFAULT_MCP_LIMITS,
 	EMPTY_MCP_ARGUMENTS,
-	JSONRPC_INTERNAL_ERROR,
-	JSONRPC_INVALID_PARAMS,
-	JSONRPC_INVALID_REQUEST,
-	JSONRPC_METHOD_NOT_FOUND,
-	JSONRPC_PARSE_ERROR,
 	MCP_EXTENSION_TASKS,
 	MCP_META_SERVER,
 	MCP_MISSING_CAPABILITY,
@@ -77,8 +83,6 @@ import {
 } from './constants.js'
 import {
 	buildDiscoverResult,
-	buildJSONRPCError,
-	buildJSONRPCResult,
 	buildMethodOptions,
 	buildModernResult,
 	buildSubscriptionAcknowledgement,
@@ -235,7 +239,7 @@ export class MCPServer implements MCPServerInterface {
 			depth: this.#limits.depth,
 		})
 		if (decoded === undefined || !('method' in decoded)) {
-			return buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Invalid Request')
+			return buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request')
 		}
 		return this.#dispatch(decoded, options)
 	}
@@ -245,11 +249,11 @@ export class MCPServer implements MCPServerInterface {
 		options?: MCPDispatchOptions,
 	): Promise<string | MCPTextStreamControllerInterface | undefined> {
 		if (!isBoundedString(message, this.#limits.message)) {
-			return JSON.stringify(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'))
+			return JSON.stringify(buildJSONRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'))
 		}
 		const parsed = parseJSON(message)
 		if (parsed === undefined) {
-			return JSON.stringify(buildJSONRPCError(undefined, JSONRPC_PARSE_ERROR, 'Parse error'))
+			return JSON.stringify(buildJSONRPCError(null, JSONRPC_PARSE_ERROR, 'Parse error'))
 		}
 		const decoded = parseJSONRPCMessage(parsed, {
 			bytes: this.#limits.message,
@@ -257,9 +261,7 @@ export class MCPServer implements MCPServerInterface {
 		})
 		// Only an INVOCATION is dispatchable — a response (or any non-message) is invalid input.
 		if (decoded === undefined || !('method' in decoded)) {
-			return JSON.stringify(
-				buildJSONRPCError(undefined, JSONRPC_INVALID_REQUEST, 'Invalid Request'),
-			)
+			return JSON.stringify(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request'))
 		}
 		const answer = await this.#dispatch(decoded, options ?? {})
 		if (answer === undefined) return undefined

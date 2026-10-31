@@ -1,5 +1,5 @@
-import type { JSONRPCMessage } from '@src/core'
-import type { StreamInterface } from '@orkestrel/server'
+import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
+import type { SSEStreamInterface } from '@orkestrel/server'
 import type { MCPSessionEvent, MCPSessionInterface, MCPSessionOptions } from './types.js'
 import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constants.js'
 
@@ -42,7 +42,7 @@ import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constan
  *   first, so a stale entry is never replayed.
  *
  * - **No transport coupling beyond the SSE seam.** It holds session state + the generic {@link
- *   StreamInterface} handles `attach` was handed — never a raw socket, request, or response.
+ *   SSEStreamInterface} handles `attach` was handed — never a raw socket, request, or response.
  *   The middleware opens the stream (the spine seam) and registers it here; this class only
  *   serializes a message onto the already-open streams.
  *
@@ -62,7 +62,7 @@ import { DEFAULT_MCP_SESSION_CAPACITY, DEFAULT_MCP_SESSION_TTL } from './constan
 export class MCPSession implements MCPSessionInterface {
 	readonly #id: string
 	readonly #events = new Map<string, MCPSessionEvent>()
-	readonly #streams = new Set<StreamInterface>()
+	readonly #streams = new Set<SSEStreamInterface>()
 	readonly #capacity: number
 	readonly #ttl: number
 	readonly #clock: () => number
@@ -79,11 +79,11 @@ export class MCPSession implements MCPSessionInterface {
 		return this.#id
 	}
 
-	attach(stream: StreamInterface): void {
+	attach(stream: SSEStreamInterface): void {
 		this.#streams.add(stream)
 	}
 
-	detach(stream: StreamInterface): void {
+	detach(stream: SSEStreamInterface): void {
 		this.#streams.delete(stream)
 	}
 

@@ -31,16 +31,15 @@
 // / `MCPMessageTransportInterface` the HTTP pair does — the wire framing differs, the dispatch
 // core does not.
 
+import type { JSONRPCMessage, JSONRPCResponse } from '@orkestrel/jsonrpc'
 import type {
-	JSONRPCMessage,
-	JSONRPCResponse,
 	MCPMessageTransportInterface,
 	MCPVersion,
 	WebSocketClientTransportOptions,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { RouteContext } from '@orkestrel/router'
-import type { ServerEventMap, StreamInterface } from '@orkestrel/server'
+import type { ServerEventMap, SSEStreamInterface } from '@orkestrel/server'
 import type { MCPSession } from './MCPSession.js'
 
 /**
@@ -254,9 +253,9 @@ export interface MCPSessionInterface {
 	 * Registers an open server→client SSE stream, a resumable `GET {path}`, so a later pushed
 	 * message reaches it.
 	 */
-	attach(stream: StreamInterface): void
+	attach(stream: SSEStreamInterface): void
 	/** Unregisters a stream — the middleware calls it when the client disconnects. */
-	detach(stream: StreamInterface): void
+	detach(stream: SSEStreamInterface): void
 	/**
 	 * Appends a message to the folded replay log under a fresh monotone event id, returns that id,
 	 * and fans the message out to every attached stream as one `id:`-tagged SSE event.
