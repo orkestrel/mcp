@@ -623,8 +623,6 @@ result shape for them. See
 
 ### Constants
 
-A `Shape` cell holds the constant's declared type.
-
 | Name                                 | Kind  | Signature                                                                                                                   | Summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ------------------------------------ | ----- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `MCP_HANDSHAKE_VERSION`              | const | `MCPLegacyVersion`                                                                                                          | Names the revision offered and defaulted to in the legacy `initialize` handshake, `'2025-11-25'`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -808,11 +806,6 @@ isMCPToolAnnotations({ readOnlyHint: false }) // true
 ```
 
 ### Types
-
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an
-optional member and `plus` introducing its call-signature members, and a type alias's own type
-literal with a union's arms escaped as `\|`.
-An extended interface's name comes before `plus`, with the members it adds after.
 
 | Name                               | Kind      | Signature                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Summary                                                                                                                                                                                                     |
 | ---------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1177,8 +1170,6 @@ _This face declares no `HTTPClientTransport`. It is host-independent and ships f
 
 #### Constants
 
-A `Shape` cell holds the constant's declared type.
-
 | Name                             | Kind  | Signature             | Summary                                                                                                                                                                                                                                |
 | -------------------------------- | ----- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SSE_BUFFERING_HEADER`           | const | `"x-accel-buffering"` | Names the reverse-proxy response header controlling buffering of an SSE response.                                                                                                                                                      |
@@ -1215,11 +1206,6 @@ decoders and the response-error builder are host-independent and ship from `@ork
 [Core § Helpers](#helpers)._
 
 #### Types
-
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an
-optional member and `plus` introducing its call-signature members, and a type alias's own type
-literal with a union's arms escaped as `\|`.
-An extended interface's name comes before `plus`, with the members it adds after.
 
 | Name                          | Kind      | Signature                                                                           | Summary                                                                                                                                                                                                                                                                                 |
 | ----------------------------- | --------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1330,10 +1316,6 @@ _This face declares none. `MCP_WEBSOCKET_SUBPROTOCOL` — the token this transpo
 _`upgradeRequestPath` (used by `createWebSocketServer`) is documented under [HTTP transport § Helpers](#helpers-1), and `createDuplexServerTransport` (which `createWebSocketServer` pipes its transport through `bindServer` with) under that section's Factories._
 
 #### Types
-
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an
-optional member and `plus` introducing its call-signature members, and a type alias's own type
-literal with a union's arms escaped as `\|`.
 
 | Name                                  | Kind      | Signature                          | Summary                                                                                                                                                     |
 | ------------------------------------- | --------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1505,8 +1487,6 @@ const tools = await client.tools()
 
 #### Constants
 
-A `Shape` cell holds the constant's declared type.
-
 | Name                   | Kind  | Signature | Summary                                                                                                                                                                                    |
 | ---------------------- | ----- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `DEFAULT_MCP_DELIVERY` | const | `10000`   | Sets the default bound in milliseconds on one unconfirmed write to a stdio client transport's child `stdin` — the `delivery` a `createStdioClientTransport` caller who supplies none gets. |
@@ -1517,11 +1497,6 @@ A `Shape` cell holds the constant's declared type.
 _See `extractLines` / `dispatchLines` under [HTTP transport § Helpers](#helpers-1)._
 
 #### Types
-
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an
-optional member and `plus` introducing its call-signature members, and a type alias's own type
-literal with a union's arms escaped as `\|`.
-An extended interface's name comes before `plus`, with the members it adds after.
 
 | Name                            | Kind      | Signature                             | Summary                                                                                                                                                                                                                                       |
 | ------------------------------- | --------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1696,8 +1671,6 @@ const tools = await http.tools()
 
 #### Constants
 
-A `Shape` cell holds the constant's declared type.
-
 | Name                         | Kind  | Signature          | Summary                                                                                                                                  |
 | ---------------------------- | ----- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `DEFAULT_MCP_SERVER_NAME`    | const | `"@orkestrel/mcp"` | Supplies the default server name `createScopeServer` reports (`initialize`'s `serverInfo.name`) when `options.name` is omitted.          |
@@ -1731,11 +1704,6 @@ The SSE decoders `decodeEvent` and `readEventStream` are host-independent and sh
 `@orkestrel/mcp`; see [Core § Helpers](#helpers).
 
 #### Types
-
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an
-optional member and `plus` introducing its call-signature members, and a type alias's own type
-literal with a union's arms escaped as `\|`.
-An extended interface's name comes before `plus`, with the members it adds after.
 
 | Name                                     | Kind      | Signature                                                                                                                | Summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ---------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
