@@ -105,12 +105,12 @@
 		"@orkestrel/websocket": "^0.0.16"
 	},
 	"devDependencies": {
-		"@microsoft/api-extractor": "^7.60.0",
+		"@microsoft/api-extractor": "^7.60.1",
 		"@modelcontextprotocol/conformance": "0.2.0-alpha.11",
-		"@orkestrel/guide": "^0.0.26",
-		"@orkestrel/probe": "^0.0.25",
+		"@orkestrel/guide": "^0.0.28",
+		"@orkestrel/probe": "^0.0.26",
 		"@orkestrel/router": "^0.0.18",
-		"@orkestrel/scaffold": "^0.0.113",
+		"@orkestrel/scaffold": "^0.0.118",
 		"@orkestrel/server": "^0.0.24",
 		"@orkestrel/test": "^0.0.31",
 		"@types/node": "^24.19.2",
