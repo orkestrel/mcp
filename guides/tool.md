@@ -45,22 +45,22 @@ interface's data members as bare names in braces, `?` marking an optional member
 introducing its call-signature members, and a type alias's own type literal with a union's arms
 escaped as `\|`. An extended interface's name comes before `plus`, with the members it adds after.
 
-| Name                   | Kind      | Shape                                                                                                                                                           | Summary                                                                          |
-| ---------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `ToolDefinition`       | interface | `{ name, title?, description?, parameters?, annotations? }`                                                                                                     | Describes a tool as advertised to a caller.                                      |
-| `ToolCall`             | interface | `{ id, name, arguments }`                                                                                                                                       | Describes one request to run a named tool.                                       |
-| `ToolSuccess`          | interface | `Success<unknown> plus { id, name }`                                                                                                                            | Reports the successful outcome of executing a `ToolCall`.                        |
-| `ToolFailure`          | interface | `Failure<string> plus { id, name }`                                                                                                                             | Reports the failed outcome of executing a `ToolCall`.                            |
-| `ToolOptions`          | interface | `{ name, title?, description?, summary?, parameters?, contract?, annotations?, execute }`                                                                       | Configures an executable tool.                                                   |
-| `ToolInterface`        | interface | `ToolDefinition plus { summary? } plus execute`                                                                                                                 | Represents an executable tool: its advertised definition plus its local handler. |
-| `ToolManagerInterface` | interface | `{ count, emitter } plus add, tool, tools, definitions, execute, remove, clear, destroy`                                                                        | Represents a registry of executable tools with per-call error isolation.         |
-| `ToolManagerEventMap`  | type      | `{ readonly add: readonly [tool: ToolInterface]; readonly remove: readonly [tool: ToolInterface]; readonly clear: readonly [tools: readonly ToolInterface[]] }` | Names the events a tool registry publishes.                                      |
-| `ToolManagerOptions`   | interface | `{ on?, error? }`                                                                                                                                               | Configures a tool registry's initial listeners and error handling.               |
-| `ToolResult`           | type      | `ToolSuccess \| ToolFailure`                                                                                                                                    | Represents the outcome of executing a `ToolCall`.                                |
-| `ToolContext`          | interface | `{ signal, caller? }`                                                                                                                                           | Carries the signal and consumer-asserted identity for an execution.              |
-| `ToolAnnotations`      | interface | `{ pure?, untrusted?, consequential? }`                                                                                                                         | Describes the observable effects and content of a tool.                          |
-| `ToolErrorCode`        | type      | `'SCHEMA' \| 'ARGUMENTS'`                                                                                                                                       | Identifies a schema conflict or an argument validation failure.                  |
-| `ToolErrorContext`     | interface | `{ faults? }`                                                                                                                                                   | Carries the structured faults behind an argument validation failure.             |
+| Name                   | Kind      | Signature                                                                                                                                                        | Summary                                                                          |
+| ---------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `ToolDefinition`       | interface | `{ name, title?, description?, parameters?, annotations? }`                                                                                                      | Describes a tool as advertised to a caller.                                      |
+| `ToolCall`             | interface | `{ id, name, arguments }`                                                                                                                                        | Describes one request to run a named tool.                                       |
+| `ToolSuccess`          | interface | `{ id, name }`                                                                                                                                                   | Reports the successful outcome of executing a `ToolCall`.                        |
+| `ToolFailure`          | interface | `{ id, name }`                                                                                                                                                   | Reports the failed outcome of executing a `ToolCall`.                            |
+| `ToolOptions`          | interface | `{ name, title?, description?, summary?, parameters?, contract?, annotations?, execute }`                                                                        | Configures an executable tool.                                                   |
+| `ToolInterface`        | interface | `{ summary?, execute() }`                                                                                                                                        | Represents an executable tool: its advertised definition plus its local handler. |
+| `ToolManagerInterface` | interface | `{ count, emitter, add(), tool(), tools(), definitions(), execute(), remove(), clear(), destroy() }`                                                             | Represents a registry of executable tools with per-call error isolation.         |
+| `ToolManagerEventMap`  | type      | `{ readonly add: readonly [tool: ToolInterface]; readonly remove: readonly [tool: ToolInterface]; readonly clear: readonly [tools: readonly ToolInterface[]]; }` | Names the events a tool registry publishes.                                      |
+| `ToolManagerOptions`   | interface | `{ on?, error? }`                                                                                                                                                | Configures a tool registry's initial listeners and error handling.               |
+| `ToolResult`           | type      | `ToolSuccess \| ToolFailure`                                                                                                                                     | Represents the outcome of executing a `ToolCall`.                                |
+| `ToolContext`          | interface | `{ signal, caller? }`                                                                                                                                            | Carries the signal and consumer-asserted identity for an execution.              |
+| `ToolAnnotations`      | interface | `{ pure?, untrusted?, consequential? }`                                                                                                                          | Describes the observable effects and content of a tool.                          |
+| `ToolErrorCode`        | type      | `'SCHEMA' \| 'ARGUMENTS'`                                                                                                                                        | Identifies a schema conflict or an argument validation failure.                  |
+| `ToolErrorContext`     | interface | `{ faults? }`                                                                                                                                                    | Carries the structured faults behind an argument validation failure.             |
 
 `ToolInterface` and `ToolManagerInterface` list every member they declare or inherit. The
 call-signature members of each are documented under [Methods](#methods); the readonly `count` of
@@ -74,9 +74,9 @@ and an `error` handler for listener throws.
 The call-envelope guard, from [`validators.ts`](../src/core/validators.ts). In a guard
 table a `Shape` cell holds the type the guard narrows to.
 
-| Name         | Kind     | Shape      | Summary                                                                                                              |
-| ------------ | -------- | ---------- | -------------------------------------------------------------------------------------------------------------------- |
-| `isToolCall` | function | `ToolCall` | Determines whether an unknown value is structurally a `ToolCall`, staying total for malformed and adversarial input. |
+| Name         | Kind     | Signature                               | Summary                                                                                                              |
+| ------------ | -------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `isToolCall` | function | `(value: unknown) => value is ToolCall` | Determines whether an unknown value is structurally a `ToolCall`, staying total for malformed and adversarial input. |
 
 ### Helpers
 
@@ -102,11 +102,11 @@ The implementing classes, from [`Tool.ts`](../src/core/tools/Tool.ts) and
 [`ToolManager.ts`](../src/core/tools/ToolManager.ts) — each documented in full under its own
 heading following this table.
 
-| Name          | Kind  | Summary                                                                                |
-| ------------- | ----- | -------------------------------------------------------------------------------------- |
-| `Tool`        | class | Binds an executable tool definition to a handler.                                      |
-| `ToolManager` | class | Represents an insertion-ordered tool registry with per-call error isolation.           |
-| `ToolError`   | class | Reports a schema conflict or argument validation failure with a machine-readable code. |
+| Name          | Kind  | Signature                                                                             | Summary                                                                                |
+| ------------- | ----- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `Tool`        | class | `new (options: ToolOptions) => ToolInterface`                                         | Binds an executable tool definition to a handler.                                      |
+| `ToolManager` | class | `new (options?: ToolManagerOptions) => ToolManagerInterface`                          | Represents an insertion-ordered tool registry with per-call error isolation.           |
+| `ToolError`   | class | `new (code: ToolErrorCode, message: string, context?: ToolErrorContext) => ToolError` | Reports a schema conflict or argument validation failure with a machine-readable code. |
 
 ### `Tool`
 
@@ -131,15 +131,18 @@ exception. See [`## Methods`](#methods) for its public call surface.
 
 ### `ToolError`
 
+The guard recognizes self-branded errors across package copies and subclasses,
+validates the declared code and optional fault report, and refuses transparent proxies.
+
 The error class from [`errors.ts`](../src/core/errors.ts) extends `Error`. Its constructor takes
 `code`, `message`, and optional `context`. Direct tool execution throws an `ARGUMENTS` error with
 the full fault report in `context.faults`; the manager contains it as a message. Use `isToolError`
 to narrow a caught value. See [Contract validation and errors](#contract-validation-and-errors)
 for an executed example.
 
-| Name          | Kind     | Shape       | Summary                                                                      |
-| ------------- | -------- | ----------- | ---------------------------------------------------------------------------- |
-| `isToolError` | function | `ToolError` | Checks whether a value is a tool error, containing hostile prototype access. |
+| Name          | Kind     | Signature                                | Summary                                                                      |
+| ------------- | -------- | ---------------------------------------- | ---------------------------------------------------------------------------- |
+| `isToolError` | function | `(value: unknown) => value is ToolError` | Checks whether a value is a tool error, containing hostile prototype access. |
 
 ## Methods
 
