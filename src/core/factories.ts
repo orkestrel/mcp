@@ -2,6 +2,7 @@ import type {
 	MCPMessageTransportEventMap,
 	MCPMessageTransportInterface,
 	JSONRPCMessage,
+	HTTPClientTransportOptions,
 	MCPClientInterface,
 	MCPClientOptions,
 	MCPLegacyClientTransportOptions,
@@ -15,6 +16,7 @@ import { MCPClient } from './MCPClient.js'
 import { MCPLegacy } from './MCPLegacy.js'
 import { MCPLegacyClientTransport } from './MCPLegacyClientTransport.js'
 import { MCPServer } from './MCPServer.js'
+import { HTTPClientTransport } from './transports/HTTPClientTransport.js'
 
 /**
  * Creates a transport-agnostic Model Context Protocol server — exposes a live
@@ -108,7 +110,7 @@ export function createMCPLegacy(server: MCPServerInterface): MCPDispatcherInterf
  * and `call(name, args)` runs a remote `tools/call` (a remote tool failure throws
  * locally, so an agent's {@link import('@orkestrel/tool').ToolManagerInterface}
  * isolates it). The transport is injected — a concrete one (the HTTP transport over
- * `fetch`) lives in the published server environment; the client itself is provider-agnostic. Subscribe
+ * `fetch`) is {@link createHTTPClientTransport}; the client itself is provider-agnostic. Subscribe
  * to `connect` / `disconnect` / `notification` through `client.emitter.on(...)`.
  *
  * @param options - `transport` (the carrier; required), an optional `identity`
@@ -118,8 +120,7 @@ export function createMCPLegacy(server: MCPServerInterface): MCPDispatcherInterf
  *
  * @example
  * ```ts
- * import { createMCPClient } from '@orkestrel/mcp'
- * import { createHTTPClientTransport } from '@orkestrel/mcp/server'
+ * import { createHTTPClientTransport, createMCPClient } from '@orkestrel/mcp'
  *
  * const client = createMCPClient({
  * 	transport: createHTTPClientTransport({ url: 'http://localhost:3000/mcp' }),
@@ -153,6 +154,48 @@ export function createMCPLegacyClientTransport(
 	options?: MCPLegacyClientTransportOptions,
 ): MCPMessageTransportInterface {
 	return new MCPLegacyClientTransport(transport, options)
+}
+
+/**
+ * Creates the HTTP client transport for an {@link MCPClientInterface} — a
+ * {@link MCPMessageTransportInterface} that drives a remote Streamable-HTTP MCP server over
+ * `fetch`.
+ *
+ * @remarks
+ * It returns {@link HTTPClientTransport}, which touches `fetch`, `Response`, `AbortController`,
+ * `AbortSignal`, and `WeakMap` alone, so a page and a Node process import the same factory.
+ * Hand it to `createMCPClient({ transport })`: each JSON-RPC message the client sends is
+ * `POST`ed to `options.url` with `content-type: application/json` and an `Accept` of both
+ * `application/json` and `text/event-stream` (the server answers with either — a plain JSON
+ * envelope or a Streamable-HTTP SSE `data:` event, decoded with `@orkestrel/sse`), and the reply
+ * is surfaced on the transport's `message` event for the client's id correlation. Add
+ * `options.headers` (for example, an `Authorization` bearer) to reach a guarded server.
+ * `start` / `close` hold no connection; against a stateful server it captures the
+ * `mcp-session-id` from `initialize` and echoes it on later requests. It also captures the
+ * initialize result's `protocolVersion` and sends `mcp-protocol-version` alone on each
+ * subsequent legacy request. Modern requests derive `mcp-protocol-version` and `mcp-method`
+ * from the message, plus `mcp-name` only for `tools/call`.
+ *
+ * @param options - `url` (the remote endpoint; required), optional `headers` merged onto
+ *   every request, optional `fetch` (default `globalThis.fetch`), and optional `timeout`
+ *   (ms, applied with `AbortSignal.timeout`); see {@link HTTPClientTransportOptions}
+ * @returns A working {@link MCPMessageTransportInterface} over `fetch`
+ *
+ * @example
+ * ```ts
+ * import { createHTTPClientTransport, createMCPClient } from '@orkestrel/mcp'
+ *
+ * const client = createMCPClient({
+ * 	transport: createHTTPClientTransport({ url: 'http://localhost:3000/mcp' }),
+ * })
+ * await client.connect()
+ * const tools = await client.tools()
+ * ```
+ */
+export function createHTTPClientTransport(
+	options: HTTPClientTransportOptions,
+): MCPMessageTransportInterface {
+	return new HTTPClientTransport(options)
 }
 
 /**

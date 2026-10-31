@@ -24,11 +24,12 @@ import {
 	MCP_METHOD_HEADER,
 	MCP_NAME_HEADER,
 	MCP_PROTOCOL_VERSION_HEADER,
+	createHTTPClientTransport,
 } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
-import { createHTTPClientTransport, createMCPRoutes, inferHeaderIssue } from '@src/server'
+import { createMCPRoutes, inferHeaderIssue } from '@src/server'
 import { createTeardown, waitForDelay } from '@orkestrel/test'
 import { createHeaderProjectionRequest, HEADER_PROJECTION_CONTEXTS } from '../../setup.js'
 import {

@@ -1,5 +1,11 @@
-import type { JSONRPCMessage, MCPClientOptions } from '@src/core'
 import type {
+	JSONRPCMessage,
+	MCPClientOptions,
+	MCPMessageTransportInterface,
+	WebSocketClientTransportOptions,
+} from '@src/core'
+import type {
+	BrowserWebSocketClientTransportOptions,
 	ModelContextAdoptOptions,
 	ModelContextEventMap,
 	ModelContextInterface,
@@ -38,16 +44,16 @@ import {
 	MCP_SESSION_HEADER,
 	MCP_WEBSOCKET_SUBPROTOCOL,
 	parseRequestContext,
+	createHTTPClientTransport,
 } from '@src/core'
 import {
 	DEFAULT_MCP_SERVER_NAME,
 	DEFAULT_MCP_SERVER_VERSION,
-	createHTTPClientTransport,
 	createMessagePortTransport,
 	createModelContext,
 	createPageServer,
 	createScopeServer,
-	createWebSocketClientTransport,
+	createBrowserWebSocketClientTransport,
 } from '@src/browser'
 import { isRecord } from '@orkestrel/contract'
 import { createToolManager } from '@orkestrel/tool'
@@ -77,7 +83,7 @@ import {
 } from '../../setupBrowser.js'
 
 // src/browser/factories.ts + src/browser/transports — the browser-face CLIENT
-// transports (`createWebSocketClientTransport` over the native `WebSocket` global,
+// transports (`createBrowserWebSocketClientTransport` over the native `WebSocket` global,
 // `createHTTPClientTransport` over native `fetch`), proven in real Chromium against
 // this repo's real Node-face server running outside the browser module graph. Vitest
 // global setup injects only its loopback URL; no Node/server implementation reaches
@@ -87,10 +93,24 @@ const serverURL = inject('server')
 
 // ── WebSocket: the browser client against the Node-face WS server ────────────
 
-describe('createWebSocketClientTransport — the browser client against the Node-face WS server', () => {
+describe('createBrowserWebSocketClientTransport — the browser client against the Node-face WS server', () => {
+	it('extends the core WebSocket client options with the subprotocol offer', () => {
+		expectTypeOf<BrowserWebSocketClientTransportOptions>().toExtend<WebSocketClientTransportOptions>()
+		expectTypeOf<BrowserWebSocketClientTransportOptions>().toEqualTypeOf<{
+			readonly url: string
+			readonly protocols?: string | readonly string[]
+		}>()
+		expectTypeOf<
+			Parameters<typeof createBrowserWebSocketClientTransport>[0]
+		>().toEqualTypeOf<BrowserWebSocketClientTransportOptions>()
+		expectTypeOf(
+			createBrowserWebSocketClientTransport,
+		).returns.toEqualTypeOf<MCPMessageTransportInterface>()
+	})
+
 	it('connect → tools/list → tools/call(add): a value round-trips over real WebSocket frames', async () => {
 		const client = createMCPClient({
-			transport: createWebSocketClientTransport({
+			transport: createBrowserWebSocketClientTransport({
 				url: `${serverURL}/mcp`,
 				protocols: MCP_WEBSOCKET_SUBPROTOCOL,
 			}),
@@ -111,7 +131,7 @@ describe('createWebSocketClientTransport — the browser client against the Node
 
 	it('a remote erroring tool throws locally (isError → throw)', async () => {
 		const client = createMCPClient({
-			transport: createWebSocketClientTransport({
+			transport: createBrowserWebSocketClientTransport({
 				url: `${serverURL}/mcp`,
 				protocols: MCP_WEBSOCKET_SUBPROTOCOL,
 			}),
@@ -122,7 +142,7 @@ describe('createWebSocketClientTransport — the browser client against the Node
 	})
 
 	it('queues sends issued before open and flushes them, in order, once the socket opens', async () => {
-		const transport = createWebSocketClientTransport({
+		const transport = createBrowserWebSocketClientTransport({
 			url: `${serverURL}/mcp`,
 			protocols: MCP_WEBSOCKET_SUBPROTOCOL,
 		})
@@ -142,7 +162,7 @@ describe('createWebSocketClientTransport — the browser client against the Node
 	})
 
 	it('a server-initiated close fires the transport close event exactly once', async () => {
-		const transport = createWebSocketClientTransport({
+		const transport = createBrowserWebSocketClientTransport({
 			url: `${serverURL}/close`,
 			protocols: [],
 		})
@@ -157,7 +177,7 @@ describe('createWebSocketClientTransport — the browser client against the Node
 	})
 
 	it('a malformed inbound frame surfaces on error and does not throw', async () => {
-		const transport = createWebSocketClientTransport({
+		const transport = createBrowserWebSocketClientTransport({
 			url: `${serverURL}/malformed`,
 			protocols: [],
 		})
@@ -177,7 +197,7 @@ describe('createWebSocketClientTransport — the browser client against the Node
 		// The server selects its configured subprotocol only when the client's offer contains
 		// that token. Omitting `protocols` defaults the offer to MCP_WEBSOCKET_SUBPROTOCOL.
 		const client = createMCPClient({
-			transport: createWebSocketClientTransport({ url: `${serverURL}/mcp` }),
+			transport: createBrowserWebSocketClientTransport({ url: `${serverURL}/mcp` }),
 		})
 
 		await client.connect()
@@ -196,7 +216,7 @@ describe('createWebSocketClientTransport — the browser client against the Node
 		// on a closed socket — `close()` leaves the queue standing and `#flush` splices whatever
 		// is in it the moment a socket opens — so this row reopens the transport and reads the
 		// live server's own replies for the message it refused.
-		const transport = createWebSocketClientTransport({
+		const transport = createBrowserWebSocketClientTransport({
 			url: `${serverURL}/mcp`,
 		})
 		const received: JSONRPCMessage[] = []
@@ -538,7 +558,7 @@ describe('createMessagePortTransport — a symmetric MCPTransportInterface over 
 
 describe('duplex — driven per carrier, and observed at the peer', () => {
 	it('the WebSocket carrier declares duplex and really carries the frame', async () => {
-		const transport = createWebSocketClientTransport({
+		const transport = createBrowserWebSocketClientTransport({
 			url: `${serverURL}/record`,
 			protocols: MCP_WEBSOCKET_SUBPROTOCOL,
 		})
@@ -635,7 +655,7 @@ describe('duplex — driven per carrier, and observed at the peer', () => {
 // ── The scope server: createScopeServer over a scope double ─────────────────
 //
 // `createScopeServer` defaults its scope to `globalThis`; it is driven here with SCOPE
-// DOUBLES (a real object satisfying `ScopeInterface`'s structural shape, not a mock of this
+// DOUBLES (a real object satisfying `WorkerScopeInterface`'s structural shape, not a mock of this
 // package's own code) covering the shapes the unified design serves: a dedicated-worker-shaped
 // double (implicit portless channel) and a Service-Worker-shaped double (message events
 // carrying a real `MessagePort`, built from a real `new MessageChannel()`). Raw JSON-RPC

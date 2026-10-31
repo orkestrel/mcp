@@ -51,7 +51,7 @@ import {
 	createDuplexServerTransport,
 	upgradeRequestPath,
 } from '@src/server'
-import { createWebSocketClientTransport } from '@src/server'
+import { createNodeWebSocketClientTransport } from '@src/server'
 import { createRecorder } from '@orkestrel/test'
 import {
 	bindClient,
@@ -114,13 +114,9 @@ import {
 	createMCPClient,
 	parseJSONRPCMessage,
 	MCP_HANDSHAKE_VERSION,
-} from '@src/core'
-import {
-	createMCPContinuation,
-	createMCPRoutes,
 	createHTTPClientTransport,
-	createWebSocketServer,
-} from '@src/server'
+} from '@src/core'
+import { createMCPContinuation, createMCPRoutes, createWebSocketServer } from '@src/server'
 
 export function createRemoteServer(): MCPServerInterface {
 	const tools = createToolManager()
@@ -1785,7 +1781,7 @@ export type TestResource =
  *
  * @example
  * ```ts
- * const transport = createWebSocketClientTransport(options)
+ * const transport = createNodeWebSocketClientTransport(options)
  * const client = createMCPClient({ transport })
  * await closeResource(client)
  * ```
@@ -1964,7 +1960,7 @@ export interface TestUpgradeOptions {
  * @example
  * ```ts
  * const peer = await startUpgradeServer({ delay: 30 })
- * const transport = createWebSocketClientTransport({ url: `${peer.base}/mcp` })
+ * const transport = createNodeWebSocketClientTransport({ url: `${peer.base}/mcp` })
  * ```
  */
 export async function startUpgradeServer(
@@ -5074,7 +5070,7 @@ export async function startStack(options?: TestStackOptions): Promise<TestStackI
 		},
 		socket() {
 			const client = createMCPClient({
-				transport: createWebSocketClientTransport({ url: `${base}/mcp` }),
+				transport: createNodeWebSocketClientTransport({ url: `${base}/mcp` }),
 			})
 			clients.push(client)
 			return client

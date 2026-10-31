@@ -18,8 +18,8 @@ import {
 	MCP_HANDSHAKE_VERSION,
 	MCP_UNSUPPORTED_VERSION,
 	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
+	createHTTPClientTransport,
 } from '@src/core'
-import { createHTTPClientTransport } from '@src/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createSignal, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { isRecord } from '@orkestrel/contract'

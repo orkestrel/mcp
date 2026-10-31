@@ -14,7 +14,7 @@ import { WEBSOCKET_READY_OPEN } from '@orkestrel/websocket'
  * {@link MCPMessageTransportInterface} — the per-connection JSON-RPC-over-WebSocket server
  * bridge, the bidirectional JSON-RPC message channel
  * `createWebSocketServer` pumps `mcp.dispatch` over and the egress mirror's
- * {@link import('./WebSocketClientTransport.js').WebSocketClientTransport} reuses.
+ * {@link import('./NodeWebSocketClientTransport.js').NodeWebSocketClientTransport} reuses.
  *
  * @remarks
  * - **Reuses `MCPMessageTransportInterface`.** It is the same generic carrier the HTTP

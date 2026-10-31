@@ -1,13 +1,18 @@
-import type { MCPClientInterface, MCPClientOptions, MCPTransportInterface } from '@src/core'
+import type {
+	MCPClientInterface,
+	MCPClientOptions,
+	MCPTransportInterface,
+	WebSocketClientTransportOptions,
+} from '@src/core'
 import type { ToolInterface, ToolManagerInterface } from '@orkestrel/tool'
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 
 // The MCP browser-transport surface — the source of truth. The client
 // transports for the Model Context Protocol drive a remote server from a page
 // / Web Worker / Service Worker: the native `WebSocket` transport
-// (`transports/WebSocketClientTransport.ts`) and the host-independent `fetch` +
-// `@orkestrel/sse` streamable-HTTP transport `@src/core` publishes, which this face's
-// `createHTTPClientTransport` returns. Every one speaks the same `@src/core`
+// (`transports/BrowserWebSocketClientTransport.ts`) and the host-independent `fetch` +
+// `@orkestrel/sse` streamable-HTTP transport `@src/core` publishes with its
+// `createHTTPClientTransport` factory. Every one speaks the same `@src/core`
 // `MCPMessageTransportInterface`, so `createMCPClient` consumes them identically. The host
 // performs the WebSocket handshake, so this face carries none of the Node client's
 // `node:crypto` / `node:http(s)` machinery.
@@ -15,12 +20,12 @@ import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkes
 // `MessagePortTransport` is the genuinely new capability: unlike the
 // client-only carriers, a `MessagePort` is symmetric — the same class is handed
 // to either `bindServer` or `bindClient` (`@src/core`), the role coming from which
-// binder it is given to. `ScopeServerOptions`, `ScopeInterface`, and
+// binder it is given to. `ScopeServerOptions`, `WorkerScopeInterface`, and
 // `ScopeServerInterface` back `createScopeServer`, the factory that wires a Web Worker's /
 // Service Worker's own message events (and any `MessagePort` they carry) to an `MCPServer`.
 
 /**
- * Options for `createWebSocketClientTransport` (browser face) — the remote MCP
+ * Options for `createBrowserWebSocketClientTransport` (browser face) — the remote MCP
  * WebSocket endpoint and any negotiated subprotocols.
  *
  * @remarks
@@ -46,8 +51,7 @@ import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkes
  * a signed value in the URL. Adding a `headers` key here would be an option that silently
  * did nothing.
  */
-export interface WebSocketClientTransportOptions {
-	readonly url: string
+export interface BrowserWebSocketClientTransportOptions extends WebSocketClientTransportOptions {
 	readonly protocols?: string | readonly string[]
 }
 
@@ -92,7 +96,7 @@ export interface ScopeTransportInterface extends MCPTransportInterface {
  * doc and the factory). A real `self` / `globalThis` inside a worker satisfies this
  * structurally (it exposes far more, which this narrower shape ignores).
  */
-export interface ScopeInterface {
+export interface WorkerScopeInterface {
 	/** Posts one reply onto the scope's implicit channel. */
 	postMessage(message: unknown): void
 	/** Subscribes to the scope's `message` events, portless and port-bearing alike. */
@@ -360,7 +364,7 @@ export interface WebMCPToolEvent {
  * `EventTarget`: the operations plus the `toolchange`, `toolactivated`, and `toolcancel`
  * subscriptions the bridge republishes as {@link ModelContextEventMap}'s `change`,
  * `activate`, and `abort`. Only the members the bridge touches are declared,
- * exactly as {@link ScopeInterface} declares only what `createScopeServer` touches, so a real
+ * exactly as {@link WorkerScopeInterface} declares only what `createScopeServer` touches, so a real
  * `ModelContext` satisfies this structurally and an IDL-faithful double satisfies it without
  * implementing the whole of `EventTarget`.
  *

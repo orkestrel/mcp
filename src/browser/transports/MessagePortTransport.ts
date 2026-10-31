@@ -8,7 +8,7 @@ import { isString } from '@orkestrel/contract'
  * `postMessage`.
  *
  * @remarks
- * - **Symmetric.** Unlike {@link import('./WebSocketClientTransport.js').WebSocketClientTransport}
+ * - **Symmetric.** Unlike {@link import('./BrowserWebSocketClientTransport.js').BrowserWebSocketClientTransport}
  *   / {@link import('@orkestrel/mcp').HTTPClientTransport} (CLIENT-only
  *   carriers of `@orkestrel/mcp`'s `MCPMessageTransportInterface`), a `MessagePort` is a
  *   plain duplex channel — the same class implements `@orkestrel/mcp`'s

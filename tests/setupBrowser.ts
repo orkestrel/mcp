@@ -5,7 +5,7 @@ import type { JSONRPCMessage, JSONRPCResponse } from '@src/core'
 import type {
 	ModelContextInterface,
 	ScopeTransportInterface,
-	ScopeInterface,
+	WorkerScopeInterface,
 	WebMCPHandlerOptions,
 	WebMCPTool,
 	WebMCPRegisteredTool,
@@ -77,7 +77,7 @@ export interface TestScopeCarrierInterface {
  * Wires real {@link createScopeTransport} halves into one in-page duplex carrier.
  *
  * @remarks
- * Each half is the shipped factory over a minimal {@link ScopeInterface} whose
+ * Each half is the shipped factory over a minimal {@link WorkerScopeInterface} whose
  * `postMessage` hands the string to the OTHER half's `deliver` — which is precisely how a
  * dedicated worker's implicit channel behaves, with the structured-clone hop removed. No
  * project-owned behaviour is reimplemented: both transports are the real ones.
@@ -891,7 +891,7 @@ export function installModelContext(
 
 /** Describes the foreign scope fixture and its observations. */
 export interface ScopeDoubleInterface {
-	readonly scope: ScopeInterface
+	readonly scope: WorkerScopeInterface
 	readonly sent: readonly unknown[]
 	readonly listenerCount: number
 	dispatch(init: { data?: unknown; ports?: readonly MessagePort[] }): void

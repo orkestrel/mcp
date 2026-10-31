@@ -5,7 +5,7 @@ import type {
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
-import type { WebSocketClientTransportOptions } from '../types.js'
+import type { NodeWebSocketClientTransportOptions } from '../types.js'
 import type { ClientRequest, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { randomBytes } from 'node:crypto'
@@ -68,12 +68,12 @@ import {
  *
  * @example
  * ```ts
- * const transport = new WebSocketClientTransport({ url: 'ws://localhost:3000/mcp' })
+ * const transport = new NodeWebSocketClientTransport({ url: 'ws://localhost:3000/mcp' })
  * const client = new MCPClient({ transport })
  * await client.connect() // start() handshakes, then the MCP initialize runs over WS frames
  * ```
  */
-export class WebSocketClientTransport implements MCPMessageTransportInterface {
+export class NodeWebSocketClientTransport implements MCPMessageTransportInterface {
 	readonly #emitter: Emitter<MCPMessageTransportEventMap>
 	readonly #url: string
 	readonly #headers: Readonly<Record<string, string>>
@@ -88,7 +88,7 @@ export class WebSocketClientTransport implements MCPMessageTransportInterface {
 	#request: ClientRequest | undefined = undefined
 	#closed = false
 
-	constructor(options: WebSocketClientTransportOptions) {
+	constructor(options: NodeWebSocketClientTransportOptions) {
 		this.#emitter = new Emitter<MCPMessageTransportEventMap>()
 		this.#url = options.url
 		this.#headers = options.headers ?? {}

@@ -1,7 +1,12 @@
-import type { JSONRPCMessage } from '@src/core'
+import type {
+	JSONRPCMessage,
+	MCPMessageTransportInterface,
+	WebSocketClientTransportOptions,
+} from '@src/core'
+import type { NodeWebSocketClientTransportOptions } from '@src/server'
 import { createServer as createHTTPServer } from 'node:http'
 import { PassThrough } from 'node:stream'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, expectTypeOf, it } from 'vitest'
 import {
 	buildCancelledNotification,
 	bindServer,
@@ -27,7 +32,7 @@ import {
 	createMCPContinuation,
 	createMCPRoutes,
 	createStdioServer,
-	createWebSocketClientTransport,
+	createNodeWebSocketClientTransport,
 	StdioServerTransport,
 } from '@src/server'
 import { WEBSOCKET_CLOSE_NORMAL, WEBSOCKET_OPCODE_CLOSE } from '@orkestrel/websocket'
@@ -636,12 +641,12 @@ describe('createMCPRoutes — the stateless default (no session middleware)', ()
 
 // ── The WebSocket transport, both halves against each other ──────────────────
 //
-// src/server/transports/{WebSocketServerTransport,WebSocketClientTransport}.ts +
-// createWebSocketServer / createWebSocketClientTransport — the DETERMINISTIC
+// src/server/transports/{WebSocketServerTransport,NodeWebSocketClientTransport}.ts +
+// createWebSocketServer / createNodeWebSocketClientTransport — the DETERMINISTIC
 // both-transports WS e2e (no live model): a REAL `Server` with
 // `server.upgrade(createWebSocketServer(mcp))` over the same stub-tool MCPServer,
 // started with `startServer`; an `MCPClient` over
-// `createWebSocketClientTransport({ url: <ws>/mcp })` drives `connect()` → `tools()` →
+// `createNodeWebSocketClientTransport({ url: <ws>/mcp })` drives `connect()` → `tools()` →
 // `call('add'/'boom')` over REAL WebSocket frames through the REAL spine upgrade seam.
 // Proves the ingress↔egress loop end to end: the handshake, the tool list, a tool-call
 // value round-trip, an erroring tool → `isError` → a local throw, and the
@@ -651,12 +656,26 @@ describe('createMCPRoutes — the stateless default (no session middleware)', ()
 // Stand up a server exposing the stub-tool MCPServer over WebSocket on an ephemeral port. The
 // WS client transport accepts the `http://` base directly (it converts `ws(s)`→`http(s)`
 // internally; an `http://` URL passes through to the same upgrade endpoint).
-describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-transports WS e2e', () => {
+describe('createWebSocketServer ↔ createNodeWebSocketClientTransport — the both-transports WS e2e', () => {
+	it('extends the core WebSocket client options with the upgrade headers', () => {
+		expectTypeOf<NodeWebSocketClientTransportOptions>().toExtend<WebSocketClientTransportOptions>()
+		expectTypeOf<NodeWebSocketClientTransportOptions>().toEqualTypeOf<{
+			readonly url: string
+			readonly headers?: Readonly<Record<string, string>>
+		}>()
+		expectTypeOf<
+			Parameters<typeof createNodeWebSocketClientTransport>[0]
+		>().toEqualTypeOf<NodeWebSocketClientTransportOptions>()
+		expectTypeOf(
+			createNodeWebSocketClientTransport,
+		).returns.toEqualTypeOf<MCPMessageTransportInterface>()
+	})
+
 	it('serves a legacy initialize and tools/call through the decorator over a real socket', async () => {
 		const handle = await startWsMCP(teardown, createMCPLegacy(createCalculatorServer()))
 		const client = createMCPClient({
 			transport: createMCPLegacyClientTransport(
-				createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
+				createNodeWebSocketClientTransport({ url: `${handle.base}/mcp` }),
 				{ version: '2025-06-18' },
 			),
 		})
@@ -669,7 +688,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 
 	it('CONTROL — a bare server refuses initialize at either shape, naming the method, over a real socket', async () => {
 		const handle = await startWsMCP(teardown)
-		const transport = createWebSocketClientTransport({ url: `${handle.base}/mcp` })
+		const transport = createNodeWebSocketClientTransport({ url: `${handle.base}/mcp` })
 		teardown.add(() => closeResource(transport))
 
 		await transport.start()
@@ -704,7 +723,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 	it('connect → tools/list → tools/call(add): a value round-trips over real WebSocket frames', async () => {
 		const handle = await startWsMCP(teardown)
 		const client = createMCPClient({
-			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
+			transport: createNodeWebSocketClientTransport({ url: `${handle.base}/mcp` }),
 		})
 		teardown.add(() => closeResource(client))
 
@@ -727,7 +746,7 @@ describe('createWebSocketServer ↔ createWebSocketClientTransport — the both-
 	it('a remote erroring tool throws locally (isError → throw)', async () => {
 		const handle = await startWsMCP(teardown)
 		const client = createMCPClient({
-			transport: createWebSocketClientTransport({ url: `${handle.base}/mcp` }),
+			transport: createNodeWebSocketClientTransport({ url: `${handle.base}/mcp` }),
 		})
 		teardown.add(() => closeResource(client))
 		await client.connect()
@@ -875,7 +894,7 @@ describe('createWebSocketServer — the spine stop detaches each claimed binding
 			},
 		})
 		const handle = await startWsMCP(teardown, mcp)
-		const transport = createWebSocketClientTransport({
+		const transport = createNodeWebSocketClientTransport({
 			url: `${handle.base}${DEFAULT_MCP_PATH}`,
 		})
 		const replies: JSONRPCMessage[] = []

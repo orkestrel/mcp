@@ -1,8 +1,9 @@
 // The MCP server-transport surface — the source of truth. The transports
 // for the Model Context Protocol over the server spine: the Streamable HTTP transport
-// (route handlers through `createMCPRoutes` + the `fetch` egress `createHTTPClientTransport`)
+// (route handlers through `createMCPRoutes`, answered by the core `fetch` egress
+// `createHTTPClientTransport`)
 // and the WebSocket transport (an ingress `createWebSocketServer` over the spine's
-// `upgrade` seam + the egress `createWebSocketClientTransport` over `node:http(s)`).
+// `upgrade` seam + the egress `createNodeWebSocketClientTransport` over `node:http(s)`).
 //
 // The HTTP transport mounts a transport-agnostic `MCPServerInterface` (the `@src/core` MCP
 // dispatch core) on a spine `Server` through `createMCPRoutes`, pumping each POST body through
@@ -24,7 +25,7 @@
 // The WebSocket transport composes the lean RFC 6455 `NodeWebSocket` wrapper (D2) over the
 // spine's generic `upgrade` seam (D3): `createWebSocketServer` returns an `UpgradeHandler`
 // that claims an MCP WebSocket upgrade and pumps each decoded JSON-RPC request through
-// `mcp.dispatch`; `createWebSocketClientTransport` opens an upgrade `GET`, validates the
+// `mcp.dispatch`; `createNodeWebSocketClientTransport` opens an upgrade `GET`, validates the
 // handshake accept, and bridges the masked client frames as a `MCPMessageTransportInterface` an
 // `MCPClient` drives. Both transports speak the SAME transport-agnostic `MCPServerInterface`
 // / `MCPMessageTransportInterface` the HTTP pair does — the wire framing differs, the dispatch
@@ -35,6 +36,7 @@ import type {
 	JSONRPCResponse,
 	MCPMessageTransportInterface,
 	MCPVersion,
+	WebSocketClientTransportOptions,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { RouteContext } from '@orkestrel/router'
@@ -356,7 +358,7 @@ export interface WebSocketServerOptions {
 }
 
 /**
- * Options for `createWebSocketClientTransport` — the remote MCP WebSocket endpoint and any
+ * Options for `createNodeWebSocketClientTransport` — the remote MCP WebSocket endpoint and any
  * extra handshake headers.
  *
  * @remarks
@@ -376,8 +378,7 @@ export interface WebSocketServerOptions {
  * else — so a `headers` key over there would be an option that silently did nothing. Do not
  * "harmonize" the option shapes.
  */
-export interface WebSocketClientTransportOptions {
-	readonly url: string
+export interface NodeWebSocketClientTransportOptions extends WebSocketClientTransportOptions {
 	readonly headers?: Readonly<Record<string, string>>
 }
 

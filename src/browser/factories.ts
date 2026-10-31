@@ -1,19 +1,15 @@
-import type {
-	HTTPClientTransportOptions,
-	MCPMessageTransportInterface,
-	MCPTransportInterface,
-} from '@src/core'
+import type { MCPMessageTransportInterface, MCPTransportInterface } from '@src/core'
 import type {
 	MessagePortTransportOptions,
 	ModelContextInterface,
 	ModelContextOptions,
 	PageServerInterface,
 	PageServerOptions,
-	ScopeInterface,
+	WorkerScopeInterface,
 	ScopeServerInterface,
 	ScopeServerOptions,
 	ScopeTransportInterface,
-	WebSocketClientTransportOptions,
+	BrowserWebSocketClientTransportOptions,
 } from './types.js'
 import {
 	bindClient,
@@ -21,7 +17,6 @@ import {
 	createDuplexClientTransport,
 	createMCPClient,
 	createMCPServer,
-	HTTPClientTransport,
 } from '@src/core'
 import { DEFAULT_MCP_SERVER_NAME, DEFAULT_MCP_SERVER_VERSION } from './constants.js'
 import { isWebMCPDocument } from './validators.js'
@@ -29,13 +24,13 @@ import { ModelContext } from './ModelContext.js'
 import { ScopeServer } from './ScopeServer.js'
 import { MessagePortTransport } from './transports/MessagePortTransport.js'
 import { ScopeTransport } from './transports/ScopeTransport.js'
-import { WebSocketClientTransport } from './transports/WebSocketClientTransport.js'
+import { BrowserWebSocketClientTransport } from './transports/BrowserWebSocketClientTransport.js'
 
 /**
  * Creates the browser-face WebSocket client transport for an
  * {@link import('@orkestrel/mcp').MCPClientInterface} — a {@link MCPMessageTransportInterface}
  * that drives a remote MCP server over the native `WebSocket` global. This factory is the
- * browser sibling of the Node face's `createWebSocketClientTransport` (`@orkestrel/mcp/server`).
+ * browser sibling of the Node face's `createNodeWebSocketClientTransport` (`@orkestrel/mcp/server`).
  *
  * @remarks
  * Hand it to `createMCPClient({ transport })`: `start()` (run by `client.connect()`)
@@ -47,75 +42,25 @@ import { WebSocketClientTransport } from './transports/WebSocketClientTransport.
  *
  * @param options - `url` (the remote WebSocket endpoint; required) and optional
  *   `protocols` (the WebSocket subprotocol(s) to request); see
- *   {@link WebSocketClientTransportOptions}
+ *   {@link BrowserWebSocketClientTransportOptions}
  * @returns A working {@link MCPMessageTransportInterface} over the native `WebSocket`
  *
  * @example
  * ```ts
  * import { createMCPClient } from '@orkestrel/mcp'
- * import { createWebSocketClientTransport } from '@orkestrel/mcp/browser'
+ * import { createBrowserWebSocketClientTransport } from '@orkestrel/mcp/browser'
  *
  * const client = createMCPClient({
- * 	transport: createWebSocketClientTransport({ url: 'ws://localhost:3000/mcp' }),
+ * 	transport: createBrowserWebSocketClientTransport({ url: 'ws://localhost:3000/mcp' }),
  * })
  * await client.connect()
  * const tools = await client.tools()
  * ```
  */
-export function createWebSocketClientTransport(
-	options: WebSocketClientTransportOptions,
+export function createBrowserWebSocketClientTransport(
+	options: BrowserWebSocketClientTransportOptions,
 ): MCPMessageTransportInterface {
-	return new WebSocketClientTransport(options)
-}
-
-/**
- * Creates the HTTP client transport for an
- * {@link import('@orkestrel/mcp').MCPClientInterface} — a {@link MCPMessageTransportInterface}
- * that drives a remote Streamable-HTTP MCP server over the native `fetch`.
- *
- * @remarks
- * It returns the core {@link import('@orkestrel/mcp').HTTPClientTransport}, the same class the
- * Node face's `createHTTPClientTransport` returns, because the class touches `fetch`,
- * `Response`, `AbortController`, `AbortSignal`, and `WeakMap` alone. This factory exists so a
- * page imports its transport from the face it already imports everything else from.
- *
- * @remarks
- * Hand it to `createMCPClient({ transport })`: each JSON-RPC message the client
- * sends is `POST`ed to `options.url` with `content-type: application/json` and an
- * `Accept` of both `application/json` and `text/event-stream` (the server answers
- * with either — a plain JSON envelope or a Streamable-HTTP SSE `data:` event,
- * decoded with `@orkestrel/sse`), and the reply is surfaced on the transport's
- * `message` event for the client's id correlation. Add `options.headers` (for example, an
- * `Authorization` bearer) to reach a guarded server. `start` / `close` hold no
- * connection; against a stateful server it captures the `mcp-session-id` from
- * `initialize` and echoes it on later requests. It also captures the initialize
- * result's `protocolVersion` and sends `mcp-protocol-version` alone on subsequent
- * legacy requests. Modern requests instead derive `mcp-protocol-version` and
- * `mcp-method` from the message, plus `mcp-name` only for `tools/call`, so the
- * same `MCPClient` passes either era's protocol gates without caller wiring.
- *
- * @param options - `url` (the remote endpoint; required), optional `headers` merged
- *   onto every request, optional `fetch` (default `globalThis.fetch`), and optional
- *   `timeout` (ms, applied with `AbortSignal.timeout`); see
- *   {@link HTTPClientTransportOptions}
- * @returns A working {@link MCPMessageTransportInterface} over the native `fetch`
- *
- * @example
- * ```ts
- * import { createMCPClient } from '@orkestrel/mcp'
- * import { createHTTPClientTransport } from '@orkestrel/mcp/browser'
- *
- * const client = createMCPClient({
- * 	transport: createHTTPClientTransport({ url: 'http://localhost:3000/mcp' }),
- * })
- * await client.connect()
- * const tools = await client.tools()
- * ```
- */
-export function createHTTPClientTransport(
-	options: HTTPClientTransportOptions,
-): MCPMessageTransportInterface {
-	return new HTTPClientTransport(options)
+	return new BrowserWebSocketClientTransport(options)
 }
 
 /**
@@ -186,13 +131,13 @@ export function createMessagePortTransport(
  */
 export function createScopeServer(
 	options: ScopeServerOptions,
-	scope: ScopeInterface = globalThis,
+	scope: WorkerScopeInterface = globalThis,
 ): ScopeServerInterface {
 	return new ScopeServer(options, scope)
 }
 
 /**
- * Adapts a hostable {@link ScopeInterface} (`self` in a dedicated Web Worker, or any
+ * Adapts a hostable {@link WorkerScopeInterface} (`self` in a dedicated Web Worker, or any
  * structurally matching double) into a {@link ScopeTransportInterface} — the implicit,
  * portless message channel {@link createScopeServer} binds for the dedicated-worker shape.
  *
@@ -215,7 +160,7 @@ export function createScopeServer(
  * const unbind = bindServer(server, scopeTransport)
  * ```
  */
-export function createScopeTransport(scope: ScopeInterface): ScopeTransportInterface {
+export function createScopeTransport(scope: WorkerScopeInterface): ScopeTransportInterface {
 	return new ScopeTransport(scope)
 }
 

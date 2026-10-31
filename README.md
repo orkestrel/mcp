@@ -46,8 +46,7 @@ This example exposes a tool registry over MCP, mounted on the HTTP spine.
 Drive a remote MCP server as a client, over the same transport-agnostic core:
 
 ```ts
-import { createMCPClient } from '@orkestrel/mcp'
-import { createHTTPClientTransport } from '@orkestrel/mcp/server'
+import { createHTTPClientTransport, createMCPClient } from '@orkestrel/mcp'
 
 const client = createMCPClient({
 	transport: createHTTPClientTransport({ url: 'http://localhost:3000/mcp' }),
@@ -57,7 +56,7 @@ const tools = await client.tools()
 const outcome = await client.call('add', { x: 2, y: 5 })
 ```
 
-The same `MCPClient` drives a `createWebSocketClientTransport` or
+The same `MCPClient` drives a `createNodeWebSocketClientTransport` or
 `createStdioClientTransport` instead — only the injected transport changes.
 
 ## Guide

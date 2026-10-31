@@ -1,12 +1,12 @@
 import type { JSONRPCMessage } from '@src/core'
 import { describe, expect, inject, it } from 'vitest'
 import { createMCPClient } from '@src/core'
-import { WebSocketClientTransport } from '@src/browser'
+import { BrowserWebSocketClientTransport } from '@src/browser'
 import { waitForDelay } from '@orkestrel/test'
 import { MCPFixtureCell } from '../../../setup.js'
 import { createJSONRPCRequest, MODERN_METADATA, waitForSettlement } from '../../../setup.js'
 
-// src/browser/transports/WebSocketClientTransport.ts — what the browser face owes the socket
+// src/browser/transports/BrowserWebSocketClientTransport.ts — what the browser face owes the socket
 // it borrowed. The round trip against the real Node-face WebSocket server is proven in
 // tests/src/browser/factories.test.ts; this file pins the RELEASE half. A socket this
 // transport closed keeps firing its own native events afterwards, so a close that leaves the
@@ -14,9 +14,9 @@ import { createJSONRPCRequest, MODERN_METADATA, waitForSettlement } from '../../
 
 const serverURL = inject('server')
 
-describe('WebSocketClientTransport — close releases the socket it bound', () => {
+describe('BrowserWebSocketClientTransport — close releases the socket it bound', () => {
 	it('close settles a start whose handshake has not opened', async () => {
-		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
+		const transport = new BrowserWebSocketClientTransport({ url: `${serverURL}/mcp` })
 		const starting = transport.start()
 
 		await transport.close()
@@ -27,7 +27,7 @@ describe('WebSocketClientTransport — close releases the socket it bound', () =
 	})
 
 	it('ignores the old socket close after a new socket has replaced it', async () => {
-		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
+		const transport = new BrowserWebSocketClientTransport({ url: `${serverURL}/mcp` })
 		const messages: JSONRPCMessage[] = []
 		const closed = new MCPFixtureCell(0)
 		transport.emitter.on('message', (message) => messages.push(message))
@@ -54,7 +54,7 @@ describe('WebSocketClientTransport — close releases the socket it bound', () =
 	})
 
 	it('emits close once however many times it is called', async () => {
-		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
+		const transport = new BrowserWebSocketClientTransport({ url: `${serverURL}/mcp` })
 		const closed = new MCPFixtureCell(0)
 		transport.emitter.on('close', () => (closed.value += 1))
 		await transport.start()
@@ -71,9 +71,9 @@ describe('WebSocketClientTransport — close releases the socket it bound', () =
 // write answers a closed channel FROM ITS OWN STATE. Silently resolving is what leaves the
 // client's correlated request pending to its deadline for a frame that was never written; the
 // pre-open queue is a different state entirely and still flushes.
-describe('WebSocketClientTransport — a send the channel cannot carry rejects', () => {
+describe('BrowserWebSocketClientTransport — a send the channel cannot carry rejects', () => {
 	it('rejects a send issued after close rather than reporting a write nobody made', async () => {
-		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
+		const transport = new BrowserWebSocketClientTransport({ url: `${serverURL}/mcp` })
 		const received: JSONRPCMessage[] = []
 		transport.emitter.on('message', (message) => received.push(message))
 		await transport.start()
@@ -88,7 +88,10 @@ describe('WebSocketClientTransport — a send the channel cannot carry rejects',
 	})
 
 	it('rejects a send issued after the server closed the socket', async () => {
-		const transport = new WebSocketClientTransport({ url: `${serverURL}/close`, protocols: [] })
+		const transport = new BrowserWebSocketClientTransport({
+			url: `${serverURL}/close`,
+			protocols: [],
+		})
 		const closed = new MCPFixtureCell(0)
 		transport.emitter.on('close', () => (closed.value += 1))
 		await transport.start()
@@ -101,7 +104,7 @@ describe('WebSocketClientTransport — a send the channel cannot carry rejects',
 	})
 
 	it('still queues a send issued before open and flushes it in order once the socket opens', async () => {
-		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
+		const transport = new BrowserWebSocketClientTransport({ url: `${serverURL}/mcp` })
 		const received: JSONRPCMessage[] = []
 		transport.emitter.on('message', (message) => received.push(message))
 
@@ -117,7 +120,7 @@ describe('WebSocketClientTransport — a send the channel cannot carry rejects',
 	})
 
 	it('drops a queued send at close so it never rides the next connection', async () => {
-		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
+		const transport = new BrowserWebSocketClientTransport({ url: `${serverURL}/mcp` })
 		const received: JSONRPCMessage[] = []
 		transport.emitter.on('message', (message) => received.push(message))
 
@@ -136,7 +139,7 @@ describe('WebSocketClientTransport — a send the channel cannot carry rejects',
 	})
 
 	it('settles the caller pending call on the closed channel instead of leaving it to time out', async () => {
-		const transport = new WebSocketClientTransport({ url: `${serverURL}/mcp` })
+		const transport = new BrowserWebSocketClientTransport({ url: `${serverURL}/mcp` })
 		const client = createMCPClient({ transport, timeout: 200 })
 		await client.connect()
 		await transport.close()

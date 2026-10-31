@@ -16,11 +16,12 @@ import {
 	MCP_MODERN_VERSION,
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_SESSION_HEADER,
+	createHTTPClientTransport,
 } from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
 import { createToolManager } from '@orkestrel/tool'
-import { createHTTPClientTransport, createMCPRoutes, createMCPSession } from '@src/server'
+import { createMCPRoutes, createMCPSession } from '@src/server'
 import { createTeardown, waitForDelay } from '@orkestrel/test'
 import {
 	createCalculatorServer,

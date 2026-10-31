@@ -1,5 +1,5 @@
 import type { MCPServerInterface } from '@src/core'
-import type { ScopeInterface, ScopeServerInterface, ScopeServerOptions } from './types.js'
+import type { WorkerScopeInterface, ScopeServerInterface, ScopeServerOptions } from './types.js'
 import { bindServer, createMCPServer } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { DEFAULT_MCP_SERVER_NAME, DEFAULT_MCP_SERVER_VERSION } from './constants.js'
@@ -8,7 +8,7 @@ import { ScopeTransport } from './transports/ScopeTransport.js'
 
 /** Owns a scope's implicit binding and every accepted client-port binding. */
 export class ScopeServer implements ScopeServerInterface {
-	readonly #scope: ScopeInterface
+	readonly #scope: WorkerScopeInterface
 	readonly #server: MCPServerInterface
 	readonly #transport: ScopeTransport
 	readonly #accept: ScopeServerOptions['accept']
@@ -17,7 +17,7 @@ export class ScopeServer implements ScopeServerInterface {
 	readonly #teardowns = new Map<MessagePort, () => void>()
 	#stopped = false
 
-	constructor(options: ScopeServerOptions, scope: ScopeInterface = globalThis) {
+	constructor(options: ScopeServerOptions, scope: WorkerScopeInterface = globalThis) {
 		this.#scope = scope
 		this.#server = createMCPServer({
 			tools: options.tools,

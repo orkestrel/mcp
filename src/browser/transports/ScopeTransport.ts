@@ -1,12 +1,12 @@
-import type { ScopeInterface, ScopeTransportInterface } from '../types.js'
+import type { WorkerScopeInterface, ScopeTransportInterface } from '../types.js'
 
 /** Adapts a scope's implicit channel to replaceable MCP transport callbacks. */
 export class ScopeTransport implements ScopeTransportInterface {
-	readonly #scope: ScopeInterface
+	readonly #scope: WorkerScopeInterface
 	#message: ((message: string) => void) | undefined
 	#closure: (() => void) | undefined
 
-	constructor(scope: ScopeInterface) {
+	constructor(scope: WorkerScopeInterface) {
 		this.#scope = scope
 	}
 

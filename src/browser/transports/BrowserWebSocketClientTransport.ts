@@ -4,7 +4,7 @@ import type {
 	JSONRPCMessage,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { WebSocketClientTransportOptions } from '../types.js'
+import type { BrowserWebSocketClientTransportOptions } from '../types.js'
 import { deliverMessage, MCP_WEBSOCKET_SUBPROTOCOL } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
@@ -12,7 +12,7 @@ import { Emitter } from '@orkestrel/emitter'
 /**
  * Drives a remote MCP server over the native `WebSocket` global from the browser face, as a
  * client {@link MCPMessageTransportInterface}. This class is the browser sibling of the Node
- * face's {@link import('@orkestrel/mcp/server').WebSocketClientTransport}.
+ * face's {@link import('@orkestrel/mcp/server').NodeWebSocketClientTransport}.
  *
  * @remarks
  * - **Host-performed handshake.** `start()` opens `new WebSocket(url, protocols)` and
@@ -50,12 +50,12 @@ import { Emitter } from '@orkestrel/emitter'
  *
  * @example
  * ```ts
- * const transport = new WebSocketClientTransport({ url: 'ws://localhost:3000/mcp' })
+ * const transport = new BrowserWebSocketClientTransport({ url: 'ws://localhost:3000/mcp' })
  * const client = new MCPClient({ transport })
  * await client.connect() // the browser handshakes, then the MCP initialize runs over WS frames
  * ```
  */
-export class WebSocketClientTransport implements MCPMessageTransportInterface {
+export class BrowserWebSocketClientTransport implements MCPMessageTransportInterface {
 	readonly #emitter: Emitter<MCPMessageTransportEventMap>
 	readonly #url: string
 	readonly #protocols: string | string[] | undefined
@@ -73,7 +73,7 @@ export class WebSocketClientTransport implements MCPMessageTransportInterface {
 	#queue: string[] = []
 	#closed = false
 
-	constructor(options: WebSocketClientTransportOptions) {
+	constructor(options: BrowserWebSocketClientTransportOptions) {
 		this.#emitter = new Emitter<MCPMessageTransportEventMap>()
 		this.#url = options.url
 		const protocols = options.protocols

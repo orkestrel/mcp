@@ -165,13 +165,13 @@ export const MCP_HEADER_ANNOTATION = 'x-mcp-header'
 // and the Node server that echoes it are one wire contract.
 
 /**
- * Names the WebSocket subprotocol `createWebSocketClientTransport` requests by default —
- * `'mcp'`, which `createWebSocketServer` selects when the client offers it. Per RFC 6455
- * §4.1 a client MUST fail the connection if the server returns
- * a subprotocol it did not request; Node ≥ 22 (undici) enforces this strictly, so the
- * default bakes the correct value in. Override `WebSocketClientTransportOptions.protocols`
- * only when connecting to a foreign server that speaks a different subprotocol (or `[]`
- * for no subprotocol negotiation at all).
+ * Names the WebSocket subprotocol `createBrowserWebSocketClientTransport` and
+ * `createNodeWebSocketClientTransport` request by default — `'mcp'`, which
+ * `createWebSocketServer` selects when the client offers it. Per RFC 6455 §4.1 a client MUST
+ * fail the connection if the server returns a subprotocol it did not request; Node ≥ 22
+ * (undici) enforces this strictly, so the default bakes the correct value in. Override
+ * `BrowserWebSocketClientTransportOptions.protocols` only when connecting to a foreign server
+ * that speaks a different subprotocol (or `[]` for no subprotocol negotiation at all).
  *
  * @remarks
  * The client sends it in `Sec-WebSocket-Protocol` and the server echoes it in its `101`

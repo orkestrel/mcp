@@ -33,10 +33,9 @@ import { isJSONRPCResponse, isMCPVersion, isModernRequest } from '../validators.
  *
  * @remarks
  * - **One class, both faces.** It touches `fetch`, `Response`, `AbortController`,
- *   `AbortSignal`, and `WeakMap` alone, so it is host-independent and lives in core. Each
- *   environment face publishes its own `createHTTPClientTransport` over it —
- *   `@orkestrel/mcp/browser` and `@orkestrel/mcp/server` — and both factories return this
- *   class, so a reply reaches a page and a Node process through the same decode.
+ *   `AbortSignal`, and `WeakMap` alone, so it is host-independent and lives in core beside
+ *   its `createHTTPClientTransport` factory, and a reply reaches a page and a Node process
+ *   through the same decode.
  * - **Request/response over `fetch`.** `send(message)` POSTs the JSON-serialized
  *   message to `options.url` with `content-type: application/json` and an
  *   `Accept` of both `application/json` and `text/event-stream` (so the server may

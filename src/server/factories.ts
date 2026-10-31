@@ -1,5 +1,4 @@
 import type {
-	HTTPClientTransportOptions,
 	MCPMessageTransportInterface,
 	MCPContinuationInterface,
 	MCPDispatcherInterface,
@@ -13,12 +12,12 @@ import type {
 	StdioClientTransportOptions,
 	StdioServerInterface,
 	StdioServerOptions,
-	WebSocketClientTransportOptions,
+	NodeWebSocketClientTransportOptions,
 	WebSocketServerOptions,
 } from './types.js'
 import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { bindServer, HTTPClientTransport, MCP_WEBSOCKET_SUBPROTOCOL } from '@src/core'
+import { bindServer, MCP_WEBSOCKET_SUBPROTOCOL } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { signToken, verifyToken } from '@orkestrel/server'
 import { createNodeWebSocket, WEBSOCKET_VERSION } from '@orkestrel/websocket'
@@ -27,7 +26,7 @@ import { createMCPPostHandler } from './handlers.js'
 import { upgradeRequestPath } from './helpers.js'
 import { StdioClientTransport } from './transports/StdioClientTransport.js'
 import { StdioServerTransport } from './transports/StdioServerTransport.js'
-import { WebSocketClientTransport } from './transports/WebSocketClientTransport.js'
+import { NodeWebSocketClientTransport } from './transports/NodeWebSocketClientTransport.js'
 import { WebSocketServerTransport } from './transports/WebSocketServerTransport.js'
 import { DuplexServerTransport } from './transports/DuplexServerTransport.js'
 
@@ -178,52 +177,6 @@ export function createMCPRoutes<TState = unknown>(
 }
 
 /**
- * Creates the HTTP client transport for an {@link import('@orkestrel/mcp').MCPClientInterface}
- * — a {@link MCPMessageTransportInterface} that drives a remote Streamable-HTTP MCP server
- * over `fetch`. The egress mirror of {@link createMCPRoutes}.
- *
- * @remarks
- * It returns the core {@link import('@orkestrel/mcp').HTTPClientTransport}, the same class the
- * browser face's `createHTTPClientTransport` returns, because the class touches `fetch`,
- * `Response`, `AbortController`, `AbortSignal`, and `WeakMap` alone.
- *
- * @remarks
- * Hand it to `createMCPClient({ transport })`: each JSON-RPC message the client sends is
- * `POST`ed to `options.url` with `content-type: application/json` and an `Accept` of
- * both `application/json` and `text/event-stream` (the server answers with either — a
- * plain JSON envelope or a Streamable-HTTP SSE `data:` event, decoded with `@orkestrel/sse`),
- * and the reply is surfaced on the transport's `message` event for the client's id
- * correlation. Add `options.headers` (for example, an `Authorization` bearer) to reach a guarded
- * server. `start` / `close` hold no connection; against a stateful server it captures the
- * `mcp-session-id` from `initialize` and echoes it on later requests. It also captures
- * the initialize result's `protocolVersion` and sends `mcp-protocol-version` alone on each
- * subsequent legacy request. Modern requests derive protocol and method headers directly
- * from the message, plus a name header only for `tools/call`.
- *
- * @param options - `url` (the remote endpoint; required), optional `headers` merged onto
- *   every request, optional `fetch` (default `globalThis.fetch`), and optional `timeout`
- *   (ms, applied with `AbortSignal.timeout`); see {@link HTTPClientTransportOptions}
- * @returns A working {@link MCPMessageTransportInterface} over `fetch`
- *
- * @example
- * ```ts
- * import { createMCPClient } from '@orkestrel/mcp'
- * import { createHTTPClientTransport } from '@orkestrel/mcp/server'
- *
- * const client = createMCPClient({
- * 	transport: createHTTPClientTransport({ url: 'http://localhost:3000/mcp' }),
- * })
- * await client.connect()
- * const tools = await client.tools()
- * ```
- */
-export function createHTTPClientTransport(
-	options: HTTPClientTransportOptions,
-): MCPMessageTransportInterface {
-	return new HTTPClientTransport(options)
-}
-
-/**
  * Creates the MCP WebSocket transport ingress — an {@link UpgradeHandler} that exposes a
  * transport-agnostic {@link MCPDispatcherInterface} over a WebSocket, the WebSocket mirror of
  * {@link createMCPRoutes}. Register it on the spine's upgrade seam.
@@ -342,7 +295,7 @@ export function createWebSocketServer(
  * Creates the WebSocket client transport for an {@link import('@orkestrel/mcp').MCPClientInterface}
  * — a {@link MCPMessageTransportInterface} that drives a remote MCP server over a WebSocket. The
  * egress mirror of {@link createWebSocketServer} and the WebSocket sibling of {@link
- * createHTTPClientTransport}.
+ * import('@orkestrel/mcp').createHTTPClientTransport}.
  *
  * @remarks
  * Hand it to `createMCPClient({ transport })`: `start()` (run by `client.connect()`) performs
@@ -355,32 +308,32 @@ export function createWebSocketServer(
  * `options.headers` (for example, an `Authorization` bearer) to reach a guarded server.
  *
  * @param options - `url` (the remote WebSocket endpoint; required) and optional `headers`
- *   merged onto the upgrade request; see {@link WebSocketClientTransportOptions}
+ *   merged onto the upgrade request; see {@link NodeWebSocketClientTransportOptions}
  * @returns A working {@link MCPMessageTransportInterface} over a WebSocket
  *
  * @example
  * ```ts
  * import { createMCPClient } from '@orkestrel/mcp'
- * import { createWebSocketClientTransport } from '@orkestrel/mcp/server'
+ * import { createNodeWebSocketClientTransport } from '@orkestrel/mcp/server'
  *
  * const client = createMCPClient({
- * 	transport: createWebSocketClientTransport({ url: 'ws://localhost:3000/mcp' }),
+ * 	transport: createNodeWebSocketClientTransport({ url: 'ws://localhost:3000/mcp' }),
  * })
  * await client.connect()
  * const tools = await client.tools()
  * ```
  */
-export function createWebSocketClientTransport(
-	options: WebSocketClientTransportOptions,
+export function createNodeWebSocketClientTransport(
+	options: NodeWebSocketClientTransportOptions,
 ): MCPMessageTransportInterface {
-	return new WebSocketClientTransport(options)
+	return new NodeWebSocketClientTransport(options)
 }
 
 /**
  * Creates the stdio client transport for an {@link import('@orkestrel/mcp').MCPClientInterface}
  * — a {@link StdioClientTransportInterface} that spawns and drives a child process MCP server
  * over newline-delimited JSON-RPC on `stdin`/`stdout`, the stdio sibling of {@link
- * createHTTPClientTransport} and {@link createWebSocketClientTransport}.
+ * import('@orkestrel/mcp').createHTTPClientTransport} and {@link createNodeWebSocketClientTransport}.
  *
  * @remarks
  * Hand it to `createMCPClient({ transport })`: `start()` (run by `client.connect()`)

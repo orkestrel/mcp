@@ -9,7 +9,7 @@ import { StdioLifetime } from '../StdioLifetime.js'
  * Drives a child process MCP server over newline-delimited JSON-RPC on `stdin`/`stdout` —
  * a {@link StdioClientTransportInterface}, the stdio sibling of {@link
  * import('@orkestrel/mcp').HTTPClientTransport} and {@link
- * import('./WebSocketClientTransport.js').WebSocketClientTransport}.
+ * import('./NodeWebSocketClientTransport.js').NodeWebSocketClientTransport}.
  *
  * @remarks
  * - **Composes `@orkestrel/process`.** `start()` builds one supervised

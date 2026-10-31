@@ -1,12 +1,15 @@
+import type { HTTPClientTransportOptions, MCPMessageTransportInterface } from '@src/core'
 import {
 	createDuplexClientTransport,
+	createHTTPClientTransport,
 	createMCPServer,
+	HTTPClientTransport,
 	MCP_META_CAPABILITIES,
 	MCP_META_SERVER,
 	MCP_META_VERSION,
 	MCP_MODERN_VERSION,
 } from '@src/core'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { completeFixtureHandshake, createMemoryTransport } from '../../setup.js'
 
@@ -85,6 +88,49 @@ describe('createMCPServer', () => {
 		await server.dispatch({ jsonrpc: '2.0', method: 'ping', id: 1 })
 
 		expect(seen).toEqual([['ping', 1]])
+	})
+})
+
+// createHTTPClientTransport is the one HTTP client factory both environments import from core.
+// The peer is a boundary stub for the platform `fetch` that records each request and answers
+// 202; the round trips against a real server live in tests/src/server/integration.test.ts and
+// tests/src/browser/factories.test.ts.
+
+describe('createHTTPClientTransport', () => {
+	it('returns the core HTTPClientTransport', () => {
+		const transport = createHTTPClientTransport({ url: 'http://127.0.0.1:1/mcp' })
+
+		expect(transport).toBeInstanceOf(HTTPClientTransport)
+		expect(transport.duplex).toBe(false)
+		expect(transport.session).toBeUndefined()
+	})
+
+	it('posts each message to the configured url with the supplied headers merged on', async () => {
+		const requests: Array<{ readonly url: string; readonly init: RequestInit | undefined }> = []
+		const transport = createHTTPClientTransport({
+			url: 'http://127.0.0.1:1/mcp',
+			headers: { authorization: 'Bearer harbor-token' },
+			fetch: (input, init) => {
+				requests.push({ url: String(input), init })
+				return Promise.resolve(new Response(null, { status: 202 }))
+			},
+		})
+
+		await transport.send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+
+		expect(requests).toHaveLength(1)
+		expect(requests[0]?.url).toBe('http://127.0.0.1:1/mcp')
+		expect(requests[0]?.init?.method).toBe('POST')
+		const headers = new Headers(requests[0]?.init?.headers)
+		expect(headers.get('authorization')).toBe('Bearer harbor-token')
+		expect(headers.get('content-type')).toBe('application/json')
+	})
+
+	it('takes the HTTP client options and returns the message transport contract', () => {
+		expectTypeOf<
+			Parameters<typeof createHTTPClientTransport>[0]
+		>().toEqualTypeOf<HTTPClientTransportOptions>()
+		expectTypeOf(createHTTPClientTransport).returns.toEqualTypeOf<MCPMessageTransportInterface>()
 	})
 })
 

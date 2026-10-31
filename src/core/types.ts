@@ -2615,6 +2615,20 @@ export interface MCPMessageTransportInterface {
 }
 
 /**
+ * Describes the options every WebSocket client transport shares — the remote MCP server's
+ * WebSocket endpoint.
+ *
+ * @remarks
+ * `url` — the absolute `ws://` / `wss://` (or `http://` / `https://`) URL of the remote server's
+ * WebSocket endpoint. Required. Each environment extends this shape with the handshake control
+ * its host exposes: `BrowserWebSocketClientTransportOptions` (`@orkestrel/mcp/browser`) adds
+ * `protocols`, and `NodeWebSocketClientTransportOptions` (`@orkestrel/mcp/server`) adds `headers`.
+ */
+export interface WebSocketClientTransportOptions {
+	readonly url: string
+}
+
+/**
  * Options for `createHTTPClientTransport` — the remote MCP server's URL and any extra
  * request headers.
  *
