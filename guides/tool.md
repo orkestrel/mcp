@@ -40,10 +40,7 @@ Source: [`src/core`](../src/core). Published through `@orkestrel/tool`.
 ### Types
 
 The data shapes, from [`types.ts`](../src/core/types.ts). Every property is readonly, and an
-optional field the caller did not supply is absent from the value. A `Shape` cell holds an
-interface's data members as bare names in braces, `?` marking an optional member and `plus`
-introducing its call-signature members, and a type alias's own type literal with a union's arms
-escaped as `\|`. An extended interface's name comes before `plus`, with the members it adds after.
+optional field the caller did not supply is absent from the value.
 
 | Name                   | Kind      | Signature                                                                                                                                                        | Summary                                                                          |
 | ---------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -71,8 +68,7 @@ and an `error` handler for listener throws.
 
 ### Validators
 
-The call-envelope guard, from [`validators.ts`](../src/core/validators.ts). In a guard
-table a `Shape` cell holds the type the guard narrows to.
+The call-envelope guard, from [`validators.ts`](../src/core/validators.ts).
 
 | Name         | Kind     | Signature                               | Summary                                                                                                              |
 | ------------ | -------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |

@@ -74,8 +74,6 @@ Narrow the header before the call. `sec-websocket-key` is typed `string | undefi
 
 ### Constants
 
-A `Shape` cell holds the constant's declared type.
-
 | Name                                | Kind  | Signature                                | Summary                                                                                                                                     |
 | ----------------------------------- | ----- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `WEBSOCKET_GUID`                    | const | `"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"` | Names the accept GUID concatenated to a client's `Sec-WebSocket-Key` before the accept hash, '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'.        |
@@ -102,8 +100,6 @@ A `Shape` cell holds the constant's declared type.
 | `WEBSOCKET_FAIL_TIMEOUT_MS`         | const | `1000`                                   | Names the flush grace, 1,000 milliseconds, a validation-breach close frame is given before the hard teardown fallback destroys the socket.  |
 
 ### Types
-
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
 
 | Name                     | Kind      | Signature                                                                                                                                                                                                                                                             | Summary                                                                                                                                                                                          |
 | ------------------------ | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

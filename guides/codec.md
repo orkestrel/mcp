@@ -121,6 +121,17 @@ read — is module data rather than public API, for the reason the Base64 alphab
 | `decodeUTF16LE`     | function | `(bytes: Uint8Array) => string \| undefined`             | Decodes little-endian UTF-16 bytes into their text, reading two bytes per code unit, low byte first. An odd length and an unpaired surrogate are `undefined`. A leading FF FE is kept as U+FEFF rather than stripped.                                                                                                                  |
 | `isUTF16LE`         | function | `(value: unknown) => value is Uint8Array`                | Checks whether a value is bytes that decode as UTF-16LE — true for exactly the byte sequences `decodeUTF16LE` answers text for. An odd length and an unpaired surrogate are false. Total on any value: a string, `null`, a sibling view kind, or a proxy is false rather than a throw.                                                 |
 
+### Marks
+
+The marks module, [`marks/constants.ts`](../src/core/marks/constants.ts), holds the byte order mark a
+consumer writes or strips around a coding. `BOM` is the one public constant in this package, kept
+in its own module so the lookup tables behind the codings stay module data. The
+[BOM stance](#the-bom-stance) states how each charset face carries it.
+
+| Name  | Kind  | Signature  | Summary                                                       |
+| ----- | ----- | ---------- | ------------------------------------------------------------- |
+| `BOM` | const | `"\uFEFF"` | Holds the byte order mark, U+FEFF, as a one-character string. |
+
 ## The laws
 
 Each face keeps the round-trip and canonical-form laws, and the suite drives both as sweeps rather
@@ -206,8 +217,9 @@ A byte order mark is data here, not a signal. `EF BB BF` decodes to U+FEFF on th
 `FF FE` decodes to U+FEFF on the UTF-16LE face, in leading position exactly as anywhere else, and
 each encodes back to those bytes. The round-trip law forces it: a decoder that dropped a leading BOM
 would answer a text whose re-encoding is shorter than the bytes it was given, and no amount of
-documentation makes that a round trip. A consumer that wants the mark removed removes it, the same
-way a consumer wanting lenient Base64 normalizes first.
+documentation makes that a round trip. A consumer that wants the mark removed compares the leading
+character against `BOM` and removes it, the same way a consumer wanting lenient Base64 normalizes
+first.
 
 ### Where this package parts from WHATWG
 
@@ -377,6 +389,7 @@ to UTF-16LE.
 
 ```ts
 import {
+	BOM,
 	decodeLatin1,
 	decodeUTF8,
 	decodeUTF16LE,
@@ -392,6 +405,7 @@ encodeUTF8('hi') // Uint8Array [104, 105]
 decodeUTF8(new Uint8Array([104, 105])) // 'hi'
 encodeUTF8('\ud800') // undefined — a lone surrogate has no UTF-8 spelling
 decodeUTF8(new Uint8Array([0xc0, 0x80])) // undefined — the overlong spelling of U+0000
+encodeUTF8(BOM) // Uint8Array [239, 187, 191]
 decodeUTF8(new Uint8Array([0xef, 0xbb, 0xbf])) // '\ufeff' — the BOM is data, not a signal
 
 // ISO-8859-1 is the identity on a byte, so only its encode side can refuse.
@@ -461,7 +475,8 @@ measureUTF8('\ud800') // undefined — ill-formed text has no UTF-8 spelling
   round-trip law walks a well-formed text population built from characters spanning every UTF-8
   width threshold, the BOM, the Latin-1 ceiling, the Windows-1252 bands, and the code points on
   either side of the surrogate range, and pins each width threshold at the byte length the
-  specification fixes. The canonical-form law walks the exhaustive two-byte space on every charset
+  specification fixes. A named case carries `BOM` through both faces, leading position included, and
+  pins it against `String.fromCodePoint(0xfeff)`. The canonical-form law walks the exhaustive two-byte space on every charset
   face, re-encoding every admitted pair to itself, and reads the Windows-1252 defined mapping as a
   bijection and the Latin-1 mapping as the identity bijection. Beside the sweeps sit the written-out
   refusal rows — the overlongs, the encoded surrogates, the out-of-range and truncated sequences,

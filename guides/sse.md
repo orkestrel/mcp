@@ -34,8 +34,6 @@ parser.clear() // drop any buffered partial line / event - ready for a fresh str
 
 ### Types
 
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
-
 | Name                 | Kind      | Signature                                  | Summary                                                                                                                                                                                                                                                                                                           |
 | -------------------- | --------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SSEEvent`           | interface | `{ data, event?, id?, retry? }`            | Represents one dispatched Server-Sent Event — the value a blank line flushes from an `SSEParserInterface`. Its `data` holds every `data:` field of that event joined by `\n` with no trailing newline, and `event` / `id` / `retry` hold the last field of each name the event carried.                           |
@@ -51,19 +49,17 @@ const options: SSEParserOptions = { limit: 1_000_000 }
 
 ### Constants
 
-A `Shape` cell holds the constant's declared type.
-
-| Name  | Kind  | Signature | Summary                                                                                                                                              |
-| ----- | ----- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NUL` | const | `string`  | Names the null byte (`U+0000`). The SSE spec voids an `id:` field whose value contains it, so an `id` carrying a NUL is never surfaced.              |
-| `BOM` | const | `string`  | Names the byte-order mark (`U+FEFF`), stripped from the first non-empty chunk of an SSE stream (a leading mark on later chunks is ordinary content). |
+| Name  | Kind  | Signature | Summary                                                                                                                                 |
+| ----- | ----- | --------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `NUL` | const | `string`  | Names the null byte (`U+0000`). The SSE spec voids an `id:` field whose value contains it, so an `id` carrying a NUL is never surfaced. |
 
 ```ts
-import { BOM, NUL } from '@orkestrel/sse'
+import { NUL } from '@orkestrel/sse'
 
 NUL.charCodeAt(0) // 0
-BOM.charCodeAt(0) // 0xfeff
 ```
+
+The parser strips the byte-order mark `BOM` that `@orkestrel/codec` exports from the first non-empty chunk of a stream; a leading mark on a later chunk is ordinary content.
 
 ### Errors
 

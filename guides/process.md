@@ -1,13 +1,13 @@
 # Process
 
 > A typed child-process toolkit in tiers: the supervised `Process` with framed stdout lines and a
-> writable stdin channel, the byte-oriented `Session`, the buffered `execute` and `executeSync`
+> writable stdin channel, the byte-oriented `Duplex`, the buffered `execute` and `executeSync`
 > runs, the fire-and-forget `detach`, and the keyed `ProcessManager` registry, none of them spawning
 > through a shell.
 
 `Process` holds its framed lines under a bounded backlog, keeps a byte-bounded stderr tail as
 `evidence` beside a live `stderr` event, publishes a typed lifecycle emitter, and ends every
-observation channel at one terminal moment through a bounded termination. `Session` publishes one
+observation channel at one terminal moment through a bounded termination. `Duplex` publishes one
 owned `Uint8Array` per stdout chunk instead, with an `end` that closes stdin without terminating
 anything and the child's own `ended` beside the terminal `exit`. A buffered run settles with an
 `ExecuteResult` carrying the captured output and the exit, while a detached child owns no stdio and
@@ -22,7 +22,7 @@ rather than syntax. The host-independent contracts, errors, constants, and types
 ## Surface
 
 The tiers divide by lifetime. Reach for `Process` when you need the live stream, the stdin
-channel, or the lifecycle events. Reach for `Session` when the child speaks a protocol and you need
+channel, or the lifecycle events. Reach for `Duplex` when the child speaks a protocol and you need
 its exact bytes rather than framed lines. Reach for `execute` or `executeSync` when you want the
 buffered output and the exit in one call. Reach for `ProcessManager` when you supervise several
 children by id.
@@ -56,7 +56,7 @@ The interface-oriented constructors, from `@orkestrel/process/server`.
 | Name                   | Kind     | Signature                                                      | Summary                                                                                                                                                                                        |
 | ---------------------- | -------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `createProcess`        | function | `(options: ProcessOptions) => ProcessInterface`                | Creates one supervised child process and returns it as a `ProcessInterface`, so a caller holds the published contract rather than the `Process` class.                                         |
-| `createSession`        | function | `(options: SessionOptions) => SessionInterface`                | Creates one raw byte session over a supervised child process and returns it as a `SessionInterface`, so a caller holds the published contract rather than the `Session` class.                 |
+| `createDuplex`         | function | `(options: DuplexOptions) => DuplexInterface`                  | Creates one raw byte duplex over a supervised child process and returns it as a `DuplexInterface`, so a caller holds the published contract rather than the `Duplex` class.                    |
 | `createProcessManager` | function | `(options?: ProcessManagerOptions) => ProcessManagerInterface` | Creates one empty keyed registry of supervised child processes and returns it as a `ProcessManagerInterface`, so a caller holds the published contract rather than the `ProcessManager` class. |
 
 ### Spawns
@@ -79,7 +79,7 @@ in a Surface row.
 | Name             | Kind  | Signature                                                             | Summary                                                                                                                                          |
 | ---------------- | ----- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `Process`        | class | `new (options: ProcessOptions) => ProcessInterface`                   | Supervises one child, frames its standard output into lines under a bounded backlog, and keeps every observation channel aligned at termination. |
-| `Session`        | class | `new (options: SessionOptions) => SessionInterface`                   | Supervises one child and publishes its standard output as raw bytes.                                                                             |
+| `Duplex`         | class | `new (options: DuplexOptions) => DuplexInterface`                     | Supervises one child and publishes its standard output as raw bytes.                                                                             |
 | `Supervisor`     | class | `new (options: ProcessOptions, face: SupervisorFace) => Supervisor`   | Supervises one child process and reports each lifecycle moment to the face composing it.                                                         |
 | `ProcessManager` | class | `new (options?: ProcessManagerOptions) => ProcessManagerInterface`    | Launches supervised children under caller-chosen ids, evicts each one as it settles, and destroys every live child on teardown.                  |
 | `ProcessError`   | class | `new (message: string, options: ProcessErrorOptions) => ProcessError` | Represents a child-process failure with a stable machine-readable category.                                                                      |
@@ -87,8 +87,6 @@ in a Surface row.
 ### Guards
 
 The total guard, from `@orkestrel/process`.
-
-In a guard table a `Shape` cell holds the type the guard narrows to.
 
 | Name             | Kind     | Signature                                   | Summary                                              |
 | ---------------- | -------- | ------------------------------------------- | ---------------------------------------------------- |
@@ -119,7 +117,7 @@ The resolution and environment building blocks every spawn composes, from
 | `buildPlatformSpawn`        | function | `(command: ProcessCommand, file: string, environment: Readonly<Record<string, string \| undefined>>, platform: NodeJS.Platform) => SpawnInput`                                                                                               | Builds a spawn form from a resolved file and an explicit platform.                                                                      |
 | `buildExecutableCandidates` | function | `(file: string, workspace: string, environment: Readonly<Record<string, string \| undefined>>, platform: NodeJS.Platform) => readonly string[]`                                                                                              | Builds the executable candidates an explicit platform would search.                                                                     |
 | `resolveExecutable`         | function | `(file: string, options?: ExecutableOptions) => string \| undefined`                                                                                                                                                                         | Resolves a command file to the executable path the host would launch, or to `undefined` on a POSIX host, which performs its own lookup. |
-| `isFile`                    | function | `(target: string) => boolean`                                                                                                                                                                                                                | Checks whether a path names a regular file.                                                                                             |
+| `namesFile`                 | function | `(target: string) => boolean`                                                                                                                                                                                                                | Checks whether a path names a regular file.                                                                                             |
 | `readVariable`              | function | `(environment: Readonly<Record<string, string \| undefined>>, name: string) => string \| undefined`                                                                                                                                          | Reads one environment variable the way the current host resolves it.                                                                    |
 | `readPlatformVariable`      | function | `(environment: Readonly<Record<string, string \| undefined>>, name: string, platform: NodeJS.Platform) => string \| undefined`                                                                                                               | Reads one environment variable under an explicit platform's key rules.                                                                  |
 | `mergeEnvironment`          | function | `(isolated: boolean, base?: Readonly<Record<string, string \| undefined>>, override?: Readonly<Record<string, string \| undefined>>) => NodeJS.ProcessEnv`                                                                                   | Merges environment overrides into the environment one child receives on the current host.                                               |
@@ -176,8 +174,6 @@ The input refusals every public entry point runs before it spawns anything, from
 
 The defaults and host bounds, from `@orkestrel/process`.
 
-A `Shape` cell holds the constant's declared type.
-
 | Name                   | Kind  | Signature                                                                    | Summary                                                                                                                                                                                       |
 | ---------------------- | ----- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PROCESS_GRACE`        | const | `5000`                                                                       | Names the default cooperative POSIX window, 5000 ms, between `SIGTERM` and `SIGKILL` during termination.                                                                                      |
@@ -194,8 +190,6 @@ A `Shape` cell holds the constant's declared type.
 
 The contracts and options, all from `@orkestrel/process`.
 
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
-
 | Name                      | Kind      | Signature                                                                                                                                                                               | Summary                                                                                                                                                                      |
 | ------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ProcessCommand`          | interface | `{ file, arguments, environment?, input?, isolated? }`                                                                                                                                  | Represents one spawnable command: the executable, its argument vector, and optional environment overrides and initial standard input.                                        |
@@ -205,9 +199,9 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 | `ProcessEventMap`         | type      | `{ readonly stderr: readonly [chunk: string]; readonly error: readonly [error: unknown]; readonly exit: readonly [exit: ProcessExit]; }`                                                | Represents the push observation surface of a `ProcessInterface` — the moments a fire-and-forget observer subscribes to, alongside the `lines` stream and the `exit` promise. |
 | `ProcessOptions`          | interface | `{ on?, error?, command, workspace, grace?, drain?, evidence?, backlog?, delivery?, writable?, signal? }`                                                                               | Configures one supervised child process.                                                                                                                                     |
 | `ProcessInterface`        | interface | `{ pid, code, signal, emitter, lines, evidence, truncated, settled, terminated, exit, send(), stop(), destroy() }`                                                                      | Represents one supervised child process with framed output, a bounded backlog, and bounded termination.                                                                      |
-| `SessionEventMap`         | type      | `{ readonly stdout: readonly [chunk: Uint8Array]; readonly stderr: readonly [chunk: string]; readonly error: readonly [error: unknown]; readonly exit: readonly [exit: ProcessExit]; }` | Represents the push observation surface of a `SessionInterface` — the moments a byte-oriented observer subscribes to, alongside the `ended` and `exit` promises.             |
-| `SessionOptions`          | interface | `{ on?, error?, command, workspace, grace?, drain?, evidence?, delivery?, signal? }`                                                                                                    | Configures one raw byte session over a supervised child.                                                                                                                     |
-| `SessionInterface`        | interface | `{ pid, code, signal, emitter, evidence, settled, terminated, ended, exit, write(), end(), stop(), destroy() }`                                                                         | Represents one supervised child process read as raw bytes, with an open standard-input channel and bounded termination.                                                      |
+| `DuplexEventMap`          | type      | `{ readonly stdout: readonly [chunk: Uint8Array]; readonly stderr: readonly [chunk: string]; readonly error: readonly [error: unknown]; readonly exit: readonly [exit: ProcessExit]; }` | Represents the push observation surface of a `DuplexInterface` — the moments a byte-oriented observer subscribes to, alongside the `ended` and `exit` promises.              |
+| `DuplexOptions`           | interface | `{ on?, error?, command, workspace, grace?, drain?, evidence?, delivery?, signal? }`                                                                                                    | Configures one raw byte duplex over a supervised child.                                                                                                                      |
+| `DuplexInterface`         | interface | `{ pid, code, signal, emitter, evidence, settled, terminated, ended, exit, write(), end(), stop(), destroy() }`                                                                         | Represents one supervised child process read as raw bytes, with an open standard-input channel and bounded termination.                                                      |
 | `ExecuteResult`           | interface | `{ command, stdout, stderr, code, signal, failed, expired, aborted, truncated }`                                                                                                        | Represents the settled outcome of a one-shot run: the buffered output and the terminal state.                                                                                |
 | `ExecuteInput`            | interface | `{ command, stdout, stderr, code, signal, expired, aborted, truncated, limit, cause? }`                                                                                                 | Represents the captured bytes and terminal facts one settled `ExecuteResult` is built from.                                                                                  |
 | `ExecuteOptions`          | interface | `{ workspace?, environment?, input?, timeout?, grace?, signal?, strict?, limit? }`                                                                                                      | Configures a one-shot run.                                                                                                                                                   |
@@ -228,8 +222,6 @@ a host-independent contract cannot, and `SupervisorFace` names no Node type but 
 Node-only `Supervisor` engine, so the contract sits with the face that constructs one. See
 [Vocabulary](#vocabulary) for the `Face` suffix.
 
-A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
-
 | Name                    | Kind      | Signature                                               | Summary                                                                                      |
 | ----------------------- | --------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `ProcessChildInterface` | interface | `{ pid?, exitCode, signalCode, kill(), once(), off() }` | Represents the child boundary the termination helpers drive.                                 |
@@ -237,10 +229,10 @@ A `Shape` cell holds an interface's data members as bare names in braces, `?` ma
 
 ### Surface notes
 
-Every member a `Shape` cell names before `plus` is a readonly data property, so it stays a Surface
+Every member a `Signature` cell names without parentheses is a readonly data property, so it stays a Surface
 row. `ended` and `exit` are among them: a promise you await is a value the entity holds, not a call
 you make. A `SupervisorFace` member is among them too: it holds a function the caller supplies
-rather than declaring one the contract implements. The call-signature members after `plus` are
+rather than declaring one the contract implements. The members it names with parentheses are
 documented under [Methods](#methods).
 
 The `Supervisor` class publishes readonly data members of its own: `stdout`, `pid`, `code`, `signal`,
@@ -255,7 +247,7 @@ them off.
 ## Methods
 
 The public methods of each behavioral interface, and of the `Supervisor` class that publishes its
-own. `Process` implements `ProcessInterface` exactly, `Session` implements `SessionInterface`
+own. `Process` implements `ProcessInterface` exactly, `Duplex` implements `DuplexInterface`
 exactly, and `ProcessManager` implements `ProcessManagerInterface` exactly, so each table doubles as
 the class's instance-method surface.
 
@@ -273,7 +265,7 @@ one holds a frozen `evidence`, an ended `lines`, and a settled `exit`.
 | `stop`    | `Promise<boolean>` | Terminates the child process tree, awaits its observed exit, and reaches the terminal moment.                          |
 | `destroy` | `Promise<void>`    | Stops the child, closes its standard-input channel, reaches the terminal moment, and destroys the observation emitter. |
 
-#### `SessionInterface`
+#### `DuplexInterface`
 
 `write` puts raw bytes on the open stdin channel and `end` closes that channel; `stop` and `destroy`
 are the lifecycle verbs. None of them rejects, and each of `end`, `stop`, and `destroy` returns one
@@ -318,7 +310,7 @@ drive `stopChild`, `waitForExit`, and `waitForClose` over a child it spawned its
 #### `Supervisor`
 
 `deliver` writes raw bytes to the open stdin channel and `end` closes that channel; `stop` and
-`destroy` are the lifecycle verbs. None of them rejects. `Process` and `Session` each forward their
+`destroy` are the lifecycle verbs. None of them rejects. `Process` and `Duplex` each forward their
 own member to one of these, so the engine's contract is the one both faces publish under their own
 names.
 
@@ -376,10 +368,10 @@ Every option and command property is read once, before the child is spawned. Rea
 whatever getter you put behind it, so hoisting those reads is what keeps a construction failure from
 leaving a live child nobody holds: a getter that throws does so while nothing has started.
 
-### Byte sessions
+### Byte duplexes
 
-`Session` supervises the same child and publishes its standard output as raw bytes. Each chunk the
-host delivers becomes one `stdout` event carrying an owned `Uint8Array` — the session's own copy, and
+`Duplex` supervises the same child and publishes its standard output as raw bytes. Each chunk the
+host delivers becomes one `stdout` event carrying an owned `Uint8Array` — the duplex's own copy, and
 a plain `Uint8Array` rather than a Node `Buffer` — so you keep it, mutate it, and concatenate it
 without reaching memory the host still manages and without depending on a host type. Nothing is
 framed and nothing is decoded on that side. A chunk boundary is the host's, so one event is not one
@@ -387,29 +379,29 @@ message and a line feed inside a payload starts no new event; you frame the conc
 yourself. Standard error is decoded and forwarded as `stderr` with the same byte-bounded `evidence`
 tail a `Process` retains, because a diagnostic stream is read rather than parsed.
 
-Choose by what the child's output is. `Process` frames output a person or a log reads. `Session`
+Choose by what the child's output is. `Process` frames output a person or a log reads. `Duplex`
 delivers output a parser reads — a length-prefixed protocol, a binary payload, anything a line framer
 would corrupt.
 
-`SessionOptions` is `ProcessOptions` without `backlog` and without `writable`. A session retains no
+`DuplexOptions` is `ProcessOptions` without `backlog` and without `writable`. A duplex retains no
 lines, so no backlog bound applies to it; its stdin channel is open from the spawn until `end` closes
 it, so no switch selects whether one exists.
 
-`SessionOptions` requires `command` and `workspace`; the rest are optional:
+`DuplexOptions` requires `command` and `workspace`; the rest are optional:
 
-| Option      | Type                            | Required | Meaning                                                                                                                                                                        |
-| ----------- | ------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `command`   | `ProcessCommand`                | yes      | The executable, its argument vector, and optional environment overrides and stdin `input`.                                                                                     |
-| `workspace` | `string`                        | yes      | The working directory the child runs in.                                                                                                                                       |
-| `grace`     | `number`                        | no       | POSIX milliseconds between `SIGTERM` and `SIGKILL`. Default: `PROCESS_GRACE` (`5_000`).                                                                                        |
-| `drain`     | `number`                        | no       | Milliseconds the package waits for the child's read ends to close after its ended, before cutting them off; `0` cuts them off immediately. Default: `PROCESS_DRAIN` (`1_000`). |
-| `evidence`  | `number`                        | no       | Maximum retained stderr tail in bytes. Default: `PROCESS_EVIDENCE` (`2_048`).                                                                                                  |
-| `delivery`  | `number`                        | no       | Milliseconds an unconfirmed `write` waits before resolving `false`; `0` or omitted disables the bound.                                                                         |
-| `signal`    | `AbortSignal`                   | no       | Aborting this signal terminates the child through the same bounded `stop`.                                                                                                     |
-| `on`        | `EmitterHooks<SessionEventMap>` | no       | Initial `stdout`, `stderr`, `error`, and `exit` listeners installed at construction.                                                                                           |
-| `error`     | `EmitterErrorHandler`           | no       | Receives a listener's throw, isolated from the engine.                                                                                                                         |
+| Option      | Type                           | Required | Meaning                                                                                                                                                                        |
+| ----------- | ------------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `command`   | `ProcessCommand`               | yes      | The executable, its argument vector, and optional environment overrides and stdin `input`.                                                                                     |
+| `workspace` | `string`                       | yes      | The working directory the child runs in.                                                                                                                                       |
+| `grace`     | `number`                       | no       | POSIX milliseconds between `SIGTERM` and `SIGKILL`. Default: `PROCESS_GRACE` (`5_000`).                                                                                        |
+| `drain`     | `number`                       | no       | Milliseconds the package waits for the child's read ends to close after its ended, before cutting them off; `0` cuts them off immediately. Default: `PROCESS_DRAIN` (`1_000`). |
+| `evidence`  | `number`                       | no       | Maximum retained stderr tail in bytes. Default: `PROCESS_EVIDENCE` (`2_048`).                                                                                                  |
+| `delivery`  | `number`                       | no       | Milliseconds an unconfirmed `write` waits before resolving `false`; `0` or omitted disables the bound.                                                                         |
+| `signal`    | `AbortSignal`                  | no       | Aborting this signal terminates the child through the same bounded `stop`.                                                                                                     |
+| `on`        | `EmitterHooks<DuplexEventMap>` | no       | Initial `stdout`, `stderr`, `error`, and `exit` listeners installed at construction.                                                                                           |
+| `error`     | `EmitterErrorHandler`          | no       | Receives a listener's throw, isolated from the engine.                                                                                                                         |
 
-A session names the child's ending and the supervision's ending apart, because a transport acts on
+A duplex names the child's ending and the supervision's ending apart, because a transport acts on
 each differently. `ended` settles at the child's own native exit and resolves no value: `code` and
 `signal` already carry the terminal facts, so a second copy of them here could only drift from them.
 `exit` settles at [the terminal moment](#the-terminal-moment), which is that native exit plus at most
@@ -422,25 +414,25 @@ does not. It is the one member on either face that does not reach the terminal m
 
 ```ts
 import { Buffer } from 'node:buffer'
-import { createSession } from '@orkestrel/process/server'
+import { createDuplex } from '@orkestrel/process/server'
 
-const session = createSession({
+const duplex = createDuplex({
 	command: { file: 'node', arguments: ['-e', 'process.stdin.pipe(process.stdout)'] },
 	workspace: process.cwd(),
 })
 
 const received: Uint8Array[] = []
-session.emitter.on('stdout', (chunk) => received.push(chunk))
+duplex.emitter.on('stdout', (chunk) => received.push(chunk))
 
-await session.write(new TextEncoder().encode('ping')) // true — the host accepted the bytes
-await session.end() // the child sees end of input; nothing terminated it
-await session.ended // it exited on its own
+await duplex.write(new TextEncoder().encode('ping')) // true — the host accepted the bytes
+await duplex.end() // the child sees end of input; nothing terminated it
+await duplex.ended // it exited on its own
 
 Buffer.concat(received).toString('utf8') // 'ping' — the exact bytes, with no terminator added
-const exit = await session.exit
+const exit = await duplex.exit
 exit.code // 0
-session.terminated // false — no termination was initiated
-await session.destroy()
+duplex.terminated // false — no termination was initiated
+await duplex.destroy()
 ```
 
 ### The terminal moment
@@ -453,7 +445,7 @@ surface is shaped around.
 - **The supervision's ending** is the terminal moment: `settled`, `exit`, `evidence`, and `lines`.
   They reach it together.
 
-`Session` gives the child's exit a member of its own, `ended`, which settles at the native exit
+`Duplex` gives the child's exit a member of its own, `ended`, which settles at the native exit
 and resolves no value. `Process` carries no such member: a line consumer reads that ending from
 `code` and `signal`, which have always reported it.
 
@@ -482,10 +474,10 @@ At the terminal moment every observation surface stops moving, together:
 - The abort listener registered on the caller's `signal` option is released here, rather than at the
   `destroy` call that preceded it.
 
-A `Session` reaches the same moment through the same paths, with its byte events in place of `lines`:
+A `Duplex` reaches the same moment through the same paths, with its byte events in place of `lines`:
 the last `stdout` and `stderr` events are delivered before the `exit` event, and none follows it.
 
-`end` is the one member on either face that does not reach the moment. It closes a session's stdin
+`end` is the one member on either face that does not reach the moment. It closes a duplex's stdin
 channel and leaves the child running, so `terminated` stays false, no drain window is armed, and `exit`
 stays pending until the child ends itself or something terminates it. Every other verb here ends the
 observation; `end` ends only the input.
@@ -630,7 +622,7 @@ await echo.stop() // true — the native exit was observed
 await echo.destroy()
 ```
 
-A `Session` opens the same channel with no switch and writes to it with `write` rather than `send`.
+A `Duplex` opens the same channel with no switch and writes to it with `write` rather than `send`.
 `write` puts the exact bytes on the channel and appends nothing, so a caller framing its own protocol
 composes the header and the delimiter itself. Every preceding refusal holds for `write` unchanged: it
 never rejects, and it resolves `false` for a channel that was closed, destroyed, ended, or failed,
@@ -638,11 +630,11 @@ for a write left unconfirmed through `delivery`, and for a call made after `stop
 The host can queue the payload, so treat the array you passed as owned by the channel until the
 returned promise settles.
 
-`end` closes a session's channel without terminating anything. Every call shares one barrier, which
+`end` closes a duplex's channel without terminating anything. Every call shares one barrier, which
 resolves after the host flushes the writes it had already accepted. That flush carries no bound of
 its own: a child that stops reading its input leaves the accepted bytes in the pipe, and the barrier
 stays pending for as long as they sit there. Race `end` against a window of your own when you need a
-bound, the way [Close a byte session cooperatively](#close-a-byte-session-cooperatively) does, rather
+bound, the way [Close a byte duplex cooperatively](#close-a-byte-duplex-cooperatively) does, rather
 than awaiting it bare. A `write` after `end` resolves
 `false`, because the host stops reporting an ended channel writable — that refusal is derived from
 the channel's state rather than declared by a second flag. The ended channel then stays quiet for its
@@ -668,7 +660,7 @@ the emitter last; it always resolves, including when termination was never confi
 after the frozen state exists, so a consumer watching the `stderr` event and a consumer reading
 `evidence` end on the same bytes.
 
-`Session` terminates through the same verbs with the same bounds and the same barriers. Run its
+`Duplex` terminates through the same verbs with the same bounds and the same barriers. Run its
 cooperative shutdown first where the child supports one: call `end`, race `ended` against a window
 of your own, and call `stop` when that window expires.
 
@@ -787,7 +779,7 @@ extensionless name. For an extension-bearing name, it enumerates the literal pat
 candidates: `report.txt` resolves to a `report.txt` file where one exists, and to `report.txt.cmd`
 where none does. The lookup reads the child's effective environment, so an overridden `PATH`
 selects the executable the child would have found, it falls back to `PROCESS_PATHEXT` when the
-environment declares no `PATHEXT`, and it accepts a candidate only when `isFile` reports a regular
+environment declares no `PATHEXT`, and it accepts a candidate only when `namesFile` reports a regular
 file. When no candidate is a regular file, `resolveExecutable` returns `undefined` and `buildSpawn`
 preserves the command file as written for native spawning.
 
@@ -1159,7 +1151,7 @@ value with `isProcessError`, then branch on `code`.
 `isProcessError` recognizes an error thrown by another installed copy of the package. It reads a
 global own-property brand rather than `instanceof`, so a duplicate installation and an ESM/CommonJS
 module copy both narrow. Recognition holds across copies that stamp their own identity under
-`Symbol.for('@orkestrel/process.error')` as a non-enumerable, non-writable own property. The guard
+`Symbol.for('@orkestrel/process.ProcessError')` as a non-enumerable, non-writable own property. The guard
 requires the native `Error` base, a prototype other than `Error.prototype`, a declared code, and
 correctly shaped optional context and result members. It never reads `name`, so subclass instances
 pass. Older boolean brands, transparent proxies, and branded plain objects fail recognition.
@@ -1222,7 +1214,7 @@ createExecuteError(result).result === result // true
 
 ## Observing
 
-`Process`, `Session`, and `ProcessManager` each expose a typed `emitter` for fire-and-forget
+`Process`, `Duplex`, and `ProcessManager` each expose a typed `emitter` for fire-and-forget
 observers — logging, metrics, tracing. Subscribe through `child.emitter.on(...)` or
 `manager.emitter.on(...)`, or wire initial listeners through the `on` option; supply an `error`
 handler to receive a listener's throw. The `error` handler and the `error` event are distinct: the
@@ -1234,7 +1226,7 @@ observer cannot corrupt the engine.
 | Event map                | Events                                                            |
 | ------------------------ | ----------------------------------------------------------------- |
 | `ProcessEventMap`        | `stderr(chunk)` · `error(cause)` · `exit(exit)`                   |
-| `SessionEventMap`        | `stdout(chunk)` · `stderr(chunk)` · `error(cause)` · `exit(exit)` |
+| `DuplexEventMap`         | `stdout(chunk)` · `stderr(chunk)` · `error(cause)` · `exit(exit)` |
 | `ProcessManagerEventMap` | `launch(id)` · `exit(id, exit)`                                   |
 
 A `Process` emits `stderr` for each decoded standard-error chunk, `error` when the child fails to
@@ -1246,8 +1238,8 @@ a `ProcessError` coded `protocol` whose `cause` is the host fault. A fault arisi
 `ProcessManager` emits `launch` when a child joins the registry and `exit`, with the child's id and
 terminal state, when it settles and leaves.
 
-A `Session` emits the same `stderr`, `error`, and `exit` moments, and adds `stdout` for each chunk of
-raw bytes the host delivered. The `stdout` payload is the session's own owned array, so a listener
+A `Duplex` emits the same `stderr`, `error`, and `exit` moments, and adds `stdout` for each chunk of
+raw bytes the host delivered. The `stdout` payload is the duplex's own owned array, so a listener
 can keep it past the call, and no `stdout` event follows the `exit` event.
 
 ```ts
@@ -1299,24 +1291,24 @@ await child.destroy()
 The abort reaches the terminal moment through the same bounded `stop`, so the loop exits on its own
 and the `exit` promise is already settled when the loop returns.
 
-### Close a byte session cooperatively
+### Close a byte duplex cooperatively
 
-The fence that follows ends the session's input, waits out a window of the caller's own, and terminates the child only when that window elapses.
+The fence that follows ends the duplex's input, waits out a window of the caller's own, and terminates the child only when that window elapses.
 
 ```ts
-import { createSession } from '@orkestrel/process/server'
+import { createDuplex } from '@orkestrel/process/server'
 
-const session = createSession({
+const duplex = createDuplex({
 	command: { file: 'node', arguments: ['language-server.js', '--stdio'] },
 	workspace: process.cwd(),
 })
 
 // …on shutdown: end the input, give the child a window of your own, then terminate if it overruns.
 const window = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000))
-const flushed = await Promise.race([session.end().then(() => true), window])
-const finished = flushed ? await Promise.race([session.ended.then(() => true), window]) : false
-if (!finished) await session.stop()
-await session.destroy()
+const flushed = await Promise.race([duplex.end().then(() => true), window])
+const finished = flushed ? await Promise.race([duplex.ended.then(() => true), window]) : false
+if (!finished) await duplex.stop()
+await duplex.destroy()
 ```
 
 The window covers `end` as well as the child's own exit, because the flush `end` awaits carries no
@@ -1429,10 +1421,10 @@ isExited(reporter) // whether the native exit arrived
   after the mark was exceeded receives the retained head, a gap, then the live stream.
 - **Iterate `lines` once and fan out from that loop** — the stream is single-consumer, so another
   iterator takes lines away from the one already iterating rather than repeating them.
-- **Reach for `Session` when the child speaks a protocol** — `lines` frames text, and a
-  length-prefixed header, a binary payload, or a NUL byte survives no line framer. A session hands
+- **Reach for `Duplex` when the child speaks a protocol** — `lines` frames text, and a
+  length-prefixed header, a binary payload, or a NUL byte survives no line framer. A duplex hands
   you the exact bytes and lets you frame them.
-- **Close a session with `end`, then race `ended`, then `stop`** — `end` closes the input and
+- **Close a duplex with `end`, then race `ended`, then `stop`** — `end` closes the input and
   terminates nothing, `ended` reports the child's own exit, and `stop` is the escalation for a child
   that overruns the window you gave it. Race `ended` rather than `exit`: `exit` waits out `drain`
   for a descendant holding the pipe, so a window raced against it escalates against a child that
@@ -1472,14 +1464,14 @@ Each name on this surface that reads against a house rule is settled here rather
 | `settled`                | Derives literally: it is `true` exactly when `exit` has settled. `closed` was refused because it borrows a Node event name into `ProcessInterface`, which is host-independent enough to type `signal` as a `string`.                                                                                                                                                                                                                                                                                                                                                         |
 | `terminated`             | A latched fact that records an initiated termination. It reports that a termination was initiated, not that one is in flight, because the initiation is what a consumer acts on: a child that was asked to end is not a child to send new work to.                                                                                                                                                                                                                                                                                                                           |
 | `drain`, `drained`       | The option names the window and the result names its outcome, so one concept carries one term across the option and the result. `drain: 0` is an immediate cutoff rather than a disabled bound, unlike the sibling `delivery`, because an unbounded drain is the defect the option prevents.                                                                                                                                                                                                                                                                                 |
-| `Session`                | A second entity rather than a byte mode on `Process`, because a mode would falsify `lines`, `truncated`, and `backlog` on half the instances of one class. `Child` collides with the published `ProcessChildInterface` contract, `Channel` is this package's word for the stdin pipe, and `Stream` and `Duplex` borrow Node class names into contracts typed to stay host-independent.                                                                                                                                                                                       |
-| `Supervisor`             | The spawn, capture, channel, and termination engine `Process` and `Session` compose. It is barrelled because its constructor takes a `ProcessOptions` and a `SupervisorFace`, and a consumer holds both, so a consumer composing a face of its own reaches the same engine `Process` and `Session` do.                                                                                                                                                                                                                                                                       |
+| `Duplex`                 | A second entity rather than a byte mode on `Process`, because a mode would falsify `lines`, `truncated`, and `backlog` on half the instances of one class. It names the two-way byte channel the entity is: bytes in through `write`, bytes out through `stdout`. `Session` belongs to `@orkestrel/middleware`, `Child` collides with the published `ProcessChildInterface` contract, and `Channel` is this package's word for the stdin pipe. The contract borrows only the word from the Node `Duplex` class and types no host stream.                                     |
+| `Supervisor`             | The spawn, capture, channel, and termination engine `Process` and `Duplex` compose. It is barrelled because its constructor takes a `ProcessOptions` and a `SupervisorFace`, and a consumer holds both, so a consumer composing a face of its own reaches the same engine `Process` and `Duplex` do.                                                                                                                                                                                                                                                                         |
 | `SupervisorFace`         | The callback record a face hands the engine at construction, not a face and not the `Supervisor`'s own face. It carries `Face` rather than the `{Entity}Hooks` form `EmitterHooks` uses, because hooks are optional listeners on an entity that runs without them, while every callback here is a moment the engine must deliver. `{Entity}Interface` was refused because the type declares no behavior of its own: each member holds a function the composing face supplies. It is published because `types.ts` declares it and the server barrel star-exports that module. |
 | `ended`, `exit`          | The endings are named apart, because a transport acts on each differently. `ended` is the child's own exit and resolves no value, because `code` and `signal` already carry the facts and a second copy could only drift. `exit` stays on the terminal moment, so `exit`, `settled`, and the `exit` event name one moment on both faces.                                                                                                                                                                                                                                     |
 | `end`                    | The consistency class of `destroy`: an idempotent lifecycle member returning the barrier every call shares. `close` was refused for borrowing a Node event name, the reason `settled` already records. It resolves `void` because every fact a result could carry is derivable — a later `write` reports `false`, and `ended` reports the exit.                                                                                                                                                                                                                              |
 | `write`, `send`          | Different verbs because they promise different things. `send` frames a line and appends the terminator; `write` puts the exact bytes on the channel and appends nothing. One name over both would hide the terminator at the call site, which is the defect the split prevents.                                                                                                                                                                                                                                                                                              |
 | `stdout`, `stderr`       | One face decodes one stream and not the other, because they are read differently. Standard output is a payload a parser consumes, so it stays bytes; standard error is a diagnostic a person reads, so it is decoded, and `evidence` bounds those same bytes.                                                                                                                                                                                                                                                                                                                |
-| `backlog`, `writable`    | Omitted from `SessionOptions` rather than falsified on it. A session retains no lines, so no backlog bound applies; its channel is open until `end` closes it, so no switch selects whether one exists. An option that could only ever hold one value is a member a consumer must learn and can never use.                                                                                                                                                                                                                                                                   |
+| `backlog`, `writable`    | Omitted from `DuplexOptions` rather than falsified on it. A duplex retains no lines, so no backlog bound applies; its channel is open until `end` closes it, so no switch selects whether one exists. An option that could only ever hold one value is a member a consumer must learn and can never use.                                                                                                                                                                                                                                                                     |
 
 ## Tests
 
@@ -1552,7 +1544,7 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   and longer than a descendant release, `stop` alone reaching the moment with no `destroy` call, the
   latched `terminated` refusing a `send`, the released abort listener, the spawn-fault path, and the
   `drain` refusals at each end of its range.
-- [`tests/src/server/processes/Session.test.ts`](../tests/src/server/processes/Session.test.ts) —
+- [`tests/src/server/processes/Duplex.test.ts`](../tests/src/server/processes/Duplex.test.ts) —
   the byte face: a binary payload carrying NUL bytes, an invalid UTF-8 sequence, a lone carriage return, and an embedded line
   feed arriving byte-identical in one event, a half-megabyte stream reassembled byte for byte, and
   each emitted chunk read as a plain owned array against a raw spawn of the same child as the
