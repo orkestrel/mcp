@@ -137,7 +137,7 @@ const CONSUMER_MANIFEST = `${JSON.stringify(
 			'@orkestrel/timeout': '^0.0.15',
 			'@orkestrel/tool': '^0.0.21',
 			'@orkestrel/websocket': '^0.0.17',
-			'@orkestrel/workspace': '^0.0.13',
+			'@orkestrel/workspace': '^0.0.14',
 		},
 	},
 	undefined,
@@ -154,9 +154,9 @@ process.stdout.write(JSON.stringify(Object.keys(entry).sort()))
 // than floating: a receipt read against whatever the registry served that morning reports on a
 // composition nobody chose.
 const COMPOSITION: readonly string[] = [
-	'@orkestrel/agent@^0.0.33',
+	'@orkestrel/agent@^0.0.35',
 	'@orkestrel/tool@^0.0.21',
-	'@orkestrel/ndjson@^0.0.14',
+	'@orkestrel/ndjson@^0.0.15',
 	'@orkestrel/router@^0.0.19',
 	'@orkestrel/server@^0.0.25',
 ]
@@ -1692,6 +1692,9 @@ describe('installed artifacts composed in a page', () => {
 	})
 
 	it('dispatches an agent call into the page server with no request at all [requires a browser]', async (context) => {
+		// The note Agent's scope check writes for a call no definition advertises.
+		const refused =
+			'"missing" did not run: it is not one of the listed tools. Use a listed tool or answer with what you have.'
 		const receipts = await requireReceipts(context)
 		const reading = await readReceipt(receipts, 'bridge()')
 		expect(reading.receipt).toStrictEqual({
@@ -1733,14 +1736,14 @@ describe('installed artifacts composed in a page', () => {
 				{
 					name: 'missing',
 					success: false,
-					value: 'tool not found: missing',
+					value: refused,
 				},
 			],
 			turns: [0, 1, 2],
 			content: 'the sum is 5',
 			partial: false,
 			roles: ['user', 'assistant', 'tool', 'assistant', 'tool', 'assistant'],
-			tool: ['5', 'tool not found: missing'],
+			tool: ['5', refused],
 		})
 		expect(reading.requests).toStrictEqual([])
 		expect(reading.fetches).toBe(0)

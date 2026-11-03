@@ -15,6 +15,18 @@
 // The tool the scripted turn calls.
 export const TOOL = 'paint'
 
+// That tool's definition. The page advertises it with a handler, and the relay's route declares
+// it, because a relay refuses a tool definition it does not declare.
+export const PAINT = {
+	name: TOOL,
+	description: 'Records a note in the page and answers with its receipt.',
+	parameters: {
+		type: 'object',
+		properties: { note: { type: 'string' } },
+		required: ['note'],
+	},
+}
+
 // The argument that call carries, which the page tool writes into the document.
 export const NOTE = 'kyoto'
 

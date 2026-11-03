@@ -17,7 +17,7 @@ import { join, resolve, sep } from 'node:path'
 import { createRelay } from '@orkestrel/agent'
 import { createDispatcher } from '@orkestrel/router'
 import { createServer } from '@orkestrel/server'
-import { PAINT_SCRIPT, ScriptedProvider } from './script.mjs'
+import { PAINT, PAINT_SCRIPT, ScriptedProvider } from './script.mjs'
 
 const PAGE = resolve(process.argv[2] ?? '')
 const MODULES = resolve(process.argv[3] ?? '')
@@ -75,6 +75,7 @@ function reportRelayed() {
 const relay = createRelay({
 	provider: new ScriptedProvider('scripted-upstream', SCRIPT),
 	authorize: (request) => request.headers.get('authorization') === CREDENTIAL,
+	tools: { definitions: [PAINT] },
 })
 
 // Answers one relay turn. What the request carried is retained before the installed relay reads

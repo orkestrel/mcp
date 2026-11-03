@@ -10,25 +10,11 @@
 // agent, tool, MCP, and relay path it drives is the installed artifact running for real.
 import { createAgent, createRelayProvider } from '@orkestrel/agent'
 import { createPageServer } from '@orkestrel/mcp/browser'
-import { createNDJSONParser } from '@orkestrel/ndjson'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { NOTE, PAINT_SCRIPT, ScriptedProvider, TOOL, buildScript, buildTurn } from './script.mjs'
+import { NOTE, PAINT, PAINT_SCRIPT, ScriptedProvider, buildScript, buildTurn } from './script.mjs'
 
 // The element the page tool writes into.
 const LIST = 'receipts'
-
-// The page tool every agent receipt advertises. Its handler mutates the document, so a receipt
-// carrying its value proves the handler ran inside the page rather than anywhere else. Its name
-// comes from the shared script, which is what the relay's own upstream calls on the Node side.
-const PAINT = {
-	name: TOOL,
-	description: 'Records a note in the page and answers with its receipt.',
-	parameters: {
-		type: 'object',
-		properties: { note: { type: 'string' } },
-		required: ['note'],
-	},
-}
 
 // The tool the hosted MCP server advertises, and the one whose handler parks until its caller
 // stops waiting. Each is a plain tool: the server's own registry executes it.
@@ -380,7 +366,6 @@ class ReceiptPage {
 		return this.runPaint(
 			createRelayProvider({
 				url,
-				parser: createNDJSONParser,
 				headers: this.relayHeaders.bind(this),
 			}),
 		)
