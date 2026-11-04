@@ -712,6 +712,21 @@ describe('MCPClient — tools() refuses what it cannot read as a complete listin
 		expect(peer.sent).toEqual(['server/discover', 'tools/list', 'tools/list'])
 	})
 
+	it('reads a null nextCursor as the end of the listing, issuing no further page', async () => {
+		const peer = createListingPeer(() => ({
+			resultType: 'complete',
+			tools: [buildListedTool('only')],
+			nextCursor: null,
+		}))
+		const client = createMCPClient({ transport: peer })
+		await client.connect()
+
+		const tools = await client.tools()
+
+		expect(tools.map((tool) => tool.name)).toEqual(['only'])
+		expect(peer.sent.filter((method) => method === 'tools/list')).toHaveLength(1)
+	})
+
 	it('reads a listing of exactly the page bound as complete', async () => {
 		const peer = createListingPeer((_cursor, count) => ({
 			resultType: 'complete',

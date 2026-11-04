@@ -31,7 +31,13 @@ import type { JSONValue } from '@orkestrel/contract'
 import type { EmitterErrorHandler } from '@orkestrel/emitter'
 import type { SSEEvent } from '@orkestrel/sse'
 import type { RecorderInterface } from '@orkestrel/test'
-import type { ToolInterface, ToolManagerInterface } from '@orkestrel/tool'
+import type {
+	ToolCall,
+	ToolContext,
+	ToolInterface,
+	ToolManagerInterface,
+	ToolResult,
+} from '@orkestrel/tool'
 import type {
 	MCPMessageTransportEventMap,
 	MCPDispatcherInterface,
@@ -80,11 +86,17 @@ import {
 	MCPStreamController,
 	parseJSONRPCMessage,
 } from '@src/core'
-import { CLOSED_PARAMETERS, OPEN_PARAMETERS, createTool, createToolManager } from '@orkestrel/tool'
+import {
+	CLOSED_PARAMETERS,
+	OPEN_PARAMETERS,
+	ToolManager,
+	createTool,
+	createToolManager,
+} from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
 import { createSSEParser } from '@orkestrel/sse'
 import { createRecorder, waitForAbort, waitForDelay } from '@orkestrel/test'
-import { attempt, isRecord } from '@orkestrel/contract'
+import { attempt, isArray, isRecord } from '@orkestrel/contract'
 import { MCPTextStreamController, supportsFormElicitation, supportsTask } from '@src/core'
 
 export async function* createReplyStream(
@@ -3166,6 +3178,33 @@ export function buildListedTool(
 	return { name, inputSchema: { type: 'object' }, ...members }
 }
 
+// A host's manager holding its policy inside `execute`: it denies every call and records the name,
+// so a server that reaches a tool any other way shows up as a call the policy never saw.
+export class DenyingToolManager extends ToolManager {
+	readonly #consulted: string[] = []
+
+	get consulted(): readonly string[] {
+		return this.#consulted
+	}
+
+	override execute(call: ToolCall, context?: ToolContext): Promise<ToolResult>
+	override execute(
+		calls: readonly ToolCall[],
+		context?: ToolContext,
+	): Promise<readonly ToolResult[]>
+	override async execute(
+		call: ToolCall | readonly ToolCall[],
+	): Promise<ToolResult | readonly ToolResult[]> {
+		if (isArray(call)) return call.map((one) => this.#deny(one))
+		return this.#deny(call)
+	}
+
+	#deny(call: ToolCall): ToolResult {
+		this.#consulted.push(call.name)
+		return { id: call.id, name: call.name, success: false, error: 'refused by policy' }
+	}
+}
+
 // Each complete `tools/call` answer a client must refuse, because it cannot be read.
 export const MALFORMED_CALL_RESULTS: readonly unknown[] = Object.freeze([
 	5,
@@ -3206,6 +3245,7 @@ export const MALFORMED_TOOL_LISTINGS: ReadonlyArray<readonly [result: unknown, r
 			'tools[0]',
 		],
 		[{ resultType: 'complete', tools: [], nextCursor: 7 }, '`nextCursor`'],
+		[{ resultType: 'complete', tools: [], nextCursor: false }, '`nextCursor`'],
 	])
 
 // The id the peer saw on its `count`-th request (1-based) — the correlation a test needs to

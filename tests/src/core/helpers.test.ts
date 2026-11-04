@@ -1851,6 +1851,13 @@ describe('readToolPage', () => {
 		expect(readToolPage({ tools: [] })).toEqual({ tools: [] })
 	})
 
+	it('reads a null nextCursor as the end of the listing', () => {
+		const page = readToolPage({ tools: [], nextCursor: null })
+
+		expect(page).toEqual({ tools: [] })
+		expect(page).not.toHaveProperty('nextCursor')
+	})
+
 	it.each(MALFORMED_TOOL_LISTINGS)('refuses %j, naming %s', (result, refusal) => {
 		const attempted = attempt(() => readToolPage(result))
 

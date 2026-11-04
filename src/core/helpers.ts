@@ -573,13 +573,15 @@ export function extractContentText(result: unknown): string {
  * @remarks
  * A listing is what a caller decides from, so it is complete or it is refused: an omitted or
  * skipped entry would read as a tool the peer does not have. Enforces the published descriptor
- * and no more: an entry stays open to members a later revision adds.
+ * and no more: an entry stays open to members a later revision adds. A `nextCursor` of `null`
+ * reads as the end of the listing, because refusing it would lose a whole listing to a server
+ * that serializes absence that way, and it can hide no page.
  *
  * @param result - The already-owned result payload the peer answered with
  * @returns The page, with each entry's required members proved
  * @throws MCPError when the answer is not an object, `tools` is not an array, an entry lacks a
- *   string `name` or a record `inputSchema`, or a present `outputSchema` or `nextCursor` is the
- *   wrong type
+ *   string `name` or a record `inputSchema`, a present `outputSchema` is not a record, or a
+ *   `nextCursor` is neither a string nor `null`
  *
  * @example
  * ```ts
@@ -613,14 +615,14 @@ export function readToolPage(result: unknown): MCPToolPage {
 		return { ...descriptor, name, inputSchema }
 	})
 	const nextCursor = result['nextCursor']
-	if (nextCursor !== undefined && !isString(nextCursor)) {
+	if (nextCursor !== undefined && nextCursor !== null && !isString(nextCursor)) {
 		throw new MCPError(
-			'MCP server returned a malformed tools/list result: `nextCursor` must be a string when present',
+			'MCP server returned a malformed tools/list result: `nextCursor` must be a string, or absent or null at the end of the listing',
 			JSONRPC_INVALID_PARAMS,
 			result,
 		)
 	}
-	return nextCursor === undefined ? { tools } : { tools, nextCursor }
+	return isString(nextCursor) ? { tools, nextCursor } : { tools }
 }
 
 /**

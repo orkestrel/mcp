@@ -739,10 +739,8 @@ export type MCPProgressHandler = (progress: MCPProgress) => void
  * Represents the explicit, host-neutral context for one modern tool execution.
  *
  * @remarks
- * The default execution path forwards the request signal and caller to the registered tool.
- * A delegating execution handler forwards `signal` and `caller` itself. A handler that throws
- * a `ToolError` with code `ARGUMENTS` answers `-32602`, as the default path does; one that
- * returns the failure `ToolManagerInterface.execute` contains answers a tool failure.
+ * The default execution path forwards the request signal and caller to the tool manager.
+ * A delegating execution handler forwards `signal` and `caller` itself.
  */
 export interface MCPExecutionContext {
 	readonly request: JSONRPCRequest
@@ -1124,7 +1122,8 @@ export type MCPListedTool = Readonly<Record<string, unknown>> &
  * Holds one `tools/list` page a client has read.
  *
  * @remarks
- * `nextCursor` mirrors the wire field: present means the listing continues past this page.
+ * `nextCursor` mirrors the wire field: present means the listing continues past this page, and
+ * a page that ended with `null` holds none.
  */
 export interface MCPToolPage {
 	readonly tools: readonly MCPListedTool[]
@@ -2104,14 +2103,10 @@ export interface MCPServerOptions {
 	 * Holds the optional explicit execution policy above the canonical live tool registry.
 	 *
 	 * @remarks
-	 * The default path reads the tool through {@link ToolManagerInterface.tool} and runs it with
-	 * the request signal and optional caller, because {@link ToolManagerInterface.execute} contains
-	 * a refused argument record as a string and this server answers one as `-32602`. A missing
-	 * tool and a signal aborted before entry still reach `execute`, which words both. So a
-	 * manager that adds policy inside `execute` is not consulted for a tool it holds, and this
-	 * option is the place for that policy. An {@link MCPExecutionHandler} receives the signal and
-	 * caller on its {@link MCPExecutionContext}; a delegating handler forwards them to the manager
-	 * itself. Tool handlers observe the signal to stop their work.
+	 * The default path forwards the request signal and optional caller through
+	 * {@link ToolManagerInterface.execute}. An {@link MCPExecutionHandler} receives them on
+	 * its {@link MCPExecutionContext}; a delegating handler forwards `signal` and `caller`
+	 * to the manager itself. Tool handlers observe the signal to stop their work.
 	 *
 	 * A handler returning a complete {@link MCPCallResult} is taken at its word: the server
 	 * bounds it and re-proves its shape, then sends what the handler composed. Nothing stamps
@@ -3029,8 +3024,8 @@ export interface MCPClientInterface {
 	 * widens rather than refuses, and the remote server stays the authority on what remains.
 	 *
 	 * The listing is complete or refused. It follows `nextCursor` for up to
-	 * {@link MCP_LOOKUP_PAGES} pages, and throws an `MCPError` for a page it cannot read and for
-	 * a listing that still carries a cursor on the last page it reads.
+	 * {@link MCP_LOOKUP_PAGES} pages, reads a `null` cursor as the end, and throws an `MCPError` for
+	 * a page it cannot read and for a listing that still carries a cursor on the last page it reads.
 	 *
 	 * @returns The remote tools as local {@link ToolInterface}s, in server order
 	 */

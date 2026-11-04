@@ -341,12 +341,14 @@ graph. A call with no `id` is a **notification** — a type of its own, handled
 `undefined`, `handle` returns `undefined`), whatever its method. The error
 envelopes carry `id: null` for the id they could not read, as JSON-RPC 2.0 § 5
 requires, and a malformed request's `-32600` carries the id it could read. Tool errors
-are not protocol errors: a thrown tool becomes a `success: false` result, which
-`tools/call` maps to an `isError: true` tool result carrying its `error` text — so the
-server wraps no tool-domain failure as a protocol error. A refused argument record is the
-one protocol error a tool produces, because its handler never ran: `tools/call` answers
-`-32602`, the message opens `Invalid params:` and lists each fault, and `error.data.faults`
-holds them. A rejected execution provider or
+are not protocol errors: the `ToolManager` (`@orkestrel/tool`) isolates a
+thrown tool into a `success: false` result, which `tools/call` maps to an
+`isError: true` tool result carrying its `error` text — so the server wraps
+no tool-domain failure as a protocol error. A refused argument record is one of those
+failures: the specification, revision 2025-11-25, Tools § Error Handling, reports input
+validation in a tool result so a model can correct and retry, and the text `Tool` refuses with
+says what to send. An in-process caller reads the same report from a `ToolError`'s
+`context.faults`. A rejected execution provider or
 malformed runtime result instead becomes a detail-free `-32603` response, and the
 value that was caught is reported on the server's `error` event — the one place it
 is legible, and never the wire.
@@ -2186,8 +2188,9 @@ remote request. Refresh snapshots explicitly between agent runs; see
 
 **A listing is complete or refused.** `tools()` follows `nextCursor` for up to `MCP_LOOKUP_PAGES`
 pages and throws an `MCPError` when an answer is not an object, `tools` is not an array, an entry
-lacks a string `name` or a record `inputSchema`, a present `outputSchema` is not a record, or a
-`nextCursor` is present on the last page it reads, because a cut listing would read as complete.
+lacks a string `name` or a record `inputSchema`, a present `outputSchema` is not a record, a
+`nextCursor` is neither a string nor `null`, or a cursor is present on the last page it reads,
+because a cut listing would read as complete. A `null` cursor reads as the end of the listing.
 A tool name a local `Tool` refuses, an empty one or one with surrounding space, throws a
 `ToolError` with code `SCHEMA` from the same call.
 
@@ -3936,19 +3939,13 @@ subscription.abort()
 `MCPServerOptions.execution` is the explicit modern execution port over the live
 `ToolManagerInterface`. Its input contains the original `request`, canonical `call`,
 real `tools` manager, effective `signal`, optional `caller`, and an optional `progress` reporter.
-The default path reads the tool through `tools.tool(name)` and runs it with `{ signal, caller }`,
-because `tools.execute` contains a refused argument record as a string and this server answers one
-as `-32602`; an unknown name and a signal aborted before entry still reach `tools.execute`, which
-words both. So a manager that adds policy inside `execute` is not consulted for a tool it holds, and
-`execution` is the place for that policy. Caller identity is omitted
+The default path calls `tools.execute(call, { signal, caller })`; caller identity is omitted
 when absent and never placed on the JSON call envelope. A delegating handler calls
 `tools.execute(context.call, { signal: context.signal, ...(context.caller === undefined ? {} : { caller: context.caller }) })`.
 A tool handler observes `context.signal` to stop work when its request is cancelled. Returning
 a `ToolResult` uses the normal text/structured normalization; returning a validated
 `MCPCallResult` preserves exact text, image, audio, resource-link, and embedded-resource
-content without guessing from an ordinary domain value. A handler that throws a `ToolError` with
-code `ARGUMENTS` answers `-32602`, while a failure `tools.execute` contained and the handler returned
-answers a tool failure carrying the same text.
+content without guessing from an ordinary domain value.
 
 **A returned `MCPCallResult` reaches the wire unstamped, and that is a declared departure.**
 The normalization path builds its answer through `buildModernResult`, which stamps the
@@ -3983,8 +3980,8 @@ The reporter exists only when `_meta.progressToken` is a string or integer.
 consumption by the original `tools/call` response stream. The source holds one item,
 stops on completion, abort, or generator return, rejects late reports, and never enters
 replay or durable state.
-A server without `execution` still runs the tool exactly once and may answer unary even when a
-token was supplied.
+A server without `execution` still calls `ToolManagerInterface.execute` exactly once and
+may answer unary even when a token was supplied.
 
 #### Stream rich results and progress
 
@@ -5659,18 +5656,17 @@ the exact statement:
    `MCPToolDescriptor` (its `parameters` renamed to `inputSchema`, a tool
    that declares none advertising the closed empty object). `tools/call` → the executed
    tool's `MCPCallResult`.
-5. **Tool errors are tool results, and a refused argument record is a protocol error.** `tools/call` reads
+5. **Tool errors are tool results, not protocol errors.** `tools/call` reads
    `params.name` (a string) + `params.arguments` (a record; the modern path defaults an
    absent one to the shared frozen `EMPTY_MCP_ARGUMENTS`),
    narrowed with `@orkestrel/contract`'s guards (no `as`); a missing /
-   non-string `name` → a `-32602` invalid-params error. Otherwise it reads the tool through
-   `tools.tool(name)` and runs `tool.execute(arguments, context)` under the modern and legacy wire
-   eras, leaving an unknown name and an aborted signal to `tools.execute`. The call carries
+   non-string `name` → a `-32602` invalid-params error. Otherwise it runs
+   `tools.execute(call, context)` under the modern and legacy wire eras. The call carries
    `{ id, name, arguments }`; the context carries the request's `signal` and the optional
    `caller` from `options.caller`, omitted when absent. The tool body receives that context.
-   A `ToolError` with code `ARGUMENTS` → a `-32602` error whose message opens `Invalid params:`
-   and whose `data.faults` holds the error's faults. Any other throw becomes a
-   `success: false` result, whose
+   Because the `ToolManager`
+   (`@orkestrel/tool`) already isolates a thrown tool, an unknown name, and a refused argument
+   record into a `success: false` result, the server adds no try/catch: that branch's
    `error` maps to `{ content: [{ type: 'text', text: <error> }], isError: true }`;
    a valued `success: true` branch maps to `{ content: [{ type: 'text', text:
    JSON.stringify(value) }], structuredContent: value }`, carrying the value unchanged
