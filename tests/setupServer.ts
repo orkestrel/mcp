@@ -90,7 +90,12 @@ import { createMCPSession } from '@src/server'
 import { postJSON, readSSEStream } from './setup.js'
 import { StdioClientTransport } from '@src/server'
 import { buildPeerDiscovery, buildClientHandshakeResponse } from './setup.js'
-import { createJSONRPCRequest, createCalculatorServer, MCPFixtureCell } from './setup.js'
+import {
+	ADDITION_PARAMETERS,
+	createJSONRPCRequest,
+	createCalculatorServer,
+	MCPFixtureCell,
+} from './setup.js'
 import { createServer as createHTTPServer, request as httpRequest } from 'node:http'
 import { connect } from 'node:net'
 import { Duplex, PassThrough } from 'node:stream'
@@ -4893,7 +4898,13 @@ export async function readGuideBoundCall(): Promise<MCPCallOutcome> {
 	clientSide.connect(serverSide)
 
 	const tools = createToolManager()
-	tools.add(createTool({ name: 'add', execute: (a) => Number(a['x']) + Number(a['y']) }))
+	tools.add(
+		createTool({
+			name: 'add',
+			parameters: ADDITION_PARAMETERS,
+			execute: (a) => Number(a['x']) + Number(a['y']),
+		}),
+	)
 	const server = createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
 	bindServer(server, serverSide)
 

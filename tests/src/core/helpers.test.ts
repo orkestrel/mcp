@@ -1,5 +1,10 @@
 import type { JSONRPCNotification } from '@orkestrel/jsonrpc'
-import { JSONRPC_PARSE_ERROR, buildJSONRPCError, buildJSONRPCResult } from '@orkestrel/jsonrpc'
+import {
+	JSONRPC_INVALID_REQUEST,
+	JSONRPC_PARSE_ERROR,
+	buildJSONRPCError,
+	buildJSONRPCResult,
+} from '@orkestrel/jsonrpc'
 import type { MCPMethodHandler, MCPMethodOptions, MCPSubscriptionFilter } from '@src/core'
 import type { MCPHeaderParameter } from '@src/core'
 import {
@@ -32,7 +37,11 @@ import {
 	renderHeaderValue,
 	DEFAULT_MCP_LIMITS,
 	buildInitializeResult,
+	buildInboundFault,
 	buildCallOutcome,
+	readMalformedId,
+	readMessageId,
+	readToolPage,
 	buildCancelledNotification,
 	buildMethodOptions,
 	buildModernResult,
@@ -65,6 +74,7 @@ import {
 	decodeEvent,
 	legacyInvocationToModern,
 	legacyResultToModern,
+	isMCPError,
 	isMCPToolError,
 	matchesResultType,
 	matchesSubscriptionNotification,
@@ -83,8 +93,8 @@ import {
 	supportsTask,
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { attempt } from '@orkestrel/contract'
-import { createTool, createToolManager } from '@orkestrel/tool'
+import { attempt, createContract, schemaToShape } from '@orkestrel/contract'
+import { CLOSED_PARAMETERS, createTool, createToolManager } from '@orkestrel/tool'
 import * as MCP from '@src/core'
 import { waitForAbort, waitForDelay } from '@orkestrel/test'
 import {
@@ -94,6 +104,8 @@ import {
 	createMemoryTransport,
 	createThrowingKeys,
 	GUARD_KEY_NAMES,
+	MALFORMED_CALL_RESULTS,
+	MALFORMED_TOOL_LISTINGS,
 	modernRequest,
 	probeOwnership,
 	TestTaskManager,
@@ -256,7 +268,6 @@ describe('tool annotation projections', () => {
 
 describe('buildToolCall', () => {
 	it('builds call envelopes without caller identity and preserves supplied arguments', () => {
-		expect(buildToolCall.length).toBe(2)
 		const request = createJSONRPCRequest({
 			id: 8,
 			method: 'tools/call',
@@ -266,7 +277,7 @@ describe('buildToolCall', () => {
 		const call = buildToolCall(request, args)
 		expect(call).toEqual({ id: '8', name: 'echo', arguments: args })
 		expect(call?.arguments).toBe(args)
-		expect(buildToolCall(createJSONRPCRequest({ method: 'tools/call' }))).toBeUndefined()
+		expect(buildToolCall(createJSONRPCRequest({ method: 'tools/call' }), {})).toBeUndefined()
 	})
 })
 
@@ -291,13 +302,20 @@ describe('buildToolDescriptors', () => {
 		])
 	})
 
-	it('defaults inputSchema to an empty object schema when a tool declares none', () => {
+	it('advertises the closed empty object for a tool that declares nothing', () => {
 		const manager = createToolManager()
 		manager.add(createTool({ name: 'echo', execute: () => 0 }))
+		manager.add({ name: 'foreign', execute: () => 0 })
 
 		expect(buildToolDescriptors(manager)).toEqual([
-			{ name: 'echo', inputSchema: { type: 'object' } },
+			{ name: 'echo', inputSchema: CLOSED_PARAMETERS },
+			{ name: 'foreign', inputSchema: CLOSED_PARAMETERS },
 		])
+		expect(CLOSED_PARAMETERS).toEqual({
+			type: 'object',
+			properties: {},
+			additionalProperties: false,
+		})
 	})
 
 	it('returns an empty list for an empty registry', () => {
@@ -434,8 +452,9 @@ describe('modern execution helpers', () => {
 				createJSONRPCRequest({
 					id: 7,
 					method: 'tools/call',
-					params: { name: 'echo', arguments: { value: 1 } },
+					params: { name: 'echo', arguments: { ignored: true } },
 				}),
+				{ value: 1 },
 			),
 		).toEqual({
 			id: '7',
@@ -1400,13 +1419,23 @@ describe('bindClient', () => {
 		expect(transport.sent).toHaveLength(1)
 	})
 
-	it('drops a malformed inbound message rather than throwing', () => {
+	it('reports a malformed inbound message on the error event rather than delivering it', () => {
 		const transport = createMemoryTransport()
 		const mcp = createBoundClient(transport)
 		bindClient(mcp, transport)
+		const errors: unknown[] = []
+		const messages: unknown[] = []
+		mcp.transport.emitter.on('error', (error) => errors.push(error))
+		mcp.transport.emitter.on('message', (message) => messages.push(message))
 
 		expect(() => transport.deliver('not json')).not.toThrow()
 		expect(() => transport.deliver(JSON.stringify({ not: 'a message' }))).not.toThrow()
+
+		expect(messages).toEqual([])
+		expect(errors).toHaveLength(2)
+		expect(errors.every(isMCPError)).toBe(true)
+		// A client answers nothing: the transport wrote no frame for either.
+		expect(transport.sent).toEqual([])
 	})
 
 	it('unbind detaches inbound delivery WITHOUT closing the transport', async () => {
@@ -1711,6 +1740,171 @@ describe('buildCallOutcome', () => {
 			expect(attempted.error).toBeInstanceOf(MCPError)
 			expect(isMCPToolError(attempted.error)).toBe(false)
 		}
+	})
+})
+
+describe('buildCallOutcome — an answer it cannot read', () => {
+	it.each(MALFORMED_CALL_RESULTS)('refuses %j as an MCPError', (result) => {
+		const attempted = attempt(() => buildCallOutcome('echo', result))
+
+		expect(attempted.success).toBe(false)
+		if (attempted.success) return
+		expect(isMCPError(attempted.error)).toBe(true)
+		expect(isMCPToolError(attempted.error)).toBe(false)
+	})
+
+	it('reads an empty content list as no value and a false isError as a success', () => {
+		expect(buildCallOutcome('echo', { content: [] })).toEqual({
+			resultType: 'complete',
+			value: undefined,
+		})
+		expect(buildCallOutcome('echo', { isError: false, structuredContent: 1 })).toEqual({
+			resultType: 'complete',
+			value: 1,
+		})
+	})
+
+	it('reads any JSON value as a structured value, the shape the server sends', () => {
+		for (const value of [7, 'text', ['a', 1], null, { count: 3 }]) {
+			expect(buildCallOutcome('echo', { structuredContent: value })).toEqual({
+				resultType: 'complete',
+				value,
+			})
+		}
+	})
+})
+
+describe('buildCallOutcome — a declared output contract', () => {
+	const output = createContract(
+		schemaToShape({
+			type: 'object',
+			properties: { count: { type: 'number' } },
+			required: ['count'],
+		}),
+	)
+
+	it('carries a structured value the contract accepts', () => {
+		expect(buildCallOutcome('search', { structuredContent: { count: 3 } }, output)).toEqual({
+			resultType: 'complete',
+			value: { count: 3 },
+		})
+	})
+
+	it('refuses a missing required key, carrying the missing fault', () => {
+		const attempted = attempt(() => buildCallOutcome('search', { structuredContent: {} }, output))
+
+		expect(attempted.success).toBe(false)
+		if (attempted.success || !isMCPError(attempted.error)) throw new Error('expected an MCPError')
+		expect(attempted.error.context).toMatchObject({
+			faults: [{ reason: 'missing', path: ['count'] }],
+		})
+		expect(attempted.error.message).toContain('count: missing')
+		expect(attempted.error.message).toContain("MCP tool 'search'")
+	})
+
+	it('refuses a value the parser would repair, because the check is is and not parse', () => {
+		const attempted = attempt(() =>
+			buildCallOutcome('search', { structuredContent: { count: '3' } }, output),
+		)
+
+		expect(attempted.success).toBe(false)
+		if (attempted.success || !isMCPError(attempted.error)) throw new Error('expected an MCPError')
+		expect(attempted.error.context).toMatchObject({ faults: [{ path: ['count'] }] })
+	})
+
+	it('refuses a success with no structured value, whatever its text says', () => {
+		const attempted = attempt(() =>
+			buildCallOutcome('search', { content: [{ type: 'text', text: '{"count":3}' }] }, output),
+		)
+
+		expect(attempted.success).toBe(false)
+		if (attempted.success) return
+		expect(isMCPError(attempted.error)).toBe(true)
+	})
+
+	it('leaves a remote failure a failure, because a failure owes no value', () => {
+		const attempted = attempt(() =>
+			buildCallOutcome(
+				'search',
+				{ isError: true, content: [{ type: 'text', text: 'tool exploded' }] },
+				output,
+			),
+		)
+
+		expect(attempted.success).toBe(false)
+		if (attempted.success) return
+		expect(isMCPToolError(attempted.error)).toBe(true)
+	})
+})
+
+describe('readToolPage', () => {
+	it('reads the required members and keeps the others open', () => {
+		const page = readToolPage({
+			tools: [{ name: 'search', inputSchema: { type: 'object' }, later: 1 }],
+			nextCursor: 'page-2',
+		})
+
+		expect(page).toEqual({
+			tools: [{ name: 'search', inputSchema: { type: 'object' }, later: 1 }],
+			nextCursor: 'page-2',
+		})
+		expect(readToolPage({ tools: [] })).toEqual({ tools: [] })
+	})
+
+	it.each(MALFORMED_TOOL_LISTINGS)('refuses %j, naming %s', (result, refusal) => {
+		const attempted = attempt(() => readToolPage(result))
+
+		expect(attempted.success).toBe(false)
+		if (attempted.success || !isMCPError(attempted.error)) throw new Error('expected an MCPError')
+		expect(attempted.error.message).toContain(refusal)
+	})
+})
+
+describe('readMessageId and readMalformedId', () => {
+	it('reads a valid id from a value that has passed no guard', () => {
+		expect(readMessageId({ id: 7, result: 1n })).toBe(7)
+		expect(readMessageId({ id: 'call-7' })).toBe('call-7')
+	})
+
+	it('answers undefined for no id, an invalid id, and a value it cannot read', () => {
+		const accessor = Object.defineProperty({}, 'id', { enumerable: true, get: () => 7 })
+		const revocable = Proxy.revocable({ id: 7 }, {})
+		revocable.revoke()
+
+		for (const value of [
+			undefined,
+			5,
+			[],
+			{},
+			{ id: null },
+			{ id: 1.5 },
+			accessor,
+			revocable.proxy,
+		]) {
+			expect(readMessageId(value)).toBeUndefined()
+		}
+	})
+
+	it('reads the id of a malformed request', () => {
+		expect(readMalformedId({ jsonrpc: '2.0', id: 7 })).toBe(7)
+		expect(readMalformedId({ jsonrpc: '2.0', id: 7, method: 5 })).toBe(7)
+		expect(readMalformedId({ id: 7, method: 'ping', result: null })).toBe(7)
+	})
+
+	it('answers undefined for a value shaped as a response, malformed or not', () => {
+		expect(readMalformedId({ jsonrpc: '2.0', id: 7, result: {} })).toBeUndefined()
+		expect(readMalformedId({ jsonrpc: '2.0', id: 7, error: 'none' })).toBeUndefined()
+		expect(readMalformedId({ method: 5 })).toBeUndefined()
+	})
+
+	it('builds a fault that carries the id only when an answer is owed', () => {
+		const owed = buildInboundFault({ id: 7, method: 5 }, 'non-JSON-RPC line')
+
+		expect(owed.message).toBe('non-JSON-RPC line')
+		expect(owed.code).toBe(JSONRPC_INVALID_REQUEST)
+		expect(owed.context).toEqual({ id: 7 })
+		expect(buildInboundFault({ id: 7, result: {} }, 'non-JSON-RPC line').context).toBeUndefined()
+		expect(buildInboundFault('words', 'non-JSON-RPC line').context).toBeUndefined()
 	})
 })
 

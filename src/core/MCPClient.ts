@@ -27,6 +27,7 @@ import type {
 	MCPClientCapabilities,
 	MCPDiscoverResult,
 	MCPIdentity,
+	MCPListedTool,
 	MCPListenOptions,
 	MCPModernVersion,
 	MCPProgressHandler,
@@ -53,6 +54,7 @@ import {
 	DEFAULT_MCP_CLIENT_VERSION,
 	DEFAULT_MCP_REQUEST_TIMEOUT,
 	DEFAULT_MCP_SUBSCRIPTION_CAPACITY,
+	MCP_LOOKUP_PAGES,
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
 	MCP_META_SUBSCRIPTION,
@@ -67,6 +69,8 @@ import {
 	buildCancelledNotification,
 	matchesResultType,
 	mcpAnnotationsToTool,
+	readMessageId,
+	readToolPage,
 } from './helpers.js'
 import { inferVersion } from './inferers.js'
 import { parseJSONRPCMessage } from './parsers.js'
@@ -351,17 +355,10 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	async tools(): Promise<readonly ToolInterface[]> {
-		const result = await this.#request('tools/list', undefined, this.#timeout)
-		// The wire shape is `{ tools: MCPToolDescriptor[] }` — narrow it: a
-		// non-record / non-array `tools` yields no tools rather than throwing.
-		if (!isRecord(result) || !isArray(result['tools'])) return []
-		const tools: ToolInterface[] = []
-		for (const descriptor of result['tools']) {
-			if (!isRecord(descriptor) || !isString(descriptor['name'])) continue
-			const name = descriptor['name']
-			tools.push(this.#tool(name, descriptor))
-		}
-		return tools
+		const connection = this.#connection
+		const listed = await this.#list(undefined, MCP_LOOKUP_PAGES)
+		connection?.adopt(listed)
+		return listed.map((descriptor) => this.#tool(descriptor))
 	}
 
 	listen(
@@ -379,6 +376,7 @@ export class MCPClient implements MCPClientInterface {
 		options?: MCPCallOptions,
 	): Promise<MCPCallOutcome> {
 		const input = options?.input
+		const output = this.#connection?.output(name)
 		const result = await this.#request(
 			'tools/call',
 			{
@@ -399,7 +397,27 @@ export class MCPClient implements MCPClientInterface {
 			undefined,
 			options,
 		)
-		return buildCallOutcome(name, result)
+		return buildCallOutcome(name, result, output)
+	}
+
+	// Reads `tools/list` page by page. The bound counts down through the recursion, and a last
+	// page still carrying a cursor refuses, because a listing cut there would read as complete.
+	async #list(cursor: string | undefined, pages: number): Promise<readonly MCPListedTool[]> {
+		const page = readToolPage(
+			await this.#request(
+				'tools/list',
+				cursor === undefined ? undefined : { cursor },
+				this.#timeout,
+			),
+		)
+		if (page.nextCursor === undefined) return page.tools
+		if (pages <= 1) {
+			throw new MCPError(
+				`MCP tools/list still carries nextCursor after ${String(MCP_LOOKUP_PAGES)} pages, so this client cannot read the listing as complete; the server must list its tools in ${String(MCP_LOOKUP_PAGES)} pages or fewer`,
+				JSONRPC_INVALID_PARAMS,
+			)
+		}
+		return [...page.tools, ...(await this.#list(page.nextCursor, pages - 1))]
 	}
 
 	async *#openSubscription(
@@ -635,31 +653,22 @@ export class MCPClient implements MCPClientInterface {
 				? undefined
 				: parsed
 		if (owned === undefined) {
-			const correlated = attempt(() => {
-				if (!isRecord(message)) return undefined
-				const descriptor = Reflect.getOwnPropertyDescriptor(message, 'id')
-				if (
-					descriptor === undefined ||
-					descriptor.enumerable !== true ||
-					!Object.hasOwn(descriptor, 'value')
+			// An unreadable answer still correlates, so the request it answers settles now instead of
+			// waiting out its deadline for a reply that has already arrived.
+			const correlated = readMessageId(message)
+			const pending = correlated === undefined ? undefined : this.#pending.get(correlated)
+			if (correlated !== undefined && pending !== undefined) {
+				this.#settle(
+					correlated,
+					new MCPError(
+						pending.method === 'server/discover'
+							? 'MCP server returned a malformed discovery result'
+							: `MCP server returned a malformed '${pending.method}' result: a result must be an object`,
+						JSONRPC_INVALID_PARAMS,
+					),
+					true,
 				)
-					return undefined
-				const id = descriptor.value
-				return isJSONRPCId(id) ? id : undefined
-			})
-			if (correlated.success && correlated.value !== undefined) {
-				const pending = this.#pending.get(correlated.value)
-				if (pending?.method === 'server/discover') {
-					this.#settle(
-						correlated.value,
-						new MCPError(
-							'MCP server returned a malformed discovery result',
-							JSONRPC_INVALID_PARAMS,
-						),
-						true,
-					)
-					return
-				}
+				return
 			}
 			this.#emitter.emit(
 				'error',
@@ -793,8 +802,8 @@ export class MCPClient implements MCPClientInterface {
 	// Wrap one remote tool descriptor as a local tool: map `inputSchema` → `parameters`
 	// (the inverse of the server's rename), carry display metadata and mapped hints,
 	// and bind `execute` and its context signal to a remote `tools/call` through `call`.
-	#tool(name: string, descriptor: Readonly<Record<string, unknown>>): ToolInterface {
-		const inputSchema = descriptor['inputSchema']
+	#tool(descriptor: MCPListedTool): ToolInterface {
+		const name = descriptor.name
 		const description = descriptor['description']
 		const title = descriptor['title']
 		const annotations = descriptor['annotations']
@@ -803,7 +812,7 @@ export class MCPClient implements MCPClientInterface {
 			name,
 			...(isString(title) ? { title } : {}),
 			...(isString(description) ? { description } : {}),
-			...(isRecord(inputSchema) ? { parameters: inputSchema } : {}),
+			parameters: descriptor.inputSchema,
 			...(Object.keys(projected).length === 0 ? {} : { annotations: projected }),
 			execute: this.#execute.bind(this, name),
 		})

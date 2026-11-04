@@ -1,10 +1,19 @@
-import type { MCPMessageTransportInterface, MCPModernVersion } from './types.js'
+import type { ContractInterface } from '@orkestrel/contract'
+import type { MCPListedTool, MCPMessageTransportInterface, MCPModernVersion } from './types.js'
+import { JSONRPC_INVALID_PARAMS } from '@orkestrel/jsonrpc'
+import { attempt, createContract, isRecord, schemaToShape } from '@orkestrel/contract'
+import { MCPError } from './errors.js'
 
-/** Owns one negotiation and the close still owed for the transport it opened. */
+/**
+ * Owns one negotiation, the close still owed for the transport it opened, and the output
+ * schemas its latest tool listing declared.
+ */
 export class MCPConnection {
 	readonly #transport: MCPMessageTransportInterface
 	readonly #negotiation: Promise<void>
 	readonly #closings = new Set<Promise<void>>()
+	readonly #contracts = new WeakMap<object, ContractInterface<unknown>>()
+	#outputs: ReadonlyMap<string, Readonly<Record<string, unknown>>> = new Map()
 	#version: MCPModernVersion | undefined
 	#settled = false
 	#superseded = false
@@ -63,6 +72,35 @@ export class MCPConnection {
 	release(): void {
 		this.supersede()
 		this.#closed = true
+	}
+
+	// One complete listing replaces the last, so a tool it no longer declares an output for is
+	// checked against nothing. A fresh schema object is a fresh memo key, so no contract goes stale.
+	adopt(tools: readonly MCPListedTool[]): void {
+		this.#outputs = new Map(
+			tools.flatMap((tool): ReadonlyArray<readonly [string, Readonly<Record<string, unknown>>]> => {
+				const schema = tool['outputSchema']
+				return isRecord(schema) ? [[tool.name, schema]] : []
+			}),
+		)
+	}
+
+	// Compiled on the first call of the tool that declares it, because a listing can be long and
+	// most of its tools are never called. A foreign schema that cannot compile fails at use.
+	output(name: string): ContractInterface<unknown> | undefined {
+		const schema = this.#outputs.get(name)
+		if (schema === undefined) return undefined
+		const known = this.#contracts.get(schema)
+		if (known !== undefined) return known
+		const compiled = attempt(() => createContract(schemaToShape(schema)))
+		if (!compiled.success) {
+			throw new MCPError(
+				`MCP tool '${name}' declares an outputSchema this client cannot compile, so its answer cannot be checked; the server must declare a JSON Schema built from plain values`,
+				JSONRPC_INVALID_PARAMS,
+			)
+		}
+		this.#contracts.set(schema, compiled.value)
+		return compiled.value
 	}
 
 	async close(): Promise<void> {

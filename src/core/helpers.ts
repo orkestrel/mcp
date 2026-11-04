@@ -8,10 +8,12 @@ import type {
 } from '@orkestrel/jsonrpc'
 import {
 	JSONRPC_INVALID_PARAMS,
+	JSONRPC_INVALID_REQUEST,
 	buildJSONRPCResult,
 	isJSONRPCId,
 	isJSONRPCNotification,
 } from '@orkestrel/jsonrpc'
+import type { ContractInterface } from '@orkestrel/contract'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { SSEParserInterface } from '@orkestrel/sse'
 import type { ToolAnnotations, ToolCall, ToolManagerInterface } from '@orkestrel/tool'
@@ -30,6 +32,7 @@ import type {
 	MCPJSONStep,
 	MCPJSONProperty,
 	MCPLegacyResult,
+	MCPListedTool,
 	MCPMethodOptions,
 	MCPProgress,
 	MCPResult,
@@ -39,12 +42,14 @@ import type {
 	MCPTextStreamControllerInterface,
 	MCPToolDescriptor,
 	MCPToolAnnotations,
+	MCPToolPage,
 	MCPTransportInterface,
 	MCPSubscriptionResult,
 	MCPSubscriptionResultMetaObject,
 } from './types.js'
 import { decodeBase64, decodeUTF8, encodeBase64, encodeHex } from '@orkestrel/codec'
 import { createSSEParser } from '@orkestrel/sse'
+import { CLOSED_PARAMETERS, describeFaults } from '@orkestrel/tool'
 import {
 	attempt,
 	cloneJSONRecord,
@@ -82,6 +87,7 @@ import {
 	isBoundedString,
 	isFieldToken,
 	isMCPHeaderPrimitive,
+	isMCPContent,
 	isMCPInputResult,
 	isMCPLegacyVersion,
 	isMCPMetaObject,
@@ -562,6 +568,142 @@ export function extractContentText(result: unknown): string {
 }
 
 /**
+ * Reads one `tools/list` answer as a page of tools, refusing a listing it cannot read.
+ *
+ * @remarks
+ * A listing is what a caller decides from, so it is complete or it is refused: an omitted or
+ * skipped entry would read as a tool the peer does not have. Enforces the published descriptor
+ * and no more: an entry stays open to members a later revision adds.
+ *
+ * @param result - The already-owned result payload the peer answered with
+ * @returns The page, with each entry's required members proved
+ * @throws MCPError when the answer is not an object, `tools` is not an array, an entry lacks a
+ *   string `name` or a record `inputSchema`, or a present `outputSchema` or `nextCursor` is the
+ *   wrong type
+ *
+ * @example
+ * ```ts
+ * readToolPage({ tools: [{ name: 'search', inputSchema: { type: 'object' } }] }).tools[0]?.name // 'search'
+ * ```
+ */
+export function readToolPage(result: unknown): MCPToolPage {
+	if (!isRecord(result) || !isArray(result['tools'])) {
+		throw new MCPError(
+			'MCP server returned a malformed tools/list result: a non-array `tools` lists nothing; send { tools: [{ name, inputSchema }] }',
+			JSONRPC_INVALID_PARAMS,
+			result,
+		)
+	}
+	const tools = result['tools'].map((descriptor, index): MCPListedTool => {
+		const name = isRecord(descriptor) ? descriptor['name'] : undefined
+		const inputSchema = isRecord(descriptor) ? descriptor['inputSchema'] : undefined
+		const outputSchema = isRecord(descriptor) ? descriptor['outputSchema'] : undefined
+		if (
+			!isRecord(descriptor) ||
+			!isString(name) ||
+			!isRecord(inputSchema) ||
+			(outputSchema !== undefined && !isRecord(outputSchema))
+		) {
+			throw new MCPError(
+				`MCP server returned a malformed tools/list result: tools[${String(index)}] needs a string \`name\`, a record \`inputSchema\`, and a record \`outputSchema\` when present`,
+				JSONRPC_INVALID_PARAMS,
+				result,
+			)
+		}
+		return { ...descriptor, name, inputSchema }
+	})
+	const nextCursor = result['nextCursor']
+	if (nextCursor !== undefined && !isString(nextCursor)) {
+		throw new MCPError(
+			'MCP server returned a malformed tools/list result: `nextCursor` must be a string when present',
+			JSONRPC_INVALID_PARAMS,
+			result,
+		)
+	}
+	return nextCursor === undefined ? { tools } : { tools, nextCursor }
+}
+
+/**
+ * Reads the JSON-RPC id one unread message carries, when it carries a valid one.
+ *
+ * @remarks
+ * Total, and it reads the `id` only as an own enumerable data property, because the value is
+ * the transport's and has passed no guard yet. A failed read answers `undefined`.
+ *
+ * @param value - The unread message candidate
+ * @returns The id, or `undefined` when the value carries no valid one
+ *
+ * @example
+ * ```ts
+ * readMessageId({ id: 7, result: 1n }) // 7
+ * readMessageId({ id: null }) // undefined
+ * ```
+ */
+export function readMessageId(value: unknown): JSONRPCId | undefined {
+	const read = attempt(() => {
+		if (!isRecord(value)) return undefined
+		const descriptor = Reflect.getOwnPropertyDescriptor(value, 'id')
+		if (
+			descriptor === undefined ||
+			descriptor.enumerable !== true ||
+			!Object.hasOwn(descriptor, 'value')
+		)
+			return undefined
+		const id: unknown = descriptor.value
+		return isJSONRPCId(id) ? id : undefined
+	})
+	return read.success ? read.value : undefined
+}
+
+/**
+ * Reads the id of a malformed request, the one message a transport answers with `-32600`.
+ *
+ * @remarks
+ * JSON-RPC gives no response to a response, so a value shaped as one answers `undefined` here
+ * even when it is malformed: no `method` and a `result` or `error` member. Everything else that
+ * carries a valid id is a request this peer sent badly, and the caller is waiting on that id.
+ *
+ * @param value - The parsed value that failed to decode as a JSON-RPC message
+ * @returns The id to answer, or `undefined` when no answer is owed or none can be addressed
+ *
+ * @example
+ * ```ts
+ * readMalformedId({ jsonrpc: '2.0', id: 7, method: 5 }) // 7
+ * readMalformedId({ jsonrpc: '2.0', id: 7, result: {} }) // undefined
+ * ```
+ */
+export function readMalformedId(value: unknown): JSONRPCId | undefined {
+	const id = readMessageId(value)
+	if (id === undefined || !isRecord(value)) return undefined
+	return !Object.hasOwn(value, 'method') &&
+		(Object.hasOwn(value, 'result') || Object.hasOwn(value, 'error'))
+		? undefined
+		: id
+}
+
+/**
+ * Builds the transport fault for one inbound value that is not the message its receiver takes.
+ *
+ * @remarks
+ * Its `context.id` holds the id of a malformed request and is absent for anything else, so a
+ * server transport reads from the fault alone whether a `-32600` answer is owed.
+ *
+ * @param value - The parsed value the transport received
+ * @param fault - The carrier's own wording for this refusal
+ * @returns The fault to emit on the transport's `error` event
+ *
+ * @example
+ * ```ts
+ * buildInboundFault({ id: 7, method: 5 }, 'non-JSON-RPC stdio line').context // { id: 7 }
+ * buildInboundFault({ id: 7, result: {} }, 'non-JSON-RPC stdio line').context // undefined
+ * ```
+ */
+export function buildInboundFault(value: unknown, fault: string): MCPError {
+	const id = readMalformedId(value)
+	return new MCPError(fault, JSONRPC_INVALID_REQUEST, id === undefined ? undefined : { id })
+}
+
+/**
  * Narrows one `tools/call` answer to the arm the peer chose.
  *
  * @remarks
@@ -570,19 +712,29 @@ export function extractContentText(result: unknown): string {
  * the arms the protocol gives a shape to, and deriving the tool's value from the one it
  * does not:
  *
+ * - A complete answer must be readable: a non-boolean `isError`, a block failing
+ *   {@link isMCPContent}, and a `structuredContent` no JSON text can hold each throw an
+ *   {@link MCPError}, and so does a success carrying neither `content` nor `structuredContent`.
+ *   `content: []` is a readable answer whose value is `undefined`.
  * - A peer's `structuredContent` is preferred over the content blocks, because it is the
  *   tool's value in its original structure while the blocks are a rendering beside it. Its
  *   mere presence decides — an explicit `null` is a value the tool returned, not an absence.
+ *   The dated result type holds any JSON value there, and this package's server sends one.
  * - With no structured value the legacy shape applies: the value was JSON-serialized into
  *   the text block(s), so parse them and fall back to the raw string when they are not JSON.
+ * - With an `output` contract, a success must carry a `structuredContent` the contract's `is`
+ *   accepts. A miss throws an {@link MCPError} whose `context.faults` holds the audit: the
+ *   server declared the schema and did not meet it.
  * - A remote tool failure (`isError: true`) throws an {@link MCPToolError} carrying the
  *   error text, so an agent's tool registry isolates it into a failure result exactly as it
  *   would a local throw, while a caller separates it from a transport failure by its type.
+ *   A failure owes no value, so it needs no `content` and meets no `output` contract.
  *
- * @param name - The tool's name, used only to describe a failure that carried no text
+ * @param name - The tool's name, used to describe a failure or a refusal
  * @param result - The already-owned result payload the peer answered with
+ * @param output - The contract of the tool's declared `outputSchema`, when it declares one
  * @returns The arm the peer answered with, frozen
- * @throws MCPError when a task or input arm's payload does not match its schema
+ * @throws MCPError when the answer cannot be read, or misses the `output` contract
  * @throws MCPToolError when the remote tool failed
  *
  * @example
@@ -591,8 +743,19 @@ export function extractContentText(result: unknown): string {
  * // → { resultType: 'complete', value: { count: 3 } }
  * ```
  */
-export function buildCallOutcome(name: string, result: unknown): MCPCallOutcome {
-	const resultType = isRecord(result) ? result['resultType'] : undefined
+export function buildCallOutcome(
+	name: string,
+	result: unknown,
+	output?: ContractInterface<unknown>,
+): MCPCallOutcome {
+	if (!isRecord(result)) {
+		throw new MCPError(
+			`MCP tool '${name}' answered with a result that is not an object`,
+			JSONRPC_INVALID_PARAMS,
+			result,
+		)
+	}
+	const resultType = result['resultType']
 	if (resultType === 'task') {
 		if (!isMCPTaskResult(result)) {
 			throw new MCPError(
@@ -613,14 +776,51 @@ export function buildCallOutcome(name: string, result: unknown): MCPCallOutcome 
 		}
 		return Object.freeze(result)
 	}
-	const text = extractContentText(result)
-	if (isRecord(result) && result['isError'] === true) {
-		throw new MCPToolError(text.length > 0 ? text : `MCP tool '${name}' failed`)
+	const failed = result['isError']
+	if (failed !== undefined && !isBoolean(failed)) {
+		throw new MCPError(
+			`MCP tool '${name}' answered a non-boolean \`isError\`; send true, false, or omit it`,
+			JSONRPC_INVALID_PARAMS,
+			result,
+		)
 	}
-	const structured = isRecord(result) && Object.hasOwn(result, 'structuredContent')
+	const content = result['content']
+	if (content !== undefined && (!isArray(content) || !content.every(isMCPContent))) {
+		throw new MCPError(
+			`MCP tool '${name}' answered a \`content\` that is not a list of valid content blocks`,
+			JSONRPC_INVALID_PARAMS,
+			result,
+		)
+	}
+	const text = extractContentText(result)
+	if (failed === true) throw new MCPToolError(text.length > 0 ? text : `MCP tool '${name}' failed`)
+	const structured = Object.hasOwn(result, 'structuredContent')
+	const carried = result['structuredContent']
+	if (structured && !isJSONValue(carried)) {
+		throw new MCPError(
+			`MCP tool '${name}' answered a \`structuredContent\` that is not a JSON value`,
+			JSONRPC_INVALID_PARAMS,
+			result,
+		)
+	}
+	if (!structured && content === undefined) {
+		throw new MCPError(
+			`MCP tool '${name}' answered neither \`content\` nor \`structuredContent\`, so its result carries no value to read`,
+			JSONRPC_INVALID_PARAMS,
+			result,
+		)
+	}
+	if (output !== undefined && (!structured || !output.is(carried))) {
+		const faults = output.audit(carried)
+		throw new MCPError(
+			`MCP tool '${name}' answered outside its declared outputSchema, so the server must meet the schema or stop declaring it:\n${describeFaults(faults, output.schema)}`,
+			JSONRPC_INVALID_PARAMS,
+			{ faults },
+		)
+	}
 	const parsed = structured || text.length === 0 ? undefined : parseJSON(text)
 	const value = structured
-		? result['structuredContent']
+		? carried
 		: text.length > 0
 			? parsed === undefined
 				? text
@@ -634,21 +834,16 @@ export function buildCallOutcome(name: string, result: unknown): MCPCallOutcome 
  * Builds the canonical Tool call for one validated MCP `tools/call` request.
  *
  * @param request - The original MCP request
- * @param args - Optional once-validated modern arguments; omission retains legacy normalization
+ * @param args - The once-validated arguments the call carries
  * @returns The canonical call, or `undefined` when the name is invalid
  */
 export function buildToolCall(
 	request: JSONRPCRequest,
-	args?: Readonly<Record<string, unknown>>,
+	args: Readonly<Record<string, unknown>>,
 ): ToolCall | undefined {
 	const name = request.params?.['name']
 	if (!isString(name)) return undefined
-	const rawArguments = request.params?.['arguments']
-	return {
-		id: String(request.id),
-		name,
-		arguments: args ?? (isRecord(rawArguments) ? rawArguments : {}),
-	}
+	return { id: String(request.id), name, arguments: args }
 }
 
 // Pure dispatch builders (the dispatch branches stay exported helpers,
@@ -700,9 +895,9 @@ export function buildMethodOptions(
  * @remarks
  * Each {@link import('@orkestrel/tool').ToolDefinition} carries through its
  * `name`, optional `title` and `description`, and mapped annotation hints;
- * its open JSON-Schema `parameters`
- * becomes `inputSchema`, defaulting to an empty object schema (`{ type: 'object' }`)
- * when a tool declares none (MCP requires an `inputSchema`).
+ * its open JSON-Schema `parameters` becomes `inputSchema`. A `Tool` always advertises
+ * `parameters`. A `ToolInterface` implementation that omits them advertises `CLOSED_PARAMETERS`,
+ * because a tool that declared nothing takes nothing and MCP requires an `inputSchema`.
  *
  * @param manager - The tool registry to describe
  * @returns One {@link MCPToolDescriptor} per registered tool, in registry order
@@ -713,7 +908,7 @@ export function buildToolDescriptors(manager: ToolManagerInterface): readonly MC
 			definition.annotations === undefined ? {} : toolAnnotationsToMCP(definition.annotations)
 		return {
 			name: definition.name,
-			inputSchema: definition.parameters ?? { type: 'object' },
+			inputSchema: definition.parameters ?? CLOSED_PARAMETERS,
 			...(definition.title === undefined ? {} : { title: definition.title }),
 			...(definition.description === undefined ? {} : { description: definition.description }),
 			...(Object.keys(annotations).length === 0 ? {} : { annotations }),
@@ -1191,8 +1386,9 @@ export function decodeBoundedMessage(
  *
  * The failures report differently on purpose. Unparsable text emits the caught parse
  * error, which names the offending position; well-formed JSON that is not a JSON-RPC message
- * has no caught value to report, so it emits `fault` — the carrier's own wording, passed in
- * rather than forked into a second copy of this body.
+ * has no caught value to report, so it emits an {@link MCPError} worded `fault` — the carrier's
+ * own wording, passed in rather than forked into a second copy of this body — and whose
+ * `context.id` holds the id of a malformed request, for a server transport to answer.
  *
  * @param emitter - The transport's emitter to deliver onto
  * @param text - One inbound frame's raw text
@@ -1217,7 +1413,7 @@ export function deliverMessage(
 	}
 	const message = parseJSONRPCMessage(parsed.value)
 	if (message === undefined) {
-		emitter.emit('error', new Error(fault))
+		emitter.emit('error', buildInboundFault(parsed.value, fault))
 		return
 	}
 	emitter.emit('message', message)

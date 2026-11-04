@@ -1,5 +1,6 @@
 import type { MCPClientInterface, MCPDispatcherInterface, MCPTransportInterface } from './types.js'
 import { parseJSON } from '@orkestrel/contract'
+import { buildInboundFault } from './helpers.js'
 import { parseJSONRPCMessage } from './parsers.js'
 import { MCPServerBinding } from './MCPServerBinding.js'
 
@@ -14,7 +15,9 @@ import { MCPServerBinding } from './MCPServerBinding.js'
  * nothing the server would parse differently: it decodes each inbound message through
  * {@link decodeBoundedMessage} under `server.limit`, the server's own bound, so a message
  * the server would refuse is never parsed here either and still receives its `-32700` from
- * the one place that words it. A held-open reply arrives as an
+ * the one place that words it. A well-formed response is the one message this binder keeps
+ * from `server.handle`: JSON-RPC gives no response to a response, so it reaches
+ * `server.emitter`'s `error` event and is not answered. A held-open reply arrives as an
  * {@link import('./types.js').MCPTextStreamControllerInterface} instead of a string: this is
  * the one place that pumps it, writing each notification in order and then the generator's
  * returned terminating response ({@link sendStream}). A `transport.send` throw or rejection —
@@ -77,8 +80,8 @@ export function bindServer(
  * this binder then completes the inbound half by decoding each message and pushing it
  * onto `client.transport.emitter` (an {@link import('@orkestrel/emitter').EmitterInterface}
  * exposes `emit`, so no client modification is needed). A malformed / non-JSON-RPC
- * inbound message is dropped (total — never throws); a delivery fault is routed to
- * `client.transport.emitter`'s `error` event (never rethrown). The returned unbind
+ * inbound message emits `error` on `client.transport.emitter` and is not delivered (total —
+ * never throws), and a delivery fault is routed to the same event (never rethrown). The returned unbind
  * detaches this binder (further inbound messages and the transport's `closed` signal are
  * ignored) without closing the transport.
  *
@@ -95,7 +98,7 @@ export function bindServer(
  * itself when a caller's `signal` aborts, on a carrier declaring `duplex`. Adding a registry
  * here would be a second correlation table for ids the client is already correlating, and a
  * pair of tables for one fact drift. The one obligation this binder does carry is delivery: a
- * malformed / non-JSON-RPC inbound message is dropped (total — never throws).
+ * malformed / non-JSON-RPC inbound message is reported rather than delivered.
  *
  * @param client - The transport-agnostic client whose transport to deliver messages onto
  * @param transport - The duplex channel to pipe the client over
@@ -117,10 +120,15 @@ export function bindClient(
 	const lifetime = new AbortController()
 	transport.listen((message) => {
 		if (lifetime.signal.aborted) return
-		const decoded = parseJSONRPCMessage(parseJSON(message))
-		if (decoded === undefined) return
+		const parsed = parseJSON(message)
+		const decoded = parseJSONRPCMessage(parsed)
 		try {
-			client.transport.emitter.emit('message', decoded)
+			if (decoded === undefined) {
+				client.transport.emitter.emit(
+					'error',
+					buildInboundFault(parsed, 'MCP client transport received a non-JSON-RPC message'),
+				)
+			} else client.transport.emitter.emit('message', decoded)
 		} catch (error) {
 			try {
 				client.transport.emitter.emit('error', error)

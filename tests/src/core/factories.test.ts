@@ -11,7 +11,11 @@ import {
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { completeFixtureHandshake, createMemoryTransport } from '../../setup.js'
+import {
+	ADDITION_PARAMETERS,
+	completeFixtureHandshake,
+	createMemoryTransport,
+} from '../../setup.js'
 
 // A minimal in-memory MCPTransportInterface double (real, not a mock):
 // `send` records every outbound string, `close` counts calls; `listen`/`closed` are
@@ -48,7 +52,13 @@ describe('createMCPServer', () => {
 
 	it('dispatches over the supplied tool registry', async () => {
 		const tools = createToolManager()
-		tools.add(createTool({ name: 'add', execute: (a) => Number(a['x']) + Number(a['y']) }))
+		tools.add(
+			createTool({
+				name: 'add',
+				parameters: ADDITION_PARAMETERS,
+				execute: (a) => Number(a['x']) + Number(a['y']),
+			}),
+		)
 		const server = createMCPServer({ identity: { name: 'demo', version: '1.0.0' }, tools })
 
 		const answer = await server.dispatch({

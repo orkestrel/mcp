@@ -2,7 +2,7 @@ import type { ModelContextEventMap } from '@src/browser'
 import { describe, expect, it } from 'vitest'
 import { createModelContext, describeWebMCPTool, isWebMCPDocument } from '@src/browser'
 import { isMCPError } from '@src/core'
-import { createTool, createToolManager } from '@orkestrel/tool'
+import { CLOSED_PARAMETERS, createTool, createToolManager, isToolError } from '@orkestrel/tool'
 import { MCPFixtureCell } from '../../setup.js'
 import {
 	createRecorder,
@@ -918,15 +918,18 @@ describe('adopt — reading the registry back as locally executable tools', () =
 		expect(remote.annotations?.untrusted).toBe(true)
 		expect(remote.annotations?.consequential).toBe(false)
 		expect(purchase.title).toBeUndefined()
-		expect(purchase.parameters).toBeUndefined()
+		expect(purchase.parameters).toEqual(CLOSED_PARAMETERS)
 		expect(purchase.annotations?.pure).toBe(true)
 		expect(purchase.annotations?.untrusted).toBe(false)
 		expect(purchase.annotations?.consequential).toBe(true)
 	})
 
-	it('forwards the caller arguments to the foreign handler unchanged', async () => {
+	it('forwards the arguments its foreign schema admits to the foreign handler', async () => {
 		const { fixture, bridge } = createBridge()
-		const recorded = recordRegistration('remote', 'done')
+		const recorded = recordRegistration('remote', 'done', {
+			type: 'object',
+			properties: { term: { type: 'string' }, limit: { type: 'number' } },
+		})
 		await fixture.registry.registerTool(recorded.tool)
 		const adopted = readOne(await bridge.adopt(), 'adopted tool')
 
@@ -937,6 +940,50 @@ describe('adopt — reading the registry back as locally executable tools', () =
 
 		expect(value).toBe('done')
 		expect(recorded.recorder.calls.map(([input]) => input)).toEqual([{ term: 'orbit', limit: 3 }])
+	})
+
+	it('refuses what its foreign schema refuses before the foreign handler runs', async () => {
+		const { fixture, bridge } = createBridge()
+		const recorded = recordRegistration('remote', 'done', {
+			type: 'object',
+			properties: { term: { type: 'string' } },
+			required: ['term'],
+		})
+		await fixture.registry.registerTool(recorded.tool)
+		const adopted = readOne(await bridge.adopt(), 'adopted tool')
+
+		const refused: unknown = await Promise.resolve()
+			.then(() => adopted.execute({}, { signal: new AbortController().signal }))
+			.catch((error: unknown) => error)
+
+		expect(isToolError(refused) && refused.code).toBe('ARGUMENTS')
+		expect(recorded.recorder.calls).toEqual([])
+	})
+
+	it('rejects the whole adopt call for a tool no local Tool can be built from', async () => {
+		const { fixture, bridge } = createBridge()
+		await fixture.registry.registerTool(recordRegistration('good', 'done').tool)
+		await fixture.registry.registerTool(
+			recordRegistration('bad', 'done', JSON.parse('["not a record"]')).tool,
+		)
+
+		const refused: unknown = await bridge.adopt().catch((error: unknown) => error)
+
+		expect(isToolError(refused) && refused.code).toBe('SCHEMA')
+	})
+
+	it('takes nothing through a foreign tool that declares no schema', async () => {
+		const { fixture, bridge } = createBridge()
+		const recorded = recordRegistration('remote', 'done')
+		await fixture.registry.registerTool(recorded.tool)
+		const adopted = readOne(await bridge.adopt(), 'adopted tool')
+
+		const refused: unknown = await Promise.resolve()
+			.then(() => adopted.execute({ term: 'orbit' }, { signal: new AbortController().signal }))
+			.catch((error: unknown) => error)
+
+		expect(isToolError(refused) && refused.context?.faults?.[0]?.reason).toBe('extra')
+		expect(recorded.recorder.calls).toEqual([])
 	})
 
 	it('executes an adopted tool through the registry and answers unchanged', async () => {

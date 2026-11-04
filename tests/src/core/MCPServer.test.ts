@@ -52,6 +52,7 @@ import {
 	readStreamFault,
 	readTextFault,
 	buildModernCall,
+	createDispatchPeer,
 	createFaultServer,
 	createHandlerFaultServer,
 	createSourceFaultServer,
@@ -117,7 +118,8 @@ import {
 	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { createTool, createToolManager } from '@orkestrel/tool'
+import { CLOSED_PARAMETERS, ToolError, createTool, createToolManager } from '@orkestrel/tool'
+import { numberShape, objectShape } from '@orkestrel/contract'
 import {
 	captureError,
 	createRecorder,
@@ -198,6 +200,195 @@ import {
 
 // Narrow a dispatch response to its `result` as a record (the MCP result payloads are
 // always records) — a guard standing in for an assertion, no `as`.
+
+describe('MCPServer — a refused argument record', () => {
+	it('answers -32602 with one extra fault and never reaches the handler', async () => {
+		const reached: unknown[] = []
+		const tools = createToolManager()
+		tools.add(
+			createTool({
+				name: 'pay',
+				contract: objectShape({ amount: numberShape() }),
+				execute: (args) => reached.push(args),
+			}),
+		)
+		const errors: unknown[] = []
+		const server = createMCPServer({ identity: { name: 'pay', version: '1' }, tools })
+		server.emitter.on('error', (error) => errors.push(error))
+
+		const response = readUnaryAnswer(
+			await server.dispatch(
+				buildModernCall({ name: 'pay', arguments: { amount: 3, extra: 1 } }, 1),
+			),
+		)
+
+		expect(response?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(response?.error?.message).toMatch(/^Invalid params: extra: extra; /u)
+		expect(response?.error?.data).toEqual({ faults: [{ reason: 'extra', path: ['extra'] }] })
+		expect(reached).toEqual([])
+		expect(errors).toEqual([])
+	})
+
+	it('answers -32602 with a missing fault from a parameters schema', async () => {
+		const tools = createToolManager()
+		tools.add(
+			createTool({
+				name: 'add',
+				parameters: {
+					type: 'object',
+					properties: { left: { type: 'number' } },
+					required: ['left'],
+				},
+				execute: () => 0,
+			}),
+		)
+		const server = createMCPServer({ identity: { name: 'add', version: '1' }, tools })
+
+		const response = readUnaryAnswer(
+			await server.dispatch(buildModernCall({ name: 'add', arguments: {} }, 1)),
+		)
+
+		expect(response?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(response?.error?.data).toMatchObject({
+			faults: [{ reason: 'missing', path: ['left'] }],
+		})
+	})
+
+	it('refuses a key a tool that declares nothing never asked for', async () => {
+		const tools = createToolManager()
+		tools.add(createTool({ name: 'bare', execute: () => 'ran' }))
+		const server = createMCPServer({ identity: { name: 'bare', version: '1' }, tools })
+
+		const refused = readUnaryAnswer(
+			await server.dispatch(buildModernCall({ name: 'bare', arguments: { value: 1 } }, 1)),
+		)
+		const answered = readUnaryAnswer(
+			await server.dispatch(buildModernCall({ name: 'bare', arguments: {} }, 2)),
+		)
+
+		expect(refused?.error?.data).toEqual({ faults: [{ reason: 'extra', path: ['value'] }] })
+		expect(readResultRecord(answered)['structuredContent']).toBe('ran')
+	})
+
+	it('hands a raw tool its arguments, and the handler the parsed copy otherwise', async () => {
+		const seen: unknown[] = []
+		const tools = createToolManager()
+		tools.add(
+			createTool({
+				name: 'raw',
+				strict: false,
+				parameters: { type: 'object', additionalProperties: false },
+				execute: (args) => seen.push(args),
+			}),
+		)
+		tools.add(
+			createTool({
+				name: 'typed',
+				parameters: { type: 'object', properties: { limit: { type: 'number' } } },
+				execute: (args) => seen.push(args),
+			}),
+		)
+		const server = createMCPServer({ identity: { name: 'routes', version: '1' }, tools })
+
+		await server.dispatch(buildModernCall({ name: 'raw', arguments: { value: 1 } }, 1))
+		await server.dispatch(buildModernCall({ name: 'typed', arguments: { limit: '30.0' } }, 2))
+
+		expect(seen).toEqual([{ value: 1 }, { limit: 30 }])
+	})
+
+	it('keeps a handler failure, an unknown name, and an aborted signal tool results', async () => {
+		const controller = new AbortController()
+		controller.abort('stopped')
+		const tools = createToolManager()
+		tools.add(
+			createTool({
+				name: 'boom',
+				execute: () => {
+					throw new Error('tool exploded')
+				},
+			}),
+		)
+		tools.add(
+			createTool({
+				name: 'schema',
+				execute: () => {
+					throw new ToolError('SCHEMA', 'an inner declaration failed')
+				},
+			}),
+		)
+		const server = createMCPServer({ identity: { name: 'failures', version: '1' }, tools })
+
+		const boom = readResultRecord(
+			readUnaryAnswer(await server.dispatch(buildModernCall({ name: 'boom' }, 1))),
+		)
+		const schema = readResultRecord(
+			readUnaryAnswer(await server.dispatch(buildModernCall({ name: 'schema' }, 2))),
+		)
+		const missing = readResultRecord(
+			readUnaryAnswer(await server.dispatch(buildModernCall({ name: 'missing' }, 3))),
+		)
+		const aborted = readResultRecord(
+			readUnaryAnswer(
+				await server.dispatch(buildModernCall({ name: 'boom' }, 4), { signal: controller.signal }),
+			),
+		)
+
+		expect(boom).toMatchObject({ isError: true, content: [{ text: 'tool exploded' }] })
+		expect(schema).toMatchObject({
+			isError: true,
+			content: [{ text: 'an inner declaration failed' }],
+		})
+		expect(missing).toMatchObject({ isError: true, content: [{ text: 'tool not found: missing' }] })
+		expect(aborted).toMatchObject({ isError: true, content: [{ text: 'stopped' }] })
+	})
+
+	it('maps a refusal an execution port throws, and leaves the failure it returns a result', async () => {
+		const tools = createToolManager()
+		tools.add(createTool({ name: 'bare', execute: () => 'ran' }))
+		const server = createMCPServer({
+			identity: { name: 'port', version: '1' },
+			tools,
+			execution: async ({ call, tools: registry, signal }) => {
+				if (call.id === '2') return registry.execute(call, { signal })
+				await registry.tool(call.name)?.execute(call.arguments, { signal })
+				return { id: call.id, name: call.name, success: true, value: 'ran' }
+			},
+		})
+
+		const thrown = readUnaryAnswer(
+			await server.dispatch(buildModernCall({ name: 'bare', arguments: { value: 1 } }, 1)),
+		)
+		const returned = readResultRecord(
+			readUnaryAnswer(
+				await server.dispatch(buildModernCall({ name: 'bare', arguments: { value: 1 } }, 2)),
+			),
+		)
+
+		expect(thrown?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(returned['isError']).toBe(true)
+	})
+
+	it('reaches a client as an MCPError carrying the faults', async () => {
+		const tools = createToolManager()
+		tools.add(createTool({ name: 'bare', execute: () => 'ran' }))
+		const client = createMCPClient({
+			transport: createDispatchPeer(
+				createMCPServer({ identity: { name: 'r', version: '1' }, tools }),
+			),
+		})
+		await client.connect()
+
+		const refused: unknown = await client
+			.call('bare', { value: 1 })
+			.catch((error: unknown) => error)
+
+		expect(isMCPError(refused) && refused.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(isMCPError(refused) && refused.message).toContain('this key is not declared')
+		expect(isMCPError(refused) && refused.context).toEqual({
+			faults: [{ reason: 'extra', path: ['value'] }],
+		})
+	})
+})
 
 // Real registry events drive the stream. The release proof retains independent recorders,
 // so listener membership distinguishes the server's cleanup from a cleared emitter.
@@ -1012,7 +1203,7 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 			'{"jsonrpc":"2.0","id":2,"result":{}}',
 		)
 		expect(await mcp.handle('{"jsonrpc":"2.0","method":"tools/list","id":3}')).toBe(
-			'{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}},{"name":"sum","inputSchema":{"type":"object","properties":{"a":{"type":"number"},"b":{"type":"number"}}},"description":"Add two numbers"},{"name":"boom","inputSchema":{"type":"object"}}]}}',
+			'{"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}},{"name":"sum","inputSchema":{"type":"object","properties":{"a":{"type":"number"},"b":{"type":"number"}}},"description":"Add two numbers"},{"name":"boom","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}]}}',
 		)
 		expect(
 			await mcp.handle(
@@ -2977,7 +3168,7 @@ describe('MCPServer — tools/list', () => {
 					properties: { a: { type: 'number' }, b: { type: 'number' } },
 				},
 			},
-			{ name: 'boom', inputSchema: { type: 'object' } },
+			{ name: 'boom', inputSchema: CLOSED_PARAMETERS },
 		])
 	})
 
@@ -3115,7 +3306,7 @@ describe('MCPServer — tools/call', () => {
 			{
 				name: 'inspect',
 				title: 'Inspect record',
-				inputSchema: { type: 'object' },
+				inputSchema: CLOSED_PARAMETERS,
 				annotations: { readOnlyHint: true, destructiveHint: false },
 			},
 		])
@@ -3132,7 +3323,7 @@ describe('MCPServer — tools/call', () => {
 		})
 		const response = readUnaryAnswer(await metadataServer.dispatch(modernRequest('tools/list')))
 		expect(readResultRecord(response)['tools']).toEqual([
-			{ name: 'inspect', inputSchema: { type: 'object' } },
+			{ name: 'inspect', inputSchema: CLOSED_PARAMETERS },
 		])
 	})
 
@@ -3363,7 +3554,7 @@ describe('MCPServer — handle (string boundary)', () => {
 		expect(reply).toContain('"id":null')
 	})
 
-	it('refuses a message carrying both a method and a result as an invalid request', async () => {
+	it('refuses a message carrying both a method and a result as an invalid request, under its id', async () => {
 		const reply = await createTestServer().handle(
 			'{"jsonrpc":"2.0","id":1,"method":"ping","result":null}',
 		)
@@ -3371,7 +3562,19 @@ describe('MCPServer — handle (string boundary)', () => {
 		expect(reply).toBe(
 			JSON.stringify({
 				jsonrpc: '2.0',
-				id: null,
+				id: 1,
+				error: { code: JSONRPC_INVALID_REQUEST, message: 'Invalid Request' },
+			}),
+		)
+	})
+
+	it('answers a malformed request under the id it can read', async () => {
+		const reply = await createTestServer().handle('{"jsonrpc":"2.0","id":"call-7","method":5}')
+
+		expect(reply).toBe(
+			JSON.stringify({
+				jsonrpc: '2.0',
+				id: 'call-7',
 				error: { code: JSONRPC_INVALID_REQUEST, message: 'Invalid Request' },
 			}),
 		)
@@ -3983,13 +4186,15 @@ describe('MCPServer — W02-A: what the egress boundary keeps doing', () => {
 describe('MCPServer — W02-B: admission and the owned argument record', () => {
 	// The sleeper: two argument-less calls share ONE frozen record, so a tool that
 	// writes to its own `arguments` now fails — wire-visible as a tool failure with no
-	// protocol change to point at.
-	it('shares one frozen empty argument record, and a tool writing to it fails', async () => {
+	// protocol change to point at. A raw tool sees that record, because the door hands a strict
+	// tool its own parsed copy.
+	it('shares one frozen empty argument record, and a raw tool writing to it fails', async () => {
 		const seen: unknown[] = []
 		const manager = createToolManager()
 		manager.add(
 			createTool({
 				name: 'observe',
+				strict: false,
 				execute: (args) => {
 					seen.push(args)
 					return 1
@@ -3999,6 +4204,7 @@ describe('MCPServer — W02-B: admission and the owned argument record', () => {
 		manager.add(
 			createTool({
 				name: 'mutate',
+				strict: false,
 				execute: (args) => {
 					const writable: Record<string, unknown> = args
 					writable['injected'] = true

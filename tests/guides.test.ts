@@ -498,7 +498,15 @@ await new GuideCommand({
 		it('requires modern metadata before the guide request succeeds', async () => {
 			const tools = createToolManager()
 			tools.add(
-				createTool({ name: 'add', execute: (args) => Number(args['x']) + Number(args['y']) }),
+				createTool({
+					name: 'add',
+					parameters: {
+						type: 'object',
+						properties: { x: { type: 'number' }, y: { type: 'number' } },
+						required: ['x', 'y'],
+					},
+					execute: (args) => Number(args['x']) + Number(args['y']),
+				}),
 			)
 			const server = createMCPServer({
 				identity: { name: 'calculator', version: '1.0.0' },
@@ -513,7 +521,7 @@ await new GuideCommand({
 				'{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"Invalid params: request declares no protocol version"}}',
 			)
 			expect(stamped).toBe(
-				'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"add","inputSchema":{"type":"object"}}],"resultType":"complete","ttlMs":60000,"cacheScope":"private","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"calculator","version":"1.0.0"}}}}',
+				'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"add","inputSchema":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"]}}],"resultType":"complete","ttlMs":60000,"cacheScope":"private","_meta":{"io.modelcontextprotocol/serverInfo":{"name":"calculator","version":"1.0.0"}}}}',
 			)
 		})
 	})

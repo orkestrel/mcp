@@ -33,7 +33,7 @@ import {
 	StdioServerTransport,
 } from '@src/server'
 import { WEBSOCKET_CLOSE_NORMAL, WEBSOCKET_OPCODE_CLOSE } from '@orkestrel/websocket'
-import { createTeardown, waitForAbort, waitForDelay } from '@orkestrel/test'
+import { createTeardown, waitForAbort, waitForCondition, waitForDelay } from '@orkestrel/test'
 import {
 	collectSSE,
 	MCPFixtureCell,
@@ -685,6 +685,25 @@ describe('createWebSocketServer ↔ createNodeWebSocketClientTransport — the b
 		expect(await client.call('add', {})).toEqual({ resultType: 'complete', value: 5 })
 	})
 
+	it('answers a malformed request frame with -32600 and reports it on the server error event', async () => {
+		const mcp = createCalculatorServer()
+		const errors: unknown[] = []
+		mcp.emitter.on('error', (error) => errors.push(error))
+		const handle = await startWsMCP(teardown, mcp)
+		const transport = createNodeWebSocketClientTransport({ url: `${handle.base}/mcp` })
+		teardown.add(() => closeResource(transport))
+		await transport.start()
+		const answer = new Promise<unknown>((resolve) => transport.emitter.on('message', resolve))
+
+		await transport.send(JSON.parse('{"jsonrpc":"2.0","id":"call-7","method":5}'))
+
+		await expect(answer).resolves.toMatchObject({
+			id: 'call-7',
+			error: { code: -32600, message: 'Invalid Request' },
+		})
+		expect(errors).toHaveLength(1)
+	})
+
 	it('CONTROL — a bare server refuses initialize at either shape, naming the method, over a real socket', async () => {
 		const handle = await startWsMCP(teardown)
 		const transport = createNodeWebSocketClientTransport({ url: `${handle.base}/mcp` })
@@ -1048,17 +1067,37 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 		handle.stop()
 	})
 
-	it('ignores a stray response line (not a request) rather than dispatching it', async () => {
+	it('reports a stray response line on the server error event and does not answer it', async () => {
 		const { input, output } = createStdioPair()
-		const handle = createStdioServer(createCalculatorServer(), { input, output })
+		const mcp = createCalculatorServer()
+		const errors: unknown[] = []
+		mcp.emitter.on('error', (error) => errors.push(error))
+		const handle = createStdioServer(mcp, { input, output })
 		handle.start()
 
 		const chunks: string[] = []
 		output.on('data', (chunk: Buffer) => chunks.push(chunk.toString()))
 		input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} })}\n`)
+		await waitForCondition('the stray response to be reported', () => errors.length > 0)
 		await waitForDelay(20)
 
 		expect(chunks).toEqual([])
+		expect(errors).toHaveLength(1)
+		handle.stop()
+	})
+
+	it('answers a malformed request line with -32600 under its id', async () => {
+		const { input, output } = createStdioPair()
+		const handle = createStdioServer(createCalculatorServer(), { input, output })
+		handle.start()
+
+		input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'call-7', method: 5 })}\n`)
+
+		expect(JSON.parse(await readStdioLine(output))).toEqual({
+			jsonrpc: '2.0',
+			id: 'call-7',
+			error: { code: -32600, message: 'Invalid Request' },
+		})
 		handle.stop()
 	})
 

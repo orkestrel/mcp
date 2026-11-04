@@ -80,7 +80,7 @@ import {
 	MCPStreamController,
 	parseJSONRPCMessage,
 } from '@src/core'
-import { createTool, createToolManager } from '@orkestrel/tool'
+import { CLOSED_PARAMETERS, OPEN_PARAMETERS, createTool, createToolManager } from '@orkestrel/tool'
 import { createEmitter } from '@orkestrel/emitter'
 import { createSSEParser } from '@orkestrel/sse'
 import { createRecorder, waitForAbort, waitForDelay } from '@orkestrel/test'
@@ -130,9 +130,25 @@ export function createRPCMessage(
 	return message
 }
 
+// The arguments the `add` fixture reads, declared because a tool enforces what it declares.
+export const ADDITION_PARAMETERS: Readonly<Record<string, unknown>> = Object.freeze({
+	type: 'object',
+	properties: Object.freeze({
+		x: Object.freeze({ type: 'number' }),
+		y: Object.freeze({ type: 'number' }),
+	}),
+	required: Object.freeze(['x', 'y']),
+})
+
 export function createBinderServer() {
 	const tools = createToolManager()
-	tools.add(createTool({ name: 'add', execute: (a) => Number(a['x']) + Number(a['y']) }))
+	tools.add(
+		createTool({
+			name: 'add',
+			parameters: ADDITION_PARAMETERS,
+			execute: (a) => Number(a['x']) + Number(a['y']),
+		}),
+	)
 	return createMCPServer({ identity: { name: 'demo', version: '1.0.0' }, tools })
 }
 
@@ -1570,7 +1586,9 @@ export function createAbortTools(): AbortToolsInterface {
 			},
 		}),
 	)
-	tools.add(createTool({ name: 'echo', execute: (args) => args['value'] }))
+	tools.add(
+		createTool({ name: 'echo', parameters: OPEN_PARAMETERS, execute: (args) => args['value'] }),
+	)
 	// `aborted` observes the same signal the handler received, so a caller reads the report
 	// without a second deferred beside the handler's own wait.
 	return {
@@ -2466,11 +2484,11 @@ export function createLegacyTools(): ToolManagerInterface {
 }
 
 export const MCP_LEGACY_DESCRIPTORS = [
-	{ name: 'good', inputSchema: { type: 'object' } },
-	{ name: 'missing', inputSchema: { type: 'object' } },
-	{ name: 'nan', inputSchema: { type: 'object' } },
-	{ name: 'failure', inputSchema: { type: 'object' } },
-	{ name: 'oversized', inputSchema: { type: 'object' } },
+	{ name: 'good', inputSchema: CLOSED_PARAMETERS },
+	{ name: 'missing', inputSchema: CLOSED_PARAMETERS },
+	{ name: 'nan', inputSchema: CLOSED_PARAMETERS },
+	{ name: 'failure', inputSchema: CLOSED_PARAMETERS },
+	{ name: 'oversized', inputSchema: CLOSED_PARAMETERS },
 ]
 
 export const MCP_LEGACY_CASES: ReadonlyArray<
@@ -3128,6 +3146,68 @@ export function createCallPeer(
 	})
 }
 
+// A modern peer whose `tools/list` answers are scripted by page, and which refuses the rest. The
+// handler reads the cursor the client sent, so a test proves the client followed it.
+export function createListingPeer(
+	page: (cursor: unknown, count: number) => unknown,
+): FixturePeerInterface {
+	return createCallPeer((request, count) =>
+		request.method === 'tools/list' && request.id !== undefined
+			? { jsonrpc: '2.0', id: request.id, result: page(request.params?.['cursor'], count) }
+			: undefined,
+	)
+}
+
+// One well-formed `tools/list` entry, named so a test can read which page it came from.
+export function buildListedTool(
+	name: string,
+	members: Readonly<Record<string, unknown>> = {},
+): Readonly<Record<string, unknown>> {
+	return { name, inputSchema: { type: 'object' }, ...members }
+}
+
+// Each complete `tools/call` answer a client must refuse, because it cannot be read.
+export const MALFORMED_CALL_RESULTS: readonly unknown[] = Object.freeze([
+	5,
+	null,
+	'words',
+	{},
+	{ resultType: 'complete' },
+	{ isError: 'true', content: [] },
+	{ isError: null, content: [] },
+	{ content: 'words' },
+	{ content: [{ type: 'text' }] },
+	{
+		content: [
+			{ type: 'text', text: 'fine' },
+			{ type: 'text', text: 7 },
+		],
+	},
+	{ content: [{ type: 'sticker', text: 'unknown' }] },
+	{ isError: true, content: [{ type: 'text' }] },
+	{ structuredContent: undefined },
+])
+
+// Each `tools/list` result the client must refuse, beside the text its refusal names.
+export const MALFORMED_TOOL_LISTINGS: ReadonlyArray<readonly [result: unknown, refusal: string]> =
+	Object.freeze([
+		[{ resultType: 'complete' }, 'non-array `tools`'],
+		[{ resultType: 'complete', tools: 'none' }, 'non-array `tools`'],
+		[{ resultType: 'complete', tools: [{}] }, 'tools[0]'],
+		[{ resultType: 'complete', tools: [{ name: 1, inputSchema: {} }] }, 'tools[0]'],
+		[{ resultType: 'complete', tools: [{ name: 'a' }] }, 'tools[0]'],
+		[{ resultType: 'complete', tools: [{ name: 'a', inputSchema: 'open' }] }, 'tools[0]'],
+		[{ resultType: 'complete', tools: [{ name: 'a', inputSchema: {} }, 'b'] }, 'tools[1]'],
+		[
+			{
+				resultType: 'complete',
+				tools: [{ name: 'a', inputSchema: {}, outputSchema: 'open' }],
+			},
+			'tools[0]',
+		],
+		[{ resultType: 'complete', tools: [], nextCursor: 7 }, '`nextCursor`'],
+	])
+
 // The id the peer saw on its `count`-th request (1-based) — the correlation a test needs to
 // address a specific in-flight request, rather than assuming the client's counter.
 export function readPeerRequestId(peer: DispatchPeerInterface, count: number): string | number {
@@ -3450,7 +3530,7 @@ export function readTextAnswer(answer: string | MCPTextStream | undefined): MCPT
 
 export function createServerTools(): ToolManagerInterface {
 	const manager = createToolManager()
-	manager.add(createTool({ name: 'echo', execute: (args) => args }))
+	manager.add(createTool({ name: 'echo', parameters: OPEN_PARAMETERS, execute: (args) => args }))
 	manager.add(
 		createTool({
 			name: 'sum',

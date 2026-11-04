@@ -1,4 +1,5 @@
 import type { JSONRPCMessage } from '@orkestrel/jsonrpc'
+import { JSONRPC_INVALID_PARAMS } from '@orkestrel/jsonrpc'
 import type {
 	MCPClientOptions,
 	MCPMessageTransportInterface,
@@ -758,7 +759,7 @@ describe('createScopeServer — Service-Worker-shaped scope (per-client MessageP
 
 		await vi.waitFor(() => expect(replies).toHaveLength(1))
 		const reply: { error: { code: number } } = JSON.parse(String(replies[0]))
-		expect(reply.error.code).toBe(-32603)
+		expect(reply.error.code).toBe(JSONRPC_INVALID_PARAMS)
 
 		worker.stop()
 	})
@@ -976,7 +977,7 @@ describe('createScopeServer — hostile inbound', () => {
 
 		await vi.waitFor(() => expect(replies).toHaveLength(1))
 		const reply: { error: { code: number } } = JSON.parse(String(replies[0]))
-		expect(reply.error.code).toBe(-32603)
+		expect(reply.error.code).toBe(JSONRPC_INVALID_PARAMS)
 
 		worker.stop()
 	})

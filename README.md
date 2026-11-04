@@ -33,7 +33,17 @@ import { createMCPRoutes } from '@orkestrel/mcp/server'
 import { createTool, createToolManager } from '@orkestrel/tool'
 
 const tools = createToolManager()
-tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
+tools.add(
+	createTool({
+		name: 'add',
+		parameters: {
+			type: 'object',
+			properties: { x: { type: 'number' }, y: { type: 'number' } },
+			required: ['x', 'y'],
+		},
+		execute: (a) => Number(a.x) + Number(a.y),
+	}),
+)
 
 const mcp = createMCPServer({ identity: { name: 'calculator', version: '1.0.0' }, tools })
 // POST /mcp dispatches JSON-RPC (JSON or SSE per Accept):

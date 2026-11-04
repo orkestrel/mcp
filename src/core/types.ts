@@ -739,8 +739,10 @@ export type MCPProgressHandler = (progress: MCPProgress) => void
  * Represents the explicit, host-neutral context for one modern tool execution.
  *
  * @remarks
- * The default execution path forwards the request signal and caller to the tool manager.
- * A delegating execution handler forwards `signal` and `caller` itself.
+ * The default execution path forwards the request signal and caller to the registered tool.
+ * A delegating execution handler forwards `signal` and `caller` itself. A handler that throws
+ * a `ToolError` with code `ARGUMENTS` answers `-32602`, as the default path does; one that
+ * returns the failure `ToolManagerInterface.execute` contains answers a tool failure.
  */
 export interface MCPExecutionContext {
 	readonly request: JSONRPCRequest
@@ -1097,8 +1099,8 @@ export interface MCPTaskOptions {
  *
  * @remarks
  * The wire renaming of a `ToolDefinition`: `name` / `description` carry through,
- * and `parameters` becomes `inputSchema` (the MCP field name), defaulting to an
- * empty object schema (`{ type: 'object' }`) when a tool declares none.
+ * and `parameters` becomes `inputSchema` (the MCP field name). A tool that declares none
+ * advertises a closed empty object, so a call that sends a key is refused.
  */
 export interface MCPToolDescriptor {
 	readonly name: string
@@ -1106,6 +1108,27 @@ export interface MCPToolDescriptor {
 	readonly description?: string
 	readonly inputSchema: Readonly<Record<string, unknown>>
 	readonly annotations?: MCPToolAnnotations
+}
+
+/**
+ * Holds one `tools/list` entry past the members a client refuses a listing without.
+ *
+ * @remarks
+ * `name` and `inputSchema` are proved, and a present `outputSchema` is a record. Every other
+ * member is a remote peer's unread value, typed `unknown` until its own guard runs.
+ */
+export type MCPListedTool = Readonly<Record<string, unknown>> &
+	Pick<MCPToolDescriptor, 'name' | 'inputSchema'>
+
+/**
+ * Holds one `tools/list` page a client has read.
+ *
+ * @remarks
+ * `nextCursor` mirrors the wire field: present means the listing continues past this page.
+ */
+export interface MCPToolPage {
+	readonly tools: readonly MCPListedTool[]
+	readonly nextCursor?: string
 }
 
 /**
@@ -2081,10 +2104,14 @@ export interface MCPServerOptions {
 	 * Holds the optional explicit execution policy above the canonical live tool registry.
 	 *
 	 * @remarks
-	 * The default path forwards the request signal and optional caller through
-	 * {@link ToolManagerInterface.execute}. An {@link MCPExecutionHandler} receives them on
-	 * its {@link MCPExecutionContext}; a delegating handler forwards `signal` and `caller`
-	 * to the manager itself. Tool handlers observe the signal to stop their work.
+	 * The default path reads the tool through {@link ToolManagerInterface.tool} and runs it with
+	 * the request signal and optional caller, because {@link ToolManagerInterface.execute} contains
+	 * a refused argument record as a string and this server answers one as `-32602`. A missing
+	 * tool and a signal aborted before entry still reach `execute`, which words both. So a
+	 * manager that adds policy inside `execute` is not consulted for a tool it holds, and this
+	 * option is the place for that policy. An {@link MCPExecutionHandler} receives the signal and
+	 * caller on its {@link MCPExecutionContext}; a delegating handler forwards them to the manager
+	 * itself. Tool handlers observe the signal to stop their work.
 	 *
 	 * A handler returning a complete {@link MCPCallResult} is taken at its word: the server
 	 * bounds it and re-proves its shape, then sends what the handler composed. Nothing stamps
@@ -2208,7 +2235,8 @@ export interface MCPDispatcherInterface {
  *   to an invocation, dispatches, and serializes the answer back to a string (or an
  *   {@link MCPTextStream}, the same sequence already serialized) — turning a parse failure
  *   into a `-32700` response and a non-invocation into a `-32600` response, and returning
- *   `undefined` for a notification. Both error envelopes carry `id: null`.
+ *   `undefined` for a notification. Both error envelopes carry `id: null`, except that a
+ *   malformed request's `-32600` carries the id it could read.
  * - **One method seam.** Every modern method — the built-in `server/discover` /
  *   `tools/list` / `tools/call` / `subscriptions/listen` and configured resource methods
  *   included — is registered on `methods` and dispatched
@@ -2288,7 +2316,8 @@ export interface MCPServerInterface extends MCPDispatcherInterface {
 	 * @remarks
 	 * A `JSON.parse` failure resolves a serialized `-32700` (Parse error) response;
 	 * a parsed value that is not a valid invocation resolves a serialized `-32600`
-	 * (Invalid Request) response — each with `id: null`, because its id could not be read;
+	 * (Invalid Request) response — each with `id: null` for an id it could not read, while a
+	 * malformed request carrying a readable id is answered under that id;
 	 * a notification resolves `undefined` (no response). A
 	 * held-open method resolves an {@link MCPTextStreamControllerInterface} — the controlled
 	 * typed stream's mirror, already serialized — so a transport writes each message with no
@@ -2995,6 +3024,13 @@ export interface MCPClientInterface {
 	 * snapshot; fetch it again to refresh an agent's {@link ToolManagerInterface}.
 	 * A summary authored on the remote tool replaces its advertised description, so the
 	 * separate summary and full description cannot be recovered from this wire view.
+	 * A wrapped tool enforces the remote `inputSchema` locally through the lenient
+	 * `schemaToShape` conversion on its first `execute`, so a schema the conversion cannot read
+	 * widens rather than refuses, and the remote server stays the authority on what remains.
+	 *
+	 * The listing is complete or refused. It follows `nextCursor` for up to
+	 * {@link MCP_LOOKUP_PAGES} pages, and throws an `MCPError` for a page it cannot read and for
+	 * a listing that still carries a cursor on the last page it reads.
 	 *
 	 * @returns The remote tools as local {@link ToolInterface}s, in server order
 	 */
@@ -3023,7 +3059,12 @@ export interface MCPClientInterface {
 	 * JSON (falling back to the raw string). A remote tool failure (`isError: true`)
 	 * throws an `MCPToolError` (an `Error`) carrying the error text instead, so an agent's
 	 * {@link ToolManagerInterface} isolates it into a `success: false` result exactly as
-	 * it would a local tool throw. A `resultType` this client cannot name is refused.
+	 * it would a local tool throw. A `resultType` this client cannot name is refused, and so is
+	 * a complete answer that cannot be read: see {@link import('./helpers.js').buildCallOutcome}.
+	 * After `tools` has read this connection's listing, a tool declaring an `outputSchema` must
+	 * answer a `structuredContent` the lenient `schemaToShape` conversion of that schema accepts,
+	 * or the call throws an `MCPError` whose `context.faults` holds the audit. A call made before
+	 * any listing knows no schema and checks none.
 	 *
 	 * `options.signal` cancels this request only — the caller stops waiting, the pending
 	 * request rejects, and the peer is told on a carrier that can carry a client

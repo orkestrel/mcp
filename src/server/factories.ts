@@ -61,11 +61,12 @@ export function createMCPContinuation(secret: TokenSecret): MCPContinuationInter
  * @remarks
  * `send` decodes the already-serialized reply string back to a {@link JSONRPCMessage}
  * and writes it through `transport.send` (the same `JSON.stringify` the underlying
- * transport already performs, so the wire bytes are unchanged). `listen` filters
- * `transport`'s `message` event to invocations only — requests and notifications, never a
- * stray response, exactly as the prior hand-rolled pumps did — and re-serializes each one
- * back to a string for `bindServer`. `closed` bridges `transport`'s `close` event. `close`
- * closes the underlying `transport`.
+ * transport already performs, so the wire bytes are unchanged), and it rejects a reply that
+ * does not decode. `listen` filters `transport`'s `message` event to invocations only —
+ * requests and notifications, never a stray response — and re-serializes each one back to a
+ * string for `bindServer`. Anything else emits `error` on `transport`, and only a malformed
+ * request carrying a readable id is answered, with `-32600`. `closed` bridges `transport`'s
+ * `close` event. `close` closes the underlying `transport`.
  *
  * @remarks A message crossing this bridge is decoded and re-encoded twice, and that is
  * accepted rather than accidental. Inbound: the carrier already parsed the frame into a
@@ -198,9 +199,10 @@ export function createMCPRoutes<TState = unknown>(
  *   import('@orkestrel/mcp').MCPTransportInterface} port through {@link
  *   createDuplexServerTransport} + {@link import('@orkestrel/mcp').bindServer}:
  *   each inbound request runs through `mcp.dispatch`, and a defined response is written back
- *   as a frame — a notification sends nothing, and a non-request message (a stray response) is
- *   ignored. A `dispatch` / `send` fault surfaces on `mcp.emitter`'s `error` event rather than
- *   escaping the (async) message pump.
+ *   as a frame — a notification sends nothing, a malformed request carrying a readable id is
+ *   answered with `-32600`, and a stray response is not answered. A transport, `dispatch`, or
+ *   `send` fault surfaces on `mcp.emitter`'s `error` event rather than escaping the (async)
+ *   message pump.
  * - **Closes on the spine's `stop`.** It holds every socket it claimed and, on `options.emitter`'s
  *   `stop` event, closes each one with the RFC 6455 close handshake, so the spine's drain settles
  *   at once and each client reads a clean goodbye. Node detaches an upgraded socket from the
@@ -277,6 +279,9 @@ export function createWebSocketServer(
 			...(protocol === undefined ? {} : { protocol }),
 		})
 		const transport = new WebSocketServerTransport(ws)
+		// This carrier is private to the handler, so `mcp.emitter` is the one place its faults can
+		// be heard.
+		transport.emitter.on('error', (error) => mcp.emitter.emit('error', error))
 		// The binder's detachment is this handler's to hold: the connection it belongs to is one
 		// this factory minted and nothing outside can reach, so a discarded `unbind` leaves the
 		// binding attached to a transport that has ended with no way left to detach it.
@@ -384,9 +389,9 @@ export function createStdioClientTransport(
  * through {@link createDuplexServerTransport} + {@link
  * import('@orkestrel/mcp').bindServer}: each inbound request runs through `mcp.dispatch`, and
  * a defined response is written back as a newline-terminated line — a notification
- * writes nothing, and a non-request message is ignored. A `dispatch` / `send` fault
- * surfaces on `mcp.emitter`'s `error` event rather than escaping the (async) message
- * pump.
+ * writes nothing, a malformed request carrying a readable id is answered with `-32600`, and a
+ * stray response is not answered. A transport, `dispatch`, or `send` fault surfaces on
+ * `mcp.emitter`'s `error` event rather than escaping the (async) message pump.
  *
  * @param mcp - The transport-agnostic {@link MCPDispatcherInterface} to expose over stdio
  * @param options - Optional injectable `input` / `output` streams; see
@@ -412,6 +417,9 @@ export function createStdioServer(
 	const input = options?.input ?? process.stdin
 	const output = options?.output ?? process.stdout
 	const transport = new StdioServerTransport(input, output)
+	// This carrier is private to the handle, so `mcp.emitter` is the one place its faults can be
+	// heard.
+	transport.emitter.on('error', (error) => mcp.emitter.emit('error', error))
 	const unbind = bindServer(mcp, createDuplexServerTransport(transport))
 	return {
 		start(): void {

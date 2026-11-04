@@ -575,10 +575,13 @@ export interface ModelContextInterface {
 	 * tool. The value resolves unchanged: WebMCP's own sources disagree about whether a tool
 	 * answers with a string or an MCP content record, so the bridge normalizes neither.
 	 *
-	 * An adopted tool advertises the foreign `inputSchema` as its `parameters` and validates
-	 * nothing against it. Compiling that schema into a contract would let one page's
-	 * unreadable or hostile schema refuse the whole `adopt` call, and the arguments reach a
-	 * handler in another document that has to validate them anyway.
+	 * An adopted tool advertises the foreign `inputSchema` as its `parameters` and enforces it
+	 * through the lenient `schemaToShape` conversion on its first `execute`, so a schema record it
+	 * cannot read refuses that tool's calls rather than the whole `adopt` call. A foreign tool with
+	 * no `inputSchema` declares nothing and takes nothing. A tool no local `Tool` can be built from,
+	 * a non-record `inputSchema` or a name with surrounding space, rejects the whole `adopt` call
+	 * with a `ToolError`. The handler in the other document stays the authority on whatever the
+	 * conversion widens.
 	 *
 	 * @param options - The origin and debugging filters; see {@link ModelContextAdoptOptions}
 	 * @returns The included registry tools, in registry order

@@ -17,7 +17,7 @@ import {
 } from '@orkestrel/jsonrpc'
 import { MCPSubscriptionSource } from './MCPSubscriptionSource.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { ToolCall } from '@orkestrel/tool'
+import type { ToolCall, ToolContext, ToolResult } from '@orkestrel/tool'
 import type { JSONValue, Result } from '@orkestrel/contract'
 import type {
 	MCPCallResult,
@@ -59,8 +59,11 @@ import type {
 	MCPTextStreamControllerInterface,
 } from './types.js'
 import { Emitter } from '@orkestrel/emitter'
+import { isToolError } from '@orkestrel/tool'
 import {
+	attempt,
 	isArray,
+	isError,
 	isFiniteNumber,
 	isInteger,
 	isJSONValue,
@@ -92,6 +95,7 @@ import {
 	buildToolDescriptors,
 	computeMissingCapabilities,
 	digestJSON,
+	readMalformedId,
 	serializeJSON,
 	stampSubscriptionNotification,
 	supportsTask,
@@ -157,7 +161,17 @@ import {
  * @example
  * ```ts
  * const tools = createToolManager()
- * tools.add(createTool({ name: 'add', execute: (a) => Number(a.x) + Number(a.y) }))
+ * tools.add(
+ * 	createTool({
+ * 		name: 'add',
+ * 		parameters: {
+ * 			type: 'object',
+ * 			properties: { x: { type: 'number' }, y: { type: 'number' } },
+ * 			required: ['x', 'y'],
+ * 		},
+ * 		execute: (a) => Number(a.x) + Number(a.y),
+ * 	}),
+ * )
  * const server = new MCPServer({ identity: { name: 'demo', version: '1.0.0' }, tools })
  * await server.handle('{"jsonrpc":"2.0","method":"server/discover","id":1,"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}')
  * // The result advertises only `2026-07-28`; wrap with `createMCPLegacy` to serve initialize or ping.
@@ -259,9 +273,16 @@ export class MCPServer implements MCPServerInterface {
 			bytes: this.#limits.message,
 			depth: this.#limits.depth,
 		})
-		// Only an INVOCATION is dispatchable — a response (or any non-message) is invalid input.
+		// Only an INVOCATION is dispatchable — a response (or any non-message) is invalid input. An
+		// id this door can read is the one the answer must carry; `null` is for one it could not.
 		if (decoded === undefined || !('method' in decoded)) {
-			return JSON.stringify(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request'))
+			return JSON.stringify(
+				buildJSONRPCError(
+					readMalformedId(parsed) ?? null,
+					JSONRPC_INVALID_REQUEST,
+					'Invalid Request',
+				),
+			)
 		}
 		const answer = await this.#dispatch(decoded, options ?? {})
 		if (answer === undefined) return undefined
@@ -963,7 +984,7 @@ export class MCPServer implements MCPServerInterface {
 		try {
 			const value =
 				this.#options.execution === undefined
-					? await this.#options.tools.execute(call, {
+					? await this.#executeTool(call, {
 							signal,
 							...(caller === undefined ? {} : { caller }),
 						})
@@ -981,6 +1002,29 @@ export class MCPServer implements MCPServerInterface {
 		}
 	}
 
+	// The path with no `execution` port. The registry contains every throw as a failure string
+	// and carries no further structure, so the one throw this server answers differently, a
+	// refused argument record, is read where `ToolFailure` says to read it: from the tool itself.
+	// An unknown name and a signal aborted before entry stay the registry's to word.
+	async #executeTool(call: ToolCall, context: ToolContext): Promise<ToolResult> {
+		const { tools } = this.#options
+		const tool = tools.tool(call.name)
+		if (tool === undefined || context.signal.aborted) return tools.execute(call, context)
+		try {
+			const value: unknown = await tool.execute(call.arguments, context)
+			return { id: call.id, name: call.name, success: true, value }
+		} catch (error) {
+			if (isToolError(error) && error.code === 'ARGUMENTS') throw error
+			const message = attempt(() => (isError(error) ? error.message : String(error)))
+			return {
+				id: call.id,
+				name: call.name,
+				success: false,
+				error: message.success ? message.value : 'Unknown thrown value',
+			}
+		}
+	}
+
 	async #execute(
 		request: JSONRPCRequest,
 		call: ToolCall,
@@ -988,7 +1032,20 @@ export class MCPServer implements MCPServerInterface {
 		progress?: MCPProgressReporter,
 	): Promise<MCPCallResult | JSONRPCResponse> {
 		const outcome = await this.#attemptExecution(request, call, options, progress)
-		if (!outcome.success) return this.#contain(outcome.error, request.id)
+		if (!outcome.success) {
+			const { error } = outcome
+			if (!isToolError(error) || error.code !== 'ARGUMENTS') {
+				return this.#contain(error, request.id)
+			}
+			// The handler never ran, so this is the caller's request and not the tool's failure.
+			const faults = error.context?.faults
+			return buildJSONRPCError(
+				request.id,
+				JSONRPC_INVALID_PARAMS,
+				`Invalid params: ${error.message}`,
+				faults === undefined ? undefined : { faults },
+			)
+		}
 		const result = outcome.value
 		const captured = snapshotJSON(result, {
 			bytes: this.#limits.content,

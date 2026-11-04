@@ -27,7 +27,7 @@ import {
 import { isArray, isString } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createRecorder, readProperty, requireValue, waitForAbort } from '@orkestrel/test'
-import { MCPFixtureCell } from './setup.js'
+import { ADDITION_PARAMETERS, MCPFixtureCell } from './setup.js'
 
 // ── Peer observation ─────────────────────────────────────────────────────────
 //
@@ -320,13 +320,18 @@ export interface RecordedRegistrationInterface {
  * await fixture.registry.registerTool(recorded.tool)
  * ```
  */
-export function recordRegistration(name: string, value: unknown): RecordedRegistrationInterface {
+export function recordRegistration(
+	name: string,
+	value: unknown,
+	inputSchema?: Readonly<Record<string, unknown>>,
+): RecordedRegistrationInterface {
 	const recorder =
 		createRecorder<readonly [Readonly<Record<string, unknown>>, WebMCPHandlerOptions]>()
 	return {
 		tool: {
 			name,
 			description: 'Records the input and options the registry handed it',
+			...(inputSchema === undefined ? {} : { inputSchema }),
 			execute: async (input, options) => {
 				recorder.handler(input, options)
 				return value
@@ -930,7 +935,13 @@ export function createScopeDouble(): ScopeDoubleInterface {
 /** Creates the scope fixture's arithmetic tool registry. */
 export function createCalculatorTools(): ToolManagerInterface {
 	const tools = createToolManager()
-	tools.add(createTool({ name: 'add', execute: (a) => Number(a['x']) + Number(a['y']) }))
+	tools.add(
+		createTool({
+			name: 'add',
+			parameters: ADDITION_PARAMETERS,
+			execute: (a) => Number(a['x']) + Number(a['y']),
+		}),
+	)
 	return tools
 }
 
