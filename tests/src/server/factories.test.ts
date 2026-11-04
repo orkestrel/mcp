@@ -40,6 +40,7 @@ import {
 	createCalculatorServer,
 	createJSONRPCNotification,
 	createJSONRPCRequest,
+	INBOUND_FRAMES,
 	MODERN_METADATA,
 	postJSON,
 } from '../../setup.js'
@@ -407,11 +408,10 @@ describe('createMCPRoutes — dispatch the MCP methods', () => {
 		)
 		expect(response.status).toBe(200)
 		const body = await response.json()
-		// The `add` stub returns 5 → the text block carrying `JSON.stringify(5)` for a
-		// client that only reads content, AND `structuredContent` carrying the value in its
-		// original shape, so a caller never has to parse a handle back out of a string.
-		// Both travel a real HTTP round trip here, which the core-level test cannot prove.
-		expect(body.result).toEqual({ content: [{ type: 'text', text: '5' }], structuredContent: 5 })
+		// The `add` stub returns 5 → the text block carrying `JSON.stringify(5)`, and no
+		// `structuredContent`, which the specification defines as a JSON object. This travels a
+		// real HTTP round trip here, which the core-level test cannot prove.
+		expect(body.result).toEqual({ content: [{ type: 'text', text: '5' }] })
 	})
 
 	it('POST tools/call on an erroring tool → isError:true in the body at 200', async () => {
@@ -1083,6 +1083,40 @@ describe('createStdioServer — pipes stdio through the core bindServer port', (
 
 		expect(chunks).toEqual([])
 		expect(errors).toHaveLength(1)
+		handle.stop()
+	})
+
+	it.each(INBOUND_FRAMES)('answers the line %s as JSON-RPC owes it', async (frame, answer) => {
+		const { input, output } = createStdioPair()
+		const handle = createStdioServer(createCalculatorServer(), { input, output })
+		handle.start()
+		const lines: string[] = []
+		output.on('data', (chunk: Buffer) => lines.push(chunk.toString()))
+
+		input.write(`${frame}\n`)
+		input.write(`${JSON.stringify({ jsonrpc: '2.0', id: 'canary', method: 'nothing/here' })}\n`)
+		await waitForCondition('the canary to answer', () =>
+			lines.some((line) => line.includes('"canary"')),
+		)
+
+		const answers: unknown[] = lines
+			.flatMap((line) => line.split('\n'))
+			.filter((line) => line.length > 0 && !line.includes('"canary"'))
+			.map((line): unknown => JSON.parse(line))
+		expect(answers).toEqual(
+			answer === undefined
+				? []
+				: [
+						{
+							jsonrpc: '2.0',
+							id: answer.id,
+							error: {
+								code: answer.code,
+								message: answer.code === -32700 ? 'Parse error' : 'Invalid Request',
+							},
+						},
+					],
+		)
 		handle.stop()
 	})
 

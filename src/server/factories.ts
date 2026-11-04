@@ -64,9 +64,10 @@ export function createMCPContinuation(secret: TokenSecret): MCPContinuationInter
  * transport already performs, so the wire bytes are unchanged), and it rejects a reply that
  * does not decode. `listen` filters `transport`'s `message` event to invocations only —
  * requests and notifications, never a stray response — and re-serializes each one back to a
- * string for `bindServer`. Anything else emits `error` on `transport`, and only a malformed
- * request carrying a readable id is answered, with `-32600`. `closed` bridges `transport`'s
- * `close` event. `close` closes the underlying `transport`.
+ * string for `bindServer`. Anything else emits `error` on `transport`, and invalid JSON or an
+ * invalid request is answered with `-32700` or `-32600`, while a stray response and a malformed
+ * notification are not. `closed` bridges `transport`'s `close` event. `close` closes the
+ * underlying `transport`.
  *
  * @remarks A message crossing this bridge is decoded and re-encoded twice, and that is
  * accepted rather than accidental. Inbound: the carrier already parsed the frame into a
@@ -199,8 +200,9 @@ export function createMCPRoutes<TState = unknown>(
  *   import('@orkestrel/mcp').MCPTransportInterface} port through {@link
  *   createDuplexServerTransport} + {@link import('@orkestrel/mcp').bindServer}:
  *   each inbound request runs through `mcp.dispatch`, and a defined response is written back
- *   as a frame — a notification sends nothing, a malformed request carrying a readable id is
- *   answered with `-32600`, and a stray response is not answered. A transport, `dispatch`, or
+ *   as a frame — a notification sends nothing, invalid JSON or an invalid request is answered
+ *   with `-32700` or `-32600`, and a stray response or a malformed notification is not answered.
+ *   A transport, `dispatch`, or
  *   `send` fault surfaces on `mcp.emitter`'s `error` event rather than escaping the (async)
  *   message pump.
  * - **Closes on the spine's `stop`.** It holds every socket it claimed and, on `options.emitter`'s
@@ -389,8 +391,8 @@ export function createStdioClientTransport(
  * through {@link createDuplexServerTransport} + {@link
  * import('@orkestrel/mcp').bindServer}: each inbound request runs through `mcp.dispatch`, and
  * a defined response is written back as a newline-terminated line — a notification
- * writes nothing, a malformed request carrying a readable id is answered with `-32600`, and a
- * stray response is not answered. A transport, `dispatch`, or `send` fault surfaces on
+ * writes nothing, invalid JSON or an invalid request is answered with `-32700` or `-32600`, and a
+ * stray response or a malformed notification is not answered. A transport, `dispatch`, or `send` fault surfaces on
  * `mcp.emitter`'s `error` event rather than escaping the (async) message pump.
  *
  * @param mcp - The transport-agnostic {@link MCPDispatcherInterface} to expose over stdio

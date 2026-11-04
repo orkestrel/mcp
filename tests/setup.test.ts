@@ -329,7 +329,7 @@ describe('createCalculatorServer', () => {
 				),
 			)
 			const added = peer.response()?.result
-			expect(isRecord(added) ? added['structuredContent'] : undefined).toBe(5)
+			expect(isRecord(added) ? added['content'] : undefined).toEqual([{ type: 'text', text: '5' }])
 
 			peer.clear()
 			await peer.send(

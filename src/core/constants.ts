@@ -182,12 +182,20 @@ export const MCP_HEADER_ANNOTATION = 'x-mcp-header'
 export const MCP_WEBSOCKET_SUBPROTOCOL = 'mcp'
 
 /**
- * Bounds the `tools/list` pages one walk reads, for a `tools/call` reaching its own annotations or a client reading a listing.
+ * Bounds the `tools/list` pages a client reads into one listing.
  *
  * @remarks
  * A client's `tools` method refuses a listing that still carries `nextCursor` on the last page
- * this bound reaches, because a cut listing would read as a complete one.
+ * this bound reaches, because a cut listing would read as a complete one. The bound is the
+ * client's own, apart from {@link MCP_LOOKUP_PAGES}, because a listing is read once per snapshot
+ * while that walk is paid per call: at a page size of 50 this one reaches 3200 definitions.
+ */
+export const MCP_LIST_PAGES = 64
+
+/**
+ * Bounds the `tools/list` pages one modern `tools/call` walks to reach its own annotations.
  *
+ * @remarks
  * The HTTP POST handler reads a called tool's {@link MCP_HEADER_ANNOTATION} annotations by
  * dispatching `tools/list` fresh on every `tools/call`, following `nextCursor` until the
  * named tool is found or the answer carries no cursor. The walk is bounded because its cost

@@ -275,7 +275,7 @@ describe('rich MCP content validators', () => {
 			isMCPCallResult({
 				resultType: 'complete',
 				content,
-				structuredContent: ['array', 1, true, null],
+				structuredContent: { items: ['array', 1, true, null] },
 			}),
 		).toBe(true)
 	})
@@ -287,6 +287,13 @@ describe('rich MCP content validators', () => {
 				resultType: 'complete',
 				content: [{ type: 'text', text: 'bad' }],
 				structuredContent: Number.NaN,
+			}),
+		).toBe(false)
+		expect(
+			isMCPCallResult({
+				resultType: 'complete',
+				content: [{ type: 'text', text: 'bad' }],
+				structuredContent: ['the specification defines a JSON object'],
 			}),
 		).toBe(false)
 		expect(isMCPContent({ type: 'image', data: 'missing-mime' })).toBe(false)

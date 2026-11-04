@@ -59,6 +59,7 @@ import type {
 	MCPTextStreamControllerInterface,
 } from './types.js'
 import { Emitter } from '@orkestrel/emitter'
+import { renderList } from '@orkestrel/tool'
 import {
 	isArray,
 	isFiniteNumber,
@@ -68,6 +69,7 @@ import {
 	isString,
 	isUndefined,
 	parseJSON,
+	preview,
 	sanitizeBudget,
 } from '@orkestrel/contract'
 import { snapshotJSON, snapshotToolResult } from './cloners.js'
@@ -92,7 +94,7 @@ import {
 	buildToolDescriptors,
 	computeMissingCapabilities,
 	digestJSON,
-	readMalformedId,
+	extractInvalidRequestId,
 	serializeJSON,
 	stampSubscriptionNotification,
 	supportsTask,
@@ -108,6 +110,7 @@ import {
 	isAbsoluteURI,
 	isBoundedJSON,
 	isBoundedString,
+	isJSONObject,
 	isMCPCallResult,
 	isMCPCompletion,
 	isMCPCompletionParams,
@@ -270,16 +273,24 @@ export class MCPServer implements MCPServerInterface {
 			bytes: this.#limits.message,
 			depth: this.#limits.depth,
 		})
-		// Only an INVOCATION is dispatchable — a response (or any non-message) is invalid input. An
-		// id this door can read is the one the answer must carry; `null` is for one it could not.
+		// Only an INVOCATION is dispatchable. A response and a malformed notification owe nothing,
+		// so they reach the error event alone; anything else is invalid input, answered under the id
+		// this door can read, or `null` for one it could not.
 		if (decoded === undefined || !('method' in decoded)) {
-			return JSON.stringify(
-				buildJSONRPCError(
-					readMalformedId(parsed) ?? null,
+			const invalid = extractInvalidRequestId(parsed)
+			if (invalid !== undefined) {
+				return JSON.stringify(
+					buildJSONRPCError(invalid, JSONRPC_INVALID_REQUEST, 'Invalid Request'),
+				)
+			}
+			this.#emitter.emit(
+				'error',
+				new MCPError(
+					'MCP server received a response or a malformed notification, which JSON-RPC does not answer',
 					JSONRPC_INVALID_REQUEST,
-					'Invalid Request',
 				),
 			)
+			return undefined
 		}
 		const answer = await this.#dispatch(decoded, options ?? {})
 		if (answer === undefined) return undefined
@@ -818,6 +829,17 @@ export class MCPServer implements MCPServerInterface {
 				id,
 				JSONRPC_INVALID_PARAMS,
 				'Invalid params: `arguments` must be an object when present',
+			)
+		}
+		// The specification lists an unknown tool as a protocol error, so it is answered before any
+		// policy or port runs, naming what a model can call instead.
+		const named = params?.['name']
+		if (isString(named) && this.#options.tools.tool(named) === undefined) {
+			const names = this.#options.tools.tools().map((tool) => tool.name)
+			return buildJSONRPCError(
+				id,
+				JSONRPC_INVALID_PARAMS,
+				`Unknown tool: ${preview(named)}; ${names.length === 0 ? 'this server has no tools' : `available tools: ${renderList(names)}`}`,
 			)
 		}
 		// ONE reference from here on: the digest, the input selector, the canonical call, and
@@ -1700,9 +1722,9 @@ export class MCPServer implements MCPServerInterface {
 			// success with the canonical text and the owned value of ONE `snapshotJSON`, so a
 			// defined `owned.value` always arrives with its string and always is exact JSON.
 			// `ToolSuccess.value` is nevertheless declared `unknown`, so this is the narrowing
-			// that reaches `structuredContent` without an assertion. Deleting it would require
-			// one, and silently omitting `structuredContent` instead would answer a shape the
-			// tool did not produce. Line-scoped mutation confirms it: flipping this code is the
+			// that reaches the text without an assertion. Deleting it would require one, and
+			// silently answering no text instead would answer a shape the tool did not produce.
+			// Line-scoped mutation confirms it: flipping this code is the
 			// only modern emission the fault sweep cannot kill. Narrowing `ToolResult['value']`
 			// upstream is what would remove it.
 			if (text === undefined || !isJSONValue(owned.value)) {
@@ -1712,8 +1734,13 @@ export class MCPServer implements MCPServerInterface {
 					'Server could not serialize tool content',
 				)
 			}
+			// The specification defines `structuredContent` as a JSON object, and the text carries
+			// every other value.
 			return this.#encodePayload(
-				{ content: [{ type: 'text', text }], structuredContent: owned.value },
+				{
+					content: [{ type: 'text', text }],
+					...(isJSONObject(owned.value) ? { structuredContent: owned.value } : {}),
+				},
 				id,
 			)
 		}

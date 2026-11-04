@@ -184,7 +184,7 @@ describe('MCPLegacy collapse boundaries', () => {
 			value: {
 				jsonrpc: '2.0',
 				id: 'legacy-progress',
-				result: { content: [{ type: 'text', text: '5' }], structuredContent: 5 },
+				result: { content: [{ type: 'text', text: '5' }] },
 			},
 		})
 		expect(executions.value).toBe(1)
@@ -217,7 +217,7 @@ describe('MCPLegacy collapse boundaries', () => {
 		expect(await answer.next()).toEqual({
 			done: true,
 			value:
-				'{"jsonrpc":"2.0","id":"empty-token","result":{"content":[{"type":"text","text":"5"}],"structuredContent":5}}',
+				'{"jsonrpc":"2.0","id":"empty-token","result":{"content":[{"type":"text","text":"5"}]}}',
 		})
 		expect(signal.value?.aborted).toBe(true)
 	})
@@ -288,7 +288,7 @@ describe('MCPLegacy collapse boundaries', () => {
 		})
 		expect(await live.next()).toMatchObject({
 			done: true,
-			value: { id: 'live', result: { structuredContent: 5 } },
+			value: { id: 'live', result: { content: [{ type: 'text', text: '5' }] } },
 		})
 		expect(executions).toEqual(['live'])
 	})

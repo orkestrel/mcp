@@ -1,29 +1,23 @@
-import {
-	JSONRPC_INTERNAL_ERROR,
-	JSONRPC_INVALID_REQUEST,
-	buildJSONRPCError,
-	isJSONRPCId,
-	isJSONRPCInvocation,
-} from '@orkestrel/jsonrpc'
+import { JSONRPC_INTERNAL_ERROR, isJSONRPCInvocation } from '@orkestrel/jsonrpc'
 import type { MCPMessageTransportInterface, MCPTransportInterface } from '@src/core'
 import {
 	MCPError,
+	buildInboundAnswer,
 	buildInboundFault,
 	decodeEvent,
-	isMCPError,
 	parseJSONRPCMessage,
 } from '@src/core'
-import { isRecord } from '@orkestrel/contract'
 
 /**
  * Bridges a message carrier to the server's serialized transport protocol.
  *
  * @remarks
- * Only an invocation crosses inbound. Anything else emits `error` on the carrier and is not
- * answered, because JSON-RPC gives no response to a response, with one exception: a malformed
- * request carrying a readable id receives `-32600`, because its sender is waiting on that id. The
- * carrier's own decode reports such a frame the same way, so one listener answers both. An
- * outbound message that cannot be decoded rejects `send` rather than vanishing.
+ * Only an invocation crosses inbound. Anything else emits `error` on the carrier. A stray response
+ * and a malformed notification are not answered, because JSON-RPC gives no response to a response
+ * and a notification waits on nothing. Invalid JSON answers `-32700` and any other invalid request
+ * answers `-32600`, under the id it carries or `null`. The carrier's own decode reports such a
+ * frame the same way, so one listener answers both. An outbound message that cannot be decoded
+ * rejects `send` rather than vanishing.
  */
 export class DuplexServerTransport implements MCPTransportInterface {
 	readonly #transport: MCPMessageTransportInterface
@@ -48,12 +42,9 @@ export class DuplexServerTransport implements MCPTransportInterface {
 			handler?.(JSON.stringify(snapshot))
 		})
 		transport.emitter.on('error', (error) => {
-			const context = isMCPError(error) ? error.context : undefined
-			const id = isRecord(context) ? context['id'] : undefined
-			if (!isMCPError(error) || error.code !== JSONRPC_INVALID_REQUEST || !isJSONRPCId(id)) return
-			transport
-				.send(buildJSONRPCError(id, JSONRPC_INVALID_REQUEST, 'Invalid Request'))
-				.catch((failure: unknown) => transport.emitter.emit('error', failure))
+			const answer = buildInboundAnswer(error)
+			if (answer === undefined) return
+			transport.send(answer).catch((failure: unknown) => transport.emitter.emit('error', failure))
 		})
 		transport.emitter.on('close', () => {
 			const handler = this.#closure

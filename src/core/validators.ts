@@ -1085,9 +1085,11 @@ export function isMCPCallResult(value: unknown): value is MCPCallResult {
 		const content = result['content']
 		const error = result['isError']
 		const metadata = result['_meta']
+		const structured = result['structuredContent']
 		return (
 			isArray(content) &&
 			content.every((entry) => isMCPContent(entry)) &&
+			(isUndefined(structured) || isJSONObject(structured)) &&
 			(isUndefined(error) || isBoolean(error)) &&
 			(isUndefined(metadata) || isMCPResultMetaObject(metadata))
 		)

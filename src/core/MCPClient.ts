@@ -48,13 +48,14 @@ import {
 	isInteger,
 	isRecord,
 	isString,
+	preview,
 } from '@orkestrel/contract'
 import {
 	DEFAULT_MCP_CLIENT_NAME,
 	DEFAULT_MCP_CLIENT_VERSION,
 	DEFAULT_MCP_REQUEST_TIMEOUT,
 	DEFAULT_MCP_SUBSCRIPTION_CAPACITY,
-	MCP_LOOKUP_PAGES,
+	MCP_LIST_PAGES,
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
 	MCP_META_SUBSCRIPTION,
@@ -69,7 +70,7 @@ import {
 	buildCancelledNotification,
 	matchesResultType,
 	mcpAnnotationsToTool,
-	readMessageId,
+	extractMessageId,
 	readToolPage,
 } from './helpers.js'
 import { inferVersion } from './inferers.js'
@@ -356,9 +357,10 @@ export class MCPClient implements MCPClientInterface {
 
 	async tools(): Promise<readonly ToolInterface[]> {
 		const connection = this.#connection
-		const listed = await this.#list(undefined, MCP_LOOKUP_PAGES)
+		const listed = await this.#list(undefined, MCP_LIST_PAGES, new Set())
+		const tools = listed.map((descriptor) => this.#tool(descriptor))
 		connection?.adopt(listed)
-		return listed.map((descriptor) => this.#tool(descriptor))
+		return tools
 	}
 
 	listen(
@@ -401,8 +403,13 @@ export class MCPClient implements MCPClientInterface {
 	}
 
 	// Reads `tools/list` page by page. The bound counts down through the recursion, and a last
-	// page still carrying a cursor refuses, because a listing cut there would read as complete.
-	async #list(cursor: string | undefined, pages: number): Promise<readonly MCPListedTool[]> {
+	// page still carrying a cursor refuses, because a listing cut there would read as complete. A
+	// cursor seen before refuses at once, because a walk that repeats one can only end at the bound.
+	async #list(
+		cursor: string | undefined,
+		pages: number,
+		seen: ReadonlySet<string>,
+	): Promise<readonly MCPListedTool[]> {
 		const page = readToolPage(
 			await this.#request(
 				'tools/list',
@@ -410,14 +417,21 @@ export class MCPClient implements MCPClientInterface {
 				this.#timeout,
 			),
 		)
-		if (page.nextCursor === undefined) return page.tools
-		if (pages <= 1) {
+		const next = page.nextCursor
+		if (next === undefined) return page.tools
+		if (seen.has(next)) {
 			throw new MCPError(
-				`MCP tools/list still carries nextCursor after ${String(MCP_LOOKUP_PAGES)} pages, so this client cannot read the listing as complete; the server must list its tools in ${String(MCP_LOOKUP_PAGES)} pages or fewer`,
+				`MCP tools/list repeated the cursor ${preview(next)}, so this listing would never end; the server must hand out a new cursor per page`,
 				JSONRPC_INVALID_PARAMS,
 			)
 		}
-		return [...page.tools, ...(await this.#list(page.nextCursor, pages - 1))]
+		if (pages <= 1) {
+			throw new MCPError(
+				`MCP tools/list still carries nextCursor after ${String(MCP_LIST_PAGES)} pages, so this client cannot read the listing as complete; the server must list its tools in ${String(MCP_LIST_PAGES)} pages or fewer`,
+				JSONRPC_INVALID_PARAMS,
+			)
+		}
+		return [...page.tools, ...(await this.#list(next, pages - 1, new Set([...seen, next])))]
 	}
 
 	async *#openSubscription(
@@ -655,7 +669,7 @@ export class MCPClient implements MCPClientInterface {
 		if (owned === undefined) {
 			// An unreadable answer still correlates, so the request it answers settles now instead of
 			// waiting out its deadline for a reply that has already arrived.
-			const correlated = readMessageId(message)
+			const correlated = extractMessageId(message)
 			const pending = correlated === undefined ? undefined : this.#pending.get(correlated)
 			if (correlated !== undefined && pending !== undefined) {
 				this.#settle(

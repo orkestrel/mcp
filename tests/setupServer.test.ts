@@ -584,6 +584,8 @@ describe('the fixture registries', () => {
 
 		expect(tools.tools().map((tool) => tool.name)).toEqual([
 			'test_simple_text',
+			'test_streaming_elicitation',
+			'test_logging_tool',
 			'test_image_content',
 			'test_multiple_content_types',
 			'test_audio_content',

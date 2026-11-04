@@ -82,7 +82,6 @@ describe('createMCPServer', () => {
 		expect(answer.result).toEqual({
 			resultType: 'complete',
 			content: [{ type: 'text', text: '10' }],
-			structuredContent: 10,
 			_meta: { [MCP_META_SERVER]: { name: 'demo', version: '1.0.0' } },
 		})
 	})

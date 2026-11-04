@@ -2598,7 +2598,7 @@ export const MCP_LEGACY_CASES: ReadonlyArray<
 		{
 			jsonrpc: '2.0',
 			id: 11,
-			result: { content: [{ type: 'text', text: '5' }], structuredContent: 5 },
+			result: { content: [{ type: 'text', text: '5' }] },
 		},
 	],
 	[
@@ -2607,7 +2607,7 @@ export const MCP_LEGACY_CASES: ReadonlyArray<
 		{
 			jsonrpc: '2.0',
 			id: 12,
-			result: { content: [{ type: 'text', text: '5' }], structuredContent: 5 },
+			result: { content: [{ type: 'text', text: '5' }] },
 		},
 	],
 	[
@@ -2639,7 +2639,10 @@ export const MCP_LEGACY_CASES: ReadonlyArray<
 		{
 			jsonrpc: '2.0',
 			id: 16,
-			result: { content: [{ type: 'text', text: 'tool not found: absent' }], isError: true },
+			error: {
+				code: -32602,
+				message: 'Unknown tool: "absent"; available tools: good, missing, nan, failure, oversized',
+			},
 		},
 	],
 	[
@@ -3223,8 +3226,64 @@ export const MALFORMED_CALL_RESULTS: readonly unknown[] = Object.freeze([
 		],
 	},
 	{ content: [{ type: 'sticker', text: 'unknown' }] },
-	{ isError: true, content: [{ type: 'text' }] },
 	{ structuredContent: undefined },
+])
+
+// Each failed `tools/call` answer whose content does not fully read, beside the message the tool
+// failure must still carry.
+export const FAILED_CALL_RESULTS: ReadonlyArray<readonly [result: unknown, message: string]> =
+	Object.freeze([
+		[
+			{
+				isError: true,
+				content: [
+					{ type: 'text', text: 'boom' },
+					{ type: 'future', x: 1 },
+				],
+			},
+			'boom',
+		],
+		[
+			{
+				isError: true,
+				content: [
+					{ type: 'text', text: 'boom' },
+					{ type: 'image', data: 'abc-_', mimeType: 'image/png' },
+				],
+			},
+			'boom',
+		],
+		[{ isError: true, content: 'boom' }, 'boom'],
+		[{ isError: true, content: [{ type: 'future', x: 1 }] }, "MCP tool 'broken' failed"],
+		[{ isError: true, content: 5 }, "MCP tool 'broken' failed"],
+		[{ isError: true }, "MCP tool 'broken' failed"],
+	])
+
+// Each inbound text frame a server transport reads, beside the error it answers: its code and id,
+// or `undefined` where JSON-RPC owes no answer.
+export const INBOUND_FRAMES: ReadonlyArray<
+	readonly [
+		frame: string,
+		answer: { readonly code: number; readonly id: string | number | null } | undefined,
+	]
+> = Object.freeze([
+	['{', { code: -32700, id: null }],
+	['{"jsonrpc":"2.0","id":0,"method":5}', { code: -32600, id: 0 }],
+	['{"id":3,"method":"tools/list"}', { code: -32600, id: 3 }],
+	['{"jsonrpc":"1.0","id":"old","method":"tools/list"}', { code: -32600, id: 'old' }],
+	['{"jsonrpc":"2.0","id":null,"method":"tools/list"}', { code: -32600, id: null }],
+	['{"jsonrpc":"2.0","id":1.5,"method":5}', { code: -32600, id: null }],
+	['[{"jsonrpc":"2.0","id":1,"method":"tools/list"}]', { code: -32600, id: null }],
+	['[]', { code: -32600, id: null }],
+	['[{"jsonrpc":"2.0","id":1,"result":{}}]', { code: -32600, id: null }],
+	['{"jsonrpc":"2.0","method":5}', undefined],
+	['{"jsonrpc":"2.0"}', undefined],
+	['{"jsonrpc":"2.0","id":5,"result":{}}', undefined],
+	['{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"x"}}', undefined],
+	['{"jsonrpc":"2.0","id":5,"result":{},"error":{"code":1,"message":"x"}}', undefined],
+	['{"jsonrpc":"2.0","id":5,"error":"none"}', undefined],
+	['{"jsonrpc":"2.0","id":null}', undefined],
+	['{"jsonrpc":"2.0","id":1.5}', undefined],
 ])
 
 // Each `tools/list` result the client must refuse, beside the text its refusal names.
@@ -3236,6 +3295,17 @@ export const MALFORMED_TOOL_LISTINGS: ReadonlyArray<readonly [result: unknown, r
 		[{ resultType: 'complete', tools: [{ name: 1, inputSchema: {} }] }, 'tools[0]'],
 		[{ resultType: 'complete', tools: [{ name: 'a' }] }, 'tools[0]'],
 		[{ resultType: 'complete', tools: [{ name: 'a', inputSchema: 'open' }] }, 'tools[0]'],
+		[{ resultType: 'complete', tools: [{ name: '', inputSchema: {} }] }, 'tools[0]'],
+		[
+			{
+				resultType: 'complete',
+				tools: [
+					{ name: 'a', inputSchema: {} },
+					{ name: ' b', inputSchema: {} },
+				],
+			},
+			'tools[1]',
+		],
 		[{ resultType: 'complete', tools: [{ name: 'a', inputSchema: {} }, 'b'] }, 'tools[1]'],
 		[
 			{

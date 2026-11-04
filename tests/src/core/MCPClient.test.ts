@@ -11,6 +11,7 @@ import {
 	createMCPServer,
 	isMCPError,
 	isMCPToolError,
+	MCP_LIST_PAGES,
 	MCP_LOOKUP_PAGES,
 	MCP_META_CAPABILITIES,
 	MCP_META_CLIENT,
@@ -21,7 +22,7 @@ import {
 	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 	createHTTPClientTransport,
 } from '@src/core'
-import { CLOSED_PARAMETERS, createTool, createToolManager, isToolError } from '@orkestrel/tool'
+import { CLOSED_PARAMETERS, createTool, createToolManager } from '@orkestrel/tool'
 import { createSignal, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { isRecord } from '@orkestrel/contract'
 import {
@@ -712,33 +713,53 @@ describe('MCPClient — tools() refuses what it cannot read as a complete listin
 		expect(peer.sent).toEqual(['server/discover', 'tools/list', 'tools/list'])
 	})
 
-	it('reads a null nextCursor as the end of the listing, issuing no further page', async () => {
-		const peer = createListingPeer(() => ({
+	it('reads a null or empty nextCursor as the end of the listing, issuing no further page', async () => {
+		for (const nextCursor of [null, '']) {
+			const peer = createListingPeer(() => ({
+				resultType: 'complete',
+				tools: [buildListedTool('only')],
+				nextCursor,
+			}))
+			const client = createMCPClient({ transport: peer })
+			await client.connect()
+
+			const tools = await client.tools()
+
+			expect(tools.map((tool) => tool.name)).toEqual(['only'])
+			expect(peer.sent.filter((method) => method === 'tools/list')).toHaveLength(1)
+		}
+	})
+
+	it('refuses a repeated cursor at once, naming it', async () => {
+		const peer = createListingPeer((_cursor, count) => ({
 			resultType: 'complete',
-			tools: [buildListedTool('only')],
-			nextCursor: null,
+			tools: [buildListedTool(`page${String(count)}`)],
+			nextCursor: count < 4 ? `next${String(count)}` : 'next2',
 		}))
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 
-		const tools = await client.tools()
+		const refused: unknown = await client.tools().catch((error: unknown) => error)
 
-		expect(tools.map((tool) => tool.name)).toEqual(['only'])
-		expect(peer.sent.filter((method) => method === 'tools/list')).toHaveLength(1)
+		expect(isMCPError(refused)).toBe(true)
+		expect(isMCPError(refused) && refused.message).toContain('"next2"')
+		expect(peer.sent.filter((method) => method === 'tools/list')).toHaveLength(3)
 	})
 
 	it('reads a listing of exactly the page bound as complete', async () => {
 		const peer = createListingPeer((_cursor, count) => ({
 			resultType: 'complete',
 			tools: [buildListedTool(`page${String(count)}`)],
-			...(count < MCP_LOOKUP_PAGES + 1 ? { nextCursor: `next${String(count)}` } : {}),
+			...(count < MCP_LIST_PAGES + 1 ? { nextCursor: `next${String(count)}` } : {}),
 		}))
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 
 		const tools = await client.tools()
 
-		expect(tools).toHaveLength(MCP_LOOKUP_PAGES)
+		expect(tools).toHaveLength(MCP_LIST_PAGES)
+		expect(MCP_LIST_PAGES).toBe(64)
+		expect(MCP_LOOKUP_PAGES).toBe(8)
 	})
 
 	it('refuses a listing that still carries nextCursor past the page bound, naming the bound', async () => {
@@ -753,8 +774,8 @@ describe('MCPClient — tools() refuses what it cannot read as a complete listin
 		const refused: unknown = await client.tools().catch((error: unknown) => error)
 
 		expect(isMCPError(refused)).toBe(true)
-		expect(isMCPError(refused) && refused.message).toContain(String(MCP_LOOKUP_PAGES))
-		expect(peer.sent.filter((method) => method === 'tools/list')).toHaveLength(MCP_LOOKUP_PAGES)
+		expect(isMCPError(refused) && refused.message).toContain(String(MCP_LIST_PAGES))
+		expect(peer.sent.filter((method) => method === 'tools/list')).toHaveLength(MCP_LIST_PAGES)
 	})
 })
 
@@ -994,13 +1015,16 @@ describe('MCPClient — call() (the content round-trip)', () => {
 		expect(refusal).toMatchObject({ message: 'tool exploded', code: 'TOOL' })
 	})
 
-	it('rejects a tools/call for an unknown remote tool (the manager not-found error)', async () => {
+	it('rejects a tools/call for an unknown remote tool with -32602, naming what it can call', async () => {
 		const client = createMCPClient({ transport: createDispatchPeer(createPeerServer()) })
 		await client.connect()
 
-		// The remote ToolManager resolves an unknown name to an `isError` not-found result,
-		// so the client throws.
-		await expect(client.call('absent', {})).rejects.toThrow(/not found/)
+		const refused: unknown = await client.call('absent', {}).catch((error: unknown) => error)
+
+		expect(isMCPError(refused) && refused.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(isMCPError(refused) && refused.message).toBe(
+			'Unknown tool: "absent"; available tools: echo, greet, boom',
+		)
 	})
 })
 
@@ -2584,9 +2608,9 @@ describe('MCPClient — call() prefers structuredContent', () => {
 		})
 	})
 
-	it('prefers an explicit null structured value over the text blocks', async () => {
-		// `null` is a value the tool returned, not an absence — the distinction a presence
-		// check keeps and an `undefined` check would lose.
+	it('reads an explicit null structured value as absent and falls back to the text blocks', async () => {
+		// The specification defines `structuredContent` as a JSON object, so `null` is not one, and
+		// refusing it would lose the answer the text carries.
 		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
 				? buildPeerCallResponse(request.id, {
@@ -2599,7 +2623,7 @@ describe('MCPClient — call() prefers structuredContent', () => {
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
 
-		expect(await client.call('nothing', {})).toEqual({ resultType: 'complete', value: null })
+		expect(await client.call('nothing', {})).toEqual({ resultType: 'complete', value: 'ignored' })
 	})
 
 	it('falls back to the parsed text when the peer sent no structured value', async () => {
@@ -2773,16 +2797,19 @@ describe('MCPClient — a declared outputSchema', () => {
 		expect(await client.call('search', {})).toEqual({ resultType: 'complete', value: {} })
 	})
 
-	it('reports a tool name the local tool refuses, naming the name', async () => {
+	it('refuses a tool name a local tool cannot take, as an MCPError naming the index', async () => {
 		const client = createMCPClient({
 			transport: createListingPeer(() => ({
 				resultType: 'complete',
-				tools: [buildListedTool(' spaced ')],
+				tools: [buildListedTool('fine'), buildListedTool(' spaced ')],
 			})),
 		})
 		await client.connect()
 
-		await expect(client.tools()).rejects.toSatisfy(isToolError)
+		const refused: unknown = await client.tools().catch((error: unknown) => error)
+
+		expect(isMCPError(refused)).toBe(true)
+		expect(isMCPError(refused) && refused.message).toContain('tools[1]')
 	})
 })
 
@@ -3037,7 +3064,10 @@ describe('MCPClient — per-request cancellation', () => {
 			// The FIRST call is left hanging for the abort; the next answers normally.
 			return count === 2
 				? undefined
-				: buildPeerCallResponse(request.id, { resultType: 'complete', structuredContent: 'second' })
+				: buildPeerCallResponse(request.id, {
+						resultType: 'complete',
+						content: [{ type: 'text', text: 'second' }],
+					})
 		})
 		const client = createMCPClient({ transport: peer })
 		await client.connect()
@@ -3093,7 +3123,10 @@ describe('MCPClient — request-scoped progress', () => {
 		peer.emitter.emit('message', buildPeerProgress(id, 2))
 		peer.emitter.emit(
 			'message',
-			buildPeerCallResponse(id, { resultType: 'complete', structuredContent: 'done' }),
+			buildPeerCallResponse(id, {
+				resultType: 'complete',
+				content: [{ type: 'text', text: 'done' }],
+			}),
 		)
 
 		await expect(pending).resolves.toEqual({ resultType: 'complete', value: 'done' })
@@ -3144,7 +3177,10 @@ describe('MCPClient — request-scoped progress', () => {
 		// one must not.
 		const peer = createCallPeer((request) =>
 			request.method === 'tools/call' && request.id !== undefined
-				? buildPeerCallResponse(request.id, { resultType: 'complete', structuredContent: 1 })
+				? buildPeerCallResponse(request.id, {
+						resultType: 'complete',
+						content: [{ type: 'text', text: '1' }],
+					})
 				: undefined,
 		)
 		const client = createMCPClient({ transport: peer })
@@ -3234,7 +3270,10 @@ describe('MCPClient — request-scoped progress', () => {
 		peer.emitter.emit('message', buildPeerProgress(id, 1))
 		peer.emitter.emit(
 			'message',
-			buildPeerCallResponse(id, { resultType: 'complete', structuredContent: 'done' }),
+			buildPeerCallResponse(id, {
+				resultType: 'complete',
+				content: [{ type: 'text', text: 'done' }],
+			}),
 		)
 
 		await expect(pending).resolves.toEqual({ resultType: 'complete', value: 'done' })
@@ -3373,7 +3412,10 @@ describe('MCPClient — every registration is released on every exit', () => {
 
 		peer.emitter.emit(
 			'message',
-			buildPeerCallResponse(id, { resultType: 'complete', structuredContent: 'done' }),
+			buildPeerCallResponse(id, {
+				resultType: 'complete',
+				content: [{ type: 'text', text: 'done' }],
+			}),
 		)
 		await expect(pending).resolves.toEqual({ resultType: 'complete', value: 'done' })
 

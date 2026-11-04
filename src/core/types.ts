@@ -343,8 +343,9 @@ export type MCPSampleContent =
  * `MCPServer` produces it before modern stamping, and `MCPLegacy` projects the
  * stamped answer back to this shape.
  *
- * A success carries the tool's value unchanged as `structuredContent` alongside
- * its serialized form in one `text` content block. A value-less success omits
+ * A success carries the tool's value in its serialized form in one `text` content block, and a
+ * record value travels unchanged as `structuredContent` beside it, because the specification
+ * defines that member as a JSON object. A value-less success omits
  * `structuredContent`. A tool failure (the `success: false` branch the registry
  * isolated) carries its `error` text in `content` and sets `isError: true`, so the
  * model sees the failure as a tool result it can react to rather than a protocol
@@ -352,8 +353,8 @@ export type MCPSampleContent =
  */
 export type MCPUnstampedCallResult = {
 	readonly content: readonly MCPContent[]
-	/** Holds the successful tool value in its original structure; absent when none was returned. */
-	readonly structuredContent?: JSONValue
+	/** Holds a successful tool's record value in its original structure; absent for any other value. */
+	readonly structuredContent?: Readonly<Record<string, JSONValue>>
 	/** Flags a failed tool — its error text is in `content`. */
 	readonly isError?: boolean
 	/** Carries open modern protocol metadata, including reserved namespaced keys. */
@@ -2699,7 +2700,7 @@ export interface MCPCallOptions {
  * The peer chooses the arm, so the caller narrows on `resultType`:
  *
  * - `'complete'` — the call finished. `value` is the tool's own value: the peer's
- *   `structuredContent` when it sent one (the tool's value in its original structure),
+ *   object `structuredContent` when it sent one (the tool's value in its original structure),
  *   and otherwise the concatenated `text` blocks parsed as JSON, falling back to the raw
  *   text. A tool failure never reaches this arm — `isError: true` throws, so an agent's
  *   {@link ToolManagerInterface} isolates a remote failure exactly as it does a local one.
@@ -3024,8 +3025,9 @@ export interface MCPClientInterface {
 	 * widens rather than refuses, and the remote server stays the authority on what remains.
 	 *
 	 * The listing is complete or refused. It follows `nextCursor` for up to
-	 * {@link MCP_LOOKUP_PAGES} pages, reads a `null` cursor as the end, and throws an `MCPError` for
-	 * a page it cannot read and for a listing that still carries a cursor on the last page it reads.
+	 * {@link MCP_LIST_PAGES} pages, reads a `null` or empty cursor as the end, and throws an
+	 * `MCPError` for a page it cannot read, for a cursor it has already followed, and for a listing
+	 * that still carries a cursor on the last page it reads.
 	 *
 	 * @returns The remote tools as local {@link ToolInterface}s, in server order
 	 */
@@ -3049,7 +3051,7 @@ export interface MCPClientInterface {
 	 * The answer is an {@link MCPCallOutcome} because the peer, not the caller, decides
 	 * whether the call finished: a modern server may defer it into a durable task or ask
 	 * for another round trip, and both are legal answers to an ordinary call. Narrow on
-	 * `resultType`; the `'complete'` arm carries the tool's `value` — the peer's
+	 * `resultType`; the `'complete'` arm carries the tool's `value` — the peer's object
 	 * `structuredContent` when it sent one, otherwise its concatenated `text` parsed as
 	 * JSON (falling back to the raw string). A remote tool failure (`isError: true`)
 	 * throws an `MCPToolError` (an `Error`) carrying the error text instead, so an agent's

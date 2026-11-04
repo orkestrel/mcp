@@ -39,8 +39,10 @@ import {
 	buildInitializeResult,
 	buildInboundFault,
 	buildCallOutcome,
-	readMalformedId,
-	readMessageId,
+	buildInboundAnswer,
+	buildParseFault,
+	extractInvalidRequestId,
+	extractMessageId,
 	readToolPage,
 	buildCancelledNotification,
 	buildMethodOptions,
@@ -93,7 +95,7 @@ import {
 	supportsTask,
 } from '@src/core'
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { attempt, createContract, schemaToShape } from '@orkestrel/contract'
+import { attempt, createContract, parseJSON, schemaToShape } from '@orkestrel/contract'
 import { CLOSED_PARAMETERS, createTool, createToolManager } from '@orkestrel/tool'
 import * as MCP from '@src/core'
 import { waitForAbort, waitForDelay } from '@orkestrel/test'
@@ -103,7 +105,9 @@ import {
 	createJSONRPCRequest,
 	createMemoryTransport,
 	createThrowingKeys,
+	FAILED_CALL_RESULTS,
 	GUARD_KEY_NAMES,
+	INBOUND_FRAMES,
 	MALFORMED_CALL_RESULTS,
 	MALFORMED_TOOL_LISTINGS,
 	modernRequest,
@@ -1621,14 +1625,14 @@ describe('buildCallOutcome', () => {
 		).toEqual({ resultType: 'complete', value: { count: 3 } })
 	})
 
-	it('treats an explicit null as the value it is', () => {
+	it('reads an explicit null as absent, falling back to the text', () => {
 		expect(
 			buildCallOutcome('nothing', {
 				resultType: 'complete',
 				content: [{ type: 'text', text: '"ignored"' }],
 				structuredContent: null,
 			}),
-		).toEqual({ resultType: 'complete', value: null })
+		).toEqual({ resultType: 'complete', value: 'ignored' })
 	})
 
 	it('parses the text when there is no structured value, raw when it is not JSON', () => {
@@ -1758,18 +1762,71 @@ describe('buildCallOutcome — an answer it cannot read', () => {
 			resultType: 'complete',
 			value: undefined,
 		})
-		expect(buildCallOutcome('echo', { isError: false, structuredContent: 1 })).toEqual({
+		expect(buildCallOutcome('echo', { isError: false, structuredContent: { n: 1 } })).toEqual({
 			resultType: 'complete',
-			value: 1,
+			value: { n: 1 },
+		})
+	})
+})
+
+describe('buildCallOutcome — a tool failure reads what it can', () => {
+	it.each(FAILED_CALL_RESULTS)('keeps the message of %j', (result, message) => {
+		const attempted = attempt(() => buildCallOutcome('broken', result))
+
+		expect(attempted.success).toBe(false)
+		if (attempted.success) return
+		expect(isMCPToolError(attempted.error)).toBe(true)
+		expect(attempted.error).toMatchObject({ message })
+	})
+
+	it('still refuses a success whose content does not read', () => {
+		const attempted = attempt(() =>
+			buildCallOutcome('broken', { content: [{ type: 'future', x: 1 }] }),
+		)
+
+		expect(attempted.success).toBe(false)
+		if (attempted.success) return
+		expect(isMCPError(attempted.error)).toBe(true)
+	})
+})
+
+describe('buildCallOutcome — structuredContent is a JSON object', () => {
+	it('reads a non-record structuredContent as absent and falls back to the content', () => {
+		const text = [{ type: 'text', text: '7' }]
+
+		for (const structuredContent of [7, 'words', ['a', 1], null, true]) {
+			expect(buildCallOutcome('echo', { content: text, structuredContent })).toEqual({
+				resultType: 'complete',
+				value: 7,
+			})
+		}
+		expect(buildCallOutcome('echo', { content: [], structuredContent: 7 })).toEqual({
+			resultType: 'complete',
+			value: undefined,
 		})
 	})
 
-	it('reads any JSON value as a structured value, the shape the server sends', () => {
-		for (const value of [7, 'text', ['a', 1], null, { count: 3 }]) {
-			expect(buildCallOutcome('echo', { structuredContent: value })).toEqual({
-				resultType: 'complete',
-				value,
-			})
+	it('refuses a non-record structuredContent with no content, which leaves no value to read', () => {
+		const attempted = attempt(() => buildCallOutcome('echo', { structuredContent: 7 }))
+
+		expect(attempted.success).toBe(false)
+		if (attempted.success) return
+		expect(isMCPError(attempted.error)).toBe(true)
+	})
+
+	it('counts a non-record structuredContent as a miss of a declared output, saying why', () => {
+		const output = createContract(schemaToShape({ type: 'object' }))
+
+		for (const result of [
+			{ content: [{ type: 'text', text: '7' }], structuredContent: 7 },
+			{ content: [{ type: 'text', text: '7' }] },
+		]) {
+			const attempted = attempt(() => buildCallOutcome('search', result, output))
+
+			expect(attempted.success).toBe(false)
+			if (attempted.success || !isMCPError(attempted.error)) throw new Error('expected an MCPError')
+			expect(attempted.error.message).toContain('carried no `structuredContent` object')
+			expect(attempted.error.message).not.toContain('received undefined')
 		}
 	})
 })
@@ -1851,11 +1908,19 @@ describe('readToolPage', () => {
 		expect(readToolPage({ tools: [] })).toEqual({ tools: [] })
 	})
 
-	it('reads a null nextCursor as the end of the listing', () => {
-		const page = readToolPage({ tools: [], nextCursor: null })
+	it('reads a name with inner space as a name', () => {
+		expect(readToolPage({ tools: [{ name: 'my tool', inputSchema: {} }] }).tools[0]?.name).toBe(
+			'my tool',
+		)
+	})
 
-		expect(page).toEqual({ tools: [] })
-		expect(page).not.toHaveProperty('nextCursor')
+	it('reads a null or empty nextCursor as the end of the listing', () => {
+		for (const nextCursor of [null, '']) {
+			const page = readToolPage({ tools: [], nextCursor })
+
+			expect(page).toEqual({ tools: [] })
+			expect(page).not.toHaveProperty('nextCursor')
+		}
 	})
 
 	it.each(MALFORMED_TOOL_LISTINGS)('refuses %j, naming %s', (result, refusal) => {
@@ -1867,10 +1932,62 @@ describe('readToolPage', () => {
 	})
 })
 
-describe('readMessageId and readMalformedId', () => {
+describe('extractInvalidRequestId and buildInboundAnswer', () => {
+	it.each(INBOUND_FRAMES)('builds what the frame %s is owed', (frame, answer) => {
+		const parsed = parseJSON(frame)
+		const fault =
+			parsed === undefined
+				? buildParseFault('the frame is not JSON')
+				: buildInboundFault(parsed, 'non-JSON-RPC line')
+
+		expect(buildInboundAnswer(fault)).toEqual(
+			answer === undefined
+				? undefined
+				: {
+						jsonrpc: '2.0',
+						id: answer.id,
+						error: {
+							code: answer.code,
+							message: answer.code === JSONRPC_PARSE_ERROR ? 'Parse error' : 'Invalid Request',
+						},
+					},
+		)
+	})
+
+	it.each(INBOUND_FRAMES.filter(([frame]) => frame !== '{'))(
+		'extracts the id the value of %s answers under',
+		(frame, answer) => {
+			expect(extractInvalidRequestId(parseJSON(frame))).toBe(answer?.id)
+		},
+	)
+
+	it('answers a value it cannot read under null, and nothing for an unrelated fault', () => {
+		const revocable = Proxy.revocable({ id: 7 }, {})
+		revocable.revoke()
+		const throwing = new Proxy(
+			{},
+			{
+				getOwnPropertyDescriptor: () => {
+					throw new Error('unreadable')
+				},
+			},
+		)
+
+		expect(extractInvalidRequestId(revocable.proxy)).toBeNull()
+		expect(extractInvalidRequestId(throwing)).toBeNull()
+		expect(buildInboundAnswer(new Error('a socket failed'))).toBeUndefined()
+		expect(
+			buildInboundAnswer(new MCPError('unrelated', JSONRPC_INVALID_REQUEST, { id: true })),
+		).toBeUndefined()
+		expect(buildInboundAnswer(new MCPError('unrelated', JSONRPC_INVALID_REQUEST))).toBeUndefined()
+		expect(buildInboundAnswer(new MCPError('unrelated', -32000, { id: 1 }))).toBeUndefined()
+	})
+})
+
+describe('extractMessageId', () => {
 	it('reads a valid id from a value that has passed no guard', () => {
-		expect(readMessageId({ id: 7, result: 1n })).toBe(7)
-		expect(readMessageId({ id: 'call-7' })).toBe('call-7')
+		expect(extractMessageId({ id: 7, result: 1n })).toBe(7)
+		expect(extractMessageId({ id: 'call-7' })).toBe('call-7')
 	})
 
 	it('answers undefined for no id, an invalid id, and a value it cannot read', () => {
@@ -1888,20 +2005,8 @@ describe('readMessageId and readMalformedId', () => {
 			accessor,
 			revocable.proxy,
 		]) {
-			expect(readMessageId(value)).toBeUndefined()
+			expect(extractMessageId(value)).toBeUndefined()
 		}
-	})
-
-	it('reads the id of a malformed request', () => {
-		expect(readMalformedId({ jsonrpc: '2.0', id: 7 })).toBe(7)
-		expect(readMalformedId({ jsonrpc: '2.0', id: 7, method: 5 })).toBe(7)
-		expect(readMalformedId({ id: 7, method: 'ping', result: null })).toBe(7)
-	})
-
-	it('answers undefined for a value shaped as a response, malformed or not', () => {
-		expect(readMalformedId({ jsonrpc: '2.0', id: 7, result: {} })).toBeUndefined()
-		expect(readMalformedId({ jsonrpc: '2.0', id: 7, error: 'none' })).toBeUndefined()
-		expect(readMalformedId({ method: 5 })).toBeUndefined()
 	})
 
 	it('builds a fault that carries the id only when an answer is owed', () => {
@@ -1911,7 +2016,7 @@ describe('readMessageId and readMalformedId', () => {
 		expect(owed.code).toBe(JSONRPC_INVALID_REQUEST)
 		expect(owed.context).toEqual({ id: 7 })
 		expect(buildInboundFault({ id: 7, result: {} }, 'non-JSON-RPC line').context).toBeUndefined()
-		expect(buildInboundFault('words', 'non-JSON-RPC line').context).toBeUndefined()
+		expect(buildInboundFault('words', 'non-JSON-RPC line').context).toEqual({ id: null })
 	})
 })
 

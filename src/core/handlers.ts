@@ -15,9 +15,9 @@ import { MCPServerBinding } from './MCPServerBinding.js'
  * nothing the server would parse differently: it decodes each inbound message through
  * {@link decodeBoundedMessage} under `server.limit`, the server's own bound, so a message
  * the server would refuse is never parsed here either and still receives its `-32700` from
- * the one place that words it. A well-formed response is the one message this binder keeps
- * from `server.handle`: JSON-RPC gives no response to a response, so it reaches
- * `server.emitter`'s `error` event and is not answered. A held-open reply arrives as an
+ * the one place that words it. A stray response and a malformed notification owe no reply, so
+ * `server.handle` answers `undefined` and reports them on `server.emitter`'s `error` event. A
+ * held-open reply arrives as an
  * {@link import('./types.js').MCPTextStreamControllerInterface} instead of a string: this is
  * the one place that pumps it, writing each notification in order and then the generator's
  * returned terminating response ({@link sendStream}). A `transport.send` throw or rejection —

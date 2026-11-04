@@ -2850,6 +2850,23 @@ export function buildConformanceTools(): ToolManagerInterface {
 			execute: () => 'This is a simple text response for testing.',
 		}),
 	)
+	// `server-stateless` reads the response stream of these two, and a call the server answers
+	// with an unknown-tool error leaves it nothing to read.
+	tools.add(
+		createTool({
+			name: 'test_streaming_elicitation',
+			description:
+				'Answer on the request stream, which the scenario reads for independent requests.',
+			execute: () => 'answered on the request stream',
+		}),
+	)
+	tools.add(
+		createTool({
+			name: 'test_logging_tool',
+			description: 'Answer with no log, which the scenario reads when no log level was set.',
+			execute: () => 'answered with no log',
+		}),
+	)
 	tools.add(
 		createTool({
 			name: 'test_image_content',

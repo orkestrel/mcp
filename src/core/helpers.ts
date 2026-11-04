@@ -1,4 +1,5 @@
 import type {
+	JSONRPCErrorResponse,
 	JSONRPCId,
 	JSONRPCInvocation,
 	JSONRPCMessage,
@@ -9,6 +10,8 @@ import type {
 import {
 	JSONRPC_INVALID_PARAMS,
 	JSONRPC_INVALID_REQUEST,
+	JSONRPC_PARSE_ERROR,
+	buildJSONRPCError,
 	buildJSONRPCResult,
 	isJSONRPCId,
 	isJSONRPCNotification,
@@ -81,7 +84,7 @@ import {
 	MCP_HANDSHAKE_VERSION,
 	SUPPORTED_MODERN_PROTOCOL_VERSIONS,
 } from './constants.js'
-import { MCPError, MCPToolError } from './errors.js'
+import { MCPError, MCPToolError, isMCPError } from './errors.js'
 import { parseJSONRPCMessage } from './parsers.js'
 import {
 	isBoundedString,
@@ -573,15 +576,16 @@ export function extractContentText(result: unknown): string {
  * @remarks
  * A listing is what a caller decides from, so it is complete or it is refused: an omitted or
  * skipped entry would read as a tool the peer does not have. Enforces the published descriptor
- * and no more: an entry stays open to members a later revision adds. A `nextCursor` of `null`
- * reads as the end of the listing, because refusing it would lose a whole listing to a server
- * that serializes absence that way, and it can hide no page.
+ * and no more: an entry stays open to members a later revision adds. A `nextCursor` of `null` or
+ * `''` reads as the end of the listing, as the reference SDK reads an empty one, because refusing
+ * it would lose a whole listing to a server that serializes absence that way, and neither can
+ * name a page.
  *
  * @param result - The already-owned result payload the peer answered with
  * @returns The page, with each entry's required members proved
  * @throws MCPError when the answer is not an object, `tools` is not an array, an entry lacks a
- *   string `name` or a record `inputSchema`, a present `outputSchema` is not a record, or a
- *   `nextCursor` is neither a string nor `null`
+ *   non-empty `name` with no surrounding space or a record `inputSchema`, a present `outputSchema`
+ *   is not a record, or a `nextCursor` is neither a string nor `null`
  *
  * @example
  * ```ts
@@ -603,11 +607,13 @@ export function readToolPage(result: unknown): MCPToolPage {
 		if (
 			!isRecord(descriptor) ||
 			!isString(name) ||
+			name.length === 0 ||
+			name !== name.trim() ||
 			!isRecord(inputSchema) ||
 			(outputSchema !== undefined && !isRecord(outputSchema))
 		) {
 			throw new MCPError(
-				`MCP server returned a malformed tools/list result: tools[${String(index)}] needs a string \`name\`, a record \`inputSchema\`, and a record \`outputSchema\` when present`,
+				`MCP server returned a malformed tools/list result: tools[${String(index)}] needs a non-empty \`name\` with no surrounding space, a record \`inputSchema\`, and a record \`outputSchema\` when present`,
 				JSONRPC_INVALID_PARAMS,
 				result,
 			)
@@ -622,11 +628,11 @@ export function readToolPage(result: unknown): MCPToolPage {
 			result,
 		)
 	}
-	return isString(nextCursor) ? { tools, nextCursor } : { tools }
+	return isString(nextCursor) && nextCursor.length > 0 ? { tools, nextCursor } : { tools }
 }
 
 /**
- * Reads the JSON-RPC id one unread message carries, when it carries a valid one.
+ * Extracts the JSON-RPC id one unread message carries, when it carries a valid one.
  *
  * @remarks
  * Total, and it reads the `id` only as an own enumerable data property, because the value is
@@ -637,11 +643,11 @@ export function readToolPage(result: unknown): MCPToolPage {
  *
  * @example
  * ```ts
- * readMessageId({ id: 7, result: 1n }) // 7
- * readMessageId({ id: null }) // undefined
+ * extractMessageId({ id: 7, result: 1n }) // 7
+ * extractMessageId({ id: null }) // undefined
  * ```
  */
-export function readMessageId(value: unknown): JSONRPCId | undefined {
+export function extractMessageId(value: unknown): JSONRPCId | undefined {
 	const read = attempt(() => {
 		if (!isRecord(value)) return undefined
 		const descriptor = Reflect.getOwnPropertyDescriptor(value, 'id')
@@ -658,37 +664,48 @@ export function readMessageId(value: unknown): JSONRPCId | undefined {
 }
 
 /**
- * Reads the id of a malformed request, the one message a transport answers with `-32600`.
+ * Extracts the id a `-32600` answer to one parsed value that is not an invocation goes under.
  *
  * @remarks
- * JSON-RPC gives no response to a response, so a value shaped as one answers `undefined` here
- * even when it is malformed: no `method` and a `result` or `error` member. Everything else that
- * carries a valid id is a request this peer sent badly, and the caller is waiting on that id.
+ * JSON-RPC gives no response to a response, so a value shaped as one owes nothing even when it
+ * is malformed: no `method` and a `result` or `error` member. A malformed notification owes
+ * nothing either, because it carries no `id` at all and its sender waits on nothing. A batch and
+ * any other value that is not an object answer under `null`, as a `method` beside an `id` that is
+ * not a valid one does. A valid id is the one its sender is waiting on. Total: a value it cannot
+ * read answers under `null`.
  *
- * @param value - The parsed value that failed to decode as a JSON-RPC message
- * @returns The id to answer, or `undefined` when no answer is owed or none can be addressed
+ * @param value - The parsed value that is not an invocation
+ * @returns The id to answer under, `null` when none can be read, or `undefined` when no answer is owed
  *
  * @example
  * ```ts
- * readMalformedId({ jsonrpc: '2.0', id: 7, method: 5 }) // 7
- * readMalformedId({ jsonrpc: '2.0', id: 7, result: {} }) // undefined
+ * extractInvalidRequestId({ jsonrpc: '2.0', id: 7, method: 5 }) // 7
+ * extractInvalidRequestId({ jsonrpc: '2.0', id: 1.5, method: 'ping' }) // null
+ * extractInvalidRequestId([]) // null
+ * extractInvalidRequestId({ jsonrpc: '2.0', id: 7, result: {} }) // undefined
+ * extractInvalidRequestId({ jsonrpc: '2.0', method: 5 }) // undefined
  * ```
  */
-export function readMalformedId(value: unknown): JSONRPCId | undefined {
-	const id = readMessageId(value)
-	if (id === undefined || !isRecord(value)) return undefined
-	return !Object.hasOwn(value, 'method') &&
-		(Object.hasOwn(value, 'result') || Object.hasOwn(value, 'error'))
-		? undefined
-		: id
+export function extractInvalidRequestId(value: unknown): JSONRPCId | null | undefined {
+	const read = attempt((): JSONRPCId | null | undefined => {
+		if (!isRecord(value)) return null
+		const method = Object.hasOwn(value, 'method')
+		if (!method && (Object.hasOwn(value, 'result') || Object.hasOwn(value, 'error'))) {
+			return undefined
+		}
+		const id = extractMessageId(value)
+		if (id !== undefined) return id
+		return method && Object.hasOwn(value, 'id') ? null : undefined
+	})
+	return read.success ? read.value : null
 }
 
 /**
  * Builds the transport fault for one inbound value that is not the message its receiver takes.
  *
  * @remarks
- * Its `context.id` holds the id of a malformed request and is absent for anything else, so a
- * server transport reads from the fault alone whether a `-32600` answer is owed.
+ * Its `context.id` holds the id {@link extractInvalidRequestId} answers under and is absent where
+ * no answer is owed, so a server transport reads from the fault alone what to write.
  *
  * @param value - The parsed value the transport received
  * @param fault - The carrier's own wording for this refusal
@@ -701,8 +718,53 @@ export function readMalformedId(value: unknown): JSONRPCId | undefined {
  * ```
  */
 export function buildInboundFault(value: unknown, fault: string): MCPError {
-	const id = readMalformedId(value)
+	const id = extractInvalidRequestId(value)
 	return new MCPError(fault, JSONRPC_INVALID_REQUEST, id === undefined ? undefined : { id })
+}
+
+/**
+ * Builds the transport fault for one inbound frame that is not JSON, which answers under `null`.
+ *
+ * @param message - The parse failure's own wording, which names the offending position
+ * @returns The fault to emit on the transport's `error` event
+ *
+ * @example
+ * ```ts
+ * buildParseFault('Unexpected end of JSON input').context // { id: null }
+ * ```
+ */
+export function buildParseFault(message: string): MCPError {
+	return new MCPError(message, JSONRPC_PARSE_ERROR, { id: null })
+}
+
+/**
+ * Builds the JSON-RPC error a server transport writes for one fault its carrier reported.
+ *
+ * @remarks
+ * Total. Only a fault {@link buildInboundFault} or {@link buildParseFault} built, carrying an
+ * `id` to answer under, produces an answer. A socket failure, a stray response, and a malformed
+ * notification produce none.
+ *
+ * @param fault - The value the carrier's `error` event reported
+ * @returns The error response to write, or `undefined` when no answer is owed
+ *
+ * @example
+ * ```ts
+ * buildInboundAnswer(buildParseFault('Unexpected end of JSON input'))
+ * // { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }
+ * buildInboundAnswer(new Error('socket failed')) // undefined
+ * ```
+ */
+export function buildInboundAnswer(fault: unknown): JSONRPCErrorResponse | undefined {
+	if (!isMCPError(fault) || !isRecord(fault.context)) return undefined
+	const id = fault.context['id']
+	if (id !== null && !isJSONRPCId(id)) return undefined
+	if (fault.code === JSONRPC_PARSE_ERROR) {
+		return buildJSONRPCError(id, JSONRPC_PARSE_ERROR, 'Parse error')
+	}
+	return fault.code === JSONRPC_INVALID_REQUEST
+		? buildJSONRPCError(id, JSONRPC_INVALID_REQUEST, 'Invalid Request')
+		: undefined
 }
 
 /**
@@ -714,23 +776,24 @@ export function buildInboundFault(value: unknown, fault: string): MCPError {
  * the arms the protocol gives a shape to, and deriving the tool's value from the one it
  * does not:
  *
- * - A complete answer must be readable: a non-boolean `isError`, a block failing
- *   {@link isMCPContent}, and a `structuredContent` no JSON text can hold each throw an
- *   {@link MCPError}, and so does a success carrying neither `content` nor `structuredContent`.
- *   `content: []` is a readable answer whose value is `undefined`.
- * - A peer's `structuredContent` is preferred over the content blocks, because it is the
- *   tool's value in its original structure while the blocks are a rendering beside it. Its
- *   mere presence decides — an explicit `null` is a value the tool returned, not an absence.
- *   The dated result type holds any JSON value there, and this package's server sends one.
- * - With no structured value the legacy shape applies: the value was JSON-serialized into
- *   the text block(s), so parse them and fall back to the raw string when they are not JSON.
- * - With an `output` contract, a success must carry a `structuredContent` the contract's `is`
- *   accepts. A miss throws an {@link MCPError} whose `context.faults` holds the audit: the
- *   server declared the schema and did not meet it.
  * - A remote tool failure (`isError: true`) throws an {@link MCPToolError} carrying the
  *   error text, so an agent's tool registry isolates it into a failure result exactly as it
  *   would a local throw, while a caller separates it from a transport failure by its type.
+ *   This comes first, because the tool's message is what a model corrects from: the text comes
+ *   from whichever blocks read, or from a bare string `content`, and the rest are not validated.
  *   A failure owes no value, so it needs no `content` and meets no `output` contract.
+ * - A success must be readable: a non-boolean `isError` and a block failing {@link isMCPContent}
+ *   each throw an {@link MCPError}, and so does a success carrying neither `content` nor an object
+ *   `structuredContent`. `content: []` is a readable answer whose value is `undefined`.
+ * - A peer's `structuredContent` is preferred over the content blocks, because it is the
+ *   tool's value in its original structure while the blocks are a rendering beside it. The
+ *   specification defines it as a JSON object, so any other value reads as absent, because
+ *   refusing it would lose a real answer from a server that also sent the text.
+ * - With no structured value the legacy shape applies: the value was JSON-serialized into
+ *   the text block(s), so parse them and fall back to the raw string when they are not JSON.
+ * - With an `output` contract, a success must carry an object `structuredContent` the contract's
+ *   `is` accepts. A miss throws an {@link MCPError} whose `context.faults` holds the audit: the
+ *   server declared the schema and did not meet it.
  *
  * @param name - The tool's name, used to describe a failure or a refusal
  * @param result - The already-owned result payload the peer answered with
@@ -787,6 +850,10 @@ export function buildCallOutcome(
 		)
 	}
 	const content = result['content']
+	if (failed === true) {
+		const message = isString(content) ? content : extractContentText(result)
+		throw new MCPToolError(message.length > 0 ? message : `MCP tool '${name}' failed`)
+	}
 	if (content !== undefined && (!isArray(content) || !content.every(isMCPContent))) {
 		throw new MCPError(
 			`MCP tool '${name}' answered a \`content\` that is not a list of valid content blocks`,
@@ -794,17 +861,8 @@ export function buildCallOutcome(
 			result,
 		)
 	}
-	const text = extractContentText(result)
-	if (failed === true) throw new MCPToolError(text.length > 0 ? text : `MCP tool '${name}' failed`)
-	const structured = Object.hasOwn(result, 'structuredContent')
 	const carried = result['structuredContent']
-	if (structured && !isJSONValue(carried)) {
-		throw new MCPError(
-			`MCP tool '${name}' answered a \`structuredContent\` that is not a JSON value`,
-			JSONRPC_INVALID_PARAMS,
-			result,
-		)
-	}
+	const structured = isRecord(carried)
 	if (!structured && content === undefined) {
 		throw new MCPError(
 			`MCP tool '${name}' answered neither \`content\` nor \`structuredContent\`, so its result carries no value to read`,
@@ -812,7 +870,14 @@ export function buildCallOutcome(
 			result,
 		)
 	}
-	if (output !== undefined && (!structured || !output.is(carried))) {
+	if (output !== undefined && !structured) {
+		throw new MCPError(
+			`MCP tool '${name}' declares an outputSchema and its result carried no \`structuredContent\` object, so the server must send one or stop declaring the schema`,
+			JSONRPC_INVALID_PARAMS,
+			{ faults: output.audit(undefined) },
+		)
+	}
+	if (output !== undefined && !output.is(carried)) {
 		const faults = output.audit(carried)
 		throw new MCPError(
 			`MCP tool '${name}' answered outside its declared outputSchema, so the server must meet the schema or stop declaring it:\n${describeFaults(faults, output.schema)}`,
@@ -820,6 +885,7 @@ export function buildCallOutcome(
 			{ faults },
 		)
 	}
+	const text = extractContentText(result)
 	const parsed = structured || text.length === 0 ? undefined : parseJSON(text)
 	const value = structured
 		? carried
@@ -1386,11 +1452,11 @@ export function decodeBoundedMessage(
  * {@link JSONRPCMessage}, and emit `error` for anything else. Total — an adversarial frame
  * produces an `error` emission and never a throw.
  *
- * The failures report differently on purpose. Unparsable text emits the caught parse
- * error, which names the offending position; well-formed JSON that is not a JSON-RPC message
- * has no caught value to report, so it emits an {@link MCPError} worded `fault` — the carrier's
- * own wording, passed in rather than forked into a second copy of this body — and whose
- * `context.id` holds the id of a malformed request, for a server transport to answer.
+ * The failures report differently on purpose. Unparsable text emits {@link buildParseFault}
+ * worded by the caught parse error, which names the offending position; well-formed JSON that
+ * is not a JSON-RPC message has no caught value to report, so it emits
+ * {@link buildInboundFault} worded `fault` — the carrier's own wording, passed in rather than
+ * forked into a second copy of this body. A server transport reads from either what to answer.
  *
  * @param emitter - The transport's emitter to deliver onto
  * @param text - One inbound frame's raw text
@@ -1406,11 +1472,11 @@ export function deliverMessage(
 	text: string,
 	fault: string,
 ): void {
-	// The one boundary in this package that keeps its own `try`: the caught value IS the
+	// The one boundary in this package that keeps its own `try`: the caught wording IS the
 	// report here, so `parseJSON`'s `undefined` would discard what this emit exists to carry.
 	const parsed = attempt(() => JSON.parse(text))
 	if (!parsed.success) {
-		emitter.emit('error', parsed.error)
+		emitter.emit('error', buildParseFault(String(parsed.error)))
 		return
 	}
 	const message = parseJSONRPCMessage(parsed.value)

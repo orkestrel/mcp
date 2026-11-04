@@ -52,6 +52,7 @@ import {
 	readStreamFault,
 	readTextFault,
 	buildModernCall,
+	INBOUND_FRAMES,
 	createDispatchPeer,
 	DenyingToolManager,
 	createFaultServer,
@@ -206,6 +207,38 @@ import {
 describe('MCPServer — a refused argument record', () => {
 	// The specification, revision 2025-11-25, Tools § Error Handling, lists input validation errors
 	// under tool execution errors, reported with `isError: true` so a model can correct and retry.
+	it('sets structuredContent only for a record value, the text carrying the rest', async () => {
+		const tools = createToolManager()
+		for (const [name, value] of [
+			['number', 7],
+			['text', 'ran'],
+			['list', ['a', 1]],
+			['nothing', null],
+			['record', { a: 1 }],
+		] as const) {
+			tools.add(createTool({ name, execute: () => value }))
+		}
+		const server = createMCPServer({ identity: { name: 'shapes', version: '1' }, tools })
+		const client = createMCPClient({ transport: createDispatchPeer(server) })
+		await client.connect()
+
+		for (const [name, value, structured] of [
+			['number', 7, false],
+			['text', 'ran', false],
+			['list', ['a', 1], false],
+			['nothing', null, false],
+			['record', { a: 1 }, true],
+		] as const) {
+			const result = readResultRecord(
+				readUnaryAnswer(await server.dispatch(buildModernCall({ name }, name))),
+			)
+
+			expect(result['content']).toEqual([{ type: 'text', text: JSON.stringify(value) }])
+			expect(Object.hasOwn(result, 'structuredContent')).toBe(structured)
+			expect(await client.call(name, {})).toEqual({ resultType: 'complete', value })
+		}
+	})
+
 	it('answers isError with the refusal text and never reaches the handler', async () => {
 		const reached: unknown[] = []
 		const tools = createToolManager()
@@ -275,7 +308,7 @@ describe('MCPServer — a refused argument record', () => {
 
 		expect(refused['isError']).toBe(true)
 		expect(JSON.stringify(refused['content'])).toContain('value: extra')
-		expect(answered['structuredContent']).toBe('ran')
+		expect(answered['content']).toEqual([{ type: 'text', text: '"ran"' }])
 	})
 
 	it('hands a raw tool its arguments, and the handler the parsed copy otherwise', async () => {
@@ -1184,9 +1217,7 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 			await mcp.handle(
 				'{"jsonrpc":"2.0","method":"tools/call","id":4,"params":{"name":"sum","arguments":{"a":2,"b":5}}}',
 			),
-		).toBe(
-			'{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"7"}],"structuredContent":7}}',
-		)
+		).toBe('{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"7"}]}}')
 	})
 
 	it('rejects malformed modern metadata with -32602', async () => {
@@ -1313,7 +1344,7 @@ describe('MCPServer — modern-and-legacy dispatch', () => {
 		const result = readResultRecord(response)
 
 		expect(result['content']).toEqual([{ type: 'text', text: '7' }])
-		expect(result['structuredContent']).toBe(7)
+		expect(Object.hasOwn(result, 'structuredContent')).toBe(false)
 		expect(result['resultType']).toBe('complete')
 		expect(result['_meta']).toEqual({
 			[MCP_META_SERVER]: { name: 'test-server', version: '1.2.3' },
@@ -1449,7 +1480,7 @@ describe('MCPServer — W01 modern execution and progress', () => {
 					resource: { uri: 'resource://embedded', mimeType: 'text/plain', text: 'embedded' },
 				},
 			],
-			structuredContent: ['array', 1, true, null],
+			structuredContent: { items: ['array', 1, true, null] },
 		}
 		const mcp = createMCPServer({
 			identity: { name: 'test-server', version: '1.2.3' },
@@ -1542,7 +1573,7 @@ describe('MCPServer — W01 modern execution and progress', () => {
 			await mcp.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
-					params: { name: 'probe', _meta: MODERN_METADATA },
+					params: { name: 'echo', _meta: MODERN_METADATA },
 				}),
 			),
 		)
@@ -1569,7 +1600,7 @@ describe('MCPServer — W01 modern execution and progress', () => {
 			await owned.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
-					params: { name: 'probe', _meta: MODERN_METADATA },
+					params: { name: 'echo', _meta: MODERN_METADATA },
 				}),
 			),
 		)
@@ -1592,14 +1623,13 @@ describe('MCPServer — W01 modern execution and progress', () => {
 			await bounded.dispatch(
 				createJSONRPCRequest({
 					method: 'tools/call',
-					params: { name: 'probe', _meta: MODERN_METADATA },
+					params: { name: 'echo', _meta: MODERN_METADATA },
 				}),
 			),
 		)
 		expect(boundedAnswer?.result).toEqual({
 			resultType: 'complete',
 			content: [{ type: 'text', text: '1' }],
-			structuredContent: 1,
 			_meta: { [MCP_META_SERVER]: { name: 'test-server', version: '1.2.3' } },
 		})
 	})
@@ -1740,7 +1770,9 @@ describe('MCPServer — W01 modern execution and progress', () => {
 			}),
 		)
 
-		expect(readUnaryAnswer(answer)?.result).toMatchObject({ structuredContent: 1 })
+		expect(readUnaryAnswer(answer)?.result).toMatchObject({
+			content: [{ type: 'text', text: '1' }],
+		})
 		expect(executions.value).toBe(1)
 	})
 
@@ -3259,7 +3291,7 @@ describe('MCPServer — tools/call', () => {
 			),
 		)
 		expect(seen).toEqual([caller, undefined])
-		expect(readResultRecord(absent)['structuredContent']).toBe('absent')
+		expect(readResultRecord(absent)['content']).toEqual([{ type: 'text', text: '"absent"' }])
 	})
 
 	it('advertises titles and mapped annotation hints on tools/list', async () => {
@@ -3339,7 +3371,7 @@ describe('MCPServer — tools/call', () => {
 		expect(observed).toEqual([caller, caller, undefined, undefined])
 	})
 
-	it('executes a tool and carries its value as structured content and JSON text', async () => {
+	it('executes a tool and carries a value that is not a record as JSON text alone', async () => {
 		const response = readUnaryAnswer(
 			await createTestServer().dispatch(
 				createJSONRPCRequest({
@@ -3352,7 +3384,7 @@ describe('MCPServer — tools/call', () => {
 		const result = readResultRecord(response)
 
 		expect(result['content']).toEqual([{ type: 'text', text: '7' }])
-		expect(result['structuredContent']).toBe(7)
+		expect(Object.hasOwn(result, 'structuredContent')).toBe(false)
 		expect(result['isError']).toBeUndefined()
 	})
 
@@ -3401,20 +3433,48 @@ describe('MCPServer — tools/call', () => {
 		expect(result['content']).toEqual([{ type: 'text', text: 'tool exploded' }])
 	})
 
-	it('maps an unknown tool name to an isError result (the manager not-found error)', async () => {
+	it('answers an unknown tool with -32602, naming it and the available tools', async () => {
 		const response = readUnaryAnswer(
-			await createTestServer().dispatch(
-				createJSONRPCRequest({
-					method: 'tools/call',
-					id: 4,
-					params: { name: 'missing', arguments: {} },
-				}),
-			),
+			await createTestServer().dispatch(buildModernCall({ name: 'missing', arguments: {} }, 4)),
 		)
-		const result = readResultRecord(response)
 
-		expect(result['isError']).toBe(true)
-		expect(result['content']).toEqual([{ type: 'text', text: 'tool not found: missing' }])
+		expect(response?.result).toBeUndefined()
+		expect(response?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(response?.error?.message).toBe(
+			'Unknown tool: "missing"; available tools: echo, sum, boom',
+		)
+	})
+
+	it('bounds the available names, and says when there are none', async () => {
+		const tools = createToolManager()
+		const server = createMCPServer({ identity: { name: 'names', version: '1' }, tools })
+
+		const empty = readUnaryAnswer(await server.dispatch(buildModernCall({ name: 'x' }, 1)))
+		for (const index of Array.from({ length: 14 }, (_, value) => value)) {
+			tools.add(createTool({ name: `tool${String(index)}`, execute: () => 0 }))
+		}
+		const many = readUnaryAnswer(await server.dispatch(buildModernCall({ name: 'x' }, 2)))
+
+		expect(empty?.error?.message).toBe('Unknown tool: "x"; this server has no tools')
+		expect(many?.error?.message).toContain('tool11 and 2 more')
+		expect(many?.error?.message).not.toContain('tool12')
+	})
+
+	it('answers an unknown tool before any input policy or execution port runs', async () => {
+		const reached: string[] = []
+		const server = createMCPServer({
+			identity: { name: 'order', version: '1' },
+			tools: createToolManager(),
+			execution: () => {
+				reached.push('execution')
+				return { id: '1', name: 'x', success: true, value: 1 }
+			},
+		})
+
+		const response = readUnaryAnswer(await server.dispatch(buildModernCall({ name: 'x' }, 1)))
+
+		expect(response?.error?.code).toBe(JSONRPC_INVALID_PARAMS)
+		expect(reached).toEqual([])
 	})
 
 	it('rejects a missing tool name with -32602 invalid params', async () => {
@@ -3496,7 +3556,6 @@ describe('MCPServer — handle (string boundary)', () => {
 				id: 2,
 				result: {
 					content: [{ type: 'text', text: '7' }],
-					structuredContent: 7,
 				},
 			}),
 		)
@@ -3517,7 +3576,7 @@ describe('MCPServer — handle (string boundary)', () => {
 	})
 
 	it('returns a -32600 invalid-request response that carries a null id for the id it could not read', async () => {
-		const reply = await createTestServer().handle('{"jsonrpc":"2.0","id":1,"result":{}}')
+		const reply = await createTestServer().handle('{"jsonrpc":"2.0","id":null,"method":"ping"}')
 
 		expect(reply).toBe(
 			JSON.stringify({
@@ -3527,6 +3586,10 @@ describe('MCPServer — handle (string boundary)', () => {
 			}),
 		)
 		expect(reply).toContain('"id":null')
+	})
+
+	it('answers a well-formed response with nothing, because JSON-RPC gives no response to one', async () => {
+		expect(await createTestServer().handle('{"jsonrpc":"2.0","id":1,"result":{}}')).toBeUndefined()
 	})
 
 	it('refuses a message carrying both a method and a result as an invalid request, under its id', async () => {
@@ -3559,6 +3622,38 @@ describe('MCPServer — handle (string boundary)', () => {
 		const reply = await createTestServer().handle('[1, 2, 3]')
 
 		expect(reply).toContain(String(JSONRPC_INVALID_REQUEST))
+	})
+
+	it.each(INBOUND_FRAMES)('answers the frame %s as JSON-RPC owes it', async (frame, answer) => {
+		const reply = await createTestServer().handle(frame)
+
+		expect(reply).toBe(
+			answer === undefined
+				? undefined
+				: JSON.stringify({
+						jsonrpc: '2.0',
+						id: answer.id,
+						error: {
+							code: answer.code,
+							message: answer.code === JSONRPC_PARSE_ERROR ? 'Parse error' : 'Invalid Request',
+						},
+					}),
+		)
+	})
+
+	it('reports a frame it does not answer on the error event', async () => {
+		const server = createMCPServer({
+			identity: { name: 'silent', version: '1' },
+			tools: createToolManager(),
+		})
+		const errors: unknown[] = []
+		server.emitter.on('error', (error) => errors.push(error))
+
+		await server.handle('{"jsonrpc":"2.0","id":5,"result":{}}')
+		await server.handle('{"jsonrpc":"2.0","method":5}')
+
+		expect(errors).toHaveLength(2)
+		expect(errors.every(isMCPError)).toBe(true)
 	})
 
 	it('returns undefined (no reply) for a notification string', async () => {
@@ -4108,7 +4203,7 @@ describe('MCPServer — W02-A: what the egress boundary keeps doing', () => {
 					throw result
 				},
 			})
-			const answer = readUnaryAnswer(await mcp.dispatch(buildModernCall({ name: 'probe' })))
+			const answer = readUnaryAnswer(await mcp.dispatch(buildModernCall({ name: 'echo' })))
 
 			expect(answer?.error?.code).toBe(JSONRPC_INTERNAL_ERROR)
 			expect(answer?.error?.message).toBe('Server error')
