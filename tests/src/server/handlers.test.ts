@@ -33,6 +33,7 @@ import {
 	createJSONRPCRequest,
 	postJSON,
 	readSSEStream,
+	INBOUND_FRAMES,
 } from '../../setup.js'
 import {
 	startServer,
@@ -63,6 +64,27 @@ describe('legacy initialization state', () => {
 })
 
 describe('createMCPPostHandler', () => {
+	it.each(INBOUND_FRAMES)('answers the HTTP body %s as JSON-RPC owes it', async (frame, answer) => {
+		const handler = createPostHandler(createCalculatorServer(), { stream: false })
+		const response = await handler(
+			new Request('http://localhost/mcp', { method: 'POST', body: frame }),
+		)
+
+		expect(response.status).toBe(answer === undefined ? 202 : 400)
+		expect(await response.text()).toBe(
+			answer === undefined
+				? ''
+				: JSON.stringify({
+						jsonrpc: '2.0',
+						id: answer.id,
+						error: {
+							code: answer.code,
+							message: answer.code === -32700 ? 'Parse error' : 'Invalid Request',
+						},
+					}),
+		)
+	})
+
 	it('extracts caller context for a registered method immediately before dispatch', async () => {
 		const mcp = createCalculatorServer()
 		const caller = Object.freeze({ subject: 'http-user' })

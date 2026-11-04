@@ -493,16 +493,11 @@ describe('createMCPRoutes — transport vs in-band outcomes', () => {
 		})
 	})
 
-	it('POST a non-request payload (a response) → 400 + a JSON-RPC -32600 body', async () => {
+	it('POST a JSON-RPC response → 202 with no body', async () => {
 		const handle = await startMCP(teardown)
-		// A well-formed JSON-RPC RESPONSE is not a request — Invalid Request, HTTP 400 + -32600.
 		const response = await postJSON(handle.base, { jsonrpc: '2.0', id: 9, result: { ok: true } })
-		expect(response.status).toBe(400)
-		expect(await response.json()).toEqual({
-			jsonrpc: '2.0',
-			id: null,
-			error: { code: -32600, message: 'Invalid Request' },
-		})
+		expect(response.status).toBe(202)
+		expect(await response.text()).toBe('')
 	})
 
 	it('POST an unknown method (id-bearing) → 200 + an IN-BAND -32601 error', async () => {

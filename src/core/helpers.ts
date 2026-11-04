@@ -669,7 +669,8 @@ export function extractMessageId(value: unknown): JSONRPCId | undefined {
  * @remarks
  * JSON-RPC gives no response to a response, so a value shaped as one owes nothing even when it
  * is malformed: no `method` and a `result` or `error` member. A malformed notification owes
- * nothing either, because it carries no `id` at all and its sender waits on nothing. A batch and
+ * nothing either, because it carries a `method` but no `id` and its sender waits on nothing.
+ * An object with neither invocation nor response members answers under `null`. A batch and
  * any other value that is not an object answer under `null`, as a `method` beside an `id` that is
  * not a valid one does. A valid id is the one its sender is waiting on. Total: a value it cannot
  * read answers under `null`.
@@ -695,7 +696,7 @@ export function extractInvalidRequestId(value: unknown): JSONRPCId | null | unde
 		}
 		const id = extractMessageId(value)
 		if (id !== undefined) return id
-		return method && Object.hasOwn(value, 'id') ? null : undefined
+		return method && !Object.hasOwn(value, 'id') ? undefined : null
 	})
 	return read.success ? read.value : null
 }

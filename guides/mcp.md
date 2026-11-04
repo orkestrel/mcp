@@ -290,8 +290,9 @@ claim this server does not implement the revision it does implement.
 its errors in band, byte-identically to what a `2025-06-18` client already expects. A
 modern result maps to real statuses: `202` for a notification, `400` for `-32020` /
 `-32021` / `-32022` / `-32602`, `404` for `-32601`, and `200` otherwise. A
-transport-level failure — malformed JSON or a body that is not a JSON-RPC request — is
-`400` under both eras, because no era was ever established. See
+transport-level failure — malformed JSON or an invalid request body — is
+`400` under both eras, because no era was ever established. A response or a malformed
+notification is accepted with `202` and no body, using the same classification as `handle`. See
 [Route a request by era and build a modern result](#route-a-request-by-era-and-build-a-modern-result)
 for the inferers this rides on.
 
@@ -1074,9 +1075,12 @@ so `caller` stays an HTTP-face seam.
 request body through `mcp.dispatch`. For a streamed response,
 `MCPDispatchOptions.signal` composes the fetch-standard request signal with
 response-stream cancellation; the optional session middleware preserves the request
-signal when it rebuilds a buffered POST. A malformed JSON body, or a parsed value
-that is not a JSON-RPC request, is an HTTP `400` carrying a JSON-RPC error
-body (`-32700` / `-32600`, with `id: null`). Legacy dispatch results retain uniform
+signal when it rebuilds a buffered POST. A malformed JSON body or an invalid request
+is an HTTP `400` carrying a JSON-RPC error body (`-32700` / `-32600`). The error
+carries `id: null` unless a malformed request has a readable id. An object with neither
+invocation nor response members, including `{}`, receives `-32600` under `null`.
+A response or a malformed notification receives HTTP `202` with no body, matching
+the silence of `handle` and stdio. Legacy dispatch results retain uniform
 HTTP `200` with in-band errors. Modern responses use `202` for notifications,
 `400` for `-32020` / `-32021` / `-32022` / `-32602`, `404` for `-32601`, and
 `200` otherwise. A unary reply is framed as one `@orkestrel/server` `createStream`

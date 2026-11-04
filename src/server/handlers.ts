@@ -12,6 +12,7 @@ import {
 	MCP_PROTOCOL_VERSION_HEADER,
 	MCP_UNSUPPORTED_VERSION,
 	SUPPORTED_LEGACY_PROTOCOL_VERSIONS,
+	extractInvalidRequestId,
 	inferRequestEra,
 	isMCPLegacyVersion,
 	isMCPModernVersion,
@@ -54,6 +55,8 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  * defined value is added to `MCPDispatchOptions`, while `undefined` is omitted.
  * For legacy `initialize`, the dispatch response is recorded as `initialization` before
  * JSON or SSE framing only when consumer state is an object with `'session' in context.state`.
+ * Responses and malformed notifications are accepted with HTTP `202` and no body. Other
+ * non-invocations receive HTTP `400` with `-32600` under their readable id, or `null`.
  *
  * @typeParam TState - The consumer's opaque per-request route state type
  * @param mcp - The transport-agnostic MCP dispatcher to dispatch through
@@ -96,7 +99,9 @@ export function createMCPPostHandler<TState = unknown>(
 		}
 		const invocation = parseJSONRPCMessage(parsed)
 		if (invocation === undefined || !('method' in invocation)) {
-			return Response.json(buildJSONRPCError(null, JSONRPC_INVALID_REQUEST, 'Invalid Request'), {
+			const invalid = extractInvalidRequestId(parsed)
+			if (invalid === undefined) return new Response(null, { status: 202 })
+			return Response.json(buildJSONRPCError(invalid, JSONRPC_INVALID_REQUEST, 'Invalid Request'), {
 				status: 400,
 			})
 		}

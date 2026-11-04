@@ -3268,6 +3268,8 @@ export const INBOUND_FRAMES: ReadonlyArray<
 	]
 > = Object.freeze([
 	['{', { code: -32700, id: null }],
+	['{}', { code: -32600, id: null }],
+	['{"hello":"world"}', { code: -32600, id: null }],
 	['{"jsonrpc":"2.0","id":0,"method":5}', { code: -32600, id: 0 }],
 	['{"id":3,"method":"tools/list"}', { code: -32600, id: 3 }],
 	['{"jsonrpc":"1.0","id":"old","method":"tools/list"}', { code: -32600, id: 'old' }],
@@ -3277,13 +3279,13 @@ export const INBOUND_FRAMES: ReadonlyArray<
 	['[]', { code: -32600, id: null }],
 	['[{"jsonrpc":"2.0","id":1,"result":{}}]', { code: -32600, id: null }],
 	['{"jsonrpc":"2.0","method":5}', undefined],
-	['{"jsonrpc":"2.0"}', undefined],
+	['{"jsonrpc":"2.0"}', { code: -32600, id: null }],
 	['{"jsonrpc":"2.0","id":5,"result":{}}', undefined],
 	['{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"x"}}', undefined],
 	['{"jsonrpc":"2.0","id":5,"result":{},"error":{"code":1,"message":"x"}}', undefined],
 	['{"jsonrpc":"2.0","id":5,"error":"none"}', undefined],
-	['{"jsonrpc":"2.0","id":null}', undefined],
-	['{"jsonrpc":"2.0","id":1.5}', undefined],
+	['{"jsonrpc":"2.0","id":null}', { code: -32600, id: null }],
+	['{"jsonrpc":"2.0","id":1.5}', { code: -32600, id: null }],
 ])
 
 // Each `tools/list` result the client must refuse, beside the text its refusal names.
