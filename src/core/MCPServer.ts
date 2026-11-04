@@ -59,7 +59,6 @@ import type {
 	MCPTextStreamControllerInterface,
 } from './types.js'
 import { Emitter } from '@orkestrel/emitter'
-import { renderList } from '@orkestrel/tool'
 import {
 	isArray,
 	isFiniteNumber,
@@ -70,6 +69,7 @@ import {
 	isUndefined,
 	parseJSON,
 	preview,
+	renderList,
 	sanitizeBudget,
 } from '@orkestrel/contract'
 import { snapshotJSON, snapshotToolResult } from './cloners.js'

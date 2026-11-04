@@ -332,7 +332,14 @@ describe('MCPServer — a refused argument record', () => {
 		const server = createMCPServer({ identity: { name: 'routes', version: '1' }, tools })
 
 		await server.dispatch(buildModernCall({ name: 'raw', arguments: { value: 1 } }, 1))
-		await server.dispatch(buildModernCall({ name: 'typed', arguments: { limit: '30.0' } }, 2))
+		await server.dispatch(buildModernCall({ name: 'typed', arguments: { limit: '30' } }, 2))
+		const refused = readResultRecord(
+			readUnaryAnswer(
+				await server.dispatch(buildModernCall({ name: 'typed', arguments: { limit: '30.0' } }, 3)),
+			),
+		)
+		expect(refused['isError']).toBe(true)
+		expect(JSON.stringify(refused['content'])).toContain('limit: type')
 
 		expect(seen).toEqual([{ value: 1 }, { limit: 30 }])
 	})

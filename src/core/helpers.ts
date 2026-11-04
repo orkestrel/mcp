@@ -52,10 +52,11 @@ import type {
 } from './types.js'
 import { decodeBase64, decodeUTF8, encodeBase64, encodeHex } from '@orkestrel/codec'
 import { createSSEParser } from '@orkestrel/sse'
-import { CLOSED_PARAMETERS, describeFaults } from '@orkestrel/tool'
+import { CLOSED_PARAMETERS } from '@orkestrel/tool'
 import {
 	attempt,
 	cloneJSONRecord,
+	describeFaults,
 	isArray,
 	isBoolean,
 	isFiniteNumber,
