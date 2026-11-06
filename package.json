@@ -109,7 +109,7 @@
 		"@microsoft/api-extractor": "^7.60.1",
 		"@modelcontextprotocol/conformance": "0.2.0-alpha.11",
 		"@orkestrel/guide": "^0.0.30",
-		"@orkestrel/probe": "^0.0.28",
+		"@orkestrel/probe": "^0.0.29",
 		"@orkestrel/router": "^0.0.20",
 		"@orkestrel/scaffold": "^0.0.124",
 		"@orkestrel/server": "^0.0.26",
