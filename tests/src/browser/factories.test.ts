@@ -171,6 +171,10 @@ describe('createBrowserWebSocketClientTransport — the browser client against t
 			closeCount.value += 1
 		})
 		await transport.start()
+		await waitForCondition(
+			'the server-initiated close reaches the transport',
+			() => closeCount.value > 0,
+		)
 		await waitForDelay(50)
 
 		expect(closeCount.value).toBe(1)
