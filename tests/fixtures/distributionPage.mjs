@@ -8,7 +8,7 @@
 // `ScriptedProvider` is a real `ProviderInterface` implementation supplying model output the
 // page cannot obtain offline. It stands for the model, not for anything this fleet owns: every
 // agent, tool, MCP, and relay path it drives is the installed artifact running for real.
-import { createAgent, createRelayProvider } from '@orkestrel/agent'
+import { createAgent, createAuthority, createRelayProvider } from '@orkestrel/agent'
 import { createPageServer } from '@orkestrel/mcp/browser'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { NOTE, PAINT, PAINT_SCRIPT, ScriptedProvider, buildScript, buildTurn } from './script.mjs'
@@ -206,6 +206,7 @@ async function runCancel() {
 		new ScriptedProvider('scripted', buildScript(HOLD.name, {}, 'released')),
 		{
 			tools: registry,
+			authority: createAuthority({ fallback: { zone: 'default', verdict: 'allow' } }),
 			limit: 4,
 			on: ledger.hooks,
 		},
@@ -307,7 +308,12 @@ class ReceiptPage {
 		const tools = createToolManager()
 		tools.add(createTool({ ...PAINT, execute: this.paint.bind(this) }))
 		const ledger = new Ledger()
-		const agent = createAgent(provider, { tools, limit: 4, on: ledger.hooks })
+		const agent = createAgent(provider, {
+			tools,
+			authority: createAuthority({ fallback: { zone: 'default', verdict: 'allow' } }),
+			limit: 4,
+			on: ledger.hooks,
+		})
 		agent.context.messages.add({
 			role: 'user',
 			content: `record the note ${NOTE}`,
@@ -343,6 +349,7 @@ class ReceiptPage {
 		]
 		const agent = createAgent(new ScriptedProvider('scripted', script), {
 			tools: registry,
+			authority: createAuthority({ fallback: { zone: 'default', verdict: 'allow' } }),
 			limit: 5,
 			on: ledger.hooks,
 		})

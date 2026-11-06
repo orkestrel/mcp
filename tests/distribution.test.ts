@@ -155,7 +155,7 @@ process.stdout.write(JSON.stringify(Object.keys(entry).sort()))
 // than floating: a receipt read against whatever the registry served that morning reports on a
 // composition nobody chose.
 const COMPOSITION: readonly string[] = [
-	'@orkestrel/agent@^0.0.35',
+	'@orkestrel/agent@^0.0.36',
 	'@orkestrel/tool@^0.0.22',
 	'@orkestrel/ndjson@^0.0.16',
 	'@orkestrel/router@^0.0.20',
