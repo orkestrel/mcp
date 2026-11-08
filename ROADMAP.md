@@ -1,3 +1,7 @@
+Each item is a chunk that reaches green before the next. An item keeps its number for life: a closed
+item leaves this file and its number is never reused, so a commit message citing an item by number
+stays true.
+
 1. Carry the cancellation notification's own `reason` into the per-request abort in `bindServer` (`src/core/helpers.ts`), so a hosted handler can tell a reasoned cancellation from a transport close. The client already sends the reason when it is a string; the receiving side reads the request id and aborts with no argument. If the reason is deliberately not carried, state that limit on `MCPServerInterface` instead and add the assertion that breaks when the sentence goes false.
 2. Drive the composition proof's module-resolution derivation from a synthetic tree, in the same block that already drives the classifiers that way: write a `node_modules` holding a relative cycle, a parent-relative specifier, and a bare specifier the tree serves nothing for, then assert what the walk returns. Today those properties are exercised only by a stage that skips without a reachable registry and a browser.
 3. Fold the two specifier scans in `tests/distribution.test.ts` into one reader whose callers partition the result: the closure reader keeps the bare `@orkestrel` names and the walk queues the relative ones. The same match runs twice with different filters.
@@ -14,3 +18,7 @@
 15\. Reconcile the 404 response for a legacy request without a session header in `createMCPSession` (`src/server/middlewares.ts`) with the MCP 2025-11-25 Streamable HTTP recommendation to answer 400. Preserve the sessionless legacy `ping` exception and the 404 response for an unknown or expired session id.
 
 16\. Replace the fixed `waitForDelay(300)` waits in `tests/src/server/transports/StdioClientTransport.test.ts` (lines 212, 226, 241, 248, 343, and 413) with waits on the event or the reply each one stands for. `.claude/rules/tests.md` forbids a fixed delay that waits on another process. On 2026-10-06, 5 of its cases failed in one `npm run test:src` while another checkout's unit held the host under heavy CPU load, and all 48 passed alone in 77.0 s (record: `tmp/codex/items13-14fix-last.md`). Keep each case's claim, and show each replaced wait red without the event it now reads.
+
+- **17.** At the next result-contract visit, decide how `buildCallOutcome` in `src/core/helpers.ts` preserves non-text-only result blocks. Define the result contract in `src/core/types.ts` before implementing the projection and its proofs.
+- **18.** On the user's word, bound the tool error text propagated by `buildCallOutcome` in `src/core/helpers.ts` while retaining a useful diagnostic. Owner: the user.
+- **19.** At the next proof audit, resolve the previously unread header semantics in `inferParameterRefusal` in `src/server/inferers.ts` and its consumer in `src/server/handlers.ts`. Read the corresponding server proofs and closing commits before claiming coverage beyond the recorded fallthrough.
