@@ -139,22 +139,49 @@ The byte-bounding and result-assembly building blocks, from `@orkestrel/process/
 The signalling and confirmation building blocks a bounded stop composes, from
 `@orkestrel/process/server`.
 
-| Name             | Kind     | Signature                                                                                                               | Summary                                                                             |
-| ---------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `inspectProcess` | function | `(pid: number) => boolean \| undefined`                                                                                 | Reports whether a process or POSIX process group still exists.                      |
-| `isExited`       | function | `(child: Pick<ProcessChildInterface, 'exitCode' \| 'signalCode'>) => boolean`                                           | Checks whether a child process has reached its native exit.                         |
-| `killProcess`    | function | `(child: Pick<ProcessChildInterface, 'pid' \| 'kill'>, signal: NodeJS.Signals) => void`                                 | Signals one owned child process, or its detached process group on a POSIX host.     |
-| `killTree`       | function | `(pid: number, timeout: number) => Promise<boolean>`                                                                    | Kills one Windows process tree through `taskkill`.                                  |
-| `waitForExit`    | function | `(child: Pick<ProcessChildInterface, 'exitCode' \| 'signalCode' \| 'once' \| 'off'>, timeout: number) => Promise<void>` | Waits for one child process's native exit, bounded by a deadline.                   |
-| `waitForClose`   | function | `(child: Pick<ProcessChildInterface, 'once' \| 'off'>, timeout: number) => Promise<boolean>`                            | Waits for one child process's streams to close, bounded by a deadline.              |
-| `stopChild`      | function | `(child: ProcessChildInterface, grace: number, confirm: number) => Promise<boolean>`                                    | Terminates one child process tree and reports whether its native exit was observed. |
+| Name             | Kind     | Signature                                                                                                               | Summary                                                                                     |
+| ---------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `inspectProcess` | function | `(pid: number) => boolean \| undefined`                                                                                 | Reports whether a process or POSIX process group still exists.                              |
+| `isExited`       | function | `(child: Pick<ProcessChildInterface, 'exitCode' \| 'signalCode'>) => boolean`                                           | Checks whether a child process has reached its native exit.                                 |
+| `killProcess`    | function | `(child: Pick<ProcessChildInterface, 'pid' \| 'kill'>, signal: NodeJS.Signals) => void`                                 | Signals one owned child process, or its detached process group on a POSIX host.             |
+| `killTree`       | function | `(pid: number, timeout: number) => Promise<boolean>`                                                                    | Kills one Windows process tree through `taskkill`.                                          |
+| `waitForExit`    | function | `(child: Pick<ProcessChildInterface, 'exitCode' \| 'signalCode' \| 'once' \| 'off'>, timeout: number) => Promise<void>` | Waits for one child process's native exit, bounded by a deadline.                           |
+| `waitForClose`   | function | `(child: Pick<ProcessChildInterface, 'once' \| 'off'>, timeout: number) => Promise<boolean>`                            | Waits for one child process's streams to close, bounded by a deadline.                      |
+| `stopChild`      | function | `(child: ProcessChildInterface, grace: number, confirm: number) => Promise<boolean>`                                    | Terminates one child process tree and reports whether its native exit was observed.         |
+| `stopGroup`      | function | `(child: ProcessChildInterface, grace: number, members: readonly ProcessMember[]) => Promise<void>`                     | Terminates the POSIX process group an exited child led, while the group still has a member. |
 
 `inspectProcess` returns `true` while the process or POSIX process group exists, including
 when the host refuses the probe with `EPERM`. It returns `false` after the target is gone
 (`ESRCH`), and `undefined` for any other host failure. It throws a `ProcessError` coded
 `invalid` for a value that is not a safe integer, zero, or minus one. Windows accepts only
 positive process ids and refuses every negative id before the host call. On POSIX, a negative
-id other than minus one probes the process group identified by its magnitude.
+id other than minus one probes the process group identified by its magnitude. A zombie still
+answers the probe signal, so where the host publishes a `/proc` process table, `inspectProcess`
+returns `false` for an id whose every thread, or every group member's every thread, reads `Z` or
+`X` in two readings taken one after the other. A reading it cannot take reads as live, and so does
+every group while the table's mount carries a `hidepid` option other than `0` or `off`, because
+that mount hides other users' processes and a hidden member can be live. A host without the table,
+and a table whose `self/stat` names a process other than this one, keep the signal's answer.
+
+### Process-table readers
+
+The Linux `/proc` reading `inspectProcess` reads a zombie through and `stopGroup` confirms a
+group's identity through, from `@orkestrel/process/server`. Each reader takes the table's root as
+an argument that defaults to `PROCESS_TABLE`, so a proof can point it at an inert table, and
+`matchesProcessEnded` also takes the scan it repeats.
+
+| Name                  | Kind     | Signature                                                                                                              | Summary                                                                                                              |
+| --------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `parseProcessStat`    | function | `(text: string) => ProcessStat \| undefined`                                                                           | Parses one process-table `stat` line into the state, the process group, and the start time a liveness reading needs. |
+| `scanProcessThreads`  | function | `(pid: string, table?: string) => readonly ProcessTask[] \| undefined`                                                 | Scans the state of every thread of one process from a process table.                                                 |
+| `scanGroupMembers`    | function | `(group: number, table?: string) => readonly ProcessMember[] \| undefined`                                             | Scans the members of one process group from a process table, each with its start time.                               |
+| `scanProcessTasks`    | function | `(pid: number, table?: string) => readonly ProcessTask[] \| undefined`                                                 | Scans every thread of one process, or of every member of one process group, from a process table.                    |
+| `matchesEndedTasks`   | function | `(first: readonly ProcessTask[], second: readonly ProcessTask[]) => boolean`                                           | Checks whether two process-table readings show the same threads, every one of them exited.                           |
+| `matchesOwnTable`     | function | `(table?: string) => boolean`                                                                                          | Checks whether a process table numbers processes the way this process signals them.                                  |
+| `matchesTableHidden`  | function | `(table?: string) => boolean`                                                                                          | Checks whether the mount of a process table hides other users' processes from this reader.                           |
+| `matchesProcessEnded` | function | `(pid: number, table?: string, scan?: (pid: number, table: string) => readonly ProcessTask[] \| undefined) => boolean` | Checks whether a process or a process group has ended while the host still answers its id.                           |
+| `matchesGroupMembers` | function | `(group: number, members: readonly ProcessMember[], table?: string) => boolean`                                        | Checks whether a process group still holds a member a snapshot of that group named.                                  |
+| `collectGroupMembers` | function | `(child: Pick<ProcessChildInterface, 'pid'>, table?: string) => readonly ProcessMember[]`                              | Collects the members of the POSIX process group an exited child led, as of the call.                                 |
 
 ### Validators
 
@@ -184,6 +211,8 @@ The defaults and host bounds, from `@orkestrel/process`.
 | `PROCESS_OUTPUT`       | const | `10485760`                                                                   | Names the default maximum captured bytes, 10485760 each, for a one-shot run's stdout and stderr.                                                                                              |
 | `PROCESS_TIMER`        | const | `2147483647`                                                                 | Names the largest timer delay, 2147483647 ms, the host schedules without truncating it to one.                                                                                                |
 | `PROCESS_PATHEXT`      | const | `".COM;.EXE;.BAT;.CMD"`                                                      | Lists the executable extensions a Windows lookup applies when the environment declares no `PATHEXT`, `.COM;.EXE;.BAT;.CMD`.                                                                   |
+| `PROCESS_TABLE`        | const | `"/proc"`                                                                    | Names the directory where a Linux host publishes its process table, `/proc`.                                                                                                                  |
+| `PROCESS_ENDED`        | const | `readonly string[]`                                                          | Lists the process-table states of a thread that has exited: `Z` for a zombie its parent has not reaped, and `X` for one the kernel is releasing.                                              |
 | `PROCESS_ERROR_CODES`  | const | `readonly ["spawn", "timeout", "input", "duplicate", "protocol", "invalid"]` | Lists the machine-readable failure categories a `ProcessError` carries, in declaration order: `spawn`, `timeout`, `input`, `duplicate`, `protocol`, and `invalid`.                            |
 
 ### Types
@@ -219,13 +248,18 @@ The contracts and options, all from `@orkestrel/process`.
 The Node-side contracts, from `@orkestrel/process/server`. Each sits in this face rather than
 the host-independent one for its own reason: `ProcessChildInterface` names `NodeJS.Signals`, which
 a host-independent contract cannot, and `SupervisorFace` names no Node type but its consumer is the
-Node-only `Supervisor` engine, so the contract sits with the face that constructs one. See
+Node-only `Supervisor` engine, so the contract sits with the face that constructs one.
+`ProcessStat`, `ProcessTask`, and `ProcessMember` describe what the Node-side process-table readers
+parse. See
 [Vocabulary](#vocabulary) for the `Face` suffix.
 
 | Name                    | Kind      | Signature                                               | Summary                                                                                      |
 | ----------------------- | --------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `ProcessChildInterface` | interface | `{ pid?, exitCode, signalCode, kill(), once(), off() }` | Represents the child boundary the termination helpers drive.                                 |
 | `SupervisorFace`        | interface | `{ chunk, fault, relieve?, close, terminal, teardown }` | Represents the composing face's callbacks for each lifecycle moment of one supervised child. |
+| `ProcessStat`           | interface | `{ state, group, start }`                               | Represents the fields of one process-table `stat` entry a liveness reading needs.            |
+| `ProcessMember`         | interface | `{ pid, start }`                                        | Represents one process-group member as a group snapshot names it: its id and its start time. |
+| `ProcessTask`           | interface | `{ id, state }`                                         | Represents one thread a process-table reading found: its `<pid>/<tid>` key and its state.    |
 
 ### Surface notes
 
@@ -347,7 +381,7 @@ fault, and the terminal `exit`, alongside the `exit` promise.
 | `backlog`   | `number`                        | no       | Soft high-water mark in bytes; termination retains at most twice `backlog`. Default: `PROCESS_BACKLOG`.                                                                        |
 | `delivery`  | `number`                        | no       | Milliseconds an unconfirmed `send` waits before resolving `false`; `0` or omitted disables the bound.                                                                          |
 | `writable`  | `boolean`                       | no       | When `true`, stdin stays open for `send`; when `false` or omitted, stdin closes after any initial `input`.                                                                     |
-| `signal`    | `AbortSignal`                   | no       | Aborting this signal terminates the child through the same bounded `stop`.                                                                                                     |
+| `signal`    | `AbortSignal`                   | no       | Aborting this signal terminates the child through the same bounded `stop`; a signal already aborted refuses the spawn.                                                         |
 | `on`        | `EmitterHooks<ProcessEventMap>` | no       | Initial `stderr`, `error`, and `exit` listeners installed at construction.                                                                                                     |
 | `error`     | `EmitterErrorHandler`           | no       | Receives a listener's throw, isolated from the engine.                                                                                                                         |
 
@@ -397,7 +431,7 @@ it, so no switch selects whether one exists.
 | `drain`     | `number`                       | no       | Milliseconds the package waits for the child's read ends to close after its ended, before cutting them off; `0` cuts them off immediately. Default: `PROCESS_DRAIN` (`1_000`). |
 | `evidence`  | `number`                       | no       | Maximum retained stderr tail in bytes. Default: `PROCESS_EVIDENCE` (`2_048`).                                                                                                  |
 | `delivery`  | `number`                       | no       | Milliseconds an unconfirmed `write` waits before resolving `false`; `0` or omitted disables the bound.                                                                         |
-| `signal`    | `AbortSignal`                  | no       | Aborting this signal terminates the child through the same bounded `stop`.                                                                                                     |
+| `signal`    | `AbortSignal`                  | no       | Aborting this signal terminates the child through the same bounded `stop`; a signal already aborted refuses the spawn.                                                         |
 | `on`        | `EmitterHooks<DuplexEventMap>` | no       | Initial `stdout`, `stderr`, `error`, and `exit` listeners installed at construction.                                                                                           |
 | `error`     | `EmitterErrorHandler`          | no       | Receives a listener's throw, isolated from the engine.                                                                                                                         |
 
@@ -650,9 +684,10 @@ true` keeps it open until termination.
 `stop` terminates the child tree, awaits its observed exit, and reports whether that exit arrived. It
 resolves `true` when the child's native exit was observed and `false` when the confirmation wait
 elapsed without it. Every call shares one termination, and the liveness fields are read again before
-each signal, so no signal is initiated after an observed exit. The window between initiating a
-signal and the host delivering it belongs to the operating system, which is the limit of what any
-caller can hold. `destroy` runs `stop`, destroys stdin so every pending `send` settles, then destroys
+each signal, so no signal reaches the child's own pid after an observed exit. On a POSIX host the
+group the child led can still receive one, through `stopGroup`, as the host table later in this
+section states. The window between initiating a signal and the host delivering it belongs to the
+operating system, which is the limit of what any caller can hold. `destroy` runs `stop`, destroys stdin so every pending `send` settles, then destroys
 the emitter last; it always resolves, including when termination was never confirmed.
 
 `stop` and `destroy` each settle after [the terminal moment](#the-terminal-moment), bounded by
@@ -687,10 +722,10 @@ timeout must terminate the child tree.
 
 POSIX and Windows terminate differently, and only POSIX has a cooperative phase.
 
-| Host    | Sequence                                                                                                                                        | `grace`  |
-| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| POSIX   | `SIGTERM` to the process group, wait `grace`, then `SIGKILL` to the group — each signal reaching the child directly when no group owns its pid. | used     |
-| Windows | `taskkill /F /T` on the whole tree at once, with a direct kill after the utility reports failure.                                               | not used |
+| Host    | Sequence                                                                                                                                                                                                                                                                                                                                  | `grace`  |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| POSIX   | `SIGTERM` to the process group, wait `grace`, then `SIGKILL` to the group — each signal reaching the child directly when no group owns its pid. After the child's exit, the same pair reaches the group while a member recorded at that exit remains and a member has not exited, the `grace` wait ending early when the read ends close. | used     |
+| Windows | `taskkill /F /T` on the whole tree at once, with a direct kill after the utility reports failure.                                                                                                                                                                                                                                         | not used |
 
 Windows has no signal a process group can receive, so `killTree` ends the tree through the
 `taskkill.exe` utility addressed by its absolute `System32` path, which stops a `PATH` override
@@ -704,9 +739,24 @@ host. The host has reaped that number and can have handed it to another process,
 naming it to `taskkill` reaches a process this package never spawned. Nothing recoverable is given
 up by returning: measured on Windows 11 with Node v24.18.1 on 2026-08-21, `taskkill /F /T` against a
 live root reaped every descendant in the fixture set, and against an exited root it reported the
-process as not found while the descendant kept the pipe open and delivered for a further 2.28s. A
-descendant whose root has exited is beyond every mechanism here, and the `drain` bound is what ends
-the wait for it.
+process as not found while the descendant kept the pipe open and delivered for a further 2.28s. On
+Windows a descendant whose root has exited is beyond every mechanism here, and the `drain` bound is
+what ends the wait for it.
+
+A POSIX process group outlives its leader's exit while it has a member, but its id alone does not
+prove that: after every member has left, the host can hand the id to an unrelated group. `Process`,
+`Duplex`, and `execute` spawn every POSIX child as the leader of its own group, apart from the
+caller's. When they observe the child's exit, `collectGroupMembers` records the members the group
+still holds, each as its id and its start time. After `stopChild` returns they call `stopGroup`,
+which signals the group only while `inspectProcess` reads a member that has not exited and, checked
+last, the group still holds a member with an identical id and start time from that record. One
+identity scan is all that separates that check from each signal. An exited child that left no
+descendant therefore costs no wait. An empty or unreadable record signals nothing, and so does a
+host that publishes no `/proc` process table, or a table whose `self/stat` names another process,
+as one mounted from another PID namespace does; there only the drain bound ends the wait. A
+descendant that left the group, by starting a session of its own, is beyond this route. So is a
+descendant forked after the child's exit, from the moment no recorded member remains in the group,
+its own ancestors included; the drain bound is what ends the wait for either.
 
 After an undrained cutoff, no mechanism here can report whether further diagnostics existed, and that
 is a limit rather than an omission. Node exposes no count of the writers still holding a pipe, and a
@@ -724,7 +774,10 @@ check and the call, and the child's native exit stays the authoritative terminal
 
 `pid` is the host id of the spawned child, and `code` and `signal` are the terminal pair the host
 recorded for it. The spawn is eager, so `pid` carries a number by the time `createProcess` returns,
-and a spawn that produced no child reports `undefined` for that child's whole lifetime. `code` and
+and a spawn that produced no child reports `undefined` for that child's whole lifetime. A `signal`
+that already aborted refuses the spawn: no child starts, `pid` stays `undefined`, `terminated` reads
+`true`, and the terminal moment arrives after the constructor's caller yields, with
+`{ code: null, signal: null, drained: true }`. `code` and
 `signal` are `null` while the child runs; the host records them at the native exit, which arrives
 before the terminal moment whenever a descendant holds the child's stdio open, so a supervisor
 inside that window reads the child's own ending from them. A spawn fault records the host's negative
@@ -839,7 +892,9 @@ buildSpawn({ file: 'node', arguments: ['--version'] }).verbatim // false
 `mergeEnvironment` builds the environment one child receives. Later maps override earlier ones, an
 `undefined` value unsets a key, and on Windows the keys fold case-insensitively with the last writer
 winning, so `PATH` followed by `Path` yields one variable rather than a rival pair the host would
-resolve unpredictably. `readVariable` reads one variable back under the same folding rule. Their
+resolve unpredictably. On every other host the parent environment drops each variable whose
+lower-cased name an override claims, an unset included, because a tool such as npm reads its
+`npm_config_` variables case-insensitively there too; the overrides keep their exact-case keys. `readVariable` reads one variable back under the same folding rule. Their
 `mergePlatformEnvironment` and `readPlatformVariable` leaves accept an explicit platform, so every
 folding decision executes on every test host.
 
@@ -884,16 +939,16 @@ the exit and the captured output together, without managing a live stream.
 
 `ExecuteOptions` are all optional:
 
-| Option        | Type                                  | Default               | Meaning                                                                  |
-| ------------- | ------------------------------------- | --------------------- | ------------------------------------------------------------------------ |
-| `workspace`   | `string`                              | current directory     | The working directory.                                                   |
-| `environment` | `Record<string, string \| undefined>` | inherit the parent    | Overrides applied last; `undefined` unsets a key.                        |
-| `input`       | `string`                              | the command's `input` | Standard-input payload, including NUL, overriding `command.input`.       |
-| `timeout`     | `number`                              | `0` (disabled)        | Milliseconds before the child is terminated; `0` or omitted disables it. |
-| `grace`       | `number`                              | `PROCESS_GRACE`       | The POSIX `SIGTERM` to `SIGKILL` window when a timeout or abort ends it. |
-| `signal`      | `AbortSignal`                         | none                  | Aborting this signal terminates the run and reports `aborted`.           |
-| `strict`      | `boolean`                             | `true`                | When `false`, resolve with the result on failure instead of rejecting.   |
-| `limit`       | `number`                              | `PROCESS_OUTPUT`      | Maximum captured bytes for stdout and for stderr, each.                  |
+| Option        | Type                                  | Default               | Meaning                                                                                                                   |
+| ------------- | ------------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `workspace`   | `string`                              | current directory     | The working directory.                                                                                                    |
+| `environment` | `Record<string, string \| undefined>` | inherit the parent    | Overrides applied last; `undefined` unsets a key.                                                                         |
+| `input`       | `string`                              | the command's `input` | Standard-input payload, including NUL, overriding `command.input`.                                                        |
+| `timeout`     | `number`                              | `0` (disabled)        | Milliseconds before the child is terminated; `0` or omitted disables it.                                                  |
+| `grace`       | `number`                              | `PROCESS_GRACE`       | The POSIX `SIGTERM` to `SIGKILL` window when a timeout or abort ends it.                                                  |
+| `signal`      | `AbortSignal`                         | none                  | Aborting this signal terminates the run and reports `aborted`; a signal already aborted refuses the run before the spawn. |
+| `strict`      | `boolean`                             | `true`                | When `false`, resolve with the result on failure instead of rejecting.                                                    |
+| `limit`       | `number`                              | `PROCESS_OUTPUT`      | Maximum captured bytes for stdout and for stderr, each.                                                                   |
 
 `ExecuteSyncOptions` carries the same set without `grace` and without `signal`, because the
 synchronous host offers neither a cooperative termination window nor in-flight cancellation.
@@ -915,10 +970,12 @@ const echoed = executeSync(
 echoed.stdout === input // true
 ```
 
-The `execute` function writes `input` with a host callback. A fault while that write is pending ends
-the run by design and makes `failed` true. With `strict: true`, the rejection is coded `input`, its
-message states that standard-input writing failed, and it carries the host fault as its `cause`;
-with `strict: false`, the result carries no cause member. This behavior is distinct from the quiet
+The `execute` function writes `input` with a host callback. A fault while that write is pending,
+before any timeout or abort began, ends the run by design and makes `failed` true. With
+`strict: true`, the rejection is coded `input`, its message states that standard-input writing
+failed, and it carries the host fault as its `cause`; with `strict: false`, the result carries no
+cause member. A fault that arrives after a termination began is that termination's consequence, so
+the run rejects as `timeout` or `spawn` instead. This behavior is distinct from the quiet
 constructor input phase of `Process`.
 
 A run with no `timeout` and no `signal` is unbounded, and what it waits for is stdio completion
@@ -952,8 +1009,8 @@ A spawn fault reports the host's negative errno in `ProcessExit.code` and an asy
 `ExecuteResult.code`. The synchronous `executeSync` result reports `null` instead.
 
 By default a failed run rejects with a `ProcessError` carrying the `ExecuteResult` on its `result`
-property. An expired run carries code `timeout`, and a host fault while writing standard input
-carries code `input`; every other failure carries code `spawn`. Passing `strict: false` settles with
+property. An expired run carries code `timeout`, and a host fault while writing standard input,
+before any termination began, carries code `input`; every other failure carries code `spawn`. Passing `strict: false` settles with
 the result even on failure, so you inspect `failed` yourself.
 
 ```ts
@@ -1046,8 +1103,9 @@ environment merge, the same `input` override, the same `limit` bounding, and the
 behavior.
 
 `execute` also bounds what follows termination. After a timeout or an abort ends the child,
-`stopChild` runs and the outcome is then awaited for one further `PROCESS_CONFIRMATION`, so a
-descendant still holding the child's stdio cannot keep a terminated run pending forever. Nothing
+`stopChild` runs, then `stopGroup` ends a POSIX descendant still in the child's group, and the
+outcome is then awaited for one further `PROCESS_CONFIRMATION`, so a descendant still holding the
+child's stdio cannot keep a terminated run pending forever. Nothing
 bounds a run that was never terminated: with no `timeout` and no `signal` there is no deadline to
 reach, and the run waits on stdio completion for as long as the descendant holds the pipe.
 
@@ -1143,7 +1201,7 @@ value with `isProcessError`, then branch on `code`.
 | ----------- | --------------------------------------------------------------------------------------------------------- |
 | `spawn`     | A rejecting run failed outside its own timeout or input write.                                            |
 | `timeout`   | A rejecting run's own `timeout` elapsed before completion.                                                |
-| `input`     | `execute` alone: a rejecting run's standard-input write reported a host fault.                            |
+| `input`     | `execute` alone: a rejecting run's standard-input write reported a host fault before any termination.     |
 | `duplicate` | `ProcessManager.launch` reused an id that is already live.                                                |
 | `protocol`  | `ProcessManager.launch` ran after `destroy` began, or a supervised channel's open stdin reported a fault. |
 | `invalid`   | A public input was refused before anything was spawned.                                                   |
@@ -1159,7 +1217,12 @@ pass. Older boolean brands, transparent proxies, and branded plain objects fail 
 A run failure carries its `ExecuteResult` on `error.result`, and its command line, exit `code`, and
 `signal` on `error.context`. A duplicate-id and a protocol failure carry the offending `id` on
 `error.context`. A validation failure carries the rejected input on `error.context.value`. The
-underlying cause, when one exists, is retained on `error.cause`.
+underlying cause, when one exists, is retained on `error.cause`; an aborted run carries the
+`reason` of the caller's signal there. A standard-input fault that arrives after a timeout or an abort
+began is that termination's consequence, so the run still rejects as `timeout` or `spawn`. A signal
+that already aborted refuses the run before the spawn and rejects the way an abort during the run
+does, as a `spawn`-coded error whose `result` reports `aborted`; its `code` and `signal` are both
+`null`, because no child ran.
 
 ```ts
 import { createDuplicateError, createInvalidError, createProtocolError } from '@orkestrel/process'
@@ -1440,8 +1503,9 @@ isExited(reporter) // whether the native exit arrived
   after `exit` settles and keep no copy of your own.
 - **Read `drained` before you treat the diagnostics as complete** — `true` reports that the child's
   streams closed, so the diagnostics are everything the child wrote. `false` reports that the `drain`
-  bound cut them off, and nothing can report whether more existed, because a descendant holding an
-  inherited pipe is beyond the tree kill and the host counts no remaining writers.
+  bound cut them off, and nothing can report whether more existed, because a descendant the tree
+  kill cannot reach can hold an inherited pipe, and the host counts no remaining writers. That is a
+  descendant outside the child's POSIX process group, or one whose Windows root already exited.
 - **Lower `drain` for a shutdown with a deadline of its own** — the default `PROCESS_DRAIN` bounds
   the wait for a descendant that never releases the pipe. Pass `drain: 0` to cut the streams off as
   soon as the bound is armed.
@@ -1540,10 +1604,14 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   the isolated environment, the `invalid` refusals, and `destroy`. The terminal moment carries its
   own rows: the frozen `evidence` tail read against a descendant that keeps writing, the `stderr`
   event and the tail stopping together, `lines` ending an in-flight read after its queued lines, the
-  `exit` promise settling at the cutoff when the streams never close, the `drain` bound driven shorter
+  `exit` promise settling after `destroy` ends a descendant through the group its exited root led
+  where a POSIX group reaches it and at the cutoff where none does, the `drain` bound driven shorter
   and longer than a descendant release, `stop` alone reaching the moment with no `destroy` call, the
   latched `terminated` refusing a `send`, the released abort listener, the spawn-fault path, and the
-  `drain` refusals at each end of its range.
+  `drain` refusals at each end of its range. The child leads a process group apart from the
+  parent's, a signal that already aborted refuses the spawn and still reaches the terminal moment, a
+  teardown after a natural exit with no descendant waits out no `grace`, and the multibyte
+  `evidence` tail reads the same whatever chunks the stderr pipe delivers.
 - [`tests/src/server/processes/Duplex.test.ts`](../tests/src/server/processes/Duplex.test.ts) —
   the byte face: a binary payload carrying NUL bytes, an invalid UTF-8 sequence, a lone carriage return, and an embedded line
   feed arriving byte-identical in one event, a half-megabyte stream reassembled byte for byte, and
@@ -1556,7 +1624,7 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   child overruns, keeping an ended channel quiet when a pending write later faults, and changing
   nothing after a `stop`. The endings pulled apart by a descendant holding the pipe, the `exit` event
   and promise agreeing once, the pid and the frozen `evidence` tail beside the live `stderr` chunks,
-  the spawn-fault path, and the `invalid` refusals.
+  the spawn-fault path, the spawn a signal that already aborted refuses, and the `invalid` refusals.
 - [`tests/src/server/processes/Supervisor.test.ts`](../tests/src/server/processes/Supervisor.test.ts)
   — the engine driven through a literal face: the moment order that ends the face's read pipeline, freezes the
   terminal state, and only then releases the face; the backpressure release reaching a face holding
@@ -1588,11 +1656,29 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   byte bounds retreating a cut to a code-point boundary, the per-chunk capture bound and the byte it
   keeps past `limit`, the validators, the termination helpers, and `waitForClose` across a close
   inside its deadline, a deadline that elapsed first, and the listeners it leaves behind. The
-  fire-and-forget spawn covers owned inputs, detached process-group behavior, invalid-input
-  refusal, and the validated working directory.
+  environment rows drop an inherited variable an added name claims under every platform input. The
+  tail trim keeps the longest code-point suffix at every cut of a mixed-width text, and
+  [`tests/src/server/helpers.bench.ts`](../tests/src/server/helpers.bench.ts) reads its cost at a
+  64 KiB bound against the array walk it replaced. `inspectProcess` reads a real unreaped zombie and
+  its group as ended, the process-table readers run over inert tables, each reading they cannot take
+  included, a group reads as live under a `hidepid` mount whose line carries an optional field and
+  an escaped mount point, a table whose `self/stat` names another process yields no reading and no
+  member, and a second scan that gains a task reads as live through an injected scan. `stopGroup`
+  ends the descendant an exited group leader left behind while it leaves a live root's group alone,
+  sends no `SIGKILL` after the last recorded member has gone though an unrecorded member lives, and
+  signals nothing for a group id an unrelated process leads, against a control that carries that
+  process's own id and start time. The fire-and-forget spawn covers owned inputs, detached process-group behavior,
+  invalid-input refusal, and the validated working directory.
 - [`tests/src/server/execution/execute.test.ts`](../tests/src/server/execution/execute.test.ts)
   — the asynchronous one-shot run: owned inputs, buffered outcomes, failure delivery,
-  cancellation, timeout, capture bounds, spawn faults, and pre-spawn refusal.
+  cancellation, timeout, capture bounds, spawn faults, and pre-spawn refusal. A signal that already
+  aborted refuses the run before the spawn, an abort carries the signal's `reason` as the rejection
+  `cause`, and a timeout ends a POSIX descendant that holds the pipe after the root exited, settling
+  near the timeout.
+- [`tests/src/server/parsers.test.ts`](../tests/src/server/parsers.test.ts) — the process-table
+  `stat` parser: the state, the group, and the start time read after the last parenthesis of a
+  command name that holds spaces and parentheses, and the refusal of text that carries no state, no
+  numeric group, or no numeric start time.
 - [`tests/src/server/execution/executeSync.test.ts`](../tests/src/server/execution/executeSync.test.ts)
   — the blocking run: root-only timeout and argument integrity beside owned inputs, buffered
   outcomes, failure delivery, capture bounds, spawn faults, and pre-spawn refusal.
