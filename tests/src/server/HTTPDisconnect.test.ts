@@ -16,6 +16,12 @@ describe('HTTPDisconnect', () => {
 		const reader = body.getReader()
 
 		try {
+			const opening = await waitForSettlement(
+				reader.read(),
+				250,
+				'Timed out waiting for the opening comment',
+			)
+			expect(new TextDecoder().decode(opening.value)).toBe(': \n\n')
 			const keepalive = await waitForSettlement(
 				reader.read(),
 				250,
@@ -64,7 +70,7 @@ describe('HTTPDisconnect', () => {
 
 			expect(response.status).toBe(201)
 			expect(response.headers.get('x-probe')).toBe('forwarded')
-			expect(text).toBe('event: result\ndata: ready\n\n')
+			expect(text).toBe(': \n\nevent: result\ndata: ready\n\n')
 		} finally {
 			stream.end()
 		}
@@ -79,6 +85,12 @@ describe('HTTPDisconnect', () => {
 		const reader = body.getReader()
 
 		try {
+			const opening = await waitForSettlement(
+				reader.read(),
+				250,
+				'Timed out waiting for the opening comment',
+			)
+			expect(new TextDecoder().decode(opening.value)).toBe(': \n\n')
 			const chunk = await waitForSettlement(
 				reader.read(),
 				250,
@@ -251,6 +263,12 @@ describe('HTTPDisconnect', () => {
 
 		try {
 			stream.end()
+			const opening = await waitForSettlement(
+				reader.read(),
+				250,
+				'Timed out waiting for the opening comment',
+			)
+			expect(new TextDecoder().decode(opening.value)).toBe(': \n\n')
 			const chunk = await waitForSettlement(
 				reader.read(),
 				250,
