@@ -40,8 +40,9 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  * A modern-shaped POST also passes straight through with `next()`, ignoring any session id.
  * The remaining behavior is the legacy session layer:
  *
- * - **`POST {path}`.** Buffers `const text = await request.text()` (so the downstream route
- *   can re-read it from a freshly-built forwarded `Request`). Resolves a session through {@link
+ * - **`POST {path}`.** Reads the body text from `request.clone()` (so the downstream route
+ *   still reads the one `Request` the server built); a used or locked body reads as absent text
+ *   and passes through to the route. Resolves a session through {@link
  *   readSessionHeader}: a valid id touches the entry and sets `context.state.session`; an
  *   absent / unknown id whose (guarded) body parses to an `initialize` request ({@link
  *   isInitializeRequest}) mints a fresh {@link MCPSession} (`crypto.randomUUID()`, the `session`
@@ -51,9 +52,8 @@ import { HTTPDisconnect } from './HTTPDisconnect.js'
  *   (`404`). The
  *   minted entry pins the negotiated legacy revision, which is supplied to a later headerless
  *   live-session request. It then
- *   forwards a fresh `Request` carrying the buffered `text` (`next(forwarded)`) — never the
- *   already-consumed original — so the route re-reads the same body, and stamps the response
- *   with {@link MCP_SESSION_HEADER}. A candidate entry is stored and advertised only when
+ *   calls `next()` on that same `Request`, with the pinned protocol header set on it when the
+ *   client sent none, and stamps the response with {@link MCP_SESSION_HEADER}. A candidate entry is stored and advertised only when
  *   `context.state.initialization` carries a result. An `initialize` that would mint a session
  *   stores none and advertises none when refused; a live session's header is returned unchanged.
  *   The POST handler records that dispatch response before JSON or SSE framing.
@@ -111,18 +111,12 @@ export function createMCPSession<TState extends MCPSessionState>(
 	return async (request, context, next) => {
 		if (context.url.pathname !== path) return next()
 		if (!allowsOrigin(request, origin)) return new Response(null, { status: 403 })
-		const text = context.method === 'POST' ? await readRequestText(request) : undefined
+		// `clone()` throws on a used or locked body, and an earlier layer can lock one unread.
+		const cloneable = !request.bodyUsed && request.body?.locked !== true
+		const text =
+			context.method === 'POST' && cloneable ? await readRequestText(request.clone()) : undefined
 		const parsed = text === undefined ? undefined : parseJSONRPCMessage(parseJSON(text))
-		if (text !== undefined && parsed !== undefined && isModernRequest(parsed)) {
-			return next(
-				new Request(context.url, {
-					method: 'POST',
-					headers: request.headers,
-					body: text,
-					signal: request.signal,
-				}),
-			)
-		}
+		if (text !== undefined && parsed !== undefined && isModernRequest(parsed)) return next()
 		if (ttl !== undefined) {
 			store.sweep(clock() - ttl)
 		}
@@ -182,25 +176,17 @@ export function createMCPSession<TState extends MCPSessionState>(
 		const entry = touched ?? created
 		if (entry === undefined) {
 			if (id === undefined && isPingRequest(parsed)) {
-				return next(
-					new Request(context.url, {
-						method: 'POST',
-						headers: request.headers,
-						body: text,
-						signal: request.signal,
-					}),
-				)
+				return next()
 			}
 			return rejectUnknownSession()
 		}
 		if (!Reflect.set(context.state, 'session', entry.session)) {
 			throw new Error('MCP session state is not writable')
 		}
-		const headers = new Headers(request.headers)
 		if (parsed === undefined || !isInitializeRequest(parsed)) {
 			const issue = inferSessionHeaderIssue(request, entry.version)
 			if (issue?.reason === 'missing') {
-				headers.set(MCP_PROTOCOL_VERSION_HEADER, entry.version)
+				request.headers.set(MCP_PROTOCOL_VERSION_HEADER, entry.version)
 			} else if (issue !== undefined) {
 				const requestId = parsed !== undefined && 'method' in parsed ? (parsed.id ?? null) : null
 				return Response.json(buildJSONRPCError(requestId, MCP_HEADER_MISMATCH, issue.message), {
@@ -208,13 +194,7 @@ export function createMCPSession<TState extends MCPSessionState>(
 				})
 			}
 		}
-		const forwarded = new Request(context.url, {
-			method: 'POST',
-			headers,
-			body: text,
-			signal: request.signal,
-		})
-		const response = await next(forwarded)
+		const response = await next()
 		if (created !== undefined) {
 			if (!response.ok || context.state.initialization?.result === undefined) return response
 			// `touched` is the instant of the LAST ACCESS, so it is read AFTER the suspension. The

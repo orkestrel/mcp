@@ -22,7 +22,8 @@ import {
 } from '@src/core'
 import { createDispatcher } from '@orkestrel/router'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { createServer } from '@orkestrel/server'
+import { createServer, isServerError } from '@orkestrel/server'
+import { attempt } from '@orkestrel/contract'
 import {
 	DEFAULT_MCP_PATH,
 	createDuplexServerTransport,
@@ -313,6 +314,16 @@ describe('createMCPContinuation', () => {
 		expect(await continuation.open(carrier)).toBe(value)
 		expect(await continuation.open(`${carrier}x`)).toBeUndefined()
 	})
+
+	it.each<string | readonly string[]>(['', ['', 'older-secret']])(
+		'refuses the blank secret %j at construction',
+		(secret) => {
+			const built = attempt(() => createMCPContinuation(secret))
+			const error = built.success ? undefined : built.error
+			expect(isServerError(error)).toBe(true)
+			expect(error).toMatchObject({ code: 'SECRET' })
+		},
+	)
 })
 
 // A minimal bearer-token check middleware, hand-rolled locally (no @orkestrel/middleware

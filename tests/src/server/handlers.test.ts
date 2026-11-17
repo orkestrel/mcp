@@ -424,7 +424,7 @@ describe('createMCPPostHandler', () => {
 		const body = await response.text()
 
 		expect(response.headers.get('x-accel-buffering')).toBe('no')
-		expect(body).toBe('data: {"jsonrpc":"2.0","id":1,"result":{}}\n\n')
+		expect(body).toBe(': \n\ndata: {"jsonrpc":"2.0","id":1,"result":{}}\n\n')
 	})
 
 	it('pumps a held-open subscription acknowledgement, notifications, and closure onto SSE', async () => {

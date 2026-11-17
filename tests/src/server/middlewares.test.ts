@@ -482,6 +482,71 @@ describe('createMCPSession — mint / validate / DELETE', () => {
 		})
 	})
 
+	it('answers a body an earlier layer locked unread as the route answers an unreadable body', async () => {
+		const dispatcher = createDispatcher<MCPSessionState>()
+		dispatcher.add(createMCPRoutes<MCPSessionState>(createMCPLegacy(createCalculatorServer())))
+		const server = createServer<MCPSessionState>({ dispatcher, state: () => ({}) })
+		server.use((input, _context, next) => {
+			input.body?.getReader()
+			return next()
+		})
+		server.use(createMCPSession())
+		const handle = await startServer(server)
+		teardown.add(() => handle.stop())
+		const response = await postJSON(handle.base, createJSONRPCRequest())
+
+		expect(response.status).toBe(400)
+		expect(response.headers.get(MCP_SESSION_HEADER)).toBeNull()
+		expect(await response.json()).toEqual({
+			jsonrpc: '2.0',
+			id: null,
+			error: { code: -32700, message: 'Parse error' },
+		})
+	})
+
+	it('a session POST reaches the route as the one server-built Request, with the pinned protocol header set on it and the body unscrubbed', async () => {
+		const dispatcher = createDispatcher<MCPSessionState>()
+		dispatcher.add(createMCPRoutes<MCPSessionState>(createMCPLegacy(createCalculatorServer())))
+		const server = createServer<MCPSessionState>({ dispatcher, state: () => ({}) })
+		const before: Request[] = []
+		const after: Request[] = []
+		const protocols: Array<string | null> = []
+		const bodies: string[] = []
+		server.use((input, _context, next) => {
+			before.push(input)
+			return next()
+		})
+		server.use(createMCPSession())
+		server.use(async (input, _context, next) => {
+			after.push(input)
+			protocols.push(input.headers.get(MCP_PROTOCOL_VERSION_HEADER))
+			bodies.push(await input.clone().text())
+			return next()
+		})
+		const handle = await startServer(server)
+		teardown.add(() => handle.stop())
+		const init = await postJSON(handle.base, createJSONRPCRequest())
+		const id = init.headers.get(MCP_SESSION_HEADER)
+		expect(id).not.toBeNull()
+		const text = '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"constructor":"kept"}}'
+		const response = await fetch(`${handle.base}/mcp`, {
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				...(id === null ? {} : { [MCP_SESSION_HEADER]: id }),
+			},
+			body: text,
+		})
+
+		expect(response.status).toBe(200)
+		expect((await response.json()).result.tools.map((tool: { name: string }) => tool.name)).toEqual(
+			['add', 'boom'],
+		)
+		expect(after[1]).toBe(before[1])
+		expect(protocols[1]).toBe('2025-11-25')
+		expect(bodies[1]).toBe(text)
+	})
+
 	it('DELETE {path} with the id → 204, and the session is then gone (a later echo → 404)', async () => {
 		const handle = await startSession(teardown)
 		const init = await postJSON(handle.base, createJSONRPCRequest())

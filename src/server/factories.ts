@@ -19,7 +19,7 @@ import type { IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { bindServer, MCP_WEBSOCKET_SUBPROTOCOL } from '@src/core'
 import { isString } from '@orkestrel/contract'
-import { signToken, verifyToken } from '@orkestrel/server'
+import { createSigner, signToken, verifyToken } from '@orkestrel/server'
 import { createNodeWebSocket, WEBSOCKET_VERSION } from '@orkestrel/websocket'
 import { DEFAULT_MCP_PATH } from './constants.js'
 import { createMCPPostHandler } from './handlers.js'
@@ -35,14 +35,17 @@ import { DuplexServerTransport } from './transports/DuplexServerTransport.js'
  *
  * @param secret - Current signing secret or `[current, ...older]` rotation list
  * @returns A continuation port that seals and opens opaque canonical state strings
+ * @throws {ServerError} Coded `'SECRET'` when `secret` is blank, not a string, or a rotation
+ *   list holding a blank entry
  */
 export function createMCPContinuation(secret: TokenSecret): MCPContinuationInterface {
+	const signer = createSigner(secret)
 	return {
 		seal(value) {
-			return signToken(value, { secret })
+			return signToken(value, { signer })
 		},
 		open(value) {
-			return verifyToken(value, secret)
+			return verifyToken(value, signer)
 		},
 	}
 }

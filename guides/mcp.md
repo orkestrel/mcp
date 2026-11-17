@@ -1158,8 +1158,8 @@ present origin requires an exact entry in the shared `origin.origins` list. A de
 that validates upstream sets `origin.enabled` to `false` on the one options value passed to
 the route and the session middleware. No shared session primitive is composed; the store, mint, and stream are
 implemented here. Because the body can only be read once, the middleware
-buffers `request.text()` and forwards a freshly built `Request` carrying that
-text to `next(...)` so the downstream route can re-read it. Omit the
+reads `request.clone()` and calls `next()` on the one `Request` the server built,
+so the downstream route reads the body itself. Omit the
 middleware for the byte-identical stateless default. The WebSocket and stdio
 transports are inherently one session per connection, so they carry no
 session header — `createMCPSession` is for the HTTP transport only.
@@ -5852,8 +5852,8 @@ the exact statement:
     response-stream cancellation to `mcp.dispatch`. After origin/body/JSON-RPC/modern-metadata-shape/header
     validation, and only for a request that will dispatch, it synchronously calls the optional
     `MCPCallerHandler` immediately before dispatch; a defined result is added as asserted
-    `caller`, while absence is omitted. The session middleware preserves the incoming signal,
-    headers, and route state across each forwarded `Request`; the pump awaits
+    `caller`, while absence is omitted. The session middleware calls `next()` on the one `Request` the server built, so the
+    signal, headers, and route state reach the route unchanged; the pump awaits
     the async iterator and never polls. An SSE comment is written every configured
     `keepalive.interval` (default `DEFAULT_MCP_KEEPALIVE_INTERVAL`), so an idle
     streamed response notices a dead client within one interval; this is transport
@@ -6094,7 +6094,8 @@ the exact statement:
     while `enabled: false` delegates each site to an upstream validator. A
     modern-shaped POST passes straight through with `next()`, ignoring
     `Mcp-Session-Id`. Otherwise, for its `path`, it makes the legacy transport
-    stateful across its verbs: a `POST` buffers `await request.text()` — resolves a session through
+    stateful across its verbs: a `POST` reads its body text from `request.clone()` (an unusable body, used or locked, reads as
+    absent text and passes through to the route) — resolves a session through
     `readSessionHeader`; a valid id touches the entry and sets
     `context.state.session`; an absent / unknown id whose (guarded) body
     parses to an `initialize` request (`isInitializeRequest`) mints a fresh
@@ -6105,10 +6106,9 @@ the exact statement:
     Other unresolved requests return `rejectUnknownSession()` (`404`). The candidate is stored
     and advertised only after `context.state.initialization` records a successful dispatch
     result, independently of JSON or SSE framing. It
-    then forwards a fresh `Request` carrying the buffered text
-    (`next(forwarded)`) — never the already-consumed original — so the route
-    re-reads the same body, retains front-middleware state for caller extraction,
-    injects that pinned revision when a live-session POST
+    then calls `next()` on that same `Request` — so the route reads the body itself
+    and retains front-middleware state for caller extraction — sets the pinned
+    revision on it when a live-session POST
     is headerless, and stamps the response with `MCP_SESSION_HEADER`. A
     live-session POST whose `MCP-Protocol-Version` header names a different
     revision than the session pinned is `400` + `-32020` — a session negotiates its
