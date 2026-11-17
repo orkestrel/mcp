@@ -161,7 +161,7 @@ returns `false` for an id whose every thread, or every group member's every thre
 `X` in two readings taken one after the other. A reading it cannot take reads as live, and so does
 every group while the table's mount carries a `hidepid` option other than `0` or `off`, because
 that mount hides other users' processes and a hidden member can be live. A host without the table,
-and a table whose `self/stat` names a process other than this one, keep the signal's answer.
+and a table whose `self/stat` names a process other than this one or cannot be read, keep the signal's answer.
 
 ### Process-table readers
 
@@ -1661,8 +1661,8 @@ The pure decision rows do not prove Windows end to end. They prove the decisions
   [`tests/src/server/helpers.bench.ts`](../tests/src/server/helpers.bench.ts) reads its cost at a
   64 KiB bound against the array walk it replaced. `inspectProcess` reads a real unreaped zombie and
   its group as ended, the process-table readers run over inert tables, each reading they cannot take
-  included, a group reads as live under a `hidepid` mount whose line carries an optional field and
-  an escaped mount point, a table whose `self/stat` names another process yields no reading and no
+  included, `matchesTableHidden` reads a `hidepid` mount whose line carries an optional field and an
+  escaped mount point as hiding, a table whose `self/stat` names another process yields no reading and no
   member, and a second scan that gains a task reads as live through an injected scan. `stopGroup`
   ends the descendant an exited group leader left behind while it leaves a live root's group alone,
   sends no `SIGKILL` after the last recorded member has gone though an unrecorded member lives, and
