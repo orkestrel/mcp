@@ -97,6 +97,7 @@ export class ScriptedProvider {
 	 */
 	constructor(id, script) {
 		this.id = id
+		this.model = 'scripted'
 		this.name = 'scripted'
 		this.#script = script
 	}

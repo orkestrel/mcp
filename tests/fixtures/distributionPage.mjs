@@ -373,6 +373,7 @@ class ReceiptPage {
 		return this.runPaint(
 			createRelayProvider({
 				url,
+				model: 'scripted',
 				headers: this.relayHeaders.bind(this),
 			}),
 		)
