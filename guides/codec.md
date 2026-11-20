@@ -8,11 +8,12 @@
 A coding is a spec-named, stateless mapping with one canonical spelling per input, written as an
 `encode*` that produces only the canonical form, a `decode*` that accepts exactly that form and
 answers `undefined` for everything else, and an `is*` guard that names the exact set the partial
-direction accepts. Every function is pure ES: no `atob` / `btoa`, no `Buffer`, no `TextEncoder` /
-`TextDecoder`, no `node:*`. Runtime type tests come from `@orkestrel/contract`. Totality is
-implemented rather than caught: codec ships no error type, no options bag, no class, and no type of
-its own. It is not a formats package — it does not compress, frame a stream, escape a document, map
-values into a store, or read JSON. Source: [`src/core`](../src/core), published through
+direction accepts. Every function but `decodeUTF8` is pure ES: no `atob` / `btoa`, no `Buffer`, no
+`TextEncoder` / `TextDecoder`, no `node:*`. `decodeUTF8` hands its bytes to the host's fatal
+`TextDecoder`. Runtime type tests come from `@orkestrel/contract`. Totality is implemented rather
+than caught: codec ships no error type, no options bag, no class, and no type of its own. It is
+not a formats package — it does not compress, frame a stream, escape a document, map values into a
+store, or read JSON. Source: [`src/core`](../src/core), published through
 `@orkestrel/codec` with a runtime dependency on `@orkestrel/contract`.
 
 ## The families
@@ -484,19 +485,35 @@ measureUTF8('\ud800') // undefined — ill-formed text has no UTF-8 spelling
   both its decoder and its guard.
 
   The platform's own codings run as oracles over the populations they agree on, each one probed
-  before a sweep was written to it. `decodeUTF8` and `decodeUTF16LE` are held against a fatal
-  `TextDecoder` carrying `ignoreBOM` over the whole two-byte space, `encodeUTF8` against
-  `TextEncoder` over the well-formed texts, and `decodeWindows1252` against the WHATWG index over
-  the bytes that index and this coding both define. `decodeLatin1` is held against
-  `String.fromCharCode` rather than against the `latin1` label, and an assertion pins the label's
-  disagreement to the 0x80-0x9F band so a later reader cannot quietly adopt it as the oracle.
+  before a sweep was written to it. `decodeUTF16LE` is held against a fatal `TextDecoder` carrying
+  `ignoreBOM` over the whole two-byte space, `encodeUTF8` against `TextEncoder` over the well-formed
+  texts, and `decodeWindows1252` against the WHATWG index over the bytes that index and this coding
+  both define. `decodeLatin1` is held against `String.fromCharCode` rather than against the `latin1`
+  label, and an assertion pins the label's disagreement to the 0x80-0x9F band so a later reader
+  cannot quietly adopt it as the oracle.
 
   Further sweeps reach the multi-byte defects a two-byte space cannot present. The embedded
   sweep wraps every byte pair as `41 b1 b2 41`, which moves each pair into the middle of a buffer
   the decoder has already started walking. The mutation sweep takes the canonical encoding of each
   boundary code point and substitutes every byte position through all 256 values, which reaches the
   overlong spellings of a four-byte code point and the encoded surrogates that sit one lead byte
-  from a canonical U+D7FF. Each runs against the same fatal `TextDecoder`.
+  from a canonical U+D7FF. Each runs against the same oracle.
+
+  `decodeUTF8` delegates to the host's decoder, so its oracle is the walk it shipped in codec
+  0.0.12, which reads no platform table: the two-byte, embedded, and boundary-mutation sweeps hold
+  it against that walk, and so does a seeded differential over random byte buffers and over
+  mutations of seeded well-formed text, with zero differences allowed. Two controls run beside the
+  differential, a fatal decoder that strips a leading BOM and a decoder that replaces instead of
+  refusing, and each must disagree with the walk somewhere in the population. Named cases pin the
+  BOM leading and mid-stream, U+0000, U+FFFE, and U+FFFF, each refusal edge beside its admitted
+  neighbour, truncation at every width, a subarray at a nonzero offset, a refused call followed by
+  an accepted one, and the copy a view over a `SharedArrayBuffer` or a resizable `ArrayBuffer`
+  takes before it reaches the host.
+
+  `measureUTF8`, `measureHex`, `measureBase64`, and `encodeHex` are each held against the walk it
+  shipped in codec 0.0.12, over the populations the law sweeps read plus the rows a code-unit walk
+  could miscount: astral pairs, lone and reversed surrogates, odd-length hex, and uppercase hex. A
+  view whose own iterator is replaced encodes the hex of its indexed bytes.
 
   The Windows-1252 high table carries another reading that is not a platform decoder at all. The
   WHATWG index defines all 256 slots, so it is silent on exactly the omissions that make this code
